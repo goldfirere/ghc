@@ -517,6 +517,9 @@ data CallishMachOp
   | MO_WriteBarrier
   | MO_Touch         -- Keep variables live (when using interior pointers)
 
+  -- Prefetch
+  | MO_Prefetch_Data
+
   -- Note that these three MachOps all take 1 extra parameter than the
   -- standard C lib versions. The extra (last) parameter contains
   -- alignment of the pointers. Used for optimisation in backends.
