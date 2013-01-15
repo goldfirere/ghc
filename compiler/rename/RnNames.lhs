@@ -531,21 +531,26 @@ getLocalNonValBinders fixity_env
              ; return (AvailTC main_name names) }
 
     new_assoc :: LInstDecl RdrName -> RnM [AvailInfo]
-    new_assoc (L _ (FamInstD { lid_inst = d })) 
-      = do { avail <- new_ti Nothing d
+    new_assoc (L _ (TyFamInstD {})) = return []
+      -- type instances don't bind new names 
+    
+    new_assoc (L _ (DataFamInstD { dfid_inst = d }))
+      = do { avail <- new_di Nothing d
            ; return [avail] }
-    new_assoc (L _ (ClsInstD { cid_poly_ty = inst_ty, cid_fam_insts = ats }))
+    new_assoc (L _ (ClsInstD { cid_inst = ClsInstDecl
+                             { cid_poly_ty = inst_ty
+                             , cid_datafam_insts = adts } }))
       | Just (_, _, L loc cls_rdr, _) <- splitLHsInstDeclTy_maybe inst_ty
       = do { cls_nm <- setSrcSpan loc $ lookupGlobalOccRn cls_rdr
-           ; mapM (new_ti (Just cls_nm) . unLoc) ats }
+           ; mapM (new_di (Just cls_nm) . unLoc) adts }
       | otherwise
       = return []     -- Do not crash on ill-formed instances
                       -- Eg   instance !Show Int   Trac #3811c
 
-    new_ti :: Maybe Name -> FamInstDecl RdrName -> RnM AvailInfo
-    new_ti mb_cls ti_decl  -- ONLY for type/data instances
-        = do { main_name <- lookupFamInstName mb_cls (fid_tycon ti_decl)
-             ; sub_names <- mapM newTopSrcBinder (hsFamInstBinders ti_decl)
+    new_di :: Maybe Name -> DataFamInstDecl RdrName -> RnM AvailInfo
+    new_di mb_cls ti_decl
+        = do { main_name <- lookupFamInstName mb_cls (dfid_tycon ti_decl)
+             ; sub_names <- mapM newTopSrcBinder (hsDataFamInstBinders ti_decl)
              ; return (AvailTC (unLoc main_name) sub_names) }
                         -- main_name is not bound here!
 \end{code}
@@ -1357,25 +1362,41 @@ findImportUsage imports rdr_env rdrs
     import_usage = foldr (extendImportMap rdr_env) Map.empty rdrs
 
     unused_decl decl@(L loc (ImportDecl { ideclHiding = imps }))
-      = (decl, nubAvails used_avails, unused_imps)
+      = (decl, nubAvails used_avails, nameSetToList unused_imps)
       where
         used_avails = Map.lookup (srcSpanEnd loc) import_usage `orElse` []
                       -- srcSpanEnd: see Note [The ImportMap]
-        dont_report_as_unused = foldr add emptyNameSet used_avails
-        add (Avail n) s = s `addOneToNameSet` n
-        add (AvailTC n ns) s = s `addListToNameSet` (n:ns)
+        used_names   = availsToNameSet used_avails
+        used_parents = mkNameSet [n | AvailTC n _ <- used_avails]
+
+        unused_imps   -- Not trivial; see eg Trac #7454
+          = case imps of
+              Just (False, imp_ies) -> foldr (add_unused . unLoc) emptyNameSet imp_ies
+              _other -> emptyNameSet -- No explicit import list => no unused-name list
+
+        add_unused :: IE Name -> NameSet -> NameSet
+        add_unused (IEVar n)          acc = add_unused_name n acc
+        add_unused (IEThingAbs n)     acc = add_unused_name n acc
+        add_unused (IEThingAll n)     acc = add_unused_all  n acc
+        add_unused (IEThingWith p ns) acc = add_unused_with p ns acc
+        add_unused _                  acc = acc
+
+        add_unused_name n acc 
+          | n `elemNameSet` used_names = acc
+          | otherwise                  = acc `addOneToNameSet` n
+        add_unused_all n acc
+          | n `elemNameSet` used_names   = acc
+          | n `elemNameSet` used_parents = acc
+          | otherwise                    = acc `addOneToNameSet` n
+        add_unused_with p ns acc
+          | all (`elemNameSet` acc1) ns = add_unused_name p acc1
+          | otherwise = acc1
+          where
+            acc1 = foldr add_unused_name acc ns
        -- If you use 'signum' from Num, then the user may well have
        -- imported Num(signum).  We don't want to complain that
-       -- Num is not itself mentioned.  Hence adding 'n' as
-       -- well to the list of of "don't report if unused" names
-
-        unused_imps = case imps of
-                        Just (False, imp_ies) -> nameSetToList unused_imps
-                          where
-                            imp_names = mkNameSet (concatMap (ieNames . unLoc) imp_ies)
-                            unused_imps = imp_names `minusNameSet` dont_report_as_unused
-
-                        _other -> []    -- No explicit import list => no unused-name list
+       -- Num is not itself mentioned.  Hence the two cases in add_unused_with.
+          
 
 extendImportMap :: GlobalRdrEnv -> RdrName -> ImportMap -> ImportMap
 -- For a used RdrName, find all the import decls that brought

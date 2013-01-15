@@ -27,7 +27,9 @@ module DynFlags (
         wopt, wopt_set, wopt_unset,
         xopt, xopt_set, xopt_unset,
         lang_set,
-        whenGeneratingDynamicToo, ifGeneratingDynamicToo, doDynamicToo,
+        whenGeneratingDynamicToo, ifGeneratingDynamicToo,
+        whenCannotGenerateDynamicToo,
+        doDynamicToo,
         DynFlags(..),
         HasDynFlags(..), ContainsDynFlags(..),
         RtsOptsEnabled(..),
@@ -116,6 +118,10 @@ module DynFlags (
         tAG_MASK,
         mAX_PTR_TAG,
         tARGET_MIN_INT, tARGET_MAX_INT, tARGET_MAX_WORD,
+
+        -- * SSE
+        isSse2Enabled,
+        isSse4_2Enabled,
   ) where
 
 #include "HsVersions.h"
@@ -171,20 +177,19 @@ data DumpFlag
 
    -- debugging flags
    = Opt_D_dump_cmm
-   | Opt_D_dump_raw_cmm
-   | Opt_D_dump_cmmz
-   -- All of the cmmz subflags (there are a lot!)  Automatically
-   -- enabled if you run -ddump-cmmz
-   | Opt_D_dump_cmmz_cfg
-   | Opt_D_dump_cmmz_cbe
-   | Opt_D_dump_cmmz_proc
-   | Opt_D_dump_cmmz_rewrite
-   | Opt_D_dump_cmmz_sp
-   | Opt_D_dump_cmmz_procmap
-   | Opt_D_dump_cmmz_split
-   | Opt_D_dump_cmmz_info
-   -- end cmmz subflags
-   | Opt_D_dump_cps_cmm
+   | Opt_D_dump_cmm_raw
+   -- All of the cmm subflags (there are a lot!)  Automatically
+   -- enabled if you run -ddump-cmm
+   | Opt_D_dump_cmm_cfg
+   | Opt_D_dump_cmm_cbe
+   | Opt_D_dump_cmm_proc
+   | Opt_D_dump_cmm_rewrite
+   | Opt_D_dump_cmm_sp
+   | Opt_D_dump_cmm_procmap
+   | Opt_D_dump_cmm_split
+   | Opt_D_dump_cmm_info
+   | Opt_D_dump_cmm_cps
+   -- end cmm subflags
    | Opt_D_dump_asm
    | Opt_D_dump_asm_native
    | Opt_D_dump_asm_liveness
@@ -201,6 +206,7 @@ data DumpFlag
    | Opt_D_dump_inlinings
    | Opt_D_dump_rule_firings
    | Opt_D_dump_rule_rewrites
+   | Opt_D_dump_simpl_trace
    | Opt_D_dump_occur_anal
    | Opt_D_dump_parsed
    | Opt_D_dump_rn
@@ -270,7 +276,7 @@ data GeneralFlag
    | Opt_DoEtaReduction
    | Opt_CaseMerge
    | Opt_UnboxStrictFields
-   | Opt_UnboxStrictPrimitiveFields
+   | Opt_UnboxSmallStrictFields
    | Opt_DictsCheap
    | Opt_EnableRewriteRules             -- Apply rewrite rules during simplification
    | Opt_Vectorise
@@ -383,6 +389,7 @@ data GeneralFlag
 
 data WarningFlag =
      Opt_WarnDuplicateExports
+   | Opt_WarnDuplicateConstraints
    | Opt_WarnHiShadows
    | Opt_WarnImplicitPrelude
    | Opt_WarnIncompletePatterns
@@ -466,6 +473,7 @@ data ExtensionFlag
    | Opt_ImplicitParams
    | Opt_ImplicitPrelude
    | Opt_ScopedTypeVariables
+   | Opt_AllowAmbiguousTypes
    | Opt_UnboxedTuples
    | Opt_BangPatterns
    | Opt_TypeFamilies
@@ -528,6 +536,7 @@ data ExtensionFlag
    | Opt_LambdaCase
    | Opt_MultiWayIf
    | Opt_TypeHoles
+   | Opt_EmptyCase
    deriving (Eq, Enum, Show)
 
 -- | Contains not only a collection of 'GeneralFlag's but also a plethora of
@@ -587,6 +596,7 @@ data DynFlags = DynFlags {
   dynHiSuf              :: String,
 
   outputFile            :: Maybe String,
+  dynOutputFile         :: Maybe String,
   outputHi              :: Maybe String,
   dynLibLoader          :: DynLibLoader,
 
@@ -700,7 +710,7 @@ data DynFlags = DynFlags {
 
   interactivePrint      :: Maybe String,
 
-  llvmVersion           :: IORef (Int),
+  llvmVersion           :: IORef Int,
 
   nextWrapperNum        :: IORef Int
  }
@@ -1118,17 +1128,30 @@ whenGeneratingDynamicToo :: MonadIO m => DynFlags -> m () -> m ()
 whenGeneratingDynamicToo dflags f = ifGeneratingDynamicToo dflags f (return ())
 
 ifGeneratingDynamicToo :: MonadIO m => DynFlags -> m a -> m a -> m a
-ifGeneratingDynamicToo dflags f g
+ifGeneratingDynamicToo dflags f g = generateDynamicTooConditional dflags f g g
+
+whenCannotGenerateDynamicToo :: MonadIO m => DynFlags -> m () -> m ()
+whenCannotGenerateDynamicToo dflags f
+    = ifCannotGenerateDynamicToo dflags f (return ())
+
+ifCannotGenerateDynamicToo :: MonadIO m => DynFlags -> m a -> m a -> m a
+ifCannotGenerateDynamicToo dflags f g
+    = generateDynamicTooConditional dflags g f g
+
+generateDynamicTooConditional :: MonadIO m
+                              => DynFlags -> m a -> m a -> m a -> m a
+generateDynamicTooConditional dflags canGen cannotGen notTryingToGen
     = if gopt Opt_BuildDynamicToo dflags
       then do let ref = canGenerateDynamicToo dflags
               b <- liftIO $ readIORef ref
-              if b then f else g
-      else g
+              if b then canGen else cannotGen
+      else notTryingToGen
 
 doDynamicToo :: DynFlags -> DynFlags
 doDynamicToo dflags0 = let dflags1 = unSetGeneralFlag' Opt_Static dflags0
                            dflags2 = addWay' WayDyn dflags1
                            dflags3 = dflags2 {
+                                         outputFile = dynOutputFile dflags2,
                                          hiSuf = dynHiSuf dflags2,
                                          objectSuf = dynObjectSuf dflags2
                                      }
@@ -1207,6 +1230,7 @@ defaultDynFlags mySettings =
         pluginModNameOpts       = [],
 
         outputFile              = Nothing,
+        dynOutputFile           = Nothing,
         outputHi                = Nothing,
         dynLibLoader            = SystemDependent,
         dumpPrefix              = Nothing,
@@ -1417,6 +1441,7 @@ dopt f dflags = (fromEnum f `IntSet.member` dumpFlags dflags)
           enableIfVerbose Opt_D_dump_splices                = False
           enableIfVerbose Opt_D_dump_rule_firings           = False
           enableIfVerbose Opt_D_dump_rule_rewrites          = False
+          enableIfVerbose Opt_D_dump_simpl_trace            = False
           enableIfVerbose Opt_D_dump_rtti                   = False
           enableIfVerbose Opt_D_dump_inlinings              = False
           enableIfVerbose Opt_D_dump_core_stats             = False
@@ -1578,7 +1603,7 @@ setObjectDir, setHiDir, setStubDir, setDumpDir, setOutputDir,
          addCmdlineFramework, addHaddockOpts, addGhciScript, 
          setInteractivePrint
    :: String -> DynFlags -> DynFlags
-setOutputFile, setOutputHi, setDumpPrefixForce
+setOutputFile, setDynOutputFile, setOutputHi, setDumpPrefixForce
    :: Maybe String -> DynFlags -> DynFlags
 
 setObjectDir  f d = d{ objectDir  = Just f}
@@ -1598,6 +1623,7 @@ setDynHiSuf     f d = d{ dynHiSuf     = f}
 setHcSuf        f d = d{ hcSuf        = f}
 
 setOutputFile f d = d{ outputFile = f}
+setDynOutputFile f d = d{ dynOutputFile = f}
 setOutputHi   f d = d{ outputHi   = f}
 
 addPluginModuleName :: String -> DynFlags -> DynFlags
@@ -1780,11 +1806,31 @@ parseDynamicFlagsFull activeFlags cmdline dflags0 args = do
       throwGhcException (CmdLineError ("combination not supported: "  ++
                               intercalate "/" (map wayDesc theWays)))
 
-  let (dflags4, consistency_warnings) = makeDynFlagsConsistent dflags3
+  -- TODO: This is an ugly hack. Do something better.
+  -- -fPIC affects the CMM code we generate, so if
+  -- we are in -dynamic-too mode we need -fPIC to be on during the
+  -- shared part of the compilation.
+  let doingDynamicToo = gopt Opt_BuildDynamicToo dflags3
+      platform = targetPlatform dflags3
+      dflags4 = if doingDynamicToo
+                then foldr setGeneralFlag' dflags3
+                           (wayGeneralFlags platform WayDyn)
+                else dflags3
 
-  liftIO $ setUnsafeGlobalDynFlags dflags4
+  {-
+  TODO: This test doesn't quite work: We don't want to give an error
+  when e.g. compiling a C file, only when compiling Haskell files.
+  when doingDynamicToo $
+      unless (isJust (outputFile dflags4) == isJust (dynOutputFile dflags4)) $
+          throwGhcException $ CmdLineError
+              "With -dynamic-too, must give -dyno iff giving -o"
+  -}
 
-  return (dflags4, leftover, consistency_warnings ++ sh_warns ++ warns)
+  let (dflags5, consistency_warnings) = makeDynFlagsConsistent dflags4
+
+  liftIO $ setUnsafeGlobalDynFlags dflags5
+
+  return (dflags5, leftover, consistency_warnings ++ sh_warns ++ warns)
 
 updateWays :: DynFlags -> DynFlags
 updateWays dflags
@@ -1976,6 +2022,7 @@ dynamic_flags = [
         ------- Output Redirection ------------------------------------------
   , Flag "odir"              (hasArg setObjectDir)
   , Flag "o"                 (sepArg (setOutputFile . Just))
+  , Flag "dyno"              (sepArg (setDynOutputFile . Just))
   , Flag "ohi"               (hasArg (setOutputHi . Just ))
   , Flag "osuf"              (hasArg setObjectSuf)
   , Flag "dynosuf"           (hasArg setDynObjectSuf)
@@ -2053,18 +2100,17 @@ dynamic_flags = [
   , Flag "dstg-stats"     (NoArg (setGeneralFlag Opt_StgStats))
 
   , Flag "ddump-cmm"               (setDumpFlag Opt_D_dump_cmm)
-  , Flag "ddump-raw-cmm"           (setDumpFlag Opt_D_dump_raw_cmm)
-  , Flag "ddump-cmmz"              (setDumpFlag Opt_D_dump_cmmz)
-  , Flag "ddump-cmmz-cfg"          (setDumpFlag Opt_D_dump_cmmz_cfg)
-  , Flag "ddump-cmmz-cbe"          (setDumpFlag Opt_D_dump_cmmz_cbe)
-  , Flag "ddump-cmmz-proc"         (setDumpFlag Opt_D_dump_cmmz_proc)
-  , Flag "ddump-cmmz-rewrite"      (setDumpFlag Opt_D_dump_cmmz_rewrite)
-  , Flag "ddump-cmmz-sp"           (setDumpFlag Opt_D_dump_cmmz_sp)
-  , Flag "ddump-cmmz-procmap"      (setDumpFlag Opt_D_dump_cmmz_procmap)
-  , Flag "ddump-cmmz-split"        (setDumpFlag Opt_D_dump_cmmz_split)
-  , Flag "ddump-cmmz-info"         (setDumpFlag Opt_D_dump_cmmz_info)
+  , Flag "ddump-cmm-raw"           (setDumpFlag Opt_D_dump_cmm_raw)
+  , Flag "ddump-cmm-cfg"           (setDumpFlag Opt_D_dump_cmm_cfg)
+  , Flag "ddump-cmm-cbe"           (setDumpFlag Opt_D_dump_cmm_cbe)
+  , Flag "ddump-cmm-proc"          (setDumpFlag Opt_D_dump_cmm_proc)
+  , Flag "ddump-cmm-rewrite"       (setDumpFlag Opt_D_dump_cmm_rewrite)
+  , Flag "ddump-cmm-sp"            (setDumpFlag Opt_D_dump_cmm_sp)
+  , Flag "ddump-cmm-procmap"       (setDumpFlag Opt_D_dump_cmm_procmap)
+  , Flag "ddump-cmm-split"         (setDumpFlag Opt_D_dump_cmm_split)
+  , Flag "ddump-cmm-info"          (setDumpFlag Opt_D_dump_cmm_info)
+  , Flag "ddump-cmm-cps"           (setDumpFlag Opt_D_dump_cmm_cps)
   , Flag "ddump-core-stats"        (setDumpFlag Opt_D_dump_core_stats)
-  , Flag "ddump-cps-cmm"           (setDumpFlag Opt_D_dump_cps_cmm)
   , Flag "ddump-asm"               (setDumpFlag Opt_D_dump_asm)
   , Flag "ddump-asm-native"        (setDumpFlag Opt_D_dump_asm_native)
   , Flag "ddump-asm-liveness"      (setDumpFlag Opt_D_dump_asm_liveness)
@@ -2081,6 +2127,7 @@ dynamic_flags = [
   , Flag "ddump-inlinings"         (setDumpFlag Opt_D_dump_inlinings)
   , Flag "ddump-rule-firings"      (setDumpFlag Opt_D_dump_rule_firings)
   , Flag "ddump-rule-rewrites"     (setDumpFlag Opt_D_dump_rule_rewrites)
+  , Flag "ddump-simpl-trace"       (setDumpFlag Opt_D_dump_simpl_trace)
   , Flag "ddump-occur-anal"        (setDumpFlag Opt_D_dump_occur_anal)
   , Flag "ddump-parsed"            (setDumpFlag Opt_D_dump_parsed)
   , Flag "ddump-rn"                (setDumpFlag Opt_D_dump_rn)
@@ -2137,6 +2184,11 @@ dynamic_flags = [
   , Flag "monly-4-regs" (NoArg (addWarn "The -monly-4-regs flag does nothing; it will be removed in a future GHC release"))
   , Flag "msse2"        (NoArg (setGeneralFlag Opt_SSE2))
   , Flag "msse4.2"      (NoArg (setGeneralFlag Opt_SSE4_2))
+    -- at some point we should probably have a single SSE flag that
+    -- contains the SSE version, instead of having a different flag
+    -- per version. That would make it easier to e.g. check if SSE2 is
+    -- enabled as you wouldn't have to check if either Opt_SSE2 or
+    -- Opt_SSE4_2 is set (as the latter implies the former).
 
      ------ Warning opts -------------------------------------------------
   , Flag "W"      (NoArg (mapM_ setWarningFlag minusWOpts))
@@ -2314,6 +2366,7 @@ fWarningFlags = [
   ( "warn-dodgy-exports",               Opt_WarnDodgyExports, nop ),
   ( "warn-dodgy-imports",               Opt_WarnDodgyImports, nop ),
   ( "warn-duplicate-exports",           Opt_WarnDuplicateExports, nop ),
+  ( "warn-duplicate-constraints",       Opt_WarnDuplicateConstraints, nop ),
   ( "warn-hi-shadowing",                Opt_WarnHiShadows, nop ),
   ( "warn-implicit-prelude",            Opt_WarnImplicitPrelude, nop ),
   ( "warn-incomplete-patterns",         Opt_WarnIncompletePatterns, nop ),
@@ -2389,7 +2442,7 @@ fFlags = [
   ( "do-eta-reduction",                 Opt_DoEtaReduction, nop ),
   ( "case-merge",                       Opt_CaseMerge, nop ),
   ( "unbox-strict-fields",              Opt_UnboxStrictFields, nop ),
-  ( "unbox-strict-primitive-fields",    Opt_UnboxStrictPrimitiveFields, nop ),
+  ( "unbox-small-strict-fields",        Opt_UnboxSmallStrictFields, nop ),
   ( "dicts-cheap",                      Opt_DictsCheap, nop ),
   ( "excess-precision",                 Opt_ExcessPrecision, nop ),
   ( "eager-blackholing",                Opt_EagerBlackHoling, nop ),
@@ -2571,6 +2624,7 @@ xFlags = [
   ( "ExtendedDefaultRules",             Opt_ExtendedDefaultRules, nop ),
   ( "ImplicitParams",                   Opt_ImplicitParams, nop ),
   ( "ScopedTypeVariables",              Opt_ScopedTypeVariables, nop ),
+  ( "AllowAmbiguousTypes",              Opt_AllowAmbiguousTypes, nop),
 
   ( "PatternSignatures",                Opt_ScopedTypeVariables,
     deprecatedForExtension "ScopedTypeVariables" ),
@@ -2595,7 +2649,8 @@ xFlags = [
   ( "UndecidableInstances",             Opt_UndecidableInstances, nop ),
   ( "IncoherentInstances",              Opt_IncoherentInstances, nop ),
   ( "PackageImports",                   Opt_PackageImports, nop ),
-  ( "TypeHoles",                        Opt_TypeHoles, nop )
+  ( "TypeHoles",                        Opt_TypeHoles, nop ),
+  ( "EmptyCase",                        Opt_EmptyCase, nop )
   ]
 
 defaultFlags :: Settings -> [GeneralFlag]
@@ -2733,7 +2788,8 @@ standardWarnings
         Opt_WarnPointlessPragmas,
         Opt_WarnUnsupportedCallingConventions,
         Opt_WarnInlineRuleShadowing,
-        Opt_WarnTypeableInstances
+        Opt_WarnTypeableInstances,
+        Opt_WarnDuplicateConstraints
       ]
 
 minusWOpts :: [WarningFlag]
@@ -3354,3 +3410,21 @@ makeDynFlagsConsistent dflags
           arch = platformArch platform
           os   = platformOS   platform
 
+-- -----------------------------------------------------------------------------
+-- SSE
+
+isSse2Enabled :: DynFlags -> Bool
+isSse2Enabled dflags = isSse4_2Enabled dflags || isSse2Enabled'
+  where
+    isSse2Enabled' = case platformArch (targetPlatform dflags) of
+        ArchX86_64 -> -- SSE2 is fixed on for x86_64.  It would be
+                      -- possible to make it optional, but we'd need to
+                      -- fix at least the foreign call code where the
+                      -- calling convention specifies the use of xmm regs,
+                      -- and possibly other places.
+                      True
+        ArchX86    -> gopt Opt_SSE2 dflags
+        _          -> False
+
+isSse4_2Enabled :: DynFlags -> Bool
+isSse4_2Enabled dflags = gopt Opt_SSE4_2 dflags

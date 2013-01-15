@@ -950,6 +950,7 @@ test.hs:(5,4)-(6,7):
     <option>-fwarn-overlapping-patterns</option>,
     <option>-fwarn-warnings-deprecations</option>,
     <option>-fwarn-deprecated-flags</option>,
+    <option>-fwarn-duplicate-constraints</option>,
     <option>-fwarn-duplicate-exports</option>,
     <option>-fwarn-missing-fields</option>,
     <option>-fwarn-missing-methods</option>,
@@ -1192,6 +1193,24 @@ foreign import "&amp;f" f :: FunPtr t
       <literal>where !(I# x) = ...</literal> instead. This will be an
       error, rather than a warning, in GHC 7.2.
       </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-fwarn-duplicate-constraints</option>:</term>
+        <listitem>
+          <indexterm><primary><option>-fwarn-duplicate-constraints</option></primary></indexterm>
+          <indexterm><primary>duplicate constraints, warning</primary></indexterm>
+
+          <para>Have the compiler warn about duplicate constraints in a type signature. For
+          example
+          <programlisting>
+             f :: (Eq a, Show a, Eq a) => a -> a
+          </programlisting>
+          The warning will indicate the duplicated <literal>Eq a</literal> constraint.
+          </para>
+
+          <para>This option is on by default.</para>
         </listitem>
       </varlistentry>
 
@@ -1876,8 +1895,8 @@ f "2"    = 2
 
         <varlistentry>
           <term>
-            <option>-funbox-strict-primitive-fields</option>:
-            <indexterm><primary><option>-funbox-strict-primitive-fields</option></primary></indexterm>
+            <option>-funbox-small-strict-fields</option>:
+            <indexterm><primary><option>-funbox-small-strict-fields</option></primary></indexterm>
             <indexterm><primary>strict constructor fields</primary></indexterm>
             <indexterm><primary>constructor fields, strict</primary></indexterm>
           </term>
@@ -1888,7 +1907,7 @@ f "2"    = 2
             pointer to be unpacked, if possible. It is equivalent to
             adding an <literal>UNPACK</literal> pragma (see <xref
             linkend="unpack-pragma"/>) to every strict constructor
-            field that fullfills the size restriction.
+            field that fulfils the size restriction.
             </para>
 
             <para>For example, the constructor fields in the following
@@ -1902,12 +1921,12 @@ data D = D !C
             would all be represented by a single
             <literal>Int#</literal> (see <xref linkend="primitives"/>)
             value with
-            <option>-funbox-strict-primitive-fields</option> enabled.
+            <option>-funbox-small-strict-fields</option> enabled.
             </para>
 
             <para>This option is less of a sledgehammer than
             <option>-funbox-strict-fields</option>: it should rarely make things
-            worse. If you use <option>-funbox-strict-primitive-fields</option>
+            worse. If you use <option>-funbox-small-strict-fields</option>
             to turn on unboxing by default you can disable it for certain
             constructor fields using the <literal>NOUNPACK</literal> pragma (see
             <xref linkend="nounpack-pragma"/>).</para>

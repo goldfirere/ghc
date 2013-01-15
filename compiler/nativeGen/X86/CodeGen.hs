@@ -71,20 +71,12 @@ is32BitPlatform = do
 sse2Enabled :: NatM Bool
 sse2Enabled = do
   dflags <- getDynFlags
-  case platformArch (targetPlatform dflags) of
-      ArchX86_64 -> -- SSE2 is fixed on for x86_64.  It would be
-                    -- possible to make it optional, but we'd need to
-                    -- fix at least the foreign call code where the
-                    -- calling convention specifies the use of xmm regs,
-                    -- and possibly other places.
-                    return True
-      ArchX86    -> return (gopt Opt_SSE2 dflags || gopt Opt_SSE4_2 dflags)
-      _          -> panic "sse2Enabled: Not an X86* arch"
+  return (isSse2Enabled dflags)
 
 sse4_2Enabled :: NatM Bool
 sse4_2Enabled = do
   dflags <- getDynFlags
-  return (gopt Opt_SSE4_2 dflags)
+  return (isSse4_2Enabled dflags)
 
 if_sse2 :: NatM a -> NatM a -> NatM a
 if_sse2 sse2 x87 = do
@@ -1659,6 +1651,17 @@ genCCall is32Bit (PrimTarget (MO_PopCnt width)) dest_regs@[dst]
     size = intSize width
     lbl = mkCmmCodeLabel primPackageId (fsLit (popCntLabel width))
 
+genCCall is32Bit (PrimTarget (MO_UF_Conv width)) dest_regs args = do
+    dflags <- getDynFlags
+    targetExpr <- cmmMakeDynamicReference dflags addImportNat
+                  CallReference lbl
+    let target = ForeignTarget targetExpr (ForeignConvention CCallConv
+                                           [NoHint] [NoHint]
+                                           CmmMayReturn)
+    genCCall is32Bit target dest_regs args
+  where
+    lbl = mkCmmCodeLabel primPackageId (fsLit (word2FloatLabel width))
+
 genCCall is32Bit target dest_regs args
  | is32Bit   = genCCall32 target dest_regs args
  | otherwise = genCCall64 target dest_regs args
@@ -2279,6 +2282,8 @@ outOfLineCmmOp mop res args
               MO_Memmove   -> fsLit "memmove"
 
               MO_PopCnt _  -> fsLit "popcnt"
+
+              MO_UF_Conv _ -> unsupported
 
               MO_S_QuotRem {}  -> unsupported
               MO_U_QuotRem {}  -> unsupported

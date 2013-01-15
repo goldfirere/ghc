@@ -19,7 +19,7 @@ module FunDeps (
         FDEq (..),
  	Equation(..), pprEquation,
 	oclose, improveFromInstEnv, improveFromAnother,
-	checkInstCoverage, checkFunDeps,
+	checkInstCoverage, checkInstLiberalCoverage, checkFunDeps,
 	pprFundeps
     ) where
 
@@ -28,9 +28,7 @@ module FunDeps (
 import Name
 import Var
 import Class
-import Id( idType )
 import Type
-import TcType( tcSplitDFunTy )
 import Unify
 import InstEnv
 import VarSet
@@ -147,6 +145,54 @@ oclose preds fixed_tvs
             ClassPred cls tys -> [(cls, tys)]
             TuplePred ts      -> concatMap classesOfPredTy ts
             _                 -> []
+
+-- XXX: Combine the two `oclose`s.
+
+{- An alternative implementation of `oclose` used in the "liberal" coverage
+condition. Differences:
+
+  1. The empty set of variables is allowed to determine stuff,
+  2. We also use equality predicates as FDs.
+
+  For 1:
+    This is needed because otherwise some valid instances are rejected.
+
+  For 2:
+    This is just a nicity, but it makes things a bit more general:
+    if we have an assumption `t1 ~ t2`, then we use the fact that if we know
+    `t1` we also know `t2` and the other way.
+-}
+
+oclose1 :: [PredType] -> TyVarSet -> TyVarSet
+oclose1 preds fixed_tvs
+  | null tv_fds = fixed_tvs -- Fast escape hatch for common case.
+  | otherwise   = loop fixed_tvs
+  where
+    loop fixed_tvs
+      | new_fixed_tvs `subVarSet` fixed_tvs = fixed_tvs
+      | otherwise                           = loop new_fixed_tvs
+      where new_fixed_tvs = foldl extend fixed_tvs tv_fds
+
+    extend fixed_tvs (ls,rs)
+        | ls `subVarSet` fixed_tvs = fixed_tvs `unionVarSet` rs
+        | otherwise                = fixed_tvs
+
+    tv_fds  :: [(TyVarSet,TyVarSet)]
+    tv_fds  = [ (tyVarsOfTypes xs, tyVarsOfTypes ys)
+              | (xs, ys) <- concatMap deterimned preds
+              ]
+
+    deterimned :: PredType -> [([Type],[Type])]
+    deterimned pred
+       = case classifyPredType pred of
+            ClassPred cls tys ->
+               do let (cls_tvs, cls_fds) = classTvsFds cls
+                  fd <- cls_fds
+                  return (instFD fd cls_tvs tys)
+            EqPred t1 t2      -> [([t1],[t2]), ([t2],[t1])]
+            TuplePred ts      -> concatMap deterimned ts
+            _                 -> []
+
 \end{code}
 
     
@@ -348,7 +394,7 @@ checkClsFD :: FunDep TyVar -> [TyVar] 	          -- One functional dependency fr
 	   -> [([TyVar], [FDEq])]
 
 checkClsFD fd clas_tvs 
-           (ClsInst { is_tvs = qtvs, is_tys = tys_inst, is_tcs = rough_tcs_inst, is_dfun = dfun })
+           (ClsInst { is_tvs = qtvs, is_tys = tys_inst, is_tcs = rough_tcs_inst })
            extra_qtvs tys_actual rough_tcs_actual
 
 -- 'qtvs' are the quantified type variables, the ones which an be instantiated 
@@ -420,9 +466,8 @@ checkClsFD fd clas_tvs
                         -- eqType again, since we know for sure that /at least one/ 
                         -- equation in there is useful)
 
-                    (dfun_tvs, _, _, _) = tcSplitDFunTy (idType dfun)
 		    meta_tvs = [ setVarType tv (substTy subst (varType tv))
-                               | tv <- dfun_tvs, tv `notElemTvSubst` subst ]
+                               | tv <- qtvs, tv `notElemTvSubst` subst ]
 		        -- meta_tvs are the quantified type variables
 		        -- that have not been substituted out
 		        --	
@@ -440,7 +485,8 @@ checkClsFD fd clas_tvs
                         --              whose kind mentions that kind variable!
                         --          Trac #6015, #6068
   where
-    bind_fn tv | tv `elemVarSet` qtvs       = BindMe
+    qtv_set = mkVarSet qtvs
+    bind_fn tv | tv `elemVarSet` qtv_set    = BindMe
                | tv `elemVarSet` extra_qtvs = BindMe
 	       | otherwise	            = Skolem
 
@@ -473,6 +519,23 @@ checkInstCoverage clas inst_taus
     fundep_ok fd  = tyVarsOfTypes rs `subVarSet` tyVarsOfTypes ls
 		 where
 		   (ls,rs) = instFD fd tyvars inst_taus
+
+checkInstLiberalCoverage :: Class -> [PredType] -> [Type] -> Bool
+-- Check that the Liberal Coverage Condition is obeyed in an instance decl
+-- For example, if we have:
+--    class C a b | a -> b
+--    instance theta => C t1 t2
+-- Then we require fv(t2) `subset` oclose(fv(t1), theta)
+-- This ensures the self-consistency of the instance, but
+-- it does not guarantee termination.
+-- See Note [Coverage Condition] below
+
+checkInstLiberalCoverage clas theta inst_taus
+  = all fundep_ok fds
+  where
+    (tyvars, fds) = classTvsFds clas
+    fundep_ok fd = tyVarsOfTypes rs `subVarSet` oclose1 theta (tyVarsOfTypes ls)
+                    where (ls,rs) = instFD fd tyvars inst_taus
 \end{code}
 
 Note [Coverage condition]
@@ -539,7 +602,7 @@ checkFunDeps inst_envs ispec
   | null bad_fundeps = Nothing
   | otherwise	     = Just bad_fundeps
   where
-    (ins_tvs, _, clas, ins_tys) = instanceHead ispec
+    (ins_tvs, clas, ins_tys) = instanceHead ispec
     ins_tv_set   = mkVarSet ins_tvs
     cls_inst_env = classInstances inst_envs clas
     bad_fundeps  = badFunDeps cls_inst_env clas ins_tv_set ins_tys

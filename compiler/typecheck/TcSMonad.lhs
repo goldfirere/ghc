@@ -84,6 +84,7 @@ module TcSMonad (
     compatKind, mkKindErrorCtxtTcS,
 
     Untouchables, isTouchableMetaTyVarTcS, isFilledMetaTyVar_maybe,
+    zonkTyVarsAndFV,
 
     getDefaultInfo, getDynFlags,
 
@@ -1205,14 +1206,13 @@ emitInsoluble ct
   = do { traceTcS "Emit insoluble" (ppr ct)
        ; updInertTcS add_insol }
   where
+    this_pred = ctPred ct
     add_insol is@(IS { inert_cans = ics@(IC { inert_insols = old_insols }) })
       | already_there = is
       | otherwise     = is { inert_cans = ics { inert_insols = extendCts old_insols ct } }
       where
         already_there = not (isWantedCt ct) && anyBag (eqType this_pred . ctPred) old_insols
 	     -- See Note [Do not add duplicate derived insolubles]
-
-    this_pred = ctPred ct
 
 getTcSImplicsRef :: TcS (IORef (Bag Implication))
 getTcSImplicsRef = TcS (return . tcs_implics) 
@@ -1303,12 +1303,17 @@ isFilledMetaTyVar_maybe tv
                   Indirect ty -> return (Just ty)
                   Flexi       -> return Nothing }
      _ -> return Nothing 
+
+zonkTyVarsAndFV :: TcTyVarSet -> TcS TcTyVarSet
+zonkTyVarsAndFV tvs = wrapTcS (TcM.zonkTyVarsAndFV tvs)
 \end{code}
 
 Note [Do not add duplicate derived insolubles]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In general we *do* want to add an insoluble (Int ~ Bool) even if there is one
-such there already, because they may come from distinct call sites.  But for
+In general we *must* add an insoluble (Int ~ Bool) even if there is
+one such there already, because they may come from distinct call
+sites.  Not only do we want an error message for each, but with
+-fdefer-type-errors we must generate evidence for each.  But for
 *derived* insolubles, we only want to report each one once.  Why?
 
 (a) A constraint (C r s t) where r -> s, say, may generate the same fundep
@@ -1678,7 +1683,7 @@ matchClass clas tys
 	}
         }
 
-matchFam :: TyCon -> [Type] -> TcS (Maybe (FamInst, [Type]))
+matchFam :: TyCon -> [Type] -> TcS (Maybe FamInstMatch)
 matchFam tycon args = wrapTcS $ tcLookupFamInst tycon args
 \end{code}
 

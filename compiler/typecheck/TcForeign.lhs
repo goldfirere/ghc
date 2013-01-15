@@ -47,7 +47,6 @@ import Platform
 import SrcLoc
 import Bag
 import FastString
-import Util
 
 import Control.Monad
 \end{code}
@@ -91,7 +90,7 @@ normaliseFfiType' env ty0 = go [] ty0
         = do { rdr_env <- getGlobalRdrEnv 
              ; case checkNewtypeFFI rdr_env rec_nts tc of
                  Nothing  -> children_only
-                 Just gre -> do { let nt_co = mkAxInstCo (newTyConCo tc) tys
+                 Just gre -> do { let nt_co = mkUnbranchedAxInstCo (newTyConCo tc) tys
                                 ; (co', ty', gres) <- go rec_nts' nt_rhs
                                 ; return (mkTransCo nt_co co', ty', gre `consBag` gres) } }
 
@@ -213,11 +212,11 @@ tcFImport d = pprPanic "tcFImport" (ppr d)
 tcCheckFIType :: Type -> [Type] -> Type -> ForeignImport -> TcM ForeignImport
 
 tcCheckFIType sig_ty arg_tys res_ty (CImport cconv safety mh l@(CLabel _))
-  = ASSERT( null arg_tys )
-    do checkCg checkCOrAsmOrLlvmOrInterp
+  -- Foreign import label
+  = do checkCg checkCOrAsmOrLlvmOrInterp
        -- NB check res_ty not sig_ty!
        --    In case sig_ty is (forall a. ForeignPtr a)
-       check (isFFILabelTy res_ty) (illegalForeignTyErr empty sig_ty)
+       check (null arg_tys && isFFILabelTy res_ty) (illegalForeignLabelErr sig_ty)
        cconv' <- checkCConv cconv
        return (CImport cconv' safety mh l)
 
@@ -256,7 +255,7 @@ tcCheckFIType sig_ty arg_tys res_ty idecl@(CImport cconv safety mh (CFunction ta
       dflags <- getDynFlags
       check (xopt Opt_GHCForeignImportPrim dflags)
             (text "Use -XGHCForeignImportPrim to allow `foreign import prim'.")
-      checkCg (checkCOrAsmOrLlvmOrDotNetOrInterp)
+      checkCg checkCOrAsmOrLlvmOrInterp
       checkCTarget target
       check (playSafe safety)
             (text "The safe/unsafe annotation should not be used with `foreign import prim'.")
@@ -265,7 +264,7 @@ tcCheckFIType sig_ty arg_tys res_ty idecl@(CImport cconv safety mh (CFunction ta
       checkForeignRes nonIOok checkSafe (isFFIPrimResultTy dflags) res_ty
       return idecl
   | otherwise = do              -- Normal foreign import
-      checkCg checkCOrAsmOrLlvmOrDotNetOrInterp
+      checkCg checkCOrAsmOrLlvmOrInterp
       cconv' <- checkCConv cconv
       checkCTarget target
       dflags <- getDynFlags
@@ -284,7 +283,7 @@ tcCheckFIType sig_ty arg_tys res_ty idecl@(CImport cconv safety mh (CFunction ta
 -- that the C identifier is valid for C
 checkCTarget :: CCallTarget -> TcM ()
 checkCTarget (StaticTarget str _ _) = do
-    checkCg checkCOrAsmOrLlvmOrDotNetOrInterp
+    checkCg checkCOrAsmOrLlvmOrInterp
     check (isCLabelString str) (badCName str)
 
 checkCTarget DynamicTarget = panic "checkCTarget DynamicTarget"
@@ -428,7 +427,7 @@ checkCOrAsmOrLlvm HscC    = Nothing
 checkCOrAsmOrLlvm HscAsm  = Nothing
 checkCOrAsmOrLlvm HscLlvm = Nothing
 checkCOrAsmOrLlvm _
-  = Just (text "requires via-C, llvm (-fllvm) or native code generation (-fvia-C)")
+  = Just (text "requires unregisterised, llvm (-fllvm) or native code generation (-fasm)")
 
 checkCOrAsmOrLlvmOrInterp :: HscTarget -> Maybe SDoc
 checkCOrAsmOrLlvmOrInterp HscC           = Nothing
@@ -436,15 +435,7 @@ checkCOrAsmOrLlvmOrInterp HscAsm         = Nothing
 checkCOrAsmOrLlvmOrInterp HscLlvm        = Nothing
 checkCOrAsmOrLlvmOrInterp HscInterpreted = Nothing
 checkCOrAsmOrLlvmOrInterp _
-  = Just (text "requires interpreted, C, Llvm or native code generation")
-
-checkCOrAsmOrLlvmOrDotNetOrInterp :: HscTarget -> Maybe SDoc
-checkCOrAsmOrLlvmOrDotNetOrInterp HscC           = Nothing
-checkCOrAsmOrLlvmOrDotNetOrInterp HscAsm         = Nothing
-checkCOrAsmOrLlvmOrDotNetOrInterp HscLlvm        = Nothing
-checkCOrAsmOrLlvmOrDotNetOrInterp HscInterpreted = Nothing
-checkCOrAsmOrLlvmOrDotNetOrInterp _
-  = Just (text "requires interpreted, C, Llvm or native code generation")
+  = Just (text "requires interpreted, unregisterised, llvm or native code generation")
 
 checkCg :: (HscTarget -> Maybe SDoc) -> TcM ()
 checkCg check = do
@@ -482,6 +473,11 @@ Warnings
 check :: Bool -> MsgDoc -> TcM ()
 check True _       = return ()
 check _    the_err = addErrTc the_err
+
+illegalForeignLabelErr :: Type -> SDoc
+illegalForeignLabelErr ty
+  = vcat [ illegalForeignTyErr empty ty
+         , ptext (sLit "A foreign-imported address (via &foo) must have type (Ptr a) or (FunPtr a)") ]
 
 illegalForeignTyErr :: SDoc -> Type -> SDoc
 illegalForeignTyErr arg_or_res ty
