@@ -90,7 +90,6 @@ tcPolyExpr expr res_ty
 
 tcPolyExprNC expr res_ty
   = do { traceTc "tcPolyExprNC" (ppr res_ty)
-       ; traceTc "RAE 100" (ppr (typeKind res_ty))
        ; (gen_fn, expr') <- tcGen GenSigCtxt res_ty $ \ _ rho ->
 			    tcMonoExprNC expr rho
        ; return (mkLHsWrap gen_fn expr') }

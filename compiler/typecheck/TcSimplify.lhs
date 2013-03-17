@@ -279,11 +279,8 @@ simplifyInfer _top_lvl apply_mr name_taus wanteds
 
        -- NB: quant_pred_candidates is already the fixpoint of any 
        --     unifications that may have happened
-       ; traceTc "RAE 2" empty
        ; gbl_tvs        <- tcGetGlobalTyVars
-       ; traceTc "RAE 3" empty
        ; zonked_tau_tvs <- TcM.zonkTyCoVarsAndFV (tyCoVarsOfTypes (map snd name_taus))
-       ; traceTc "RAE 4" empty
        ; let init_tvs  = zonked_tau_tvs `minusVarSet` gbl_tvs
              poly_qtvs = growThetaTyCoVars quant_pred_candidates init_tvs 
                          `minusVarSet` gbl_tvs
@@ -589,10 +586,7 @@ solveWantedsTcMWithEvBinds :: EvBindsVar
 solveWantedsTcMWithEvBinds ev_binds_var wc tcs_action
   = do { traceTc "solveWantedsTcMWithEvBinds" $ text "wanted=" <+> ppr wc
        ; wc2 <- runTcSWithEvBinds ev_binds_var (tcs_action wc)
-       ; traceTc "RAE 5" empty
-       ; x <- zonkWC ev_binds_var wc2
-       ; traceTc "RAE 6" empty
-       ; return x }
+       ; zonkWC ev_binds_var wc2 }
          -- See Note [Zonk after solving]
 
 solveWantedsTcM :: WantedConstraints -> TcM (WantedConstraints, Bag EvBind)

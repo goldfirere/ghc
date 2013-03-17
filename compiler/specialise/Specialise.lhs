@@ -1052,8 +1052,7 @@ specCalls env rules_for_me calls_for_me fn rhs
     -- pprTrace "specDefn: none" (ppr fn <+> ppr calls_for_me) $
     return ([], [], emptyUDs)
   where
-    _trace_doc = sep [ ppr fn_type, ppr rhs -- RAE
-                     , ppr rhs_tyvars, ppr n_tyvars
+    _trace_doc = sep [ ppr rhs_tyvars, ppr n_tyvars
                      , ppr rhs_ids, ppr n_dicts
                      , ppr (idInlineActivation fn) ]
 

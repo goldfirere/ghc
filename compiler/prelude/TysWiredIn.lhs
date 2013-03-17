@@ -429,8 +429,10 @@ unboxedPairDataCon = tupleCon   UnboxedTuple 2
 
 \begin{code}
 eqTyCon :: TyCon
-eqTyCon = mkAlgTyCon eqTyConName
-            (mkForAllTys [kv1, kv2] $ mkArrowKinds [k1, k2] constraintKind)
+eqTyCon = tc 
+  where
+    tc = mkAlgTyCon eqTyConName
+            kind
             [kv1, kv2, a, b]
             Nothing
             []      -- No stupid theta
@@ -438,8 +440,9 @@ eqTyCon = mkAlgTyCon eqTyConName
             NoParentTyCon
             NonRecursive
             False
-            Nothing   -- No parent for constraint-kinded types
-  where
+            (Just (mkPromotedTyCon tc (promoteKind kind)))
+
+    kind = mkForAllTys [kv1, kv2] $ mkArrowKinds [k1, k2] constraintKind
     kv1:kv2:_ = drop 9 (tyVarList superKind) -- gets j and k
     k1 = mkOnlyTyVarTy kv1
     k2 = mkOnlyTyVarTy kv2

@@ -711,11 +711,8 @@ zonkWCRec :: EvBindsVar
           -> WantedConstraints -> TcM WantedConstraints
 zonkWCRec binds_var untch (WC { wc_flat = flat, wc_impl = implic, wc_insol = insol })
   = do { flat'   <- zonkFlats binds_var untch flat
-       ; traceTc "RAE 7" empty
        ; implic' <- mapBagM zonkImplication implic
-       ; traceTc "RAE 8" empty
        ; insol'  <- zonkCts insol -- No need to do the more elaborate zonkFlats thing
-       ; traceTc "RAE 9" empty
        ; return (WC { wc_flat = flat', wc_impl = implic', wc_insol = insol' }) }
 
 zonkFlats :: EvBindsVar -> Untouchables -> Cts -> TcM Cts
@@ -814,35 +811,13 @@ zonkCt ct
 
 zonkCtEvidence :: CtEvidence -> TcM CtEvidence
 zonkCtEvidence ctev@(CtGiven { ctev_pred = pred }) 
-  = do { traceTc "RAE 10" empty
-       ; pred' <- zonkTcType pred
+  = do { pred' <- zonkTcType pred
        ; return (ctev { ctev_pred = pred'}) }
 zonkCtEvidence ctev@(CtWanted { ctev_pred = pred })
-  = do { traceTc "RAE 13" empty
---       ; return $! seqType pred -- RAE
-       ; traceTc "RAE 14" empty
-       ; case splitTyConApp_maybe pred of
-                     Just (tc, [k1,k2,unit,app])
-                       | tc `hasKey` eqTyConKey
-                       , Just (a,b) <- splitAppTy_maybe app
-                       -> do { traceTc "RAE 15" (ppr tc)
-                             ; traceTc "RAE 16" (ppr unit)
-                             ; traceTc "RAE 17" (ppr (typeKind unit))
-                             ; traceTc "RAE 18" (ppr a)
-                             ; traceTc "RAE 19" (ppr (typeKind a))
-                             ; traceTc "RAE 20" (ppr b)
-                             ; traceTc "RAE 21" (ppr (typeKind b))
-                             ; traceTc "RAE 22" (ppr k1)
-                             ; traceTc "RAE 23" (ppr (typeKind k1))
-                             ; traceTc "RAE 24" (ppr k2)
-                             ; traceTc "RAE 25" (ppr (typeKind k2)) }
-                     _ -> return () -- RAE
-       ; traceTc "RAE 11" (ppr pred)
-       ; pred' <- zonkTcType pred
+  = do { pred' <- zonkTcType pred
        ; return (ctev { ctev_pred = pred' }) }
 zonkCtEvidence ctev@(CtDerived { ctev_pred = pred })
-  = do { traceTc "RAE 12" empty
-       ; pred' <- zonkTcType pred
+  = do { pred' <- zonkTcType pred
        ; return (ctev { ctev_pred = pred' }) }
 
 zonkSkolemInfo :: SkolemInfo -> TcM SkolemInfo

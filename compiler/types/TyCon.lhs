@@ -1229,6 +1229,7 @@ isRecursiveTyCon _                                 = False
 promotableTyCon_maybe :: TyCon -> Maybe TyCon
 promotableTyCon_maybe (AlgTyCon { tcPromoted = prom })   = prom
 promotableTyCon_maybe (TupleTyCon { tcPromoted = prom }) = prom
+promotableTyCon_maybe tc@(PromotedDataCon {})            = Just tc
 promotableTyCon_maybe _                                  = Nothing
 
 promoteTyCon :: TyCon -> TyCon

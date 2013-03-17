@@ -30,7 +30,6 @@ import Type
 import HscTypes
 import TyCon
 import DataCon
-import Var
 import Name
 import NameSet
 import Avail
@@ -39,7 +38,7 @@ import BasicTypes
 import SrcLoc
 import UniqSet
 import Maybes( mapCatMaybes, isJust )
-import Util ( lengthIs, isSingleton )
+import Util ( isSingleton )
 import Data.List
 \end{code}
 
@@ -481,7 +480,6 @@ isPromotableTyCon :: NameSet -> TyCon -> Bool
 isPromotableTyCon rec_tycons tc
   =  isAlgTyCon tc    -- Only algebraic; not even synonyms
                      -- (we could reconsider the latter)
-  && ok_kind (tyConKind tc)
   && case algTyConRhs tc of 
        DataTyCon { data_cons = cs } -> all ok_con cs 
        NewTyCon { data_con = c }    -> ok_con c
@@ -489,17 +487,11 @@ isPromotableTyCon rec_tycons tc
        DataFamilyTyCon {}           -> False
 
   where
-    ok_kind kind = all isLiftedTypeKind args && isLiftedTypeKind res
-            where  -- Checks for * -> ... -> * -> *
-              (args, res) = splitFunTys kind
-
     -- See Note [Promoted data constructors] in TyCon
-    ok_con con = all (isLiftedTypeKind . tyVarKind) ex_tvs
-              && null eq_spec   -- No constraints
-              && null theta
+    ok_con con = null theta
               && all (isPromotableType rec_tycons) orig_arg_tys
        where
-         (_, ex_tvs, eq_spec, theta, orig_arg_tys, _) = dataConFullSig con
+         (_, _, _, theta, orig_arg_tys, _) = dataConFullSig con
 
 
 isPromotableType :: NameSet -> Type -> Bool
@@ -511,8 +503,7 @@ isPromotableType rec_tcs ty
       (_, rho) -> go rho
   where
     go (TyConApp tc tys) 
-      | tys `lengthIs` tyConArity tc 
-      ,  tyConName tc `elemNameSet` rec_tcs 
+      |  tyConName tc `elemNameSet` rec_tcs 
       || isJust (promotableTyCon_maybe tc) 
                        = all go tys
       | otherwise      = False
@@ -521,8 +512,8 @@ isPromotableType rec_tcs ty
     go (ForAllTy _ ty) = go ty
     go (TyVarTy {})    = True
     go (LitTy {})      = False
-    go (CastTy {})     = False
-    go (CoercionTy {}) = False
+    go (CastTy ty _)   = go ty
+    go (CoercionTy {}) = True
 \end{code}
 
 

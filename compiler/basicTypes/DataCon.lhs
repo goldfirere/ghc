@@ -1060,24 +1060,46 @@ The transformation from type to kind is done by promoteType
 -- Assumes the argument satisfies 'isPromotableType'
 promoteType :: Type -> Kind
 promoteType ty
-  = mkForAllTys kvs (go rho)
+  = mkForAllTys kvs (go env0 rho)
   where
     (tvs, rho) = splitForAllTys ty
-    kvs = [ mkKindVar (tyVarName tv) superKind | tv <- tvs ]
-    env = zipVarEnv tvs kvs
+    kvs = [ prom_tv tv | tv <- tvs ]
+    env0 = zipVarEnv tvs kvs
 
-    go (TyConApp tc tys) | Just prom_tc <- promotableTyCon_maybe tc
-                         = mkTyConApp prom_tc (map go tys)
-    go (FunTy arg res)   = mkArrowKind (go arg) (go res)
-    go (TyVarTy tv)      | Just kv <- lookupVarEnv env tv 
-                         = TyVarTy kv
-    go _ = panic "promoteType"  -- Argument did not satisfy isPromotableType
+    go env (TyVarTy tv)      | Just kv <- lookupVarEnv env tv 
+                             = TyVarTy kv
+    go env (AppTy t1 t2)     = mkAppTy (go env t1) (go env t2)
+    go env (TyConApp tc tys) | Just prom_tc <- promotableTyCon_maybe tc
+                             = mkTyConApp prom_tc (map (go env) tys)
+    go env (FunTy arg res)   = mkArrowKind (go env arg) (go env res)
+    go env (ForAllTy tv ty)  = let kv = prom_tv tv
+                                   env' = extendVarEnv env tv (prom_tv tv) in
+                               mkForAllTy kv (go env' ty)
+    go _   t@(LitTy _)       = pprPanic "promoteType 1" (ppr t)
+    go env (CastTy ty co)    = CastTy (go env ty) co
+    go _   t@(CoercionTy _)  = t
+    go _   t                 = pprPanic "promoteType 2" (ppr t)
+
+    prom_tv tv = mkKindVar (tyVarName tv) (promoteKind (tyVarKind tv))
 
 promoteKind :: Kind -> SuperKind
 -- Promote the kind of a type constructor
 -- from (* -> * -> *) to (BOX -> BOX -> BOX) 
-promoteKind (TyConApp tc []) 
-  | isStarKindCon tc = superKind
-promoteKind (FunTy arg res) = FunTy (promoteKind arg) (promoteKind res)
-promoteKind k = pprPanic "promoteKind" (ppr k)
+promoteKind a@(TyVarTy _)      = a
+promoteKind (AppTy t1 t2)      = AppTy (promoteKind t1) (promoteKind t2)
+promoteKind (TyConApp tc args) = TyConApp (promoteTcKind tc) (map promoteKind args) 
+promoteKind (FunTy arg res)    = FunTy (promoteKind arg) (promoteKind res)
+promoteKind (ForAllTy tv ty)   = ForAllTy tv (promoteKind ty)
+promoteKind lit@(LitTy _)      = lit
+  -- don't need to do anything to the coercion, because the typechecker won't care
+  -- and Core doesn't distinguish promoted types from unpromoted types
+promoteKind (CastTy ty co)     = CastTy (promoteKind ty) co
+promoteKind t@(CoercionTy _)   = t
+
+-- changes * to BOX, leaves everything else. This is only called on *kinds*
+-- so anything other than * would have sort BOX already and can't go any higher.
+promoteTcKind :: TyCon -> TyCon
+promoteTcKind tc
+  | isStarKindCon tc = superKindTyCon
+  | otherwise        = tc
 \end{code}

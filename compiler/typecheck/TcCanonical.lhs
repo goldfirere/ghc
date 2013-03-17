@@ -577,6 +577,7 @@ flatten loc _f ctxt ty@(ForAllTy {})
                          -- See Note [Flattening under a forall]
        ; return (mkForAllTys tvs rho', foldr mkTcForAllCo co tvs) }
 
+-- TODO (RAE): Fix this. Requires update of TcCoercion.
 flatten _ _ _ ty@(CastTy {})
   = pprPanic "flatten" (ppr ty)
 flatten _ _ _ ty@(CoercionTy {})

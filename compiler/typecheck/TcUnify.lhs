@@ -562,7 +562,6 @@ uType origin orig_ty1 orig_ty2
        ; traceTc "u_tys " $ vcat 
               [ text "untch" <+> ppr untch
               , sep [ ppr orig_ty1, text "~", ppr orig_ty2]
-              , sep [ ppr (typeKind orig_ty1), text "k~", ppr (typeKind orig_ty2)] -- RAE
               , ppr origin]
        ; co <- go orig_ty1 orig_ty2
        ; if isTcReflCo co

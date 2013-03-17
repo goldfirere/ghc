@@ -259,7 +259,7 @@ Types can be abstracted over coercions, and thus in many places where we used
 to consider only tyvars, we must now also consider the possibility of covars.
 But where, really, can these covars appear? In precisely these locations:
   - the kind of a promoted GADT data constructor
-  - the existential variables of a data constructor (TODO (RAE): Really??)
+  - the existential variables of a data constructor (TODO (RAE): Really?? ~ vs ~#)
   - the type of the constructor Eq# (in type (~))
   - the quantified vars for an axiom branch
   - the type of an id

@@ -282,6 +282,8 @@ liftTcCoSubstWith tvs cos ty
     go ty@(LitTy {})     = mkTcReflCo ty
     go (ForAllTy tv ty)  = mkTcForAllCo tv (go ty)
     go (FunTy t1 t2)     = mkTcFunCo (go t1) (go t2)
+    -- TODO (RAE): Fix this. Requires substantial overhaul of TcCoercion, but it seems
+    -- necessary to support instance methods using promoted GADTs. Argh.
     go ty@(CastTy {})    = pprPanic "liftCoSubstWith CastTy" (ppr ty)
     go ty@(CoercionTy {})= pprPanic "liftCoSubstWith Coercion" (ppr ty)
 \end{code}
