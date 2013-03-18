@@ -464,8 +464,13 @@ tc_hs_type ipTy@(HsIParamTy n ty) exp_kind
 tc_hs_type ty@(HsEqTy ty1 ty2) exp_kind 
   = do { (ty1', kind1) <- tc_infer_lhs_type ty1
        ; (ty2', kind2) <- tc_infer_lhs_type ty2
+       ; checkExpectedKind ty2 kind2
+              (EK kind1 msg_fn)
        ; checkExpectedKind ty constraintKind exp_kind
-       ; return (mkNakedTyConApp eqTyCon [kind1, kind2, ty1', ty2']) }
+       ; return (mkNakedTyConApp eqTyCon [kind1, ty1', ty2']) }
+  where
+    msg_fn pkind = ptext (sLit "The left argument of the equality had kind")
+                   <+> quotes (pprKind pkind)
 
 --------- Misc
 tc_hs_type (HsKindSig ty sig_k) exp_kind 

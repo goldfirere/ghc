@@ -815,10 +815,9 @@ mkTcEqPred :: TcType -> TcType -> Type
 -- But this is horribly delicate: what about type variables
 -- that turn out to be bound to Int#?
 mkTcEqPred ty1 ty2
-  = mkTyConApp eqTyCon [k1, k2, ty1, ty2]
+  = mkTyConApp eqTyCon [k, ty1, ty2]
   where
-    k1 = defaultKind (typeKind ty1)
-    k2 = defaultKind (typeKind ty2)
+    k = defaultKind (typeKind ty1)
 \end{code}
 
 @isTauTy@ tests to see if a type is "simple".  It should not be called on a boxy type.

@@ -1796,10 +1796,15 @@ pprTcApp p pp tc tys
      sep (punctuate comma (map (pp TopPrec) ty_args)))
 
   | not opt_PprStyle_Debug
-  , getUnique tc == eqTyConKey || getUnique tc == eqPrimTyConKey
+  , getUnique tc == eqTyConKey
                            -- We need to special case the type equality TyCons because
-  , [_, _, ty1,ty2] <- tys    -- with kind polymorphism it has 4 args, so won't get printed infix
+  , [_, ty1,ty2] <- tys    -- with kind polymorphism it has 3 or 4 args, so won't get printed infix
                            -- With -dppr-debug switch this off so we can see the kind
+  = pprInfixApp p pp (ppr tc) ty1 ty2
+
+  | not opt_PprStyle_Debug
+  , getUnique tc == eqPrimTyConKey
+  , [_, _, ty1, ty2] <- tys
   = pprInfixApp p pp (ppr tc) ty1 ty2
 
   | otherwise

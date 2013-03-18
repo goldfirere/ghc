@@ -231,7 +231,7 @@ tcCoercionKind co = go co
 
 eqVarKind :: EqVar -> Pair Type
 eqVarKind cv
- | Just (tc, [_kind1,_kind2,ty1,ty2]) <- tcSplitTyConApp_maybe (varType cv)
+ | Just (tc, [_kind,ty1,ty2]) <- tcSplitTyConApp_maybe (varType cv)
  = ASSERT (tc `hasKey` eqTyConKey)
    Pair ty1 ty2
  | otherwise = pprPanic "eqVarKind, non coercion variable" (ppr cv <+> dcolon <+> ppr (varType cv))

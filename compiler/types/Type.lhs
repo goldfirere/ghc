@@ -1039,10 +1039,10 @@ Make PredTypes
 -- | Creates a type equality predicate
 mkEqPred :: Type -> Type -> PredType
 mkEqPred ty1 ty2
-  = TyConApp eqTyCon [k1, k2, ty1, ty2]
+  = WARN( not (k `eqKind` typeKind ty2), ppr ty1 $$ ppr ty2 $$ ppr k $$ ppr (typeKind ty2) )
+    TyConApp eqTyCon [k, ty1, ty2]
   where 
-    k1 = typeKind ty1
-    k2 = typeKind ty2
+    k = typeKind ty1
 
 -- | Creates a primitive type equality predicate.
 -- Invariant: the types are not Coercions
@@ -1126,7 +1126,7 @@ classifyPredType ev_ty = case splitTyConApp_maybe ev_ty of
     Just (tc, tys) | Just clas <- tyConClass_maybe tc
                    -> ClassPred clas tys
     Just (tc, tys) | tc `hasKey` eqTyConKey
-                   , let [_, _, ty1, ty2] = tys
+                   , let [_, ty1, ty2] = tys
                    -> EqPred ty1 ty2
     Just (tc, tys) | isTupleTyCon tc
                    -> TuplePred tys
@@ -1147,14 +1147,14 @@ getClassPredTys_maybe ty = case splitTyConApp_maybe ty of
 getEqPredTys :: PredType -> (Type, Type)
 getEqPredTys ty 
   = case splitTyConApp_maybe ty of 
-      Just (tc, (_ : _ : ty1 : ty2 : tys)) -> ASSERT( tc `hasKey` eqTyConKey && null tys )
+      Just (tc, (_ : ty1 : ty2 : tys)) -> ASSERT( tc `hasKey` eqTyConKey && null tys )
                                           (ty1, ty2)
       _ -> pprPanic "getEqPredTys" (ppr ty)
 
 getEqPredTys_maybe :: PredType -> Maybe (Type, Type)
 getEqPredTys_maybe ty 
   = case splitTyConApp_maybe ty of 
-      Just (tc, [_, _, ty1, ty2]) | tc `hasKey` eqTyConKey -> Just (ty1, ty2)
+      Just (tc, [_, ty1, ty2]) | tc `hasKey` eqTyConKey -> Just (ty1, ty2)
       _ -> Nothing
 \end{code}
 

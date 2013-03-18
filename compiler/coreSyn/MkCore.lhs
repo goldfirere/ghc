@@ -299,10 +299,10 @@ mkStringExprFS str
 \begin{code}
 
 mkEqBox :: Coercion -> CoreExpr
-mkEqBox co = Var (dataConWorkId eqBoxDataCon) `mkTyApps` [k1, k2, ty1, ty2] `App` Coercion co
+mkEqBox co = ASSERT2( typeKind ty2 `eqKind` k, ppr co $$ ppr ty1 $$ ppr ty2 $$ ppr (typeKind ty1) $$ ppr (typeKind ty2) )
+             Var (dataConWorkId eqBoxDataCon) `mkTyApps` [k, ty1, ty2] `App` Coercion co
   where Pair ty1 ty2 = coercionKind co
-        k1 = typeKind ty1
-        k2 = typeKind ty2
+        k = typeKind ty1
 
 \end{code}
 

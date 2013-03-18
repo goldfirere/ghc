@@ -772,7 +772,7 @@ canEqNC loc ev ty1 ty2
  =  do { let flav = ctEvFlavour ev
        ; (s1, co1) <- flatten loc FMSubstOnly flav ty1
        ; (s2, co2) <- flatten loc FMSubstOnly flav ty2
-       ; mb_ct <- rewriteCtFlavor ev (mkTcEqPred s1 s2) (mkHdEqPred s1 s2 co1 co2)
+       ; mb_ct <- rewriteCtFlavor ev (mkTcEqPred s1 s2) (mkHdEqPred s2 co1 co2)
        ; case mb_ct of
            Nothing     -> return Stop
            Just new_ev -> last_chance new_ev s1 s2 }
@@ -819,7 +819,7 @@ canEqFailure loc ev ty1 ty2
        ; (s1, co1) <- flatten loc FMSubstOnly flav ty1
        ; (s2, co2) <- flatten loc FMSubstOnly flav ty2
        ; mb_ct <- rewriteCtFlavor ev (mkTcEqPred s1 s2)
-                                     (mkHdEqPred s1 s2 co1 co2)
+                                     (mkHdEqPred s2 co1 co2)
        ; case mb_ct of
            Just new_ev -> emitInsoluble (CNonCanonical { cc_ev = new_ev, cc_loc = loc }) 
            Nothing -> pprPanic "canEqFailure" (ppr ev $$ ppr ty1 $$ ppr ty2)
@@ -1111,7 +1111,7 @@ canEqLeafFunEq loc ev fn tys1 ty2  -- ev :: F tys1 ~ ty2
           -- Fancy higher-dimensional coercion between equalities!
           -- SPJ asks why?  Why not just co : F xis1 ~ F tys1?
        ; let fam_head = mkTyConApp fn xis1
-             xco = mkHdEqPred xi2 ty2 (mkTcTyConAppCo fn cos1) co2
+             xco = mkHdEqPred ty2 (mkTcTyConAppCo fn cos1) co2
              -- xco :: (F xis1 ~ xi2) ~ (F tys1 ~ ty2)
              
        ; mb <- rewriteCtFlavor ev (mkTcEqPred fam_head xi2) xco
@@ -1172,11 +1172,8 @@ canEqLeafTyVarEq loc ev tv s2              -- ev :: tv ~ s2
 mkHdEqPred :: Type -> Type -> TcCoercion -> TcCoercion -> TcCoercion
 -- Make a higher-dimensional equality
 --    co1 :: s1~t1,  co2 :: s2~t2
--- Then (mkHdEqPred s2 t2 co1 co2) :: (s1~s2) ~ (t1~t2)
-mkHdEqPred s2 t2 co1 co2
-  = mkTcTyConAppCo eqTyCon [mkTcReflCo (defaultKind (typeKind s2)),
-                            mkTcReflCo (defaultKind (typeKind t2)),
-                            co1, co2]
+-- Then (mkHdEqPred t2 co1 co2) :: (s1~s2) ~ (t1~t2)
+mkHdEqPred t2 co1 co2 = mkTcTyConAppCo eqTyCon [mkTcReflCo (defaultKind (typeKind t2)), co1, co2]
    -- Why defaultKind? Same reason as the comment on TcType/mkTcEqPred. I truly hate this (DV)
 \end{code}
 

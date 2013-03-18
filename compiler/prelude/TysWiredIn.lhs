@@ -430,8 +430,8 @@ unboxedPairDataCon = tupleCon   UnboxedTuple 2
 \begin{code}
 eqTyCon :: TyCon
 eqTyCon = mkAlgTyCon eqTyConName
-            (mkForAllTys [kv1, kv2] $ mkArrowKinds [k1, k2] constraintKind)
-            [kv1, kv2, a, b]
+            (ForAllTy kv $ mkArrowKinds [k, k] constraintKind)
+            [kv, a, b]
             Nothing
             []      -- No stupid theta
             (DataTyCon [eqBoxDataCon] False)
@@ -441,22 +441,18 @@ eqTyCon = mkAlgTyCon eqTyConName
             Nothing
 
   where
-    kv1:kv2:_ = drop 9 (tyVarList superKind) -- gets j and k
-    k1 = mkOnlyTyVarTy kv1
-    k2 = mkOnlyTyVarTy kv2
-    a:_ = tyVarList k1
-    _:b:_ = tyVarList k2
+    kv = kKiVar
+    k = mkOnlyTyVarTy kv
+    a:b:_ = tyVarList k
 
 eqBoxDataCon :: DataCon
 eqBoxDataCon = pcDataCon eqBoxDataConName args [arg_ty] eqTyCon
   where
-    kv1:kv2:_ = drop 9 (tyVarList superKind) -- gets j and k
-    k1 = mkOnlyTyVarTy kv1
-    k2 = mkOnlyTyVarTy kv2
-    a:_ = tyVarList k1
-    _:b:_ = tyVarList k2
-    args = [kv1, kv2, a, b]
-    arg_ty = TyConApp eqPrimTyCon ([k1, k2] ++ mkOnlyTyVarTys [a, b])
+    kv = kKiVar
+    k = mkOnlyTyVarTy kv
+    a:b:_ = tyVarList k
+    args = [kv, a, b]
+    arg_ty = TyConApp eqPrimTyCon ([k, k] ++ mkOnlyTyVarTys [a, b])
 \end{code}
 
 \begin{code}

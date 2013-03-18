@@ -447,7 +447,7 @@ check_pred_ty dflags ctxt pred
         -> check_class_pred dflags ctxt cls tys
 
         | tc `hasKey` eqTyConKey
-        , let [_, _, ty1, ty2] = tys
+        , let [_, ty1, ty2] = tys
         -> check_eq_pred dflags ctxt ty1 ty2
 
         | isTupleTyCon tc
