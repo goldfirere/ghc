@@ -1169,7 +1169,7 @@ canEqLeafTyVarEq loc ev tv s2              -- ev :: tv ~ s2
 
     } } }
 
-mkHdEqPred :: Type -> Type -> TcCoercion -> TcCoercion -> TcCoercion
+mkHdEqPred :: Type -> TcCoercion -> TcCoercion -> TcCoercion
 -- Make a higher-dimensional equality
 --    co1 :: s1~t1,  co2 :: s2~t2
 -- Then (mkHdEqPred t2 co1 co2) :: (s1~s2) ~ (t1~t2)
