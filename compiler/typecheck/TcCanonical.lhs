@@ -1130,7 +1130,7 @@ canEqLeafTyVarEq loc ev tv s2              -- ev :: tv ~ s2
        ; let flav = ctEvFlavour ev
        ; (xi1,co1) <- flattenTyVar loc FMFullFlatten flav tv -- co1 :: xi1 ~ tv
        ; (xi2,co2) <- flatten      loc FMFullFlatten flav s2 -- co2 :: xi2 ~ s2 
-       ; let co = mkHdEqPred xi2 s2 co1 co2
+       ; let co = mkHdEqPred s2 co1 co2
              -- co :: (xi1 ~ xi2) ~ (tv ~ s2)
        
        ; traceTcS "canEqLeafTyVarEq2" $ empty 
