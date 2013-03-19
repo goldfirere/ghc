@@ -556,7 +556,7 @@ lookupKindOccRn rdr_name
   = do { mb_name <- lookupOccRn_maybe rdr_name
        ; case mb_name of
            Just name -> return name
-           Nothing   -> reportUnboundName rdr_name  }
+           Nothing   -> lookup_demoted rdr_name  } -- RAE
 
 -- lookupPromotedOccRn looks up an optionally promoted RdrName.
 lookupTypeOccRn :: RdrName -> RnM Name

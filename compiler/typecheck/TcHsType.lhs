@@ -1487,10 +1487,16 @@ tc_kind_var_app name arg_kis
   	     -> do { data_kinds <- xoptM Opt_DataKinds
   	           ; unless data_kinds $ addErr (dataKindsErr name)
   	     	   ; case promotableTyCon_maybe tc of
-  	     	       Just prom_tc | arg_kis `lengthIs` tyConArity prom_tc
+  	     	       Just prom_tc -- RAE | arg_kis `lengthIs` tyConArity prom_tc
   	     	               -> return (mkTyConApp prom_tc arg_kis)
-  	     	       Just _  -> tycon_err tc "is not fully applied"
+  	-- RAE     	       Just _  -> tycon_err tc "is not fully applied"
   	     	       Nothing -> tycon_err tc "is not promotable" }
+           AGlobal (ADataCon dc) -- RAE
+             -> do { data_kinds <- xoptM Opt_DataKinds
+                   ; unless data_kinds $ addErr (dataKindsErr name)
+                   ; case promoteDataCon_maybe dc of
+                       Just prom_dc -> return (mkTyConApp prom_dc arg_kis)
+                       Nothing -> datacon_err dc "is not promotable" }
 
   	   -- A lexically scoped kind variable
   	   ATyVar _ kind_var 
@@ -1522,6 +1528,8 @@ tc_kind_var_app name arg_kis
   where 
    tycon_err tc msg = failWithTc (quotes (ppr tc) <+> ptext (sLit "of kind")
                                   <+> quotes (ppr (tyConKind tc)) <+> ptext (sLit msg))
+   datacon_err dc msg = failWithTc (quotes (ppr dc) <+> ptext (sLit "of type")
+                                  <+> quotes (ppr (dataConUserType dc)) <+> ptext (sLit msg))
 
 dataKindsErr :: Name -> SDoc
 dataKindsErr name
