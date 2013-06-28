@@ -318,4 +318,10 @@ It checks to see if \coderef{types/Unify.lhs}{tcApartTys} returns \texttt{Surely
 Two types are apart if neither type is a type family application and if they do not
 unify.
 
+\section{Operational semantics}
+
+Write this.
+
+\ottdefnstep{}
+
 \end{document}
