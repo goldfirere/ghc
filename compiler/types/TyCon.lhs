@@ -1396,6 +1396,20 @@ algTyConRhs (AlgTyCon {algTcRhs = rhs}) = rhs
 algTyConRhs (TupleTyCon {dataCon = con, tyConArity = arity})
     = DataTyCon { data_cons = [con], is_enum = arity == 0 }
 algTyConRhs other = pprPanic "algTyConRhs" (ppr other)
+
+-- | Get the list of roles for the type parameters of a TyCon
+-- The TypeEquiv parameter is the equivalence relation desired
+tyConRoles :: TyCon -> TypeEquiv -> [Role]
+tyConRoles tc Nominal = map (const Nominal) (tyConTyVars tc)
+tyConRoles tc Representational
+  = ...
+
+-- | Like tyConRoles, but with an infinite list of (Equiv Nominal) at the end,
+-- for ease of implementation when dealing with potentially-oversaturated
+-- TyCons
+tyConRolesX :: TyCon -> TypeEquiv -> [Role]
+tyConRolesX tc = tyConRoles tc eq ++ nominals
+  where nominals = (Equiv Nominal : nominals)
 \end{code}
 
 \begin{code}
