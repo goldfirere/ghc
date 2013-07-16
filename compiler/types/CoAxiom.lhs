@@ -233,6 +233,7 @@ data CoAxiom br
   = CoAxiom                   -- Type equality axiom.
     { co_ax_unique   :: Unique        -- unique identifier
     , co_ax_name     :: Name          -- name for pretty-printing
+    , co_ax_role     :: Role          -- role of the axiom's equality
     , co_ax_tc       :: TyCon         -- the head of the LHS patterns
     , co_ax_branches :: BranchList CoAxBranch br
                                       -- the branches that form this axiom
@@ -276,6 +277,9 @@ coAxiomArity ax index
 
 coAxiomName :: CoAxiom br -> Name
 coAxiomName = co_ax_name
+
+coAxiomRole :: CoAxiom br -> Role
+coAxiomRole = co_ax_role
 
 coAxiomBranches :: CoAxiom br -> BranchList CoAxBranch br
 coAxiomBranches = co_ax_branches

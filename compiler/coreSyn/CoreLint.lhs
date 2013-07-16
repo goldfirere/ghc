@@ -813,40 +813,46 @@ lintInCo co
         ; _   <- lintCoercion co'
         ; return co' }
 
-lintCoercion :: OutCoercion -> LintM (LintedKind, LintedType, LintedType)
+lintCoercion :: OutCoercion -> LintM (LintedKind, LintedType, LintedType, Role)
 -- Check the kind of a coercion term, returning the kind
 -- Post-condition: the returned OutTypes are lint-free
 --                 and have the same kind as each other
 
 -- If you edit this function, you may need to update the GHC formalism
 -- See Note [GHC Formalism]
-lintCoercion (Refl ty)
+lintCoercion (Refl r ty)
   = do { k <- lintType ty
-       ; return (k, ty, ty) }
+       ; return (k, ty, ty, r) }
 
-lintCoercion co@(TyConAppCo tc cos)
+lintCoercion co@(TyConAppCo r tc cos)
   | tc `hasKey` funTyConKey
   , [co1,co2] <- cos
-  = do { (k1,s1,t1) <- lintCoercion co1
-       ; (k2,s2,t2) <- lintCoercion co2
+  = do { (k1,s1,t1,r1) <- lintCoercion co1
+       ; (k2,s2,t2,r2) <- lintCoercion co2
        ; rk <- lintArrow (ptext (sLit "coercion") <+> quotes (ppr co)) k1 k2
+       ; checkRoles co tc r [r1, r2]
+       ; checkNotRole co Phantom r -- TODO (RAE): update?
        ; return (rk, mkFunTy s1 s2, mkFunTy t1 t2) }
 
   | otherwise
-  = do { (ks,ss,ts) <- mapAndUnzip3M lintCoercion cos
+  = do { (ks,ss,ts,rs) <- mapAndUnzip4M lintCoercion cos
        ; rk <- lint_co_app co (tyConKind tc) (ss `zip` ks)
+       ; checkRoles co tc r rs
+       ; checkNotRole co Phantom r -- TODO (RAE): update?
        ; return (rk, mkTyConApp tc ss, mkTyConApp tc ts) }
 
 lintCoercion co@(AppCo co1 co2)
-  = do { (k1,s1,t1) <- lintCoercion co1
-       ; (k2,s2,t2) <- lintCoercion co2
+  = do { (k1,s1,t1,r1) <- lintCoercion co1
+       ; (k2,s2,t2,r2) <- lintCoercion co2
        ; rk <- lint_co_app co k1 [(s2,k2)]
-       ; return (rk, mkAppTy s1 s2, mkAppTy t1 t2) }
+       ; checkRole co Nominal r1
+       ; checkRole co Nominal r2
+       ; return (rk, mkAppTy s1 s2, mkAppTy t1 t2, Nominal) }
 
 lintCoercion (ForAllCo tv co)
   = do { lintTyBndrKind tv
-       ; (k, s, t) <- addInScopeVar tv (lintCoercion co)
-       ; return (k, mkForAllTy tv s, mkForAllTy tv t) }
+       ; (k, s, t, r) <- addInScopeVar tv (lintCoercion co)
+       ; return (k, mkForAllTy tv s, mkForAllTy tv t, r) }
 
 lintCoercion (CoVarCo cv)
   | not (isCoVar cv)
@@ -860,28 +866,31 @@ lintCoercion (CoVarCo cv)
        ; when (isSuperKind k) $
          checkL (s `eqKind` t) (hang (ptext (sLit "Non-refl kind equality"))
                                    2 (ppr cv))
-       ; return (k, s, t) }
+       ; return (k, s, t, Nominal) }
 
-lintCoercion (UnsafeCo ty1 ty2)
+lintCoercion co@(UnivCo r ty1 ty2)
   = do { k1 <- lintType ty1
        ; _k2 <- lintType ty2
 --       ; unless (k1 `eqKind` k2) $ 
 --         failWithL (hang (ptext (sLit "Unsafe coercion changes kind"))
 --                       2 (ppr co))
-       ; return (k1, ty1, ty2) }
+       ; checkNotRole co Nominal r -- TODO (RAE): update?
+       ; return (k1, ty1, ty2, r) }
 
 lintCoercion (SymCo co) 
-  = do { (k, ty1, ty2) <- lintCoercion co
-       ; return (k, ty2, ty1) }
+  = do { (k, ty1, ty2, r) <- lintCoercion co
+       ; return (k, ty2, ty1, r) }
 
 lintCoercion co@(TransCo co1 co2)
-  = do { (k1, ty1a, ty1b) <- lintCoercion co1
-       ; (_,  ty2a, ty2b) <- lintCoercion co2
+  = do { (k1, ty1a, ty1b, r1) <- lintCoercion co1
+       ; (_,  ty2a, ty2b, r2) <- lintCoercion co2
        ; checkL (ty1b `eqType` ty2a)
                 (hang (ptext (sLit "Trans coercion mis-match:") <+> ppr co)
                     2 (vcat [ppr ty1a, ppr ty1b, ppr ty2a, ppr ty2b]))
-       ; return (k1, ty1a, ty2b) }
+       ; checkRole co r1 r2
+       ; return (k1, ty1a, ty2b, r1) }
 
+-- TODO (RAE): update this case after decision on nth
 lintCoercion the_co@(NthCo n co)
   = do { (_,s,t) <- lintCoercion co
        ; case (splitTyConApp_maybe s, splitTyConApp_maybe t) of
@@ -899,10 +908,11 @@ lintCoercion the_co@(NthCo n co)
                               2 (ppr the_co $$ ppr s $$ ppr t)) }
 
 lintCoercion the_co@(LRCo lr co)
-  = do { (_,s,t) <- lintCoercion co
+  = do { (_,s,t,r) <- lintCoercion co
+       ; checkRole co Nominal r
        ; case (splitAppTy_maybe s, splitAppTy_maybe t) of
            (Just s_pr, Just t_pr) 
-             -> return (k, s_pick, t_pick)
+             -> return (k, s_pick, t_pick, Nominal)
              where
                s_pick = pickLR lr s_pr
                t_pick = pickLR lr t_pr
@@ -911,14 +921,14 @@ lintCoercion the_co@(LRCo lr co)
            _ -> failWithL (hang (ptext (sLit "Bad LRCo:"))
                               2 (ppr the_co $$ ppr s $$ ppr t)) }
 
-lintCoercion (InstCo co arg_ty)
-  = do { (k,s,t)  <- lintCoercion co
-       ; arg_kind <- lintType arg_ty
+lintCoercion g@(InstCo co arg_ty)
+  = do { (k,s,t,r) <- lintCoercion co
+       ; arg_kind  <- lintType arg_ty
        ; case (splitForAllTy_maybe s, splitForAllTy_maybe t) of
           (Just (tv1,ty1), Just (tv2,ty2))
             | arg_kind `isSubKind` tyVarKind tv1
             -> return (k, substTyWith [tv1] [arg_ty] ty1, 
-                          substTyWith [tv2] [arg_ty] ty2) 
+                          substTyWith [tv2] [arg_ty] ty2, r) 
             | otherwise
             -> failWithL (ptext (sLit "Kind mis-match in inst coercion"))
 	  _ -> failWithL (ptext (sLit "Bad argument of inst")) }
@@ -941,7 +951,7 @@ lintCoercion co@(AxiomInstCo con ind cos)
        ; case checkAxInstCo co of
            Just bad_branch -> bad_ax $ ptext (sLit "inconsistent with") <+> (pprCoAxBranch (coAxiomTyCon con) bad_branch)
            Nothing -> return ()
-       ; return (typeKind rhs', mkTyConApp (coAxiomTyCon con) lhs', rhs') }
+       ; return (typeKind rhs', mkTyConApp (coAxiomTyCon con) lhs', rhs', coAxiomRole con) }
   where
     bad_ax what = addErrL (hang (ptext (sLit "Bad axiom application") <+> parens what)
                         2 (ppr co))
@@ -1131,6 +1141,24 @@ checkTys :: OutType -> OutType -> MsgDoc -> LintM ()
 -- annotations need only be consistent, not equal)
 -- Assumes ty1,ty2 are have alrady had the substitution applied
 checkTys ty1 ty2 msg = checkL (ty1 `eqType` ty2) msg
+
+checkRole :: Coercion -> Role -> Role -> LintM ()
+checkRole co r1 r2
+  = checkL (r1 == r2)
+           (ptext (sLit "Role incompatibility: expected") <+> ppr r1 <> comma <+>
+            ptext (sLit "got") <+> ppr r2 $$
+            ptext (sLit "in") ppr co)
+
+checkNotRole :: Coercion -> Role -> Role -> LintM ()
+checkNotRole co r1 r2
+  = checkL (r1 /= r2)
+           (ptext (sLit "Role incompatibility: expected something other than") <+>
+            ppr r1 $$
+            ptext (sLit "in") <+> ppr co)
+
+checkRoles :: Coercion -> TyCon -> Role -> [Role] -> LintM ()
+checkRoles co tc r rs
+  = zipWithM_ (checkRole co) (tyConRolesX tc r) rs
 \end{code}
 
 %************************************************************************

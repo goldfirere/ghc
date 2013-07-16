@@ -504,6 +504,7 @@ mkBranchedCoAxiom ax_name fam_tc branches
     CoAxiom { co_ax_unique   = nameUnique ax_name
             , co_ax_name     = ax_name
             , co_ax_tc       = fam_tc
+            , co_ax_role     = Nominal
             , co_ax_implicit = False
             , co_ax_branches = toBranchList branches }
 
@@ -512,6 +513,7 @@ mkUnbranchedCoAxiom ax_name fam_tc branch
   = CoAxiom { co_ax_unique   = nameUnique ax_name
             , co_ax_name     = ax_name
             , co_ax_tc       = fam_tc
+            , co_ax_role     = Nominal
             , co_ax_implicit = False
             , co_ax_branches = FirstBranch (branch { cab_incomps = [] }) }
 
@@ -520,6 +522,7 @@ mkSingleCoAxiom ax_name tvs fam_tc lhs_tys rhs_ty
   = CoAxiom { co_ax_unique   = nameUnique ax_name
             , co_ax_name     = ax_name
             , co_ax_tc       = fam_tc
+            , co_ax_role     = Nominal
             , co_ax_implicit = False
             , co_ax_branches = FirstBranch (branch { cab_incomps = [] }) }
   where

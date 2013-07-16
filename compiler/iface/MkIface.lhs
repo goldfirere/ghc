@@ -1441,9 +1441,11 @@ idToIfaceDecl id
 coAxiomToIfaceDecl :: CoAxiom br -> IfaceDecl
 -- We *do* tidy Axioms, because they are not (and cannot 
 -- conveniently be) built in tidy form
-coAxiomToIfaceDecl ax@(CoAxiom { co_ax_tc = tycon, co_ax_branches = branches })
+coAxiomToIfaceDecl ax@(CoAxiom { co_ax_tc = tycon, co_ax_branches = branches
+                               , co_ax_role = role })
  = IfaceAxiom { ifName       = name
               , ifTyCon      = toIfaceTyCon tycon
+              , ifRole       = role
               , ifAxBranches = brListMap (coAxBranchToIfaceBranch
                                             emptyTidyEnv
                                             (brListMap coAxBranchLHS branches)) branches }
@@ -1545,7 +1547,7 @@ tyConToIfaceDecl env tycon
 toIfaceBang :: TidyEnv -> HsBang -> IfaceBang
 toIfaceBang _    HsNoBang            = IfNoBang
 toIfaceBang _   (HsUnpack Nothing)   = IfUnpack
-toIfaceBang env (HsUnpack (Just co)) = IfUnpackCo (coToIfaceType (tidyCo env co))
+toIfaceBang env (HsUnpack (Just co)) = IfUnpackCo (toIfaceCoercion (tidyCo env co))
 toIfaceBang _   HsStrict             = IfStrict
 toIfaceBang _   (HsUserBang {})      = panic "toIfaceBang"
 
@@ -1820,7 +1822,7 @@ toIfaceExpr (Case s x ty as)
   | null as                 = IfaceECase (toIfaceExpr s) (toIfaceType ty)
   | otherwise               = IfaceCase (toIfaceExpr s) (getFS x) (map toIfaceAlt as)
 toIfaceExpr (Let b e)       = IfaceLet (toIfaceBind b) (toIfaceExpr e)
-toIfaceExpr (Cast e co)     = IfaceCast (toIfaceExpr e) (coToIfaceType co)
+toIfaceExpr (Cast e co)     = IfaceCast (toIfaceExpr e) (toIfaceCoercion co)
 toIfaceExpr (Tick t e)    = IfaceTick (toIfaceTickish t) (toIfaceExpr e)
 
 ---------------------

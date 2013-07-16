@@ -65,16 +65,14 @@ type IfaceTvBndr  = (IfLclName, IfaceKind)
 
 -------------------------------
 type IfaceKind     = IfaceType
-type IfaceCoercion = IfaceType
 
-data IfaceType     -- A kind of universal type, used for types, kinds, and coercions
+data IfaceType     -- A kind of universal type, used for types and kinds
   = IfaceTyVar    IfLclName               -- Type/coercion variable only, not tycon
   | IfaceAppTy    IfaceType IfaceType
   | IfaceFunTy    IfaceType IfaceType
   | IfaceForAllTy IfaceTvBndr IfaceType
   | IfaceTyConApp IfaceTyCon [IfaceType]  -- Not necessarily saturated
                                           -- Includes newtypes, synonyms, tuples
-  | IfaceCoConApp IfaceCoCon [IfaceType]  -- Always saturated
   | IfaceLitTy IfaceTyLit
 
 type IfacePredType = IfaceType
@@ -88,12 +86,21 @@ data IfaceTyLit
 -- coercion constructors, the lot
 newtype IfaceTyCon = IfaceTc { ifaceTyConName :: IfExtName }
 
-  -- Coercion constructors
-data IfaceCoCon
-  = IfaceCoAx IfExtName BranchIndex -- BranchIndex is 0-indexed branch number
-  | IfaceReflCo    | IfaceUnsafeCo  | IfaceSymCo
-  | IfaceTransCo   | IfaceInstCo
-  | IfaceNthCo Int | IfaceLRCo LeftOrRight
+data IfaceCoercion
+  = IfaceReflCo      Role IfaceType
+  | IfaceFunCo       Role IfaceCoercion IfaceCoercion
+  | IfaceTyConAppCo  Role IfaceTyCon [IfaceCoercion]
+  | IfaceAppCo       IfaceCoercion IfaceCoercion
+  | IfaceForAllCo    IfaceTvBndr IfaceCoercion
+  | IfaceCoVarCo     IfLclName
+  | IfaceAxiomInstCo IfExtName BranchIndex [IfaceCoercion]
+  | IfaceUnivCo      Role IfaceType IfaceType
+  | IfaceSymCo       IfaceCoercion
+  | IfaceTransCo     IfaceCoercion IfaceCoercion
+  | IfaceNthCo       Int IfaceCoercion
+  | IfaceLRCo        LeftOrRight IfaceCoercion
+  | IfaceInstCo      IfaceCoercion IfaceType
+  | IfaceSubCo       IfaceCoercion
 \end{code}
 
 %************************************************************************
@@ -193,13 +200,9 @@ isIfacePredTy _  = False
 
 ppr_ty :: Int -> IfaceType -> SDoc
 ppr_ty _         (IfaceTyVar tyvar)     = ppr tyvar
-ppr_ty ctxt_prec (IfaceTyConApp tc tys) = ppr_tc_app ctxt_prec tc tys
+ppr_ty ctxt_prec (IfaceTyConApp tc tys) = ppr_tc_app ppr_ty ctxt_prec tc tys
 
 ppr_ty _ (IfaceLitTy n) = ppr_tylit n
-
-ppr_ty ctxt_prec (IfaceCoConApp tc tys)
-  = maybeParen ctxt_prec tYCON_PREC
-               (sep [ppr tc, nest 4 (sep (map pprParendIfaceType tys))])
 
         -- Function types
 ppr_ty ctxt_prec (IfaceFunTy ty1 ty2)
@@ -225,7 +228,9 @@ ppr_ty ctxt_prec ty@(IfaceForAllTy _ _)
     (tvs, theta, tau) = splitIfaceSigmaTy ty
 
  -------------------
-pprIfaceForAllPart :: [IfaceTvBndr] -> IfaceContext -> SDoc -> SDoc
+-- needs to handle type contexts and coercion contexts, hence the
+-- generality
+pprIfaceForAllPart :: Outputable a => [IfaceTvBndr] -> [a] -> SDoc -> SDoc
 pprIfaceForAllPart tvs ctxt doc
   = sep [ppr_tvs, pprIfaceContext ctxt, doc]
   where
@@ -233,20 +238,23 @@ pprIfaceForAllPart tvs ctxt doc
             | otherwise = ptext (sLit "forall") <+> pprIfaceTvBndrs tvs <> dot
 
 -------------------
-ppr_tc_app :: Int -> IfaceTyCon -> [IfaceType] -> SDoc
-ppr_tc_app _         tc          []   = ppr_tc tc
+ppr_tc_app :: (Int -> a -> SDoc) -> Int -> IfaceTyCon -> [a] -> SDoc
+ppr_tc_app _  _         tc          []   = ppr_tc tc
 
 
-ppr_tc_app _         (IfaceTc n) [ty] | n == listTyConName = brackets (pprIfaceType ty)
-ppr_tc_app _         (IfaceTc n) [ty] | n == parrTyConName = paBrackets (pprIfaceType ty)
-ppr_tc_app _         (IfaceTc n) tys
+ppr_tc_app pp _         (IfaceTc n) [ty]
+  | n == listTyConName
+  = brackets (pp tOP_PREC ty)
+  | n == parrTyConName
+  = paBrackets (pp tOP_PREC ty)
+ppr_tc_app pp _         (IfaceTc n) tys
   | Just (ATyCon tc) <- wiredInNameTyThing_maybe n
   , Just sort <- tyConTuple_maybe tc
   , tyConArity tc == length tys
-  = tupleParens sort (sep (punctuate comma (map pprIfaceType tys)))
-ppr_tc_app ctxt_prec tc tys
+  = tupleParens sort (sep (punctuate comma (map (pp tOP_PREC) tys)))
+ppr_tc_app pp ctxt_prec tc tys
   = maybeParen ctxt_prec tYCON_PREC
-               (sep [ppr_tc tc, nest 4 (sep (map pprParendIfaceType tys))])
+               (sep [ppr_tc tc, nest 4 (sep (map (pp tYCON_PREC) tys))])
 
 ppr_tc :: IfaceTyCon -> SDoc
 -- Wrap infix type constructors in parens
@@ -260,30 +268,83 @@ ppr_tylit :: IfaceTyLit -> SDoc
 ppr_tylit (IfaceNumTyLit n) = integer n
 ppr_tylit (IfaceStrTyLit n) = text (show n)
 
+pprIfaceCoercion :: IfaceCoercion -> SDoc
+pprIfaceCoercion = ppr_co tOP_PREC
+
+ppr_co :: Int -> IfaceCoercion -> SDoc
+ppr_co _         (IfaceReflCo r ty) = angleBrackets (ppr ty) <> ppr_role r
+ppr_co ctxt_prec (IfaceFunCo r co1 co2)
+  = maybeParen ctxt_prec fUN_PREC $
+    sep (ppr_co fUN_PREC co1 : ppr_fun_tail co2)
+  where
+    ppr_fun_tail (IfaceFunCo r co1 co2)
+      = (arrow <> ppr_role r <+> ppr_co fUN_PREC co1) : ppr_fun_tail co2
+    ppr_fun_tail other_co
+      = [arrow <> ppr_role r <+> pprIfaceCoercion other_co]
+
+ppr_co _         co@(IfaceTyConAppCo r tc cos)
+  = parens (ppr_tc_app ppr_co tOP_PREC tc cos) <> ppr_role r
+ppr_co ctxt_prec (IfaceAppCo co1 co2)
+  = maybeParen ctxt_prec tYCON_PREC $
+    ppr_co fUN_PREC co1 <+> pprParendIfaceCoercion co2
+ppr_co ctxt_prec co@(IfaceForAllCo _ _)
+  = maybeParen ctxt_prec fUN_PREC (sep [ppr_tvs, pprIfaceCoercion inner_co])
+  where
+    (tvs, inner_co) = split_co co
+    ppr_tvs = ptext (sLit "forall") <+> pprIfaceTvBndrs tvs <> dot
+
+    split_co (IfaceForAllCo tv co')
+      = let (tvs, co'') = split_co co' in (tv:tvs,co'')
+    split_co co' = ([], co')
+
+ppr_co _         (IfaceCoVarCo covar)       = ppr covar
+
+ppr_co ctxt_prec (IfaceUnivCo r ty1 ty2)
+  = maybeParen ctxt_prec tYCON_PREC $
+    ptext (sLit "UnivCo") <+> ppr r <+>
+    pprParendIfaceType ty1 <+> pprParendIfaceType ty2
+
+ppr_co ctxt_prec (IfaceInstCo co ty)
+  = maybeParen ctxt_prec tYCON_PREC $
+    ptext (sLit "Inst") <+> pprParendIfaceCoercion co <+> pprParendIfaceType ty
+
+ppr_co ctxt_prec co
+  = ppr_special_co ctxt_prec doc cos
+  where (doc, cos) = case co of
+                     { IfaceAxiomInstCo n i cos -> (ppr n <> brackets (ppr i), cos)
+                     ; IfaceSymCo co            -> (ptext (sLit "Sym"), [co])
+                     ; IfaceTransCo co1 co2     -> (ptext (sLit "Trans"), [co1,co2])
+                     ; IfaceNthCo i co          -> (ptext (sLit "Nth:") <> int d,
+                                                    [co])
+                     ; IfaceLRCo lr co          -> (ppr lr, [co])
+                     ; IfaceSubCo co            -> (ptext (sLit "Sub"), [co])
+                     ; co                       -> panic "pprIfaceCo" }
+
+ppr_special_co :: Int -> SDoc -> [IfaceCoercion] -> SDoc
+ppr_special_co ctxt_prec doc cos
+  = maybeParen ctxt_prec tYCON_PREC
+               (sep [doc, nest 4 (sep (map pprParendIfaceCoercion cos))])
+
+ppr_role :: Role -> SDoc
+ppr_role r = underscore <> ppr r
+
 -------------------
 instance Outputable IfaceTyCon where
   ppr = ppr . ifaceTyConName
 
-instance Outputable IfaceCoCon where
-  ppr (IfaceCoAx n i)  = ppr n <> brackets (ppr i)
-  ppr IfaceReflCo      = ptext (sLit "Refl")
-  ppr IfaceUnsafeCo    = ptext (sLit "Unsafe")
-  ppr IfaceSymCo       = ptext (sLit "Sym")
-  ppr IfaceTransCo     = ptext (sLit "Trans")
-  ppr IfaceInstCo      = ptext (sLit "Inst")
-  ppr (IfaceNthCo d)   = ptext (sLit "Nth:") <> int d
-  ppr (IfaceLRCo lr)   = ppr lr
+instance Outputable IfaceCoercion where
+  ppr = pprIfaceCoercion
 
 instance Outputable IfaceTyLit where
   ppr = ppr_tylit
 
 -------------------
-pprIfaceContext :: IfaceContext -> SDoc
+pprIfaceContext :: Outputable a => [a] -> SDoc
 -- Prints "(C a, D b) =>", including the arrow
 pprIfaceContext []    = empty
 pprIfaceContext theta = ppr_preds theta <+> darrow
 
-ppr_preds :: [IfacePredType] -> SDoc
+ppr_preds :: Outputable a => [a] -> SDoc
 ppr_preds [pred] = ppr pred    -- No parens
 ppr_preds preds  = parens (sep (punctuate comma (map ppr preds)))
 \end{code}
@@ -347,38 +408,31 @@ toIfaceContext :: ThetaType -> IfaceContext
 toIfaceContext = toIfaceTypes
 
 ----------------
-coToIfaceType :: Coercion -> IfaceType
-coToIfaceType (Refl ty)             = IfaceCoConApp IfaceReflCo [toIfaceType ty]
-coToIfaceType (TyConAppCo tc cos)
+toIfaceCoercion :: Coercion -> IfaceCoercion
+toIfaceCoercion (Refl r ty)         = IfaceReflCo r (toIfaceType ty)
+toIfaceCoercion (TyConAppCo r tc cos)
   | tc `hasKey` funTyConKey
-  , [arg,res] <- cos                = IfaceFunTy (coToIfaceType arg) (coToIfaceType res)
-  | otherwise                       = IfaceTyConApp (toIfaceTyCon tc)
-                                                    (map coToIfaceType cos)
-coToIfaceType (AppCo co1 co2)       = IfaceAppTy    (coToIfaceType co1)
-                                                    (coToIfaceType co2)
-coToIfaceType (ForAllCo v co)       = IfaceForAllTy (toIfaceTvBndr v)
-                                                    (coToIfaceType co)
-coToIfaceType (CoVarCo cv)          = IfaceTyVar  (toIfaceCoVar cv)
-coToIfaceType (AxiomInstCo con ind cos)
-                                    = IfaceCoConApp (coAxiomToIfaceType con ind)
-                                                    (map coToIfaceType cos)
-coToIfaceType (UnsafeCo ty1 ty2)    = IfaceCoConApp IfaceUnsafeCo
-                                                    [ toIfaceType ty1
-                                                    , toIfaceType ty2 ]
-coToIfaceType (SymCo co)            = IfaceCoConApp IfaceSymCo
-                                                    [ coToIfaceType co ]
-coToIfaceType (TransCo co1 co2)     = IfaceCoConApp IfaceTransCo
-                                                    [ coToIfaceType co1
-                                                    , coToIfaceType co2 ]
-coToIfaceType (NthCo d co)          = IfaceCoConApp (IfaceNthCo d)
-                                                    [ coToIfaceType co ]
-coToIfaceType (LRCo lr co)          = IfaceCoConApp (IfaceLRCo lr)
-                                                    [ coToIfaceType co ]
-coToIfaceType (InstCo co ty)        = IfaceCoConApp IfaceInstCo
-                                                    [ coToIfaceType co
-                                                    , toIfaceType ty ]
+  , [arg,res] <- cos                = IfaceFunCo r (toIfaceCoercion arg) (toIfaceCoercion res)
+  | otherwise                       = IfaceTyConAppCo r (toIfaceTyCon tc)
+                                                      (map toIfaceCoercion cos)
+toIfaceCoercion (AppCo co1 co2)     = IfaceAppCo  (toIfaceCoercion co1)
+                                                  (toIfaceCoercion co2)
+toIfaceCoercion (ForAllCo v co)     = IfaceForAllCo (toIfaceTvBndr v)
+                                                    (toIfaceCoercion co)
+toIfaceCoercion (CoVarCo cv)        = IfaceCoVarCo  (toIfaceCoVar cv)
+toIfaceCoercion (AxiomInstCo con ind cos)
+                                    = IfaceAxiomInstCo (coAxiomName con) ind
+                                                       (map toIfaceCoercion cos)
+toIfaceCoercion (UnivCo r ty1 ty2)  = IfaceUnivCo r (toIfaceType ty1)
+                                                  (toIfaceType ty2)
+toIfaceCoercion (SymCo co)          = IfaceSymCo (toIfaceCoercion co)
+toIfaceCoercion (TransCo co1 co2)   = IfaceTransCo (toIfaceCoercion co1)
+                                                   (toIfaceCoercion co2)
+toIfaceCoercion (NthCo d co)        = IfaceNthCo d (toIfaceCoercion co)
+toIfaceCoercion (LRCo lr co)        = IfaceLRCo lr (toIfaceCoercion co)
+toIfaceCoercion (InstCo co ty)      = IfaceInstCo (toIfaceCoercion co)
+                                                  (toIfaceType ty)
+toIfaceCoercion (SubCo co)          = IfaceSubCo (toIfaceCoercion co)
 
-coAxiomToIfaceType :: CoAxiom br -> Int -> IfaceCoCon
-coAxiomToIfaceType con ind = IfaceCoAx (coAxiomName con) ind
 \end{code}
 

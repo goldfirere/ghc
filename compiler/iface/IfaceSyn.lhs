@@ -105,6 +105,7 @@ data IfaceDecl
 
   | IfaceAxiom { ifName       :: OccName,        -- Axiom name
                  ifTyCon      :: IfaceTyCon,     -- LHS TyCon
+                 ifRole       :: Role,           -- Role of axiom
                  ifAxBranches :: [IfaceAxBranch] -- Branches
     }
 
@@ -617,7 +618,7 @@ pprIfaceConDecl tc
     ppr_bang IfNoBang = char '_'        -- Want to see these
     ppr_bang IfStrict = char '!'
     ppr_bang IfUnpack = ptext (sLit "!!")
-    ppr_bang (IfUnpackCo co) = ptext (sLit "!!") <> pprParendIfaceType co
+    ppr_bang (IfUnpackCo co) = ptext (sLit "!!") <> pprParendIfaceCoercion co
 
     main_payload = ppr name <+> dcolon <+>
                    pprIfaceForAllPart (univ_tvs ++ ex_tvs) (eq_ctxt ++ ctxt) pp_tau
@@ -715,7 +716,7 @@ pprIfaceExpr add_par (IfaceCase scrut bndr alts)
 pprIfaceExpr _       (IfaceCast expr co)
   = sep [pprParendIfaceExpr expr,
          nest 2 (ptext (sLit "`cast`")),
-         pprParendIfaceType co]
+         pprParendIfaceCoercion co]
 
 pprIfaceExpr add_par (IfaceLet (IfaceNonRec b rhs) body)
   = add_par (sep [ptext (sLit "let {"),
@@ -888,8 +889,35 @@ freeNamesIfType (IfaceLitTy _)        = emptyNameSet
 freeNamesIfType (IfaceForAllTy tv t)  =
    freeNamesIfTvBndr tv &&& freeNamesIfType t
 freeNamesIfType (IfaceFunTy s t)      = freeNamesIfType s &&& freeNamesIfType t
-freeNamesIfType (IfaceCoConApp tc ts) = 
-   freeNamesIfCo tc &&& fnList freeNamesIfType ts
+
+freeNamesIfCoercion :: IfaceCoercion -> NameSet
+freeNamesIfCoercion (IfaceReflCo _ t) = freeNamesIfType t
+freeNamesIfCoercion (IfaceFunCo _ c1 c2)
+  = freeNamesIfCoercion c1 &&& freeNamesIfCoercion c2
+freeNamesIfCoercion (IfaceTyConAppCo _ tc cos)
+  = freeNamesIfTc tc &&& fnList freeNamesIfCoercion cos
+freeNamesIfCoercion (IfaceAppCo c1 c2)
+  = freeNamesIfCoercion c1 &&& freeNamesIfCoercion c2
+freeNamesIfCoercion (IfaceForAllCo tv co)
+  = freeNamesIfTvBndr tv &&& freeNamesIfCoercion co
+freeNamesIfCoercion (IfaceCoVarCo _)
+  = emptyNameSet
+freeNamesIfCoercion (IfaceAxiomInstCo ax _ cos)
+  = unitNameSet ax &&& fnList freeNamesIfCoercion cos
+freeNamesIfCoercion (IfaceUnivCo _ t1 t2)
+  = freeNamesIfType t1 &&& freeNamesIfType t2
+freeNamesIfCoercion (IfaceSymCo c)
+  = freeNamesIfCoercion c
+freeNamesIfCoercion (IfaceTransCo c1 c2)
+  = freeNamesIfCoercion c1 &&& freeNamesIfCoercion c2
+freeNamesIfCoercion (IfaceNthCo _ co)
+  = freeNamesIfCoercion co
+freeNamesIfCoercion (IfaceLRCo _ co)
+  = freeNamesIfCoercion co
+freeNamesIfCoercion (IfaceInstCo co ty)
+  = freeNamesIfCoercion co &&& freeNamesIfType ty
+freeNamesIfCoercion (IfaceSubCo co)
+  = freeNamesIfCoercion co
 
 freeNamesIfTvBndrs :: [IfaceTvBndr] -> NameSet
 freeNamesIfTvBndrs = fnList freeNamesIfTvBndr
@@ -936,7 +964,7 @@ freeNamesIfExpr (IfaceCo co)      = freeNamesIfType co
 freeNamesIfExpr (IfaceTuple _ as) = fnList freeNamesIfExpr as
 freeNamesIfExpr (IfaceLam b body) = freeNamesIfBndr b &&& freeNamesIfExpr body
 freeNamesIfExpr (IfaceApp f a)    = freeNamesIfExpr f &&& freeNamesIfExpr a
-freeNamesIfExpr (IfaceCast e co)  = freeNamesIfExpr e &&& freeNamesIfType co
+freeNamesIfExpr (IfaceCast e co)  = freeNamesIfExpr e &&& freeNamesIfCoercion co
 freeNamesIfExpr (IfaceTick _ e)   = freeNamesIfExpr e
 freeNamesIfExpr (IfaceECase e ty) = freeNamesIfExpr e &&& freeNamesIfType ty
 freeNamesIfExpr (IfaceCase s _ alts)

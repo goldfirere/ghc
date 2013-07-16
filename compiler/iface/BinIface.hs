@@ -896,10 +896,8 @@ instance Binary IfaceType where
             putByte bh 3
             put_ bh ag
             put_ bh ah
-    put_ bh (IfaceCoConApp cc tys)
-      = do { putByte bh 4; put_ bh cc; put_ bh tys }
     put_ bh (IfaceTyConApp tc tys)
-      = do { putByte bh 5; put_ bh tc; put_ bh tys }
+      = do { putByte bh 4; put_ bh tc; put_ bh tys }
 
     put_ bh (IfaceLitTy n)
       = do { putByte bh 30; put_ bh n }
@@ -919,15 +917,130 @@ instance Binary IfaceType where
               3 -> do ag <- get bh
                       ah <- get bh
                       return (IfaceFunTy ag ah)
-              4 -> do { cc <- get bh; tys <- get bh
-                      ; return (IfaceCoConApp cc tys) }
-              5 -> do { tc <- get bh; tys <- get bh
+              4 -> do { tc <- get bh; tys <- get bh
                       ; return (IfaceTyConApp tc tys) }
 
               30 -> do n <- get bh
                        return (IfaceLitTy n)
 
               _  -> panic ("get IfaceType " ++ show h)
+
+instance Binary IfaceCoercion where
+  put_ bh (IfaceReflCo a b) = do
+          putByte bh 1
+          put_ bh a
+          put_ bh b
+  put_ bh (IfaceFunCo a b c) = do
+          putByte bh 2
+          put_ bh a
+          put_ bh b
+          put_ bh c
+  put_ bh (IfaceTyConAppCo a b c) = do
+          putByte bh 3
+          put_ bh a
+          put_ bh b
+          put_ bh c
+  put_ bh (IfaceAppCo a b) = do
+          putByte bh 4
+          put_ bh a
+          put_ bh b
+  put_ bh (IfaceForAllCo a b) = do
+          putByte bh 5
+          put_ bh a
+          put_ bh b
+  put_ bh (IfaceCoVarCo a) = do
+          putByte bh 6
+          put_ bh a
+  put_ bh (IfaceAxiomInstCo a b c) = do
+          putByte bh 7
+          put_ bh a
+          put_ bh b
+          put_ bh c
+  put_ bh (IfaceUnivCo a b c) = do
+          putByte bh 8
+          put_ bh a
+          put_ bh b
+          put_ bh c
+  put_ bh (IfaceSymCo a) = do
+          putByte bh 9
+          put_ bh a
+  put_ bh (IfaceTransCo a b) = do
+          putByte bh 10
+          put_ bh a
+          put_ bh b
+  put_ bh (IfaceNthCo a b) = do
+          putByte bh 11
+          put_ bh a
+          put_ bh b
+  put_ bh (IfaceLRCo a b) = do
+          putByte bh 12
+          put_ bh a
+          put_ bh b
+  put_ bh (IfaceInstCo a b) = do
+          putByte bh 13
+          put_ bh a
+          put_ bh b
+  put_ bh (IfaceSubCo a) = do
+          putByte bh 14
+          put_ bh a
+  
+  get bh = do
+      tag <- getByte bh
+      case tag of
+           1 -> do a <- get bh
+                   b <- get bh
+                   return $ IfaceReflCo a b
+           2 -> do a <- get bh
+                   b <- get bh
+                   c <- get bh
+                   return $ IfaceFunCo a b c
+           3 -> do a <- get bh
+                   b <- get bh
+                   c <- get bh
+                   return $ IfaceTyConAppCo a b c
+           4 -> do a <- get bh
+                   b <- get bh
+                   return $ IfaceAppCo a b
+           5 -> do a <- get bh
+                   b <- get bh
+                   return $ IfaceForAllCo a b
+           6 -> do a <- get bh
+                   return $ IfaceCoVarCo a
+           7 -> do a <- get bh
+                   b <- get bh
+                   c <- get bh
+                   return $ IfaceAxiomInstCo a b c
+           8 -> do a <- get bh
+                   b <- get bh
+                   c <- get bh
+                   return $ IfaceUnivCo a b c
+           9 -> do a <- get bh
+                   return $ IfaceSymCo a
+           10-> do a <- get bh
+                   b <- get bh
+                   return $ IfaceTransCo a b
+           11-> do a <- get bh
+                   b <- get bh
+                   return $ IfaceNthCo a b
+           12-> do a <- get bh
+                   b <- get bh
+                   return $ IfaceLRCo a b
+           13-> do a <- get bh
+                   b <- get bh
+                   return $ IfaceInstCo a b
+           14-> do a <- get bh
+                   return $ IfaceSubCo a
+           _ -> panic ("get IfaceCoercion " ++ show tag)             
+
+instance Binary Role where
+  put_ bh Nominal          = putByte bh 1
+  put_ bh Representational = putByte bh 2
+  put_ bh Phantom          = putByte bh 3
+
+  get bh = do tag <- getByte bh
+              case tag of 1 -> return Nominal
+                          2 -> return Representational
+                          3 -> return Phantom
 
 instance Binary IfaceTyLit where
   put_ bh (IfaceNumTyLit n)  = putByte bh 1 >> put_ bh n
@@ -1258,11 +1371,12 @@ instance Binary IfaceDecl where
         put_ bh a6
         put_ bh a7
         
-    put_ bh (IfaceAxiom a1 a2 a3) = do
+    put_ bh (IfaceAxiom a1 a2 a3 a4) = do
         putByte bh 5
         put_ bh (occNameFS a1)
         put_ bh a2
         put_ bh a3
+        put_ bh a4
 
     get bh = do
         h <- getByte bh
@@ -1303,8 +1417,9 @@ instance Binary IfaceDecl where
             _ -> do a1 <- get bh
                     a2 <- get bh
                     a3 <- get bh
+                    a4 <- get bh
                     occ <- return $! mkOccNameFS tcName a1
-                    return (IfaceAxiom occ a2 a3)
+                    return (IfaceAxiom occ a2 a3 a4)
 
 instance Binary IfaceAxBranch where
     put_ bh (IfaceAxBranch a1 a2 a3 a4) = do

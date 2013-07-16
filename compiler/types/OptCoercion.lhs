@@ -130,10 +130,10 @@ opt_co' env sym (AxiomInstCo con ind cos)
   = wrapSym sym $ AxiomInstCo con ind (map (opt_co env False) cos)
       -- Note that the_co does *not* have sym pushed into it
 
-opt_co' env sym (UnsafeCo ty1 ty2)
-  | ty1' `eqType` ty2' = Refl ty1'
-  | sym                = mkUnsafeCo ty2' ty1'
-  | otherwise          = mkUnsafeCo ty1' ty2'
+opt_co' env sym (UnivCo r ty1 ty2)
+  | ty1' `eqType` ty2' = Refl r ty1'
+  | sym                = mkUnivCo r ty2' ty1'
+  | otherwise          = mkUnivCo r ty1' ty2'
   where
     ty1' = substTy env ty1
     ty2' = substTy env ty2

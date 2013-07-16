@@ -557,7 +557,8 @@ tc_iface_decl _ _ (IfaceForeign {ifName = rdr_name, ifExtName = ext_name})
         ; return (ATyCon (mkForeignTyCon name ext_name 
                                          liftedTypeKind 0)) }
 
-tc_iface_decl _ _ (IfaceAxiom {ifName = ax_occ, ifTyCon = tc, ifAxBranches = branches})
+tc_iface_decl _ _ (IfaceAxiom { ifName = ax_occ, ifTyCon = tc
+                              , ifAxBranches = branches, ifRole = role })
   = do { tc_name     <- lookupIfaceTop ax_occ
        ; tc_tycon    <- tcIfaceTyCon tc
        ; tc_branches <- foldlM tc_ax_branches [] branches
@@ -565,6 +566,7 @@ tc_iface_decl _ _ (IfaceAxiom {ifName = ax_occ, ifTyCon = tc, ifAxBranches = bra
                      CoAxiom { co_ax_unique   = nameUnique tc_name
                              , co_ax_name     = tc_name
                              , co_ax_tc       = tc_tycon
+                             , co_ax_role     = role
                              , co_ax_branches = toBranchList tc_branches
                              , co_ax_implicit = False }
        ; return (ACoAxiom axiom) }
@@ -915,7 +917,6 @@ tcIfaceType (IfaceTyConApp tc tks) = do { tc' <- tcIfaceTyCon tc
                                         ; tks' <- tcIfaceTcArgs (tyConKind tc') tks 
                                         ; return (mkTyConApp tc' tks') }
 tcIfaceType (IfaceForAllTy tv t)  = bindIfaceTyVar tv $ \ tv' -> do { t' <- tcIfaceType t; return (ForAllTy tv' t') }
-tcIfaceType t@(IfaceCoConApp {})  = pprPanic "tcIfaceType" (ppr t)
 
 tcIfaceTypes :: [IfaceType] -> IfL [Type]
 tcIfaceTypes tys = mapM tcIfaceType tys
@@ -983,28 +984,29 @@ This context business is why we need tcIfaceTcArgs.
 %************************************************************************
 
 \begin{code}
-tcIfaceCo :: IfaceType -> IfL Coercion
-tcIfaceCo (IfaceTyVar n)        = mkCoVarCo <$> tcIfaceCoVar n
-tcIfaceCo (IfaceAppTy t1 t2)    = mkAppCo <$> tcIfaceCo t1 <*> tcIfaceCo t2
-tcIfaceCo (IfaceFunTy t1 t2)    = mkFunCo <$> tcIfaceCo t1 <*> tcIfaceCo t2
-tcIfaceCo (IfaceTyConApp tc ts) = mkTyConAppCo <$> tcIfaceTyCon tc <*> mapM tcIfaceCo ts
-tcIfaceCo t@(IfaceLitTy _)      = mkReflCo <$> tcIfaceType t
-tcIfaceCo (IfaceCoConApp tc ts) = tcIfaceCoApp tc ts
-tcIfaceCo (IfaceForAllTy tv t)  = bindIfaceTyVar tv $ \ tv' ->
-                                  mkForAllCo tv' <$> tcIfaceCo t
-
-tcIfaceCoApp :: IfaceCoCon -> [IfaceType] -> IfL Coercion
-tcIfaceCoApp IfaceReflCo      [t]     = Refl         <$> tcIfaceType t
-tcIfaceCoApp (IfaceCoAx n i)  ts      = AxiomInstCo  <$> tcIfaceCoAxiom n
-                                                     <*> pure i
-                                                     <*> mapM tcIfaceCo ts
-tcIfaceCoApp IfaceUnsafeCo    [t1,t2] = UnsafeCo     <$> tcIfaceType t1 <*> tcIfaceType t2
-tcIfaceCoApp IfaceSymCo       [t]     = SymCo        <$> tcIfaceCo t
-tcIfaceCoApp IfaceTransCo     [t1,t2] = TransCo      <$> tcIfaceCo t1 <*> tcIfaceCo t2
-tcIfaceCoApp IfaceInstCo      [t1,t2] = InstCo       <$> tcIfaceCo t1 <*> tcIfaceType t2
-tcIfaceCoApp (IfaceNthCo d)   [t]     = NthCo d      <$> tcIfaceCo t
-tcIfaceCoApp (IfaceLRCo lr)   [t]     = LRCo lr      <$> tcIfaceCo t
-tcIfaceCoApp cc ts = pprPanic "toIfaceCoApp" (ppr cc <+> ppr ts)
+tcIfaceCo :: IfaceCoercion -> IfL Coercion
+tcIfaceCo (IfaceReflCo r t)         = mkReflCo r <$> tcIfaceType t
+tcIfaceCo (IfaceFunCo r c1 c2)      = mkFunCo r <$> tcIfaceCo t1 <*> tcIfaceCo t2
+tcIfaceCo (IfaceTyConAppCo r tc cs) = mkTyConAppCo r <$> tcIfaceTyCon tc
+                                                     <*> mapM tcIfaceCo cs
+tcIfaceCo (IfaceAppCo c1 c2)        = mkAppCo Nominal <$> tcIfaceCo c1
+                                                      <*> tcIfaceCo c2
+tcIfaceCo (IfaceForAllCo tv c)      = bindIfaceTyVar tv $ \ tv' ->
+                                      mkForAllCo tv' <$> tcIfaceCo c
+tcIfaceCo (IfaceCoVarCo n)          = mkCoVarCo <$> tcIfaceCoVar n
+tcIfaceCo (IfaceAxiomInstCo n i cs) = AxiomInstCo <$> tcIfaceCoAxiom n
+                                                  <*> pure i
+                                                  <*> mapM tcIfaceCo ts
+tcIfaceCo (IfaceUnivCo r c1 c2)     = UnivCo r <$> tcIfaceType t1
+                                               <*> tcIfaceType t2
+tcIfaceCo (IfaceSymCo c)            = SymCo    <$> tcIfaceCo c
+tcIfaceCo (IfaceTransCo c1 c2)      = TransCo  <$> tcIfaceCo c1
+                                               <*> tcIfaceCo c2
+tcIfaceCo (IfaceInstCo c1 t2)       = InstCo   <$> tcIfaceCo c1
+                                               <*> tcIfaceType t2
+tcIfaceCo (IfaceNthCo d c)          = NthCo d  <$> tcIfaceCo c
+tcIfaceCo (IfaceLRCo lr c)          = LRCo lr  <$> tcIfaceCo c
+tcIfaceCo (IfaceSubCo c)            = SubCo    <$> tcIfaceCo c
 
 tcIfaceCoVar :: FastString -> IfL CoVar
 tcIfaceCoVar = tcIfaceLclId
