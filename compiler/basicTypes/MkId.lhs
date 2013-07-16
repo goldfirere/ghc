@@ -547,7 +547,7 @@ mkDataConRep dflags fam_envs wrap_name data_con
     initial_wrap_app = Var (dataConWorkId data_con)
                       `mkTyApps`  res_ty_args
     	              `mkVarApps` ex_tvs                 
-    	              `mkCoApps`  map (mkReflCo . snd) eq_spec
+    	              `mkCoApps`  map (mkReflCo Nominal . snd) eq_spec
     	                -- Dont box the eq_spec coercions since they are
     	                -- marked as HsUnpack by mk_dict_strict_mark
 

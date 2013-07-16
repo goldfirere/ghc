@@ -986,7 +986,7 @@ This context business is why we need tcIfaceTcArgs.
 \begin{code}
 tcIfaceCo :: IfaceCoercion -> IfL Coercion
 tcIfaceCo (IfaceReflCo r t)         = mkReflCo r <$> tcIfaceType t
-tcIfaceCo (IfaceFunCo r c1 c2)      = mkFunCo r <$> tcIfaceCo t1 <*> tcIfaceCo t2
+tcIfaceCo (IfaceFunCo r c1 c2)      = mkFunCo r <$> tcIfaceCo c1 <*> tcIfaceCo c2
 tcIfaceCo (IfaceTyConAppCo r tc cs) = mkTyConAppCo r <$> tcIfaceTyCon tc
                                                      <*> mapM tcIfaceCo cs
 tcIfaceCo (IfaceAppCo c1 c2)        = mkAppCo Nominal <$> tcIfaceCo c1
@@ -996,8 +996,8 @@ tcIfaceCo (IfaceForAllCo tv c)      = bindIfaceTyVar tv $ \ tv' ->
 tcIfaceCo (IfaceCoVarCo n)          = mkCoVarCo <$> tcIfaceCoVar n
 tcIfaceCo (IfaceAxiomInstCo n i cs) = AxiomInstCo <$> tcIfaceCoAxiom n
                                                   <*> pure i
-                                                  <*> mapM tcIfaceCo ts
-tcIfaceCo (IfaceUnivCo r c1 c2)     = UnivCo r <$> tcIfaceType t1
+                                                  <*> mapM tcIfaceCo cs
+tcIfaceCo (IfaceUnivCo r t1 t2)     = UnivCo r <$> tcIfaceType t1
                                                <*> tcIfaceType t2
 tcIfaceCo (IfaceSymCo c)            = SymCo    <$> tcIfaceCo c
 tcIfaceCo (IfaceTransCo c1 c2)      = TransCo  <$> tcIfaceCo c1

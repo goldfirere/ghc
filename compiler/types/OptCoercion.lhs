@@ -102,11 +102,11 @@ opt_co env sym co
                  | otherwise = substCo env co
 -}
 
-opt_co' env _   (Refl ty)           = Refl (substTy env ty)
-opt_co' env sym (SymCo co)          = opt_co env (not sym) co
-opt_co' env sym (TyConAppCo tc cos) = mkTyConAppCo tc (map (opt_co env sym) cos)
-opt_co' env sym (AppCo co1 co2)     = mkAppCo (opt_co env sym co1) (opt_co env sym co2)
-opt_co' env sym (ForAllCo tv co)    = case substTyVarBndr env tv of
+opt_co' env _   (Refl r ty)           = Refl r (substTy env ty)
+opt_co' env sym (SymCo co)            = opt_co env (not sym) co
+opt_co' env sym (TyConAppCo r tc cos) = mkTyConAppCo r tc (map (opt_co env sym) cos)
+opt_co' env sym (AppCo co1 co2)       = mkAppCo Nominal (opt_co env sym co1) (opt_co env sym co2)
+opt_co' env sym (ForAllCo tv co)      = case substTyVarBndr env tv of
                                          (env', tv') -> mkForAllCo tv' (opt_co env' sym co)
      -- Use the "mk" functions to check for nested Refls
 
@@ -147,10 +147,10 @@ opt_co' env sym (TransCo co1 co2)
     in_scope = getCvInScope env
 
 opt_co' env sym (NthCo n co)
-  | TyConAppCo tc cos <- co'
+  | TyConAppCo _ tc cos <- co'
   , isDecomposableTyCon tc   -- Not synonym families
   = ASSERT( n < length cos )
-    cos !! n
+    cos !! n  -- TODO (RAE): Might be at the wrong role
   | otherwise
   = NthCo n co'
   where
@@ -179,6 +179,9 @@ opt_co' env sym (InstCo co ty)
   where
     co' = opt_co env sym co
     ty' = substTy env ty
+
+opt_co' env sym (SubCo co)
+  = SubCo (opt_co' env sym co) -- TODO (RAE): Rewrite this.
 
 -------------
 opt_transList :: InScopeSet -> [NormalCo] -> [NormalCo] -> [NormalCo]
@@ -239,37 +242,38 @@ opt_trans_rule is in_co1@(InstCo co1 ty1) in_co2@(InstCo co2 ty2)
     mkInstCo (opt_trans is co1 co2) ty1
  
 -- Push transitivity down through matching top-level constructors.
-opt_trans_rule is in_co1@(TyConAppCo tc1 cos1) in_co2@(TyConAppCo tc2 cos2)
+opt_trans_rule is in_co1@(TyConAppCo r1 tc1 cos1) in_co2@(TyConAppCo r2 tc2 cos2)
   | tc1 == tc2 
-  = fireTransRule "PushTyConApp" in_co1 in_co2 $
-    TyConAppCo tc1 (opt_transList is cos1 cos2)
+  = ASSERT( r1 == r2 )
+    fireTransRule "PushTyConApp" in_co1 in_co2 $
+    TyConAppCo r1 tc1 (opt_transList is cos1 cos2)
 
 opt_trans_rule is in_co1@(AppCo co1a co1b) in_co2@(AppCo co2a co2b)
   = fireTransRule "TrPushApp" in_co1 in_co2 $
-    mkAppCo (opt_trans is co1a co2a) (opt_trans is co1b co2b)
+    mkAppCo Nominal (opt_trans is co1a co2a) (opt_trans is co1b co2b)
 
 -- Eta rules
-opt_trans_rule is co1@(TyConAppCo tc cos1) co2
+opt_trans_rule is co1@(TyConAppCo r tc cos1) co2
   | Just cos2 <- etaTyConAppCo_maybe tc co2
   = ASSERT( length cos1 == length cos2 )
     fireTransRule "EtaCompL" co1 co2 $
-    TyConAppCo tc (opt_transList is cos1 cos2)
+    TyConAppCo r tc (opt_transList is cos1 cos2)
 
-opt_trans_rule is co1 co2@(TyConAppCo tc cos2)
+opt_trans_rule is co1 co2@(TyConAppCo r tc cos2)
   | Just cos1 <- etaTyConAppCo_maybe tc co1
   = ASSERT( length cos1 == length cos2 )
     fireTransRule "EtaCompR" co1 co2 $
-    TyConAppCo tc (opt_transList is cos1 cos2)
+    TyConAppCo r tc (opt_transList is cos1 cos2)
 
 opt_trans_rule is co1@(AppCo co1a co1b) co2
   | Just (co2a,co2b) <- etaAppCo_maybe co2
   = fireTransRule "EtaAppL" co1 co2 $
-    mkAppCo (opt_trans is co1a co2a) (opt_trans is co1b co2b)
+    mkAppCo Nominal (opt_trans is co1a co2a) (opt_trans is co1b co2b)
 
 opt_trans_rule is co1 co2@(AppCo co2a co2b)
   | Just (co1a,co1b) <- etaAppCo_maybe co1
   = fireTransRule "EtaAppR" co1 co2 $
-    mkAppCo (opt_trans is co1a co2a) (opt_trans is co1b co2b)
+    mkAppCo Nominal (opt_trans is co1a co2a) (opt_trans is co1b co2b)
 
 -- Push transitivity inside forall
 opt_trans_rule is co1 co2
@@ -347,7 +351,7 @@ opt_trans_rule _ co1 co2	-- Identity rule
   , Pair _ ty2 <- coercionKind co2
   , ty1 `eqType` ty2
   = fireTransRule "RedTypeDirRefl" co1 co2 $
-    Refl ty2
+    Refl (coercionRole co1) ty2
 
 opt_trans_rule _ _ _ = Nothing
 
@@ -429,7 +433,7 @@ matchAxiom sym ax@(CoAxiom { co_ax_tc = tc }) ind co
                     , cab_rhs = rhs }) = coAxiomNthBranch ax ind in
     case liftCoMatch (mkVarSet qtvs) (if sym then (mkTyConApp tc lhs) else rhs) co of
       Nothing    -> Nothing
-      Just subst -> allMaybes (map (liftCoSubstTyVar subst) qtvs)
+      Just subst -> allMaybes (map (liftCoSubstTyVar subst Nominal) qtvs)
 
 -------------
 compatible_co :: Coercion -> Coercion -> Bool
@@ -475,7 +479,7 @@ etaTyConAppCo_maybe :: TyCon -> Coercion -> Maybe [Coercion]
 -- If possible, split a coercion 
 --       g :: T s1 .. sn ~ T t1 .. tn
 -- into [ Nth 0 g :: s1~t1, ..., Nth (n-1) g :: sn~tn ] 
-etaTyConAppCo_maybe tc (TyConAppCo tc2 cos2)
+etaTyConAppCo_maybe tc (TyConAppCo _ tc2 cos2)
   = ASSERT( tc == tc2 ) Just cos2
 
 etaTyConAppCo_maybe tc co
@@ -487,7 +491,7 @@ etaTyConAppCo_maybe tc co
   , let n = length tys1
   = ASSERT( tc == tc1 ) 
     ASSERT( n == length tys2 )
-    Just (decomposeCo n co)  
+    Just (decomposeCo n co)   -- TODO (RAE): These might be the wrong roles.
     -- NB: n might be <> tyConArity tc
     -- e.g.   data family T a :: * -> *
     --        g :: T a b ~ T c d

@@ -106,8 +106,8 @@ pty (TransCoercion t1 t2) =
   sep [text "%trans", paty t1, paty t2]
 pty (SymCoercion t) =
   sep [text "%sym", paty t]
-pty (UnsafeCoercion t1 t2) =
-  sep [text "%unsafe", paty t1, paty t2]
+pty (UnivCoercion t1 t2) =
+  sep [text "%univ", paty t1, paty t2]
 pty (NthCoercion n t) =
   sep [text "%nth", int n, paty t]
 pty (LRCoercion CLeft t) =
@@ -118,6 +118,8 @@ pty (InstCoercion t1 t2) =
   sep [text "%inst", paty t1, paty t2]
 pty (AxiomCoercion tc i cos) = 
   pqname tc <+> int i <+> sep (map paty cos)
+pty (SubCoercion t) =
+  sep [text "%sub", paty t]
 pty ty@(Tapp {}) = pappty ty []
 pty ty@(Tvar {}) = paty ty
 pty ty@(Tcon {}) = paty ty

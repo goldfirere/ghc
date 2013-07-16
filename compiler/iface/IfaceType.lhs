@@ -9,22 +9,23 @@ This module defines interface types and binders
 module IfaceType (
         IfExtName, IfLclName,
 
-        IfaceType(..), IfacePredType, IfaceKind, IfaceTyCon(..), IfaceCoCon(..),
+        IfaceType(..), IfacePredType, IfaceKind, IfaceTyCon(..), IfaceCoercion(..),
         IfaceTyLit(..),
-        IfaceContext, IfaceBndr(..), IfaceTvBndr, IfaceIdBndr, IfaceCoercion,
+        IfaceContext, IfaceBndr(..), IfaceTvBndr, IfaceIdBndr, 
 
         -- Conversion from Type -> IfaceType
         toIfaceType, toIfaceKind, toIfaceContext,
         toIfaceBndr, toIfaceIdBndr, toIfaceTvBndrs,
         toIfaceTyCon, toIfaceTyCon_name,
 
-        -- Conversion from Coercion -> IfaceType
-        coToIfaceType,
+        -- Conversion from Coercion -> IfaceCoercion
+        toIfaceCoercion,
 
         -- Printing
         pprIfaceType, pprParendIfaceType, pprIfaceContext,
         pprIfaceIdBndr, pprIfaceTvBndr, pprIfaceTvBndrs, pprIfaceBndrs,
-        tOP_PREC, tYCON_PREC, noParens, maybeParen, pprIfaceForAllPart
+        tOP_PREC, tYCON_PREC, noParens, maybeParen, pprIfaceForAllPart,
+        pprIfaceCoercion, pprParendIfaceCoercion
 
     ) where
 
@@ -268,8 +269,9 @@ ppr_tylit :: IfaceTyLit -> SDoc
 ppr_tylit (IfaceNumTyLit n) = integer n
 ppr_tylit (IfaceStrTyLit n) = text (show n)
 
-pprIfaceCoercion :: IfaceCoercion -> SDoc
+pprIfaceCoercion, pprParendIfaceCoercion :: IfaceCoercion -> SDoc
 pprIfaceCoercion = ppr_co tOP_PREC
+pprParendIfaceCoercion = ppr_co tYCON_PREC
 
 ppr_co :: Int -> IfaceCoercion -> SDoc
 ppr_co _         (IfaceReflCo r ty) = angleBrackets (ppr ty) <> ppr_role r
@@ -282,7 +284,7 @@ ppr_co ctxt_prec (IfaceFunCo r co1 co2)
     ppr_fun_tail other_co
       = [arrow <> ppr_role r <+> pprIfaceCoercion other_co]
 
-ppr_co _         co@(IfaceTyConAppCo r tc cos)
+ppr_co _         (IfaceTyConAppCo r tc cos)
   = parens (ppr_tc_app ppr_co tOP_PREC tc cos) <> ppr_role r
 ppr_co ctxt_prec (IfaceAppCo co1 co2)
   = maybeParen ctxt_prec tYCON_PREC $
@@ -314,11 +316,11 @@ ppr_co ctxt_prec co
                      { IfaceAxiomInstCo n i cos -> (ppr n <> brackets (ppr i), cos)
                      ; IfaceSymCo co            -> (ptext (sLit "Sym"), [co])
                      ; IfaceTransCo co1 co2     -> (ptext (sLit "Trans"), [co1,co2])
-                     ; IfaceNthCo i co          -> (ptext (sLit "Nth:") <> int d,
+                     ; IfaceNthCo d co          -> (ptext (sLit "Nth:") <> int d,
                                                     [co])
                      ; IfaceLRCo lr co          -> (ppr lr, [co])
                      ; IfaceSubCo co            -> (ptext (sLit "Sub"), [co])
-                     ; co                       -> panic "pprIfaceCo" }
+                     ; _                        -> panic "pprIfaceCo" }
 
 ppr_special_co :: Int -> SDoc -> [IfaceCoercion] -> SDoc
 ppr_special_co ctxt_prec doc cos

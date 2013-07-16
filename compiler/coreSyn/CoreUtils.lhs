@@ -1602,7 +1602,7 @@ need to address that here.
 \begin{code}
 tryEtaReduce :: [Var] -> CoreExpr -> Maybe CoreExpr
 tryEtaReduce bndrs body
-  = go (reverse bndrs) body (mkReflCo (exprType body))
+  = go (reverse bndrs) body (mkReflCo Representational (exprType body))
   where
     incoming_arity = count isId bndrs
 
@@ -1659,9 +1659,10 @@ tryEtaReduce bndrs body
        | Just tv <- getTyVar_maybe ty
        , bndr == tv  = Just (mkForAllCo tv co)
     ok_arg bndr (Var v) co
-       | bndr == v   = Just (mkFunCo (mkReflCo (idType bndr)) co)
+       | bndr == v   = Just (mkFunCo Representational
+                                     (mkReflCo Representational (idType bndr)) co)
     ok_arg bndr (Cast (Var v) co_arg) co
-       | bndr == v  = Just (mkFunCo (mkSymCo co_arg) co)
+       | bndr == v  = Just (mkFunCo Representational (mkSymCo co_arg) co)
        -- The simplifier combines multiple casts into one,
        -- so we can have a simple-minded pattern match here
     ok_arg _ _ _ = Nothing

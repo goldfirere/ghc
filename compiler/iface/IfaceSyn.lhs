@@ -43,6 +43,7 @@ import Annotations
 import Class
 import NameSet
 import CoAxiom ( BranchIndex )
+import TyCon ( Role )
 import Name
 import CostCentre
 import Literal
@@ -287,7 +288,7 @@ data IfaceExpr
   = IfaceLcl    IfLclName
   | IfaceExt    IfExtName
   | IfaceType   IfaceType
-  | IfaceCo     IfaceType		-- We re-use IfaceType for coercions
+  | IfaceCo     IfaceCoercion
   | IfaceTuple 	TupleSort [IfaceExpr]	-- Saturated; type arguments omitted
   | IfaceLam 	IfaceBndr IfaceExpr
   | IfaceApp 	IfaceExpr IfaceExpr
@@ -683,7 +684,7 @@ pprIfaceExpr _       (IfaceExt v)       = ppr v
 pprIfaceExpr _       (IfaceLit l)       = ppr l
 pprIfaceExpr _       (IfaceFCall cc ty) = braces (ppr cc <+> ppr ty)
 pprIfaceExpr _       (IfaceType ty)     = char '@' <+> pprParendIfaceType ty
-pprIfaceExpr _       (IfaceCo co)       = text "@~" <+> pprParendIfaceType co
+pprIfaceExpr _       (IfaceCo co)       = text "@~" <+> pprParendIfaceCoercion co
 
 pprIfaceExpr add_par app@(IfaceApp _ _) = add_par (pprIfaceApp app [])
 pprIfaceExpr _       (IfaceTuple c as)  = tupleParens c (interpp'SP as)
@@ -960,7 +961,7 @@ freeNamesIfExpr :: IfaceExpr -> NameSet
 freeNamesIfExpr (IfaceExt v)      = unitNameSet v
 freeNamesIfExpr (IfaceFCall _ ty) = freeNamesIfType ty
 freeNamesIfExpr (IfaceType ty)    = freeNamesIfType ty
-freeNamesIfExpr (IfaceCo co)      = freeNamesIfType co
+freeNamesIfExpr (IfaceCo co)      = freeNamesIfCoercion co
 freeNamesIfExpr (IfaceTuple _ as) = fnList freeNamesIfExpr as
 freeNamesIfExpr (IfaceLam b body) = freeNamesIfBndr b &&& freeNamesIfExpr body
 freeNamesIfExpr (IfaceApp f a)    = freeNamesIfExpr f &&& freeNamesIfExpr a
@@ -993,11 +994,6 @@ freeNamesIfExpr _ = emptyNameSet
 freeNamesIfTc :: IfaceTyCon -> NameSet
 freeNamesIfTc (IfaceTc tc) = unitNameSet tc
 -- ToDo: shouldn't we include IfaceIntTc & co.?
-
-freeNamesIfCo :: IfaceCoCon -> NameSet
-freeNamesIfCo (IfaceCoAx tc _) = unitNameSet tc
--- ToDo: include IfaceIPCoAx? Probably not necessary.
-freeNamesIfCo _ = emptyNameSet
 
 freeNamesIfRule :: IfaceRule -> NameSet
 freeNamesIfRule (IfaceRule { ifRuleBndrs = bs, ifRuleHead = f

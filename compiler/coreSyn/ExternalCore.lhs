@@ -64,11 +64,12 @@ data Ty
 -- them specially, so we have to print them out with special syntax.
   | TransCoercion Ty Ty
   | SymCoercion Ty
-  | UnsafeCoercion Ty Ty
+  | UnivCoercion Ty Ty
   | InstCoercion Ty Ty
   | NthCoercion Int Ty
   | AxiomCoercion (Qual Tcon) Int [Ty]
   | LRCoercion LeftOrRight Ty
+  | SubCoercion Ty
 
 data LeftOrRight = CLeft | CRight
 

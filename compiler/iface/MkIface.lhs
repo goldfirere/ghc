@@ -1792,7 +1792,7 @@ coreRuleToIfaceRule mod rule@(Rule { ru_name = name, ru_fn = fn,
         -- construct the same ru_rough field as we have right now;
         -- see tcIfaceRule
     do_arg (Type ty)     = IfaceType (toIfaceType (deNoteType ty))
-    do_arg (Coercion co) = IfaceCo   (coToIfaceType co)
+    do_arg (Coercion co) = IfaceCo   (toIfaceCoercion co)
     do_arg arg           = toIfaceExpr arg
 
         -- Compute orphanhood.  See Note [Orphans] in IfaceSyn
@@ -1815,7 +1815,7 @@ toIfaceExpr :: CoreExpr -> IfaceExpr
 toIfaceExpr (Var v)         = toIfaceVar v
 toIfaceExpr (Lit l)         = IfaceLit l
 toIfaceExpr (Type ty)       = IfaceType (toIfaceType ty)
-toIfaceExpr (Coercion co)   = IfaceCo   (coToIfaceType co)
+toIfaceExpr (Coercion co)   = IfaceCo   (toIfaceCoercion co)
 toIfaceExpr (Lam x b)       = IfaceLam (toIfaceBndr x) (toIfaceExpr b)
 toIfaceExpr (App f a)       = toIfaceApp f [a]
 toIfaceExpr (Case s x ty as) 

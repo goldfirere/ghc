@@ -21,14 +21,14 @@ module CoAxiom (
        toBranchedAxiom, toUnbranchedAxiom,
        coAxiomName, coAxiomArity, coAxiomBranches,
        coAxiomTyCon, isImplicitCoAxiom, coAxiomNumPats,
-       coAxiomNthBranch, coAxiomSingleBranch_maybe,
+       coAxiomNthBranch, coAxiomSingleBranch_maybe, coAxiomRole,
        coAxiomSingleBranch, coAxBranchTyVars, coAxBranchLHS,
        coAxBranchRHS, coAxBranchSpan, coAxBranchIncomps,
        placeHolderIncomps
        ) where 
 
 import {-# SOURCE #-} TypeRep ( Type )
-import {-# SOURCE #-} TyCon ( TyCon )
+import {-# SOURCE #-} TyCon ( TyCon, Role )
 import Outputable
 import Name
 import Unique
@@ -257,12 +257,12 @@ data CoAxBranch
   deriving Typeable
 
 toBranchedAxiom :: CoAxiom br -> CoAxiom Branched
-toBranchedAxiom (CoAxiom unique name tc branches implicit)
-  = CoAxiom unique name tc (toBranchedList branches) implicit
+toBranchedAxiom (CoAxiom unique name role tc branches implicit)
+  = CoAxiom unique name role tc (toBranchedList branches) implicit
 
 toUnbranchedAxiom :: CoAxiom br -> CoAxiom Unbranched
-toUnbranchedAxiom (CoAxiom unique name tc branches implicit)
-  = CoAxiom unique name tc (toUnbranchedList branches) implicit
+toUnbranchedAxiom (CoAxiom unique name role tc branches implicit)
+  = CoAxiom unique name role tc (toUnbranchedList branches) implicit
 
 coAxiomNumPats :: CoAxiom br -> Int
 coAxiomNumPats = length . coAxBranchLHS . (flip coAxiomNthBranch 0)

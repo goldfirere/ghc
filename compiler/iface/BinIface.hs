@@ -1041,6 +1041,7 @@ instance Binary Role where
               case tag of 1 -> return Nominal
                           2 -> return Representational
                           3 -> return Phantom
+                          _ -> panic ("get Role " ++ show tag)
 
 instance Binary IfaceTyLit where
   put_ bh (IfaceNumTyLit n)  = putByte bh 1 >> put_ bh n
@@ -1067,29 +1068,6 @@ instance Binary LeftOrRight where
                ; case h of
                    0 -> return CLeft
                    _ -> return CRight }
-
-instance Binary IfaceCoCon where
-   put_ bh (IfaceCoAx n ind)   = do { putByte bh 0; put_ bh n; put_ bh ind }
-   put_ bh IfaceReflCo         = putByte bh 1
-   put_ bh IfaceUnsafeCo       = putByte bh 2
-   put_ bh IfaceSymCo          = putByte bh 3
-   put_ bh IfaceTransCo        = putByte bh 4
-   put_ bh IfaceInstCo         = putByte bh 5
-   put_ bh (IfaceNthCo d)      = do { putByte bh 6; put_ bh d }
-   put_ bh (IfaceLRCo lr)      = do { putByte bh 7; put_ bh lr }
-
-   get bh = do
-        h <- getByte bh
-        case h of
-          0 -> do { n <- get bh; ind <- get bh; return (IfaceCoAx n ind) }
-          1 -> return IfaceReflCo 
-          2 -> return IfaceUnsafeCo
-          3 -> return IfaceSymCo
-          4 -> return IfaceTransCo
-          5 -> return IfaceInstCo
-          6 -> do { d <- get bh; return (IfaceNthCo d) }
-          7 -> do { lr <- get bh; return (IfaceLRCo lr) }
-          _ -> panic ("get IfaceCoCon " ++ show h)
 
 -------------------------------------------------------------------------
 --              IfaceExpr and friends

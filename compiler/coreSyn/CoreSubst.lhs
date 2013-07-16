@@ -59,7 +59,7 @@ import Type     hiding ( substTy, extendTvSubst, extendTvSubstList
                        , isInScope, substTyVarBndr, cloneTyVarBndr )
 import Coercion hiding ( substTy, substCo, extendTvSubst, substTyVarBndr, substCoVarBndr )
 
-import TyCon       ( tyConArity )
+import TyCon       ( tyConArity, Role(..) )
 import DataCon
 import PrelNames   ( eqBoxDataConKey )
 import OptCoercion ( optCoercion )
@@ -1163,7 +1163,7 @@ data ConCont = CC [CoreExpr] Coercion
 -- where t1..tk are the *universally-qantified* type args of 'dc'
 exprIsConApp_maybe :: InScopeEnv -> CoreExpr -> Maybe (DataCon, [Type], [CoreExpr])
 exprIsConApp_maybe (in_scope, id_unf) expr
-  = go (Left in_scope) expr (CC [] (mkReflCo (exprType expr)))
+  = go (Left in_scope) expr (CC [] (mkReflCo Representational (exprType expr)))
   where
     go :: Either InScopeSet Subst 
        -> CoreExpr -> ConCont 
@@ -1251,10 +1251,12 @@ dealWithCoercion co dc dc_args
         (ex_args, val_args) = splitAtList dc_ex_tyvars non_univ_args
 
         -- Make the "theta" from Fig 3 of the paper
-        gammas = decomposeCo tc_arity co
+        gammas = decomposeCo tc_arity co  -- TODO (RAE): Are these the right roles?
         theta_subst = liftCoSubstWith 
                          (dc_univ_tyvars ++ dc_ex_tyvars)
-                         (gammas         ++ map mkReflCo (stripTypeArgs ex_args))
+                                                -- existentials are at role N
+                         (gammas         ++ map (mkReflCo Nominal)
+                                                (stripTypeArgs ex_args))
 
           -- Cast the value arguments (which include dictionaries)
         new_val_args = zipWith cast_arg arg_tys val_args

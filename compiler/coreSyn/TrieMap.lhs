@@ -561,6 +561,45 @@ fdC k m = foldTM k (km_refl m)
         . foldTM k          (km_left m)
         . foldTM k          (km_right m)
         . foldTM (foldTM k) (km_inst m)
+
+------------------------
+data RoleMap a
+  = EmptyRM
+  | RM { rm_nom   :: a
+       , rm_repr  :: a
+       , rm_phant :: a }
+
+instance TrieMap RoleMap where
+   type Key RoleMap = Role
+   emptyTM  = EmptyRM
+   lookupTM = lkR emptyCME
+   alterTM  = xtR emptyCME
+   foldTM   = fdR
+   mapTM    = mapR
+
+mapR :: (a->b) -> RoleMap a -> RoleMap b
+mapR _ EmptyRM = EmptyRM
+mapR f (RM { rm_nom = nom, rm_repr = repr, rm_phant = phant })
+  = RM { rm_nom   = f nom
+       , rm_repr  = f repr
+       , rm_phant = f phant }
+ 
+lkA :: CmEnv -> Role -> RoleMap a -> Maybe a
+lkA env (Nominal,          _, rhs)  = rm_nom >.> lkE env rhs
+lkA env (Representational, _, rhs) = rm_repr >.> lkE env rhs
+lkA env (Phantom,          _, rhs) = rm_phant >.> lkE env rhs
+
+xtA :: CmEnv -> CoreAlt -> XT a -> AltMap a -> AltMap a
+xtA env (DEFAULT, _, rhs)    f m = m { am_deflt = am_deflt m |> xtE env rhs f }
+xtA env (LitAlt l, _, rhs)   f m = m { am_lit   = am_lit m   |> xtLit l |>> xtE env rhs f }
+xtA env (DataAlt d, bs, rhs) f m = m { am_data  = am_data m  |> xtNamed d 
+                                                             |>> xtE (extendCMEs env bs) rhs f }
+
+fdA :: (a -> b -> b) -> AltMap a -> b -> b
+fdA k m = foldTM k (am_deflt m)
+        . foldTM (foldTM k) (am_data m)
+        . foldTM (foldTM k) (am_lit m)
+
 \end{code}
 
 

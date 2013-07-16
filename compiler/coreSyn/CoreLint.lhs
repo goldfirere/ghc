@@ -306,7 +306,8 @@ lintCoreExpr (Lit lit)
 lintCoreExpr (Cast expr co)
   = do { expr_ty <- lintCoreExpr expr
        ; co' <- applySubstCo co
-       ; (_, from_ty, to_ty) <- lintCoercion co'
+       ; (_, from_ty, to_ty, r) <- lintCoercion co'
+       ; checkRole co' Representational r
        ; checkTys from_ty expr_ty (mkCastErr expr co' from_ty expr_ty)
        ; return to_ty }
 
@@ -832,14 +833,14 @@ lintCoercion co@(TyConAppCo r tc cos)
        ; rk <- lintArrow (ptext (sLit "coercion") <+> quotes (ppr co)) k1 k2
        ; checkRoles co tc r [r1, r2]
        ; checkNotRole co Phantom r -- TODO (RAE): update?
-       ; return (rk, mkFunTy s1 s2, mkFunTy t1 t2) }
+       ; return (rk, mkFunTy s1 s2, mkFunTy t1 t2, r) }
 
   | otherwise
   = do { (ks,ss,ts,rs) <- mapAndUnzip4M lintCoercion cos
        ; rk <- lint_co_app co (tyConKind tc) (ss `zip` ks)
        ; checkRoles co tc r rs
        ; checkNotRole co Phantom r -- TODO (RAE): update?
-       ; return (rk, mkTyConApp tc ss, mkTyConApp tc ts) }
+       ; return (rk, mkTyConApp tc ss, mkTyConApp tc ts, r) }
 
 lintCoercion co@(AppCo co1 co2)
   = do { (k1,s1,t1,r1) <- lintCoercion co1
@@ -892,16 +893,18 @@ lintCoercion co@(TransCo co1 co2)
 
 -- TODO (RAE): update this case after decision on nth
 lintCoercion the_co@(NthCo n co)
-  = do { (_,s,t) <- lintCoercion co
+  = do { (_,s,t,r) <- lintCoercion co
+       ; checkRole the_co Representational r
        ; case (splitTyConApp_maybe s, splitTyConApp_maybe t) of
            (Just (tc_s, tys_s), Just (tc_t, tys_t)) 
              | tc_s == tc_t
              , tys_s `equalLength` tys_t
              , n < length tys_s
-             -> return (ks, ts, tt)
+             -> return (ks, ts, tt, tr)
              where
                ts = getNth tys_s n
                tt = getNth tys_t n
+               tr = getNth (tyConRoles tc_s Representational) n
                ks = typeKind ts
 
            _ -> failWithL (hang (ptext (sLit "Bad getNth:"))
@@ -921,7 +924,7 @@ lintCoercion the_co@(LRCo lr co)
            _ -> failWithL (hang (ptext (sLit "Bad LRCo:"))
                               2 (ppr the_co $$ ppr s $$ ppr t)) }
 
-lintCoercion g@(InstCo co arg_ty)
+lintCoercion (InstCo co arg_ty)
   = do { (k,s,t,r) <- lintCoercion co
        ; arg_kind  <- lintType arg_ty
        ; case (splitForAllTy_maybe s, splitForAllTy_maybe t) of
@@ -957,7 +960,8 @@ lintCoercion co@(AxiomInstCo con ind cos)
                         2 (ppr co))
 
     check_ki (subst_l, subst_r) (ktv, co)
-      = do { (k, t1, t2) <- lintCoercion co
+      = do { (k, t1, t2, r) <- lintCoercion co
+           ; checkRole co Nominal r -- TODO (RAE): update if axiom roles
            ; let ktv_kind = Type.substTy subst_l (tyVarKind ktv)
                   -- Using subst_l is ok, because subst_l and subst_r
                   -- must agree on kind equalities
@@ -965,6 +969,11 @@ lintCoercion co@(AxiomInstCo con ind cos)
                     (bad_ax (ptext (sLit "check_ki2") <+> vcat [ ppr co, ppr k, ppr ktv, ppr ktv_kind ] ))
            ; return (Type.extendTvSubst subst_l ktv t1, 
                      Type.extendTvSubst subst_r ktv t2) } 
+
+lintCoercion co@(SubCo co')
+  = do { (k,s,t,r) <- lintCoercion co'
+       ; checkRole co Nominal r
+       ; return (k,s,t,Representational) }
 \end{code}
 
 %************************************************************************
@@ -1147,7 +1156,7 @@ checkRole co r1 r2
   = checkL (r1 == r2)
            (ptext (sLit "Role incompatibility: expected") <+> ppr r1 <> comma <+>
             ptext (sLit "got") <+> ppr r2 $$
-            ptext (sLit "in") ppr co)
+            ptext (sLit "in") <+> ppr co)
 
 checkNotRole :: Coercion -> Role -> Role -> LintM ()
 checkNotRole co r1 r2

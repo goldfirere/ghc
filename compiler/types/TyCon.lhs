@@ -13,7 +13,7 @@ module TyCon(
 
         AlgTyConRhs(..), visibleDataCons,
         TyConParent(..), isNoParent,
-        SynTyConRhs(..), 
+        SynTyConRhs(..), Role(..),
 
         -- ** Constructing TyCons
         mkAlgTyCon,
@@ -891,7 +891,7 @@ mkAlgTyCon :: Name
            -> Kind              -- ^ Kind of the resulting 'TyCon'
            -> [TyVar]           -- ^ 'TyVar's scoped over: see 'tyConTyVars'.
                                 --   Arity is inferred from the length of this list
-           -> [Role]            -- ^ The roles for each TyVar
+--RAE           -> [Role]            -- ^ The roles for each TyVar
            -> Maybe CType       -- ^ The C type this type corresponds to
                                 --   when using the CAPI FFI
            -> [PredType]        -- ^ Stupid theta: see 'algTcStupidTheta'
@@ -901,14 +901,14 @@ mkAlgTyCon :: Name
            -> Bool              -- ^ Was the 'TyCon' declared with GADT syntax?
            -> Maybe TyCon       -- ^ Promoted version
            -> TyCon
-mkAlgTyCon name kind tyvars roles cType stupid rhs parent is_rec gadt_syn prom_tc
+mkAlgTyCon name kind tyvars {-roles-} cType stupid rhs parent is_rec gadt_syn prom_tc
   = AlgTyCon {
         tyConName        = name,
         tyConUnique      = nameUnique name,
         tc_kind          = kind,
         tyConArity       = length tyvars,
         tyConTyVars      = tyvars,
-        tc_roles         = roles,
+        tc_roles         = map (const Nominal) tyvars, -- RAE roles,
         tyConCType       = cType,
         algTcStupidTheta = stupid,
         algTcRhs         = rhs,
@@ -919,9 +919,9 @@ mkAlgTyCon name kind tyvars roles cType stupid rhs parent is_rec gadt_syn prom_t
     }
 
 -- | Simpler specialization of 'mkAlgTyCon' for classes
-mkClassTyCon :: Name -> Kind -> [TyVar] -> [Role] -> AlgTyConRhs -> Class -> RecFlag -> TyCon
-mkClassTyCon name kind tyvars roles rhs clas is_rec
-  = mkAlgTyCon name kind tyvars roles Nothing [] rhs (ClassTyCon clas) 
+mkClassTyCon :: Name -> Kind -> [TyVar] -> {-[Role] -> RAE -} AlgTyConRhs -> Class -> RecFlag -> TyCon
+mkClassTyCon name kind tyvars {-roles-} rhs clas is_rec
+  = mkAlgTyCon name kind tyvars {-roles-} Nothing [] rhs (ClassTyCon clas) 
                is_rec False 
                Nothing    -- Class TyCons are not pormoted
 
@@ -994,15 +994,15 @@ mkPrimTyCon' name kind arity rep is_unlifted
     }
 
 -- | Create a type synonym 'TyCon'
-mkSynTyCon :: Name -> Kind -> [TyVar] -> [Role] -> SynTyConRhs -> TyConParent -> TyCon
-mkSynTyCon name kind tyvars roles rhs parent
+mkSynTyCon :: Name -> Kind -> [TyVar] -> {-[Role] -> RAE -} SynTyConRhs -> TyConParent -> TyCon
+mkSynTyCon name kind tyvars {-roles-} rhs parent
   = SynTyCon {
         tyConName = name,
         tyConUnique = nameUnique name,
         tc_kind = kind,
         tyConArity = length tyvars,
         tyConTyVars = tyvars,
-        tc_roles = roles,
+        tc_roles = map (const Nominal) tyvars, -- RAE roles,
         synTcRhs = rhs,
         synTcParent = parent
     }
@@ -1413,7 +1413,7 @@ tyConFamilySize other = pprPanic "tyConFamilySize:" (ppr other)
 algTyConRhs :: TyCon -> AlgTyConRhs
 algTyConRhs (AlgTyCon {algTcRhs = rhs}) = rhs
 algTyConRhs (TupleTyCon {dataCon = con, tyConArity = arity})
-    = DataTyCon { data_cons = [con], is_enum = arity == 0 }22
+    = DataTyCon { data_cons = [con], is_enum = arity == 0 }
 algTyConRhs other = pprPanic "algTyConRhs" (ppr other)
 
 -- | Get the list of roles for the type parameters of a TyCon
@@ -1424,11 +1424,11 @@ tyConRoles tc Representational
   = case tc of
     { FunTyCon {}                            -> const_role Representational
     ; AlgTyCon { tc_roles = roles }          -> roles
-    ; TupleTyCon { tyConArity = arity }      -> const_role Representational
+    ; TupleTyCon {}                          -> const_role Representational
     ; SynTyCon { tc_roles = roles }          -> roles
     ; PrimTyCon {}                           -> const_role Nominal
-    ; PromotedDataCon { tyConArity = arity } -> const_role Nominal
-    ; PromotedTyCon { tyConArity = arity }   -> const_role Nominal
+    ; PromotedDataCon {}                     -> const_role Nominal
+    ; PromotedTyCon {}                       -> const_role Nominal
     }
   where
     const_role eq = replicate (tyConArity tc) eq
