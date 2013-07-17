@@ -24,11 +24,13 @@ module CoAxiom (
        coAxiomNthBranch, coAxiomSingleBranch_maybe, coAxiomRole,
        coAxiomSingleBranch, coAxBranchTyVars, coAxBranchLHS,
        coAxBranchRHS, coAxBranchSpan, coAxBranchIncomps,
-       placeHolderIncomps
+       placeHolderIncomps,
+
+       Role(..)
        ) where 
 
 import {-# SOURCE #-} TypeRep ( Type )
-import {-# SOURCE #-} TyCon ( TyCon, Role )
+import {-# SOURCE #-} TyCon ( TyCon )
 import Outputable
 import Name
 import Unique
@@ -395,3 +397,24 @@ instance Typeable br => Data.Data (CoAxiom br) where
     dataTypeOf _ = mkNoRepType "CoAxiom"
 \end{code}
 
+%************************************************************************
+%*                                                                      *
+                    Roles
+%*                                                                      *
+%************************************************************************
+
+This is defined here to avoid circular dependencies.
+
+\begin{code}
+
+-- See Note [Roles] in Coercion
+-- defined here to avoid cyclic dependency with Coercion
+data Role = Nominal | Representational | Phantom
+  deriving (Eq, Data.Data, Data.Typeable)
+
+instance Outputable Role where
+  ppr Nominal          = char 'N'
+  ppr Representational = char 'R'
+  ppr Phantom          = char 'P'
+
+\end{code}

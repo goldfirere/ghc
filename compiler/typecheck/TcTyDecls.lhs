@@ -518,6 +518,78 @@ isPromotableType rec_tcs con_arg_ty
     go _               	 = False
 \end{code}
 
+%************************************************************************
+%*                                                                      *
+        Role inference
+%*                                                                      *
+%************************************************************************
+
+\begin{code}
+type TcRoleEnv = NameEnv [TcRole]
+type RoleEnv = NameEnv [Role]
+
+data TcRole = Role Role
+            | MetaRole (IORef (Maybe Role))
+
+-- RAE: COMMENT!!
+inferRoles :: TyClGroup Name -> TcM (Name -> [Role])
+inferRoles group
+  = do { role_env <- buildRoleEnv group
+       ; propagateRoles role_env group
+       ; role_env' <- zonkRoleEnv role_env
+       ; return $ \name -> case lookupNameEnv role_env' name of
+                             Just roles -> roles
+                             Nothing    -> pprPanic "inferRoles" (ppr name) }
+
+buildRoleEnv :: TyClGroup Name -> TcM TcRoleEnv
+buildRoleEnv [] = return emptyNameEnv
+buildRoleEnv (L loc decl : rest)
+  = do { tc_roles <- setSrcSpan loc $ buildTcRoles decl
+       ; rest_env <- buildRoleEnv rest
+       ; return $ extendNameEnv rest_env (tcdName decl) tc_roles }
+
+-- RAE: Are these assumptions accurate?
+buildTcRoles :: TyClDecl Name -> TcM [TcRole]
+buildTcRoles (ForeignType {}) = return []
+buildTcRoles (FamDecl (FamilyDecl { fdTyVars = HsQTvs { hsq_kvs = kvs
+                                                      , hsq_tvs = tvs } }))
+  = return (map (const (Role Nominal)) (kvs ++ tvs))
+buildTcRoles (SynDecl { tcdTyVars = tyvars })
+  = buildTcRolesFromHsTVBs tyvars
+buildTcRoles (DataDecl { tcdTyVars = tyvars })
+  = buildTcRolesFromHsTVBs tyvars
+buildTcRoles (ClassDecl { tcdTyVars = tyvars })
+  = buildTcRolesFromHsTVBs tyvars
+
+buildTcRolesFromHsTVBs :: LHsTyVarBndrs Name -> TcM [TcRole]
+buildTcRolesFromHsTVBs (HsQTvs { hsq_kvs = kvs, hsq_tvs = tvs })
+  = do { let kv_roles = map (const $ Role Nominal) kvs
+       ; tv_roles <- mapM (const mkUnknownMetaRole) tvs
+                  -- RAE: Change this when we have role annotations
+       ; return $ kv_roles ++ tv_roles }
+
+mkUnknownMetaRole :: TcM TcRole
+mkUnknownMetaRole
+  = do { metarole <- newMutVar Nothing
+       ; return $ MetaRole metarole }
+
+propagateRoles :: TcRoleEnv -> TyClGroup Name -> TcM ()
+propagateRoles role_env group
+  = do { update <- foldM propagateRoles1 False group
+       ; when update $ propagateRoles role_env group }
+
+propagateRoles1 :: Bool -> TyClDecl Name -> TcM Bool
+propagateRoles1 update (ForeignType {}) = return update
+propagateRoles1 update (FamDecl {}) = return update -- all tyvars are Nominal
+propagateRoles1 update (SynDecl { tcdRhs = rhs_ty })
+  = do { 
+
+data RoleM a 
+
+zonkRoleEnv :: TcRoleEnv -> TcM RoleEnv
+
+
+\end{code}
 
 %************************************************************************
 %*                                                                      *

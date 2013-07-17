@@ -13,7 +13,7 @@ module TyCon(
 
         AlgTyConRhs(..), visibleDataCons,
         TyConParent(..), isNoParent,
-        SynTyConRhs(..), Role(..),
+        SynTyConRhs(..),
 
         -- ** Constructing TyCons
         mkAlgTyCon,
@@ -501,16 +501,6 @@ data AlgTyConRhs
                              -- Watch out!  If any newtypes become transparent
                              -- again check Trac #1072.
     }
-    
--- See Note [Roles] in Coercion
--- defined here to avoid cyclic dependency with Coercion
-data Role = Nominal | Representational | Phantom
-  deriving (Eq, Data.Data, Data.Typeable)
-
-instance Outputable Role where
-  ppr Nominal          = char 'N'
-  ppr Representational = char 'R'
-  ppr Phantom          = char 'P'
 
 \end{code}
 
@@ -699,10 +689,12 @@ which encodes as (TyConApp instCoercionTyCon [TyConApp CoT [], s])
 Note [Newtype eta]
 ~~~~~~~~~~~~~~~~~~
 Consider
-        newtype Parser m a = MkParser (Foogle m a)
+        newtype Parser a = MkParser (IO a) derriving( Monad )
 Are these two types equal (to Core)?
-        Monad (Parser m)
-        Monad (Foogle m)
+        Monad Parser
+        Monad IO
+which we need to make the derived instance for Monad Parser.
+
 Well, yes.  But to see that easily we eta-reduce the RHS type of
 Parser, in this case to ([], Froogle), so that even unsaturated applications
 of Parser will work right.  This eta reduction is done when the type

@@ -5,7 +5,6 @@ import Name (Name)
 import Unique (Unique)
 
 data TyCon
-data Role
 
 tyConName           :: TyCon -> Name
 tyConUnique         :: TyCon -> Unique

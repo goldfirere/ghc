@@ -757,14 +757,12 @@ chooseAxiom envs role tc tys
   = let ax     = famInstAxiom fam_inst
         co     = mkUnbranchedAxInstCo role ax inst_tys
         ty     = pSnd (coercionKind co)
-        axRole = coAxiomRole ax
     in Just (co, ty)
 
   | Just ax <- isClosedSynFamilyTyCon_maybe tc
   , Just (ind, inst_tys) <- chooseBranch ax tys
   = let co     = mkAxInstCo role ax ind inst_tys
         ty     = pSnd (coercionKind co)
-        axRole = coAxiomRole ax
     in Just (co, ty)
 
   | otherwise

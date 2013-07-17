@@ -42,8 +42,7 @@ import Demand
 import Annotations
 import Class
 import NameSet
-import CoAxiom ( BranchIndex )
-import TyCon ( Role )
+import CoAxiom ( BranchIndex, Role )
 import Name
 import CostCentre
 import Literal

@@ -24,7 +24,7 @@ import TyCon
 import DataCon    (dataConName, dataConWorkId, dataConTyCon)
 import PrelInfo   (wiredInThings, basicKnownKeyNames)
 import Id         (idName, isDataConWorkId_maybe)
-import Coercion   (LeftOrRight(..))
+import Coercion   (LeftOrRight(..),Role(..))
 import TysWiredIn
 import IfaceEnv
 import HscTypes
