@@ -133,7 +133,7 @@ splitPrimTyCon ty
 mkBuiltinCo :: (Builtins -> TyCon) -> VM Coercion
 mkBuiltinCo get_tc
   = do { tc <- builtin get_tc
-       ; return $ mkTyConAppCo tc []
+       ; return $ mkTyConAppCo Nominal tc []
        }
 
 

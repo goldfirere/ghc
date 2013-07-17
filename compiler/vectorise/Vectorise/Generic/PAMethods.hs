@@ -216,9 +216,9 @@ buildToArrPRepr vect_tc repr_co pdata_tc _ r
       arg    <- newLocalVar (fsLit "xs") arg_ty
 
       pdata_co <- mkBuiltinCo pdataTyCon
-      let co           = mkAppCo pdata_co
+      let co           = mkAppCo Representational pdata_co
                        . mkSymCo
-                       $ mkUnbranchedAxInstCo repr_co ty_args
+                       $ mkUnbranchedAxInstCo Nominal repr_co ty_args
 
           scrut   = unwrapFamInstScrut pdata_tc ty_args (Var arg)
 
@@ -281,8 +281,8 @@ buildFromArrPRepr vect_tc repr_co pdata_tc _ r
       arg    <- newLocalVar (fsLit "xs") arg_ty
 
       pdata_co <- mkBuiltinCo pdataTyCon
-      let co           = mkAppCo pdata_co
-                       $ mkUnbranchedAxInstCo repr_co var_tys
+      let co           = mkAppCo Representational pdata_co
+                       $ mkUnbranchedAxInstCo Nominal repr_co var_tys
 
       let scrut        = mkCast (Var arg) co
 
@@ -366,9 +366,9 @@ buildToArrPReprs vect_tc repr_co _ pdatas_tc r
 
     -- Coersion to case between the (PRepr a) type and its instance.
     pdatas_co <- mkBuiltinCo pdatasTyCon
-    let co           = mkAppCo pdatas_co
+    let co           = mkAppCo Representational pdatas_co
                      . mkSymCo
-                     $ mkUnbranchedAxInstCo repr_co ty_args
+                     $ mkUnbranchedAxInstCo Nominal repr_co ty_args
 
     let scrut        = unwrapFamInstScrut pdatas_tc ty_args (Var varg)
     (vars, result)  <- to_sum r
@@ -457,8 +457,8 @@ buildFromArrPReprs vect_tc repr_co _ pdatas_tc r
         
     -- Build the coercion between PRepr and the instance type
     pdatas_co <- mkBuiltinCo pdatasTyCon
-    let co           = mkAppCo pdatas_co
-                     $ mkUnbranchedAxInstCo repr_co var_tys
+    let co           = mkAppCo Representational pdatas_co
+                     $ mkUnbranchedAxInstCo Nominal repr_co var_tys
 
     let scrut        = mkCast (Var varg) co
 

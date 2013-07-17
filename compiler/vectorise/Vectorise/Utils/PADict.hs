@@ -143,9 +143,9 @@ prDictOfPReprInstTyCon _ty prepr_ax prepr_args
       let rhs = mkUnbranchedAxInstRHS prepr_ax prepr_args
       dict <- prDictOfReprType' rhs
       pr_co <- mkBuiltinCo prTyCon
-      let co = mkAppCo pr_co
+      let co = mkAppCo Representational pr_co
              $ mkSymCo
-             $ mkUnbranchedAxInstCo prepr_ax prepr_args
+             $ mkUnbranchedAxInstCo Nominal prepr_ax prepr_args
       return $ mkCast dict co
 
 -- |Get the PR dictionary for a type. The argument must be a representation

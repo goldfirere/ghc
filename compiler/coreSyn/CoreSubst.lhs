@@ -59,7 +59,7 @@ import Type     hiding ( substTy, extendTvSubst, extendTvSubstList
                        , isInScope, substTyVarBndr, cloneTyVarBndr )
 import Coercion hiding ( substTy, substCo, extendTvSubst, substTyVarBndr, substCoVarBndr )
 
-import TyCon       ( tyConArity, Role(..) )
+import TyCon       ( tyConArity )
 import DataCon
 import PrelNames   ( eqBoxDataConKey )
 import OptCoercion ( optCoercion )

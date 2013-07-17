@@ -755,32 +755,20 @@ chooseAxiom envs role tc tys
   , [FamInstMatch { fim_instance = fam_inst
                   , fim_tys =      inst_tys }] <- lookupFamInstEnv envs tc tys
   = let ax     = famInstAxiom fam_inst
-        co     = mkUnbranchedAxInstCo ax inst_tys
+        co     = mkUnbranchedAxInstCo role ax inst_tys
         ty     = pSnd (coercionKind co)
         axRole = coAxiomRole ax
-    in Just (fix_role role axRole co, ty)
+    in Just (co, ty)
 
   | Just ax <- isClosedSynFamilyTyCon_maybe tc
   , Just (ind, inst_tys) <- chooseBranch ax tys
-  = let co     = mkAxInstCo ax ind inst_tys
+  = let co     = mkAxInstCo role ax ind inst_tys
         ty     = pSnd (coercionKind co)
         axRole = coAxiomRole ax
-    in Just (fix_role role axRole co, ty)
+    in Just (co, ty)
 
   | otherwise
   = Nothing
-
-  where
-    fix_role :: Role   -- desired
-             -> Role   -- current
-             -> Coercion -> Coercion
-    fix_role Nominal          Nominal          = id
-    fix_role Nominal          Representational = pprPanic "chooseAxiom.fix_role" . ppr
-    fix_role Representational Nominal          = mkSubCo
-    fix_role Representational Representational = id
-    fix_role Phantom          _                = mkPhantomCo
-    fix_role _                Phantom          = pprPanic "Phantom axiom!" . ppr
-
 
 -- The axiom can be oversaturated. (Closed families only.)
 chooseBranch :: CoAxiom Branched -> [Type] -> Maybe (BranchIndex, [Type])

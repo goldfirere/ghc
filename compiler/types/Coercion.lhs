@@ -18,6 +18,7 @@ module Coercion (
         -- * Main data type
         Coercion(..), Var, CoVar,
         LeftOrRight(..), pickLR,
+        Role(..),
 
         -- ** Functions over coercions
         coVarKind,
@@ -33,7 +34,7 @@ module Coercion (
         mkSymCo, mkTransCo, mkNthCo, mkLRCo,
 	mkInstCo, mkAppCo, mkTyConAppCo, mkFunCo,
         mkForAllCo, mkUnsafeCo, mkUnivCo, mkSubCo, mkPhantomCo,
-        mkNewTypeCo, 
+        mkNewTypeCo, maybeSubCo, maybeSubCo2,
 
         -- ** Decomposition
         splitNewTypeRepCo_maybe, instNewTyCon_maybe, 
@@ -720,12 +721,14 @@ mkCoVarCo cv
 mkReflCo :: Role -> Type -> Coercion
 mkReflCo = Refl
 
-mkAxInstCo :: CoAxiom br -> BranchIndex -> [Type] -> Coercion
+mkAxInstCo :: Role -> CoAxiom br -> BranchIndex -> [Type] -> Coercion
 -- mkAxInstCo can legitimately be called over-staturated; 
 -- i.e. with more type arguments than the coercion requires
-mkAxInstCo ax index tys
-  | arity == n_tys = AxiomInstCo ax_br index rtys
+mkAxInstCo role ax index tys
+  | arity == n_tys = maybeSubCo2 role ax_role $ AxiomInstCo ax_br index rtys
   | otherwise      = ASSERT( arity < n_tys )
+                     ASSERT( ax_role == Nominal ) -- RAE: This is broken.
+                     maybeSubCo role $
                      foldl AppCo (AxiomInstCo ax_br index (take arity rtys))
                                  (drop arity rtys)
   where
@@ -733,11 +736,12 @@ mkAxInstCo ax index tys
     arity = coAxiomArity ax index
     rtys  = map (Refl Nominal) tys
     ax_br = toBranchedAxiom ax
+    ax_role = coAxiomRole ax
 
 -- to be used only with unbranched axioms
-mkUnbranchedAxInstCo :: CoAxiom Unbranched -> [Type] -> Coercion
-mkUnbranchedAxInstCo ax tys
-  = mkAxInstCo ax 0 tys
+mkUnbranchedAxInstCo :: Role -> CoAxiom Unbranched -> [Type] -> Coercion
+mkUnbranchedAxInstCo role ax tys
+  = mkAxInstCo role ax 0 tys
 
 mkAxInstLHS, mkAxInstRHS :: CoAxiom br -> BranchIndex -> [Type] -> Type
 -- Instantiate the axiom with specified types,
@@ -886,6 +890,14 @@ maybeSubCo Nominal          = id
 maybeSubCo Representational = mkSubCo
 maybeSubCo Phantom          = pprPanic "maybeSubCo Phantom" . ppr
 
+maybeSubCo2 :: Role   -- desired role
+            -> Role   -- current role
+            -> Coercion -> Coercion
+maybeSubCo2 Representational Nominal = mkSubCo
+maybeSubCo2 Nominal Representational = pprPanic "maybeSubCo2 R->N" . ppr
+maybeSubCo2 Phantom _                = mkPhantomCo
+maybeSubCo2 _ _                      = id
+
 -- takes any coercion and turns it into a Phantom coercion
 mkPhantomCo :: Coercion -> Coercion
 mkPhantomCo co
@@ -959,7 +971,7 @@ instNewTyCon_maybe :: TyCon -> [Type] -> Maybe (Type, Coercion)
 instNewTyCon_maybe tc tys
   | Just (tvs, ty, co_tc) <- unwrapNewTyCon_maybe tc  -- Check for newtype
   , tys `lengthIs` tyConArity tc                      -- Check saturated
-  = Just (substTyWith tvs tys ty, mkUnbranchedAxInstCo co_tc tys)
+  = Just (substTyWith tvs tys ty, mkUnbranchedAxInstCo Representational co_tc tys)
   | otherwise
   = Nothing
 

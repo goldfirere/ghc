@@ -68,19 +68,20 @@ isForeignExport _                             = False
 -- evaluates any type synonyms, type functions, and newtypes. However,
 -- we are only allowed to look through newtypes if the constructor is
 -- in scope.  We return a bag of all the newtype constructors thus found.
+-- Always returns a Representational coercion
 normaliseFfiType :: Type -> TcM (Coercion, Type, Bag GlobalRdrElt)
 normaliseFfiType ty
     = do fam_envs <- tcGetFamInstEnvs
          normaliseFfiType' fam_envs ty
 
 normaliseFfiType' :: FamInstEnvs -> Type -> TcM (Coercion, Type, Bag GlobalRdrElt)
-normaliseFfiType' env ty0 = go initRecTc ty0
+normaliseFfiType' env ty0 = go initRecTc Representational ty0
   where
-    go :: RecTcChecker -> Type -> TcM (Coercion, Type, Bag GlobalRdrElt)
-    go rec_nts ty | Just ty' <- coreView ty     -- Expand synonyms
-        = go rec_nts ty'
+    go :: RecTcChecker -> Role -> Type -> TcM (Coercion, Type, Bag GlobalRdrElt)
+    go rec_nts r ty | Just ty' <- coreView ty     -- Expand synonyms
+        = go rec_nts r ty'
 
-    go rec_nts (TyConApp tc tys)
+    go rec_nts r (TyConApp tc tys)
         -- We don't want to look through the IO newtype, even if it is
         -- in scope, so we have a special case for it:
         | tc_key `elem` [ioTyConKey, funPtrTyConKey]
@@ -97,13 +98,13 @@ normaliseFfiType' env ty0 = go initRecTc ty0
         = do { rdr_env <- getGlobalRdrEnv 
              ; case checkNewtypeFFI rdr_env tc of
                  Nothing  -> children_only
-                 Just gre -> do { (co', ty', gres) <- go rec_nts' nt_rhs
+                 Just gre -> do { (co', ty', gres) <- go rec_nts' r nt_rhs
                                 ; return (mkTransCo nt_co co', ty', gre `consBag` gres) } }
 
         | isFamilyTyCon tc              -- Expand open tycons
-        , (co, ty) <- normaliseTcApp env tc tys
+        , (co, ty) <- normaliseTcApp env r tc tys
         , not (isReflCo co)
-        = do (co', ty', gres) <- go rec_nts ty
+        = do (co', ty', gres) <- go rec_nts r ty
              return (mkTransCo co co', ty', gres)  
 
         | otherwise
@@ -111,28 +112,29 @@ normaliseFfiType' env ty0 = go initRecTc ty0
         where
           tc_key = getUnique tc
           children_only 
-            = do xs <- mapM (go rec_nts) tys
+            = do xs <- zipWithM (go rec_nts) (tyConRolesX tc r) tys
                  let (cos, tys', gres) = unzip3 xs
-                 return (mkTyConAppCo tc cos, mkTyConApp tc tys', unionManyBags gres)
-          nt_co  = mkUnbranchedAxInstCo (newTyConCo tc) tys
+                 return (mkTyConAppCo r tc cos, mkTyConApp tc tys', unionManyBags gres)
+            -- RAE: This r *must* be R... but it might not be in practice, I think.
+          nt_co  = mkUnbranchedAxInstCo r (newTyConCo tc) tys
           nt_rhs = newTyConInstRhs tc tys
 
-    go rec_nts (AppTy ty1 ty2)
-      = do (coi1, nty1, gres1) <- go rec_nts ty1
-           (coi2, nty2, gres2) <- go rec_nts ty2
-           return (mkAppCo coi1 coi2, mkAppTy nty1 nty2, gres1 `unionBags` gres2)
+    go rec_nts r (AppTy ty1 ty2)
+      = do (coi1, nty1, gres1) <- go rec_nts Nominal ty1
+           (coi2, nty2, gres2) <- go rec_nts Nominal ty2
+           return (mkAppCo r coi1 coi2, mkAppTy nty1 nty2, gres1 `unionBags` gres2)
 
-    go rec_nts (FunTy ty1 ty2)
-      = do (coi1,nty1,gres1) <- go rec_nts ty1
-           (coi2,nty2,gres2) <- go rec_nts ty2
-           return (mkFunCo coi1 coi2, mkFunTy nty1 nty2, gres1 `unionBags` gres2)
+    go rec_nts r (FunTy ty1 ty2)
+      = do (coi1,nty1,gres1) <- go rec_nts r ty1
+           (coi2,nty2,gres2) <- go rec_nts r ty2
+           return (mkFunCo r coi1 coi2, mkFunTy nty1 nty2, gres1 `unionBags` gres2)
 
-    go rec_nts (ForAllTy tyvar ty1)
-      = do (coi,nty1,gres1) <- go rec_nts ty1
+    go rec_nts r (ForAllTy tyvar ty1)
+      = do (coi,nty1,gres1) <- go rec_nts r ty1
            return (mkForAllCo tyvar coi, ForAllTy tyvar nty1, gres1)
 
-    go _ ty@(TyVarTy {}) = return (Refl ty, ty, emptyBag)
-    go _ ty@(LitTy {})   = return (Refl ty, ty, emptyBag)
+    go _ r ty@(TyVarTy {}) = return (Refl r ty, ty, emptyBag)
+    go _ r ty@(LitTy {})   = return (Refl r ty, ty, emptyBag)
 
 
 checkNewtypeFFI :: GlobalRdrEnv -> TyCon -> Maybe GlobalRdrElt
