@@ -535,7 +535,7 @@ data TcRole = Role Role
 inferRoles :: TyClGroup Name -> TcM (Name -> [Role])
 inferRoles group
   = do { role_env <- buildRoleEnv group
-       ; propagateRoles role_env group
+       ; rcGroup role_env group
        ; role_env' <- zonkRoleEnv role_env
        ; return $ \name -> case lookupNameEnv role_env' name of
                              Just roles -> roles
@@ -573,18 +573,25 @@ mkUnknownMetaRole
   = do { metarole <- newMutVar Nothing
        ; return $ MetaRole metarole }
 
-propagateRoles :: TcRoleEnv -> TyClGroup Name -> TcM ()
-propagateRoles role_env group
-  = do { update <- foldM propagateRoles1 False group
+rcGroup :: TcRoleEnv -> TyClGroup Name -> TcM ()
+rcGroup role_env group
+  = do { update <- runRoleM $ mapM_ rcDecl group
        ; when update $ propagateRoles role_env group }
 
-propagateRoles1 :: Bool -> TyClDecl Name -> TcM Bool
-propagateRoles1 update (ForeignType {}) = return update
-propagateRoles1 update (FamDecl {}) = return update -- all tyvars are Nominal
-propagateRoles1 update (SynDecl { tcdRhs = rhs_ty })
-  = do { 
+rcDecl :: TyClDecl Name -> RoleM ()
+rcDecl (ForeignType {}) = return ()
+rcDecl (FamDecl {}) = return () -- all tyvars are Nominal
+rcDecl (SynDecl { tcdRhs = rhs_ty }) = rcType rhs_ty
 
-data RoleM a 
+newtype RoleM a = RM { unRM :: Bool -> TcM (a, Bool) }
+instance Monad RoleM where
+  return x = RM $ \update -> return (x, update)
+  a >>= f  = RM $ \update -> do { (a', update') <- (unRM a update)
+                                ; f a' update' }
+
+runRoleM :: RoleM () -> TcM Bool
+runRoleM (RM f) = do { (_, update) <- f False
+                     ; return update }
 
 zonkRoleEnv :: TcRoleEnv -> TcM RoleEnv
 
