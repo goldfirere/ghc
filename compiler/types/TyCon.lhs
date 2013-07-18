@@ -65,7 +65,7 @@ module TyCon(
         tyConFamilySize,
         tyConStupidTheta,
         tyConArity,
-        tyConRoles, tyConRolesX,
+        tyConRoles,
         tyConParent,
         tyConTuple_maybe, tyConClass_maybe,
         tyConFamInst_maybe, tyConFamInstSig_maybe, tyConFamilyCoercion_maybe,
@@ -959,9 +959,9 @@ mkForeignTyCon name ext_name kind arity
 
 
 -- | Create an unlifted primitive 'TyCon', such as @Int#@
-mkPrimTyCon :: Name  -> Kind -> Arity -> PrimRep -> TyCon
-mkPrimTyCon name kind arity rep
-  = mkPrimTyCon' name kind arity rep True
+mkPrimTyCon :: Name  -> Kind -> [Role] -> PrimRep -> TyCon
+mkPrimTyCon name kind roles rep
+  = mkPrimTyCon' name kind roles rep True
 
 -- | Kind constructors
 mkKindTyCon :: Name -> Kind -> TyCon
@@ -969,18 +969,18 @@ mkKindTyCon name kind
   = mkPrimTyCon' name kind 0 VoidRep True
 
 -- | Create a lifted primitive 'TyCon' such as @RealWorld@
-mkLiftedPrimTyCon :: Name  -> Kind -> Arity -> PrimRep -> TyCon
-mkLiftedPrimTyCon name kind arity rep
-  = mkPrimTyCon' name kind arity rep False
+mkLiftedPrimTyCon :: Name  -> Kind -> [Role] -> PrimRep -> TyCon
+mkLiftedPrimTyCon name kind roles rep
+  = mkPrimTyCon' name kind roles rep False
 
-mkPrimTyCon' :: Name  -> Kind -> Arity -> PrimRep -> Bool -> TyCon
-mkPrimTyCon' name kind arity rep is_unlifted
+mkPrimTyCon' :: Name  -> Kind -> [Role] -> PrimRep -> Bool -> TyCon
+mkPrimTyCon' name kind roles rep is_unlifted
   = PrimTyCon {
         tyConName    = name,
         tyConUnique  = nameUnique name,
         tc_kind    = kind,
-        tyConArity   = arity,
-        tc_roles     = replicate arity Nominal, -- RAE
+        tyConArity   = length roles,
+        tc_roles     = roles
         primTyConRep = rep,
         isUnLifted   = is_unlifted,
         tyConExtName = Nothing

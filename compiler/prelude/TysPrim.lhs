@@ -375,16 +375,16 @@ mkArrowKinds arg_kinds result_kind = foldr mkArrowKind result_kind arg_kinds
 
 \begin{code}
 -- only used herein
-pcPrimTyCon :: Name -> Int -> PrimRep -> TyCon
-pcPrimTyCon name arity rep
-  = mkPrimTyCon name kind arity rep
+pcPrimTyCon :: Name -> [Role] -> PrimRep -> TyCon
+pcPrimTyCon name roles rep
+  = mkPrimTyCon name kind roles rep
   where
-    kind        = mkArrowKinds (replicate arity liftedTypeKind) result_kind
+    kind        = mkArrowKinds (map (const liftedTypeKind) roles) result_kind
     result_kind = unliftedTypeKind
 
 pcPrimTyCon0 :: Name -> PrimRep -> TyCon
 pcPrimTyCon0 name rep
-  = mkPrimTyCon name result_kind 0 rep
+  = mkPrimTyCon name result_kind [] rep
   where
     result_kind = unliftedTypeKind
 
@@ -474,11 +474,11 @@ mkStatePrimTy :: Type -> Type
 mkStatePrimTy ty = TyConApp statePrimTyCon [ty]
 
 statePrimTyCon :: TyCon   -- See Note [The State# TyCon]
-statePrimTyCon	 = pcPrimTyCon statePrimTyConName 1 VoidRep
+statePrimTyCon	 = pcPrimTyCon statePrimTyConName [Phantom] VoidRep
 
 eqPrimTyCon :: TyCon  -- The representation type for equality predicates
 		      -- See Note [The ~# TyCon]
-eqPrimTyCon  = mkPrimTyCon eqPrimTyConName kind 3 VoidRep
+eqPrimTyCon  = mkPrimTyCon eqPrimTyConName kind [Nominal, Nominal, Nominal] VoidRep
   where kind = ForAllTy kv $ mkArrowKinds [k, k] unliftedTypeKind
         kv = kKiVar
         k = mkTyVarTy kv
@@ -509,12 +509,12 @@ defined in \tr{TysWiredIn.lhs}, not here.
 \begin{code}
 arrayPrimTyCon, mutableArrayPrimTyCon, mutableByteArrayPrimTyCon,
     byteArrayPrimTyCon, arrayArrayPrimTyCon, mutableArrayArrayPrimTyCon :: TyCon
-arrayPrimTyCon             = pcPrimTyCon  arrayPrimTyConName             1 PtrRep
-mutableArrayPrimTyCon      = pcPrimTyCon  mutableArrayPrimTyConName      2 PtrRep
-mutableByteArrayPrimTyCon  = pcPrimTyCon  mutableByteArrayPrimTyConName  1 PtrRep
-byteArrayPrimTyCon         = pcPrimTyCon0 byteArrayPrimTyConName           PtrRep
-arrayArrayPrimTyCon        = pcPrimTyCon0 arrayArrayPrimTyConName          PtrRep
-mutableArrayArrayPrimTyCon = pcPrimTyCon  mutableArrayArrayPrimTyConName 1 PtrRep
+arrayPrimTyCon             = pcPrimTyCon arrayPrimTyConName             [Representational] PtrRep
+mutableArrayPrimTyCon      = pcPrimTyCon  mutableArrayPrimTyConName     [Phantom, Representational] PtrRep
+mutableByteArrayPrimTyCon  = pcPrimTyCon mutableByteArrayPrimTyConName  [Phantom] PtrRep
+byteArrayPrimTyCon         = pcPrimTyCon0 byteArrayPrimTyConName        PtrRep
+arrayArrayPrimTyCon        = pcPrimTyCon0 arrayArrayPrimTyConName       PtrRep
+mutableArrayArrayPrimTyCon = pcPrimTyCon mutableArrayArrayPrimTyConName [Phantom] PtrRep
 
 mkArrayPrimTy :: Type -> Type
 mkArrayPrimTy elt    	    = TyConApp arrayPrimTyCon [elt]
