@@ -78,6 +78,7 @@ data IfaceDecl
   | IfaceData { ifName       :: OccName,        -- Type constructor
                 ifCType      :: Maybe CType,    -- C type for CAPI FFI
                 ifTyVars     :: [IfaceTvBndr],  -- Type variables
+                ifRoles      :: [Role],         -- Roles
                 ifCtxt       :: IfaceContext,   -- The "stupid theta"
                 ifCons       :: IfaceConDecls,  -- Includes new/data/data family info
                 ifRec        :: RecFlag,        -- Recursive or not?
@@ -90,12 +91,14 @@ data IfaceDecl
 
   | IfaceSyn  { ifName    :: OccName,           -- Type constructor
                 ifTyVars  :: [IfaceTvBndr],     -- Type variables
+                ifRoles   :: [Role],            -- Roles
                 ifSynKind :: IfaceKind,         -- Kind of the *rhs* (not of the tycon)
                 ifSynRhs  :: IfaceSynTyConRhs }
 
   | IfaceClass { ifCtxt    :: IfaceContext,     -- Context...
                  ifName    :: OccName,          -- Name of the class TyCon
                  ifTyVars  :: [IfaceTvBndr],    -- Type variables
+                 ifRoles   :: [Role],           -- Roles
                  ifFDs     :: [FunDep FastString], -- Functional dependencies
                  ifATs     :: [IfaceAT],      -- Associated type families
                  ifSigs    :: [IfaceClassOp],   -- Method signatures

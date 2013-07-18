@@ -1320,7 +1320,7 @@ instance Binary IfaceDecl where
     put_ _ (IfaceForeign _ _) = 
         error "Binary.put_(IfaceDecl): IfaceForeign"
 
-    put_ bh (IfaceData a1 a2 a3 a4 a5 a6 a7 a8 a9) = do
+    put_ bh (IfaceData a1 a2 a3 a4 a5 a6 a7 a8 a9 a10) = do
         putByte bh 2
         put_ bh (occNameFS a1)
         put_ bh a2
@@ -1331,15 +1331,17 @@ instance Binary IfaceDecl where
         put_ bh a7
         put_ bh a8
         put_ bh a9
+        put_ bh a10
 
-    put_ bh (IfaceSyn a1 a2 a3 a4) = do
+    put_ bh (IfaceSyn a1 a2 a3 a4 a5) = do
         putByte bh 3
         put_ bh (occNameFS a1)
         put_ bh a2
         put_ bh a3
         put_ bh a4
+        put_ bh a5
 
-    put_ bh (IfaceClass a1 a2 a3 a4 a5 a6 a7) = do
+    put_ bh (IfaceClass a1 a2 a3 a4 a5 a6 a7 a8) = do
         putByte bh 4
         put_ bh a1
         put_ bh (occNameFS a2)
@@ -1348,6 +1350,7 @@ instance Binary IfaceDecl where
         put_ bh a5
         put_ bh a6
         put_ bh a7
+        put_ bh a8
         
     put_ bh (IfaceAxiom a1 a2 a3 a4) = do
         putByte bh 5
@@ -1375,14 +1378,16 @@ instance Binary IfaceDecl where
                     a7 <- get bh
                     a8 <- get bh
                     a9 <- get bh
+                    a10 <- get bh
                     occ <- return $! mkOccNameFS tcName a1
-                    return (IfaceData occ a2 a3 a4 a5 a6 a7 a8 a9)
+                    return (IfaceData occ a2 a3 a4 a5 a6 a7 a8 a9 a10)
             3 -> do a1 <- get bh
                     a2 <- get bh
                     a3 <- get bh
                     a4 <- get bh
+                    a5 <- get bh
                     occ <- return $! mkOccNameFS tcName a1
-                    return (IfaceSyn occ a2 a3 a4)
+                    return (IfaceSyn occ a2 a3 a4 a5)
             4 -> do a1 <- get bh
                     a2 <- get bh
                     a3 <- get bh
@@ -1390,8 +1395,9 @@ instance Binary IfaceDecl where
                     a5 <- get bh
                     a6 <- get bh
                     a7 <- get bh
+                    a8 <- get bh
                     occ <- return $! mkOccNameFS clsName a2
-                    return (IfaceClass a1 occ a3 a4 a5 a6 a7)
+                    return (IfaceClass a1 occ a3 a4 a5 a6 a7 a8)
             _ -> do a1 <- get bh
                     a2 <- get bh
                     a3 <- get bh

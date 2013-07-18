@@ -579,11 +579,11 @@ tcTyClDecl1 parent _rec_info (FamDecl { tcdFam = fd })
   = tcFamDecl1 parent fd
 
   -- "type" synonym declaration
-tcTyClDecl1 _parent _rec_info
+tcTyClDecl1 _parent rec_info
             (SynDecl { tcdLName = L _ tc_name, tcdTyVars = tvs, tcdRhs = rhs })
   = ASSERT( isNoParent _parent )
     tcTyClTyVars tc_name tvs $ \ tvs' kind ->
-    tcTySynRhs tc_name tvs' kind rhs
+    tcTySynRhs rec_info tc_name tvs' kind rhs
 
   -- "data/newtype" declaration
 tcTyClDecl1 _parent rec_info
@@ -606,6 +606,7 @@ tcTyClDecl1 _parent rec_info
                         -- need to look up its recursiveness
                     tycon_name = tyConName (classTyCon clas)
                     tc_isrec = rti_is_rec rec_info tycon_name
+                    roles    = rti_roles rec_info tycon_name
 
                ; ctxt' <- tcHsContext ctxt
                ; ctxt' <- zonkTcTypeToTypes emptyZonkEnv ctxt'
@@ -614,7 +615,7 @@ tcTyClDecl1 _parent rec_info
                ; (sig_stuff, gen_dm_env) <- tcClassSigs class_name sigs meths
                ; at_stuff <- tcClassATs class_name (AssocFamilyTyCon clas) ats at_defs
                ; clas <- buildClass False {- Must include unfoldings for selectors -}
-                            class_name tvs' ctxt' fds' at_stuff
+                            class_name tvs' roles ctxt' fds' at_stuff
                             sig_stuff tc_isrec
                ; traceTc "tcClassDecl" (ppr fundeps $$ ppr tvs' $$ ppr fds')
                ; return (clas, tvs', gen_dm_env) }
@@ -657,7 +658,8 @@ tcFamDecl1 parent
   = tcTyClTyVars tc_name tvs $ \ tvs' kind -> do
   { traceTc "open type family:" (ppr tc_name)
   ; checkFamFlag tc_name
-  ; tycon <- buildSynTyCon tc_name tvs' OpenSynFamilyTyCon kind parent
+  ; let roles = map (const Nominal) tvs'
+  ; tycon <- buildSynTyCon tc_name tvs' roles OpenSynFamilyTyCon kind parent
   ; return [ATyCon tycon] }
 
 tcFamDecl1 parent
@@ -698,7 +700,8 @@ tcFamDecl1 parent
 
          -- now, finally, build the TyCon
        ; let syn_rhs = ClosedSynFamilyTyCon co_ax
-       ; tycon <- buildSynTyCon tc_name tvs' syn_rhs kind parent
+             roles   = map (const Nominal) tvs'
+       ; tycon <- buildSynTyCon tc_name tvs' roles syn_rhs kind parent
 
        ; return [ATyCon tycon, ACoAxiom co_ax] }
 -- We check for instance validity later, when doing validity checking for
@@ -711,22 +714,25 @@ tcFamDecl1 parent
   ; checkFamFlag tc_name
   ; extra_tvs <- tcDataKindSig kind
   ; let final_tvs = tvs' ++ extra_tvs    -- we may not need these
-        tycon = buildAlgTyCon tc_name final_tvs Nothing []
+        roles     = map (const Nominal) final_tvs
+        tycon = buildAlgTyCon tc_name final_tvs roles Nothing []
                               DataFamilyTyCon Recursive
                               False   -- Not promotable to the kind level
                               True    -- GADT syntax
                               parent
   ; return [ATyCon tycon] }
 
-tcTySynRhs :: Name
+tcTySynRhs :: RecTyInfo
+           -> Name
            -> [TyVar] -> Kind
            -> LHsType Name -> TcM [TyThing]
-tcTySynRhs tc_name tvs kind hs_ty
+tcTySynRhs rec_info tc_name tvs kind hs_ty
   = do { env <- getLclEnv
        ; traceTc "tc-syn" (ppr tc_name $$ ppr (tcl_env env))
        ; rhs_ty <- tcCheckLHsType hs_ty kind
        ; rhs_ty <- zonkTcTypeToType emptyZonkEnv rhs_ty
-       ; tycon <- buildSynTyCon tc_name tvs (SynonymTyCon rhs_ty)
+       ; let roles = rti_roles rec_info tc_name
+       ; tycon <- buildSynTyCon tc_name tvs roles (SynonymTyCon rhs_ty)
                                 kind NoParentTyCon
        ; return [ATyCon tycon] }
 
@@ -740,6 +746,7 @@ tcDataDefn rec_info tc_name tvs kind
                      , dd_cons = cons })
   = do { extra_tvs <- tcDataKindSig kind
        ; let final_tvs  = tvs ++ extra_tvs
+       ;     roles      = rti_roles rec_info tc_name
        ; stupid_theta <- tcHsContext ctxt
        ; kind_signatures <- xoptM Opt_KindSignatures
        ; is_boot         <- tcIsHsBoot  -- Are we compiling an hs-boot file?
@@ -764,7 +771,7 @@ tcDataDefn rec_info tc_name tvs kind
                    DataType -> return (mkDataTyConRhs data_cons)
                    NewType  -> ASSERT( not (null data_cons) )
                                     mkNewTyConRhs tc_name tycon (head data_cons)
-             ; return (buildAlgTyCon tc_name final_tvs cType stupid_theta tc_rhs
+             ; return (buildAlgTyCon tc_name final_tvs rolesc Type stupid_theta tc_rhs
                                      (rti_is_rec rec_info tc_name)
                                      (rti_promotable rec_info)
                                      (not h98_syntax) NoParentTyCon) }

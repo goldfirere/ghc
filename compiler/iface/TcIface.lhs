@@ -437,7 +437,8 @@ tc_iface_decl _ ignore_prags (IfaceId {ifName = occ_name, ifType = iface_type,
 
 tc_iface_decl parent _ (IfaceData {ifName = occ_name, 
                           ifCType = cType, 
-                          ifTyVars = tv_bndrs, 
+                          ifTyVars = tv_bndrs,
+                          ifRoles = roles,
                           ifCtxt = ctxt, ifGadtSyntax = gadt_syn,
                           ifCons = rdr_cons, 
                           ifRec = is_rec, ifPromotable = is_prom, 
@@ -448,7 +449,7 @@ tc_iface_decl parent _ (IfaceData {ifName = occ_name,
             { stupid_theta <- tcIfaceCtxt ctxt
             ; parent' <- tc_parent tyvars mb_axiom_name
             ; cons <- tcIfaceDataCons tc_name tycon tyvars rdr_cons
-            ; return (buildAlgTyCon tc_name tyvars cType stupid_theta 
+            ; return (buildAlgTyCon tc_name tyvars roles cType stupid_theta 
                                     cons is_rec is_prom gadt_syn parent') }
     ; traceIf (text "tcIfaceDecl4" <+> ppr tycon)
     ; return (ATyCon tycon) }
@@ -479,6 +480,7 @@ tc_iface_decl parent _ (IfaceData {ifName = occ_name,
            ; return (FamInstTyCon ax_unbr fam_tc lhs_tys) }
 
 tc_iface_decl parent _ (IfaceSyn {ifName = occ_name, ifTyVars = tv_bndrs, 
+                                  ifRoles = roles,
                                   ifSynRhs = mb_rhs_ty,
                                   ifSynKind = kind })
    = bindIfaceTyVars_AT tv_bndrs $ \ tyvars -> do
@@ -486,7 +488,7 @@ tc_iface_decl parent _ (IfaceSyn {ifName = occ_name, ifTyVars = tv_bndrs,
      ; rhs_kind <- tcIfaceKind kind     -- Note [Synonym kind loop]
      ; rhs      <- forkM (mk_doc tc_name) $ 
                    tc_syn_rhs mb_rhs_ty
-     ; tycon    <- buildSynTyCon tc_name tyvars rhs rhs_kind parent
+     ; tycon    <- buildSynTyCon tc_name tyvars roles rhs rhs_kind parent
      ; return (ATyCon tycon) }
    where
      mk_doc n = ptext (sLit "Type syonym") <+> ppr n
@@ -499,7 +501,7 @@ tc_iface_decl parent _ (IfaceSyn {ifName = occ_name, ifTyVars = tv_bndrs,
 
 tc_iface_decl _parent ignore_prags
             (IfaceClass {ifCtxt = rdr_ctxt, ifName = tc_occ,
-                         ifTyVars = tv_bndrs, ifFDs = rdr_fds, 
+                         ifTyVars = tv_bndrs, ifRoles = roles, ifFDs = rdr_fds, 
                          ifATs = rdr_ats, ifSigs = rdr_sigs, 
                          ifRec = tc_isrec })
 -- ToDo: in hs-boot files we should really treat abstract classes specially,
@@ -515,7 +517,7 @@ tc_iface_decl _parent ignore_prags
     ; cls  <- fixM $ \ cls -> do
               { ats  <- mapM (tc_at cls) rdr_ats
               ; traceIf (text "tc-iface-class4" <+> ppr tc_occ)
-              ; buildClass ignore_prags tc_name tyvars ctxt fds ats sigs tc_isrec }
+              ; buildClass ignore_prags tc_name tyvars roles ctxt fds ats sigs tc_isrec }
     ; return (ATyCon (classTyCon cls)) }
   where
    tc_sc pred = forkM (mk_sc_doc pred) (tcIfaceType pred)

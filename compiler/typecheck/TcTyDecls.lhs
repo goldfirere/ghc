@@ -351,6 +351,7 @@ compiled, plus the outer structure of directly-mentioned types.
 
 \begin{code}
 data RecTyInfo = RTI { rti_promotable :: Bool
+                     , rti_roles      :: Name -> [Role]
                      , rti_is_rec     :: Name -> RecFlag }
 
 calcRecFlags :: ModDetails -> [TyThing] -> RecTyInfo
@@ -358,6 +359,7 @@ calcRecFlags :: ModDetails -> [TyThing] -> RecTyInfo
 -- Any type constructors in boot_names are automatically considered loop breakers
 calcRecFlags boot_details tyclss
   = RTI { rti_promotable = is_promotable
+        , rti_roles      = roles
         , rti_is_rec     = is_rec }
   where
     rec_tycon_names = mkNameSet (map tyConName all_tycons)
@@ -366,6 +368,8 @@ calcRecFlags boot_details tyclss
                    -- the class TyCon, so tyclss includes the class tycons
 
     is_promotable = all (isPromotableTyCon rec_tycon_names) all_tycons
+
+    roles = inferRoles all_tycons
 
     ----------------- Recursion calculation ----------------
     is_rec n | n `elemNameSet` rec_names = Recursive
@@ -525,76 +529,134 @@ isPromotableType rec_tcs con_arg_ty
 %************************************************************************
 
 \begin{code}
-type TcRoleEnv = NameEnv [TcRole]
+inferRoles :: [TyCon] -> Name -> [Role]
+inferRoles tycons name
+  = let role_env = initialRoleEnv tycons
+        role_env' = irGroup role_env tycons in
+    case lookupNameEnv role_env' name of
+      Just roles -> roles
+      Nothing    -> pprPanic "inferRoles" (ppr name)
+
 type RoleEnv = NameEnv [Role]
 
-data TcRole = Role Role
-            | MetaRole (IORef (Maybe Role))
+initialRoleEnv :: [TyCon] -> RoleEnv
+initialRoleEnv = extendNameEnvList emptyNameEnv . map initialRoleEnv1
 
--- RAE: COMMENT!!
-inferRoles :: TyClGroup Name -> TcM (Name -> [Role])
-inferRoles group
-  = do { role_env <- buildRoleEnv group
-       ; rcGroup role_env group
-       ; role_env' <- zonkRoleEnv role_env
-       ; return $ \name -> case lookupNameEnv role_env' name of
-                             Just roles -> roles
-                             Nothing    -> pprPanic "inferRoles" (ppr name) }
+-- RAE: change this once there are role annotations
+initialRoleEnv1 :: TyCon -> (Name, [Role])
+initialRoleEnv1 tc
+  | isFamilyTyCon tc  = (name, default_role Nominal)
+  | isAlgTyCon tc     = (name, default_role Phantom)
+  | isSynTyCon tc     = (name, default_role Phantom)
+  | otherwise         = pprPanic "initialRoleEnv1" (ppr tc)
+  where name         = tyConName name
+        default_role r = map (\tv -> if isKindVar tv then Nominal else r)
+                             (tyConTyVars tc)
 
-buildRoleEnv :: TyClGroup Name -> TcM TcRoleEnv
-buildRoleEnv [] = return emptyNameEnv
-buildRoleEnv (L loc decl : rest)
-  = do { tc_roles <- setSrcSpan loc $ buildTcRoles decl
-       ; rest_env <- buildRoleEnv rest
-       ; return $ extendNameEnv rest_env (tcdName decl) tc_roles }
+irGroup :: RoleEnv -> [TyCon] -> RoleEnv
+irGroup env tcs
+  = let (env', update) = runRoleM env $ mapM_ irTyCon tcs in
+    if update
+    then irGroup env' tcs
+    else env'
 
--- RAE: Are these assumptions accurate?
-buildTcRoles :: TyClDecl Name -> TcM [TcRole]
-buildTcRoles (ForeignType {}) = return []
-buildTcRoles (FamDecl (FamilyDecl { fdTyVars = HsQTvs { hsq_kvs = kvs
-                                                      , hsq_tvs = tvs } }))
-  = return (map (const (Role Nominal)) (kvs ++ tvs))
-buildTcRoles (SynDecl { tcdTyVars = tyvars })
-  = buildTcRolesFromHsTVBs tyvars
-buildTcRoles (DataDecl { tcdTyVars = tyvars })
-  = buildTcRolesFromHsTVBs tyvars
-buildTcRoles (ClassDecl { tcdTyVars = tyvars })
-  = buildTcRolesFromHsTVBs tyvars
+irTyCon :: TyCon -> RoleM ()
+irTyCon tc
+  | isAlgTyCon tc
+  = do { old_roles <- lookupRoles tc
+       ; unless (all (== Nominal) old_roles) $  -- also catches data families
+         addRoleInferenceInfo name var_ns $
+         mapM_ irDataCon (visibleDataCons $ algTyConRhs tc) }
 
-buildTcRolesFromHsTVBs :: LHsTyVarBndrs Name -> TcM [TcRole]
-buildTcRolesFromHsTVBs (HsQTvs { hsq_kvs = kvs, hsq_tvs = tvs })
-  = do { let kv_roles = map (const $ Role Nominal) kvs
-       ; tv_roles <- mapM (const mkUnknownMetaRole) tvs
-                  -- RAE: Change this when we have role annotations
-       ; return $ kv_roles ++ tv_roles }
+  | Just (SynonymTyCon ty) <- synTyConRhs_maybe tc
+  = addRoleInferenceInfo name var_ns $ irType ty
 
-mkUnknownMetaRole :: TcM TcRole
-mkUnknownMetaRole
-  = do { metarole <- newMutVar Nothing
-       ; return $ MetaRole metarole }
+  | otherwise
+  = return ()
 
-rcGroup :: TcRoleEnv -> TyClGroup Name -> TcM ()
-rcGroup role_env group
-  = do { update <- runRoleM $ mapM_ rcDecl group
-       ; when update $ propagateRoles role_env group }
+  where
+    name    = tyConName tc
+    var_ns = zipVarEnv (tyConTyVars tc) [0..]
 
-rcDecl :: TyClDecl Name -> RoleM ()
-rcDecl (ForeignType {}) = return ()
-rcDecl (FamDecl {}) = return () -- all tyvars are Nominal
-rcDecl (SynDecl { tcdRhs = rhs_ty }) = rcType rhs_ty
+irDataCon :: DataCon -> RoleM ()
+irDataCon = irType . dataConRepType
 
-newtype RoleM a = RM { unRM :: Bool -> TcM (a, Bool) }
+irType :: Type -> RoleM ()
+irType = go emptyVarSet
+  where
+    go lcls (TyVarTy tv) = unless (tv `elemVarSet` lcls) $
+                           updateRole Representational tv
+    go lcls (AppTy t1 t2) = go lcls t1 >> go lcls t2
+    go lcls (TyConApp tc tys)
+      = do { roles <- lookupRoles tc
+           ; zipWithM_ (go_app lcls) roles tys }
+    go lcls (FunTy t1 t2) = go lcls t1 >> go lcls t2
+    go lcls (ForAllTy tv ty) = go (extendVarSet lcls tv) ty
+    go lcls (LitTy {}) = return ()
+
+    go_app _ Phantom _ = return ()
+    go_app lcls Nominal ty = let nvars = tyVarsOfType tys `minusVarSet` lcls in
+                             mapM_ (updateRole Nominal) (varSetElems nvars)
+    go_app lcls Representational ty = go lcls ty
+
+lookupRoles :: TyCon -> RoleM [Role]
+lookupRoles tc
+  = do { env <- getRoleEnv
+       ; case lookupNameEnv env (tyConName tc) of
+           Just roles -> return roles
+           Nothing    -> return $ tyConRoles tc }
+
+updateRole :: Role -> TyVar -> RoleM ()
+updateRole role tv
+  = do { var_ns <- getVarNs
+       ; case lookupVarEnv var_ns tv of
+       { Nothing -> pprPanic "updateRole" (ppr tv)
+       ; Just n  -> do
+       { name <- getTyConName
+       ; old_roles <- lookupRolesName name
+       ; let old_role = getNth old_roles n
+       ; when old_role /= role $ updateRoleEnv name n role }}}
+
+data RoleInferenceState = RIS { role_env  :: RoleEnv
+                              , update    :: Bool }
+
+type VarPositions = VarEnv Int
+
+data RoleInferenceInfo = RII { var_ns :: VarPositions
+                               name   :: Name }
+
+newtype RoleM a = RM { unRM :: Maybe RoleInferenceInfo
+                            -> RoleInferenceState
+                            -> (a, RoleInferenceState) }
 instance Monad RoleM where
-  return x = RM $ \update -> return (x, update)
-  a >>= f  = RM $ \update -> do { (a', update') <- (unRM a update)
-                                ; f a' update' }
+  return x = RM $ \_ state -> (x, state)
+  a >>= f  = RM $ \m_info state -> let (a', state') = unRM a m_info state in
+                                   unRM (f a') m_info state'
 
-runRoleM :: RoleM () -> TcM Bool
-runRoleM (RM f) = do { (_, update) <- f False
-                     ; return update }
+runRoleM :: RoleEnv -> RoleM () -> (RoleEnv, Bool)
+runRoleM env thing = (env', update)
+  where RIS { role_env = env', update = update } = unRM thing Nothing state 
+        state = RIS { role_env  = env, update    = False }
 
-zonkRoleEnv :: TcRoleEnv -> TcM RoleEnv
+addRoleInferenceInfo :: Name -> VarPositions -> RoleM a -> RoleM a
+addRoleInferenceInfo name var_ns thing
+  = RM $ \_nothing state -> ASSERT( isNothing nothing )
+                            unRM thing (Just info) state
+  where info = RII { var_ns = var_ns, name = name }
 
+getRoleEnv :: RoleM RoleEnv
+getRoleEnv = RM $ \state@(RIS { role_env = env }) -> (env, state)
+
+updateRoleEnv :: Name -> Int -> Role -> RoleM ()
+updateRoleEnv name n role
+  = RM $ \_ (RIS { role_env = role_env }) ->
+         let roles' =
+               case lookupNameEnv role_env name of
+                 Nothing -> pprPanic "updateRoleEnv" (ppr name)
+                 Just roles -> let (before, _ : after) = splitAt n roles in
+                               before ++ role : after
+             role_env' = extendNameEnv role_env name roles' in
+         ((), RIS { role_env = role_env', update = True })
 
 \end{code}
 

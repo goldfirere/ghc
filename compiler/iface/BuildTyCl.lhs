@@ -46,13 +46,13 @@ import Outputable
 
 \begin{code}
 ------------------------------------------------------
-buildSynTyCon :: Name -> [TyVar] 
+buildSynTyCon :: Name -> [TyVar] -> [Role] 
               -> SynTyConRhs
               -> Kind                   -- ^ Kind of the RHS
               -> TyConParent
               -> TcRnIf m n TyCon
-buildSynTyCon tc_name tvs rhs rhs_kind parent 
-  = return (mkSynTyCon tc_name kind tvs rhs parent)
+buildSynTyCon tc_name tvs roles rhs rhs_kind parent 
+  = return (mkSynTyCon tc_name kind tvs roles rhs parent)
   where kind = mkPiKinds tvs rhs_kind
 
 
@@ -185,14 +185,14 @@ type TcMethInfo = (Name, DefMethSpec, Type)
 buildClass :: Bool		-- True <=> do not include unfoldings 
 				--	    on dict selectors
 				-- Used when importing a class without -O
-	   -> Name -> [TyVar] -> ThetaType
+	   -> Name -> [TyVar] -> [Role] -> ThetaType
 	   -> [FunDep TyVar]		   -- Functional dependencies
 	   -> [ClassATItem]		   -- Associated types
 	   -> [TcMethInfo]                 -- Method info
 	   -> RecFlag			   -- Info for type constructor
 	   -> TcRnIf m n Class
 
-buildClass no_unf tycon_name tvs sc_theta fds at_items sig_stuff tc_isrec
+buildClass no_unf tycon_name tvs roles sc_theta fds at_items sig_stuff tc_isrec
   = fixM  $ \ rec_clas -> 	-- Only name generation inside loop
     do	{ traceIf (text "buildClass")
         ; dflags <- getDynFlags
@@ -255,7 +255,7 @@ buildClass no_unf tycon_name tvs sc_theta fds at_items sig_stuff tc_isrec
 
 	; let {	clas_kind = mkPiKinds tvs constraintKind
 
- 	      ; tycon = mkClassTyCon tycon_name clas_kind tvs
+ 	      ; tycon = mkClassTyCon tycon_name clas_kind tvs roles
  	                             rhs rec_clas tc_isrec
 		-- A class can be recursive, and in the case of newtypes 
 		-- this matters.  For example

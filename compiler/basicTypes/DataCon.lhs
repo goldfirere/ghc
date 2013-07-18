@@ -996,6 +996,7 @@ dataConCannotMatch tys con
 \begin{code}
 buildAlgTyCon :: Name 
               -> [TyVar]               -- ^ Kind variables and type variables
+              -> [Role]
 	      -> Maybe CType
 	      -> ThetaType	       -- ^ Stupid theta
 	      -> AlgTyConRhs
@@ -1005,14 +1006,14 @@ buildAlgTyCon :: Name
               -> TyConParent
 	      -> TyCon
 
-buildAlgTyCon tc_name ktvs cType stupid_theta rhs 
+buildAlgTyCon tc_name ktvs roles cType stupid_theta rhs 
               is_rec is_promotable gadt_syn parent
   = tc
   where 
     kind = mkPiKinds ktvs liftedTypeKind
 
     -- tc and mb_promoted_tc are mutually recursive
-    tc = mkAlgTyCon tc_name kind ktvs cType stupid_theta 
+    tc = mkAlgTyCon tc_name kind ktvs roles cType stupid_theta 
                     rhs parent is_rec gadt_syn 
                     mb_promoted_tc
 

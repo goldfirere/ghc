@@ -697,7 +697,8 @@ tcDataFamInstDecl mb_clsinfo
                     axiom    = mkSingleCoAxiom axiom_name eta_tvs fam_tc eta_pats 
                                                (mkTyConApp rep_tc (mkTyVarTys eta_tvs))
                     parent   = FamInstTyCon axiom fam_tc pats'
-                    rep_tc   = buildAlgTyCon rep_tc_name tvs' cType stupid_theta tc_rhs 
+                    roles    = map (const Nominal) tvs' -- RAE: double-check
+                    rep_tc   = buildAlgTyCon rep_tc_name tvs' roles cType stupid_theta tc_rhs 
                                              Recursive 
                                              False      -- No promotable to the kind level
                                              h98_syntax parent

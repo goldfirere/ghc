@@ -883,7 +883,7 @@ mkAlgTyCon :: Name
            -> Kind              -- ^ Kind of the resulting 'TyCon'
            -> [TyVar]           -- ^ 'TyVar's scoped over: see 'tyConTyVars'.
                                 --   Arity is inferred from the length of this list
---RAE           -> [Role]            -- ^ The roles for each TyVar
+           -> [Role]            -- ^ The roles for each TyVar
            -> Maybe CType       -- ^ The C type this type corresponds to
                                 --   when using the CAPI FFI
            -> [PredType]        -- ^ Stupid theta: see 'algTcStupidTheta'
@@ -893,14 +893,14 @@ mkAlgTyCon :: Name
            -> Bool              -- ^ Was the 'TyCon' declared with GADT syntax?
            -> Maybe TyCon       -- ^ Promoted version
            -> TyCon
-mkAlgTyCon name kind tyvars {-roles-} cType stupid rhs parent is_rec gadt_syn prom_tc
+mkAlgTyCon name kind tyvars roles cType stupid rhs parent is_rec gadt_syn prom_tc
   = AlgTyCon {
         tyConName        = name,
         tyConUnique      = nameUnique name,
         tc_kind          = kind,
         tyConArity       = length tyvars,
         tyConTyVars      = tyvars,
-        tc_roles         = map (const Nominal) tyvars, -- RAE roles,
+        tc_roles         = roles,
         tyConCType       = cType,
         algTcStupidTheta = stupid,
         algTcRhs         = rhs,
@@ -911,9 +911,9 @@ mkAlgTyCon name kind tyvars {-roles-} cType stupid rhs parent is_rec gadt_syn pr
     }
 
 -- | Simpler specialization of 'mkAlgTyCon' for classes
-mkClassTyCon :: Name -> Kind -> [TyVar] -> {-[Role] -> RAE -} AlgTyConRhs -> Class -> RecFlag -> TyCon
-mkClassTyCon name kind tyvars {-roles-} rhs clas is_rec
-  = mkAlgTyCon name kind tyvars {-roles-} Nothing [] rhs (ClassTyCon clas) 
+mkClassTyCon :: Name -> Kind -> [TyVar] -> [Role] -> AlgTyConRhs -> Class -> RecFlag -> TyCon
+mkClassTyCon name kind tyvars roles rhs clas is_rec
+  = mkAlgTyCon name kind tyvars roles Nothing [] rhs (ClassTyCon clas) 
                is_rec False 
                Nothing    -- Class TyCons are not pormoted
 
@@ -987,15 +987,15 @@ mkPrimTyCon' name kind arity rep is_unlifted
     }
 
 -- | Create a type synonym 'TyCon'
-mkSynTyCon :: Name -> Kind -> [TyVar] -> {-[Role] -> RAE -} SynTyConRhs -> TyConParent -> TyCon
-mkSynTyCon name kind tyvars {-roles-} rhs parent
+mkSynTyCon :: Name -> Kind -> [TyVar] -> [Role] -> SynTyConRhs -> TyConParent -> TyCon
+mkSynTyCon name kind tyvars roles rhs parent
   = SynTyCon {
         tyConName = name,
         tyConUnique = nameUnique name,
         tc_kind = kind,
         tyConArity = length tyvars,
         tyConTyVars = tyvars,
-        tc_roles = map (const Nominal) tyvars, -- RAE roles,
+        tc_roles = roles,
         synTcRhs = rhs,
         synTcParent = parent
     }
