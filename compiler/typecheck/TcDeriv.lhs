@@ -1466,7 +1466,7 @@ mkNewTypeEqn orig dflags tvs
                -- currently generate type 'instance' decls; and cannot do
                -- so for 'data' instance decls
 
-        roles_ok = let cls_roles = tyConRoles (classTyCon cls) Representational in
+        roles_ok = let cls_roles = tyConRoles (classTyCon cls) in
                    not (null cls_roles) && last cls_roles /= Nominal
                -- We must make sure that the class definition (and all its
                -- members) never pattern-match on the last parameter.

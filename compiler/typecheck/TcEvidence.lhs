@@ -79,6 +79,9 @@ differences
   * The kind of a TcCoercion is  t1 ~  t2 
              of a Coercion   is  t1 ~# t2
 
+  * TcCoercions are essentially all at role Nominal -- the type-checker
+    reasons only about nominal equality, not representational
+
   * TcAxiomInstCo takes Types, not Coecions as arguments;
     the generality is required only in the Simplifier
 

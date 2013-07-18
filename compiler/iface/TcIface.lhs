@@ -989,8 +989,8 @@ tcIfaceCo (IfaceReflCo r t)         = mkReflCo r <$> tcIfaceType t
 tcIfaceCo (IfaceFunCo r c1 c2)      = mkFunCo r <$> tcIfaceCo c1 <*> tcIfaceCo c2
 tcIfaceCo (IfaceTyConAppCo r tc cs) = mkTyConAppCo r <$> tcIfaceTyCon tc
                                                      <*> mapM tcIfaceCo cs
-tcIfaceCo (IfaceAppCo c1 c2)        = mkAppCo Nominal <$> tcIfaceCo c1
-                                                      <*> tcIfaceCo c2
+tcIfaceCo (IfaceAppCo c1 c2)        = mkAppCo <$> tcIfaceCo c1
+                                              <*> tcIfaceCo c2
 tcIfaceCo (IfaceForAllCo tv c)      = bindIfaceTyVar tv $ \ tv' ->
                                       mkForAllCo tv' <$> tcIfaceCo c
 tcIfaceCo (IfaceCoVarCo n)          = mkCoVarCo <$> tcIfaceCoVar n

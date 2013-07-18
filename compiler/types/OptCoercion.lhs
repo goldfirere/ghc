@@ -105,7 +105,7 @@ opt_co env sym co
 opt_co' env _   (Refl r ty)           = Refl r (substTy env ty)
 opt_co' env sym (SymCo co)            = opt_co env (not sym) co
 opt_co' env sym (TyConAppCo r tc cos) = mkTyConAppCo r tc (map (opt_co env sym) cos)
-opt_co' env sym (AppCo co1 co2)       = mkAppCo Nominal (opt_co env sym co1) (opt_co env sym co2)
+opt_co' env sym (AppCo co1 co2)       = mkAppCo (opt_co env sym co1) (opt_co env sym co2)
 opt_co' env sym (ForAllCo tv co)      = case substTyVarBndr env tv of
                                          (env', tv') -> mkForAllCo tv' (opt_co env' sym co)
      -- Use the "mk" functions to check for nested Refls
@@ -250,7 +250,7 @@ opt_trans_rule is in_co1@(TyConAppCo r1 tc1 cos1) in_co2@(TyConAppCo r2 tc2 cos2
 
 opt_trans_rule is in_co1@(AppCo co1a co1b) in_co2@(AppCo co2a co2b)
   = fireTransRule "TrPushApp" in_co1 in_co2 $
-    mkAppCo Nominal (opt_trans is co1a co2a) (opt_trans is co1b co2b)
+    mkAppCo (opt_trans is co1a co2a) (opt_trans is co1b co2b)
 
 -- Eta rules
 opt_trans_rule is co1@(TyConAppCo r tc cos1) co2
@@ -268,12 +268,12 @@ opt_trans_rule is co1 co2@(TyConAppCo r tc cos2)
 opt_trans_rule is co1@(AppCo co1a co1b) co2
   | Just (co2a,co2b) <- etaAppCo_maybe co2
   = fireTransRule "EtaAppL" co1 co2 $
-    mkAppCo Nominal (opt_trans is co1a co2a) (opt_trans is co1b co2b)
+    mkAppCo (opt_trans is co1a co2a) (opt_trans is co1b co2b)
 
 opt_trans_rule is co1 co2@(AppCo co2a co2b)
   | Just (co1a,co1b) <- etaAppCo_maybe co1
   = fireTransRule "EtaAppR" co1 co2 $
-    mkAppCo Nominal (opt_trans is co1a co2a) (opt_trans is co1b co2b)
+    mkAppCo (opt_trans is co1a co2a) (opt_trans is co1b co2b)
 
 -- Push transitivity inside forall
 opt_trans_rule is co1 co2
@@ -467,7 +467,8 @@ etaAppCo_maybe :: Coercion -> Maybe (Coercion,Coercion)
 etaAppCo_maybe co
   | Just (co1,co2) <- splitAppCo_maybe co
   = Just (co1,co2)
-  | Pair ty1 ty2 <- coercionKind co
+  | Nominal <- coercionRole co
+  , Pair ty1 ty2 <- coercionKind co
   , Just (_,t1) <- splitAppTy_maybe ty1
   , Just (_,t2) <- splitAppTy_maybe ty2
   , typeKind t1 `eqType` typeKind t2      -- Note [Eta for AppCo]
@@ -491,7 +492,7 @@ etaTyConAppCo_maybe tc co
   , let n = length tys1
   = ASSERT( tc == tc1 ) 
     ASSERT( n == length tys2 )
-    Just (decomposeCo n co)   -- TODO (RAE): These might be the wrong roles.
+    Just (decomposeCo n co)
     -- NB: n might be <> tyConArity tc
     -- e.g.   data family T a :: * -> *
     --        g :: T a b ~ T c d

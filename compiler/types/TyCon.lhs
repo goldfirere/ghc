@@ -393,8 +393,8 @@ data TyCon
         tyConUnique   :: Unique,
         tyConName     :: Name,
         tc_kind       :: Kind,
-        tyConArity    :: Arity,         -- SLPJ Oct06: I'm not sure what the significance
-                                        --             of the arity of a primtycon is!
+        tyConArity    :: Arity,         
+        tc_roles      :: [Role],
 
         primTyConRep  :: PrimRep,       -- ^ Many primitive tycons are unboxed, but some are
                                         --   boxed (represented by pointers). This 'PrimRep'
@@ -980,6 +980,7 @@ mkPrimTyCon' name kind arity rep is_unlifted
         tyConUnique  = nameUnique name,
         tc_kind    = kind,
         tyConArity   = arity,
+        tc_roles     = replicate arity Nominal, -- RAE
         primTyConRep = rep,
         isUnLifted   = is_unlifted,
         tyConExtName = Nothing
@@ -1409,30 +1410,20 @@ algTyConRhs (TupleTyCon {dataCon = con, tyConArity = arity})
 algTyConRhs other = pprPanic "algTyConRhs" (ppr other)
 
 -- | Get the list of roles for the type parameters of a TyCon
--- The TypeEquiv parameter is the equivalence relation desired
-tyConRoles :: TyCon -> Role -> [Role]
-tyConRoles tc Nominal = replicate (tyConArity tc) Nominal
-tyConRoles tc Representational
+tyConRoles :: TyCon -> [Role]
+tyConRoles tc
   = case tc of
-    { FunTyCon {}                            -> const_role Representational
-    ; AlgTyCon { tc_roles = roles }          -> roles
-    ; TupleTyCon {}                          -> const_role Representational
-    ; SynTyCon { tc_roles = roles }          -> roles
-    ; PrimTyCon {}                           -> const_role Nominal
-    ; PromotedDataCon {}                     -> const_role Nominal
-    ; PromotedTyCon {}                       -> const_role Nominal
+    { FunTyCon {}                    -> const_role Representational
+    ; AlgTyCon { tc_roles = roles }  -> roles
+    ; TupleTyCon {}                  -> const_role Representational
+    ; SynTyCon { tc_roles = roles }  -> roles
+    ; PrimTyCon { tc_roles = roles } -> roles
+    ; PromotedDataCon {}             -> const_role Nominal
+    ; PromotedTyCon {}               -> const_role Nominal
     }
   where
     const_role eq = replicate (tyConArity tc) eq
 
-tyConRoles tc Phantom = pprPanic "tyConRoles Phantom" (ppr tc)
-
--- | Like tyConRoles, but with an infinite list of Nominal at the end,
--- for ease of implementation when dealing with potentially-oversaturated
--- TyCons
-tyConRolesX :: TyCon -> Role -> [Role]
-tyConRolesX tc r = tyConRoles tc r ++ nominals
-  where nominals = (Nominal : nominals)
 \end{code}
 
 \begin{code}

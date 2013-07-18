@@ -44,7 +44,7 @@ import Unique( Unique )
 import Digraph
 
 
-import TyCon      ( isTupleTyCon, tyConDataCons_maybe, tyConRolesX )
+import TyCon      ( isTupleTyCon, tyConDataCons_maybe )
 import TcEvidence
 import TcType
 import Type
@@ -705,7 +705,7 @@ dsHsWrapper (WpTyApp ty)      e = return $ App e (Type ty)
 dsHsWrapper (WpLet ev_binds)  e = do bs <- dsTcEvBinds ev_binds
                                      return (mkCoreLets bs e)
 dsHsWrapper (WpCompose c1 c2) e = dsHsWrapper c1 =<< dsHsWrapper c2 e
-dsHsWrapper (WpCast co)       e = dsTcCoercion Representational co (mkCast e) 
+dsHsWrapper (WpCast co)       e = dsTcCoercion co (mkCast e . mkSubCo) 
 dsHsWrapper (WpEvLam ev)      e = return $ Lam ev e 
 dsHsWrapper (WpTyLam tv)      e = return $ Lam tv e 
 dsHsWrapper (WpEvApp evtrm)   e = liftM (App e) (dsEvTerm evtrm)
@@ -739,7 +739,7 @@ dsEvTerm (EvId v) = return (Var v)
 
 dsEvTerm (EvCast tm co) 
   = do { tm' <- dsEvTerm tm
-       ; dsTcCoercion Representational co $ mkCast tm' }
+       ; dsTcCoercion co $ mkCast tm' . mkSubCo }
                         -- 'v' is always a lifted evidence variable so it is
                         -- unnecessary to call varToCoreExpr v here.
 
@@ -747,7 +747,7 @@ dsEvTerm (EvDFunApp df tys tms) = do { tms' <- mapM dsEvTerm tms
                                      ; return (Var df `mkTyApps` tys `mkApps` tms') }
 
 dsEvTerm (EvCoercion (TcCoVarCo v)) = return (Var v)  -- See Note [Simple coercions]
-dsEvTerm (EvCoercion co)            = dsTcCoercion Nominal co mkEqBox
+dsEvTerm (EvCoercion co)            = dsTcCoercion co mkEqBox
 
 dsEvTerm (EvTupleSel v n)
    = do { tm' <- dsEvTerm v
@@ -785,21 +785,22 @@ dsEvTerm (EvLit l) =
     EvStr s -> mkStringExprFS s
 
 ---------------------------------------
-dsTcCoercion :: Role -> TcCoercion -> (Coercion -> CoreExpr) -> DsM CoreExpr
+dsTcCoercion :: TcCoercion -> (Coercion -> CoreExpr) -> DsM CoreExpr
 -- This is the crucial function that moves 
 -- from TcCoercions to Coercions; see Note [TcCoercions] in Coercion
 -- e.g.  dsTcCoercion (trans g1 g2) k
 --       = case g1 of EqBox g1# ->
 --         case g2 of EqBox g2# ->
 --         k (trans g1# g2#)
-dsTcCoercion role co thing_inside
+-- thing_inside will get a Nominal coercion always
+dsTcCoercion co thing_inside
   = do { us <- newUniqueSupply
        ; let eqvs_covs :: [(EqVar,CoVar)]
              eqvs_covs = zipWith mk_co_var (varSetElems (coVarsOfTcCo co))
                                            (uniqsFromSupply us)
 
              subst = mkCvSubst emptyInScopeSet [(eqv, mkCoVarCo cov) | (eqv, cov) <- eqvs_covs]
-             result_expr = thing_inside (ds_tc_coercion subst role co)
+             result_expr = thing_inside (ds_tc_coercion subst co)
              result_ty   = exprType result_expr
 
        ; return (foldr (wrap_in_case result_ty) result_expr eqvs_covs) }
@@ -816,30 +817,30 @@ dsTcCoercion role co thing_inside
     wrap_in_case result_ty (eqv, cov) body 
       = Case (Var eqv) eqv result_ty [(DataAlt eqBoxDataCon, [cov], body)]
 
-ds_tc_coercion :: CvSubst -> Role -> TcCoercion -> Coercion
+ds_tc_coercion :: CvSubst -> TcCoercion -> Coercion
 -- If the incoming TcCoercion if of type (a ~ b), 
 --                 the result is of type (a ~# b)
 -- The VarEnv maps EqVars of type (a ~ b) to Coercions of type (a ~# b)
 -- No need for InScope set etc because the 
-ds_tc_coercion subst role tc_co
-  = go role tc_co
+ds_tc_coercion subst tc_co
+  = go tc_co
   where
-    go r (TcRefl ty)            = Refl r (Coercion.substTy subst ty)
-    go r (TcTyConAppCo tc cos)  = mkTyConAppCo r tc (zipWith go (tyConRolesX tc r) cos)
-    go r (TcAppCo co1 co2)      = mkAppCo r (go Nominal co1) (go Nominal co2)
-    go r (TcForAllCo tv co)     = mkForAllCo tv' (ds_tc_coercion subst' r co)
+    go (TcRefl ty)            = Refl Nominal (Coercion.substTy subst ty)
+    go (TcTyConAppCo tc cos)  = mkTyConAppCo Nominal tc (map go cos)
+    go (TcAppCo co1 co2)      = mkAppCo (go co1) (go co2)
+    go (TcForAllCo tv co)     = mkForAllCo tv' (ds_tc_coercion subst' co)
                               where
                                 (subst', tv') = Coercion.substTyVarBndr subst tv
-    go r (TcAxiomInstCo ax ind tys)
-                              = mkAxInstCo r ax ind (map (Coercion.substTy subst) tys)
-    go r (TcSymCo co)           = mkSymCo (go r co)
-    go r (TcTransCo co1 co2)    = mkTransCo (go r co1) (go r co2)
-    go r (TcNthCo n co)         = mkNthCo n (go r co) -- RAE: fix this
-    go r (TcLRCo lr co)         = maybeSubCo r $ mkLRCo lr (go Nominal co)
-    go r (TcInstCo co ty)       = mkInstCo (go r co) ty
-    go r (TcLetCo bs co)        = ds_tc_coercion (ds_co_binds bs) r co
-    go r (TcCastCo co1 co2)     = mkCoCast (go r co1) (go r co2) -- RAE: check this
-    go _ (TcCoVarCo v)          = ds_ev_id subst v -- RAE: no r. suspicious.
+    go (TcAxiomInstCo ax ind tys)
+                              = mkAxInstCo Nominal ax ind (map (Coercion.substTy subst) tys)
+    go (TcSymCo co)           = mkSymCo (go co)
+    go (TcTransCo co1 co2)    = mkTransCo (go co1) (go co2)
+    go (TcNthCo n co)         = mkNthCo n (go co)
+    go (TcLRCo lr co)         = mkLRCo lr (go co)
+    go (TcInstCo co ty)       = mkInstCo (go co) ty
+    go (TcLetCo bs co)        = ds_tc_coercion (ds_co_binds bs) co
+    go (TcCastCo co1 co2)     = mkCoCast (go co1) (go co2)
+    go (TcCoVarCo v)          = ds_ev_id subst v
 
     ds_co_binds :: TcEvBinds -> CvSubst
     ds_co_binds (EvBinds bs)      = foldl ds_scc subst (sccEvBinds bs)
@@ -851,9 +852,9 @@ ds_tc_coercion subst role tc_co
     ds_scc _ (CyclicSCC other) = pprPanic "ds_scc:cyclic" (ppr other $$ ppr tc_co)
 
     ds_co_term :: CvSubst -> EvTerm -> Coercion
-    ds_co_term subst (EvCoercion tc_co) = ds_tc_coercion subst Nominal tc_co -- RAE: check this
+    ds_co_term subst (EvCoercion tc_co) = ds_tc_coercion subst tc_co
     ds_co_term subst (EvId v)           = ds_ev_id subst v
-    ds_co_term subst (EvCast tm co)     = mkCoCast (ds_co_term subst tm) (ds_tc_coercion subst Nominal co) -- RAE: check this
+    ds_co_term subst (EvCast tm co)     = mkCoCast (ds_co_term subst tm) (ds_tc_coercion subst co)
     ds_co_term _ other = pprPanic "ds_co_term" (ppr other $$ ppr tc_co)
 
     ds_ev_id :: CvSubst -> EqVar -> Coercion

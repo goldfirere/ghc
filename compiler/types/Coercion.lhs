@@ -43,6 +43,7 @@ module Coercion (
         decomposeCo, getCoVar_maybe,
         splitAppCo_maybe,
         splitForAllCo_maybe,
+        nthRole, tyConRolesX,
 
 	-- ** Coercion variables
 	mkCoVar, isCoVar, isCoVarType, coVarName, setCoVarName, setCoVarUnique,
@@ -121,8 +122,16 @@ import qualified Data.Data as Data hiding ( TyCon )
 -- If you edit this type, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.lhs
 data Coercion 
+  -- Each constructor has a "role signature", indicating the way roles are
+  -- propagated through coercions. P, N, and R stand for coercions of the
+  -- given role. e stands for a coercion of a specific unknown role (think
+  -- "role polymorphism"). "e" stands for an explicit role parameter
+  -- indicating role e. _ stands for a parameter that is not a Role or
+  -- Coercion.
+
   -- These ones mirror the shape of types
-  = Refl Role Type  -- See Note [Refl invariant]
+  = -- Refl :: "e" -> _ -> e
+    Refl Role Type  -- See Note [Refl invariant]
           -- Invariant: applications of (Refl T) to a bunch of identity coercions
           --            always show up as Refl.
           -- For example  (Refl T) (Refl a) (Refl b) shows up as (Refl (T a b)).
@@ -137,19 +146,26 @@ data Coercion
 
   -- These ones simply lift the correspondingly-named 
   -- Type constructors into Coercions
+  
+  -- TyConAppCo :: "e" -> _ -> ?? -> e
+  -- See Note [TyConAppCo roles]
   | TyConAppCo Role TyCon [Coercion]    -- lift TyConApp 
     	       -- The TyCon is never a synonym; 
 	       -- we expand synonyms eagerly
 	       -- But it can be a type function
-               -- Role should never be Phantom
 
   | AppCo Coercion Coercion        -- lift AppTy
+          -- AppCo :: e -> N -> e
 
   -- See Note [Forall coercions]
   | ForAllCo TyVar Coercion       -- forall a. g
+         -- :: _ -> e -> e
 
   -- These are special
-  | CoVarCo CoVar
+  | CoVarCo CoVar      -- :: _ -> N
+
+    -- AxiomInstCo :: e -> _ -> [N] -> e
+    -- RAE: update with axiom roles
   | AxiomInstCo (CoAxiom Branched) BranchIndex [Coercion]
      -- See also [CoAxiom index]
      -- The coercion arguments always *precisely* saturate 
@@ -157,17 +173,22 @@ data Coercion
      -- any left over, we use AppCo.  See 
      -- See [Coercion axioms applied to coercions]
 
-  | UnivCo Role Type Type            -- see Note [UnivCo]
-  | SymCo Coercion
-  | TransCo Coercion Coercion
+         -- see Note [UnivCo]
+  | UnivCo Role Type Type      -- :: "e" -> _ -> _ -> e
+  | SymCo Coercion             -- :: e -> e
+  | TransCo Coercion Coercion  -- :: e -> e -> e
 
   -- These are destructors
 
   | NthCo  Int         Coercion     -- Zero-indexed; decomposes (T t0 ... tn)
+    -- :: _ -> e -> ?? (inverse of TyConAppCo, see Note [TyConAppCo roles])
   | LRCo   LeftOrRight Coercion     -- Decomposes (t_left t_right)
+    -- :: _ -> N -> N
   | InstCo Coercion Type
+    -- :: e -> _ -> e
 
   | SubCo Coercion                  -- Turns a ~N into a ~R
+    -- :: N -> R
   deriving (Data.Data, Data.Typeable)
 
 -- If you edit this type, you may need to update the GHC formalism
@@ -320,7 +341,9 @@ Now (Nth 0 g) will optimise to Refl, but perhaps not instantly.
 Note [Roles]
 ~~~~~~~~~~~~
 Roles are a solution to the GeneralizedNewtypeDeriving problem, articulated
-in Trac #1496. Here is one way to phrase the problem:
+in Trac #1496. The full story is in docs/core-spec/core-spec.pdf.
+
+Here is one way to phrase the problem:
 
 Given:
 newtype Age = MkAge Int
@@ -398,10 +421,18 @@ The UnivCo ("universal coercion") serves two rather separate functions:
  - the implementation for unsafeCoerce#
  - placeholder for phantom parameters in a TyConAppCo
 
-A UnivCo can be created at Representational or Phantom roles (never
-Nominal). At Representational, it asserts that two (possibly unrelated)
+At Representational, it asserts that two (possibly unrelated)
 types have the same representation and can be casted to one another.
 This form is necessary for unsafeCoerce#.
+
+For optimisation purposes, it is convenient to allow UnivCo to appear
+at Nominal role. If we have
+
+data Foo a = MkFoo (F a)   -- F is a type family
+
+and we want an unsafe coercion from Foo Int to Foo Bool, then it would
+be nice to have (TyConAppCo Foo (UnivCo Nominal Int Bool)). So, we allow
+Nominal UnivCo's.
 
 At Phantom role, it is used as an argument to TyConAppCo in the place
 of a phantom parameter (a type parameter unused in the type definition).
@@ -413,6 +444,34 @@ data Q a = MkQ Int
 We want a coercion for (Q Bool) ~R (Q Char).
 
 (TyConAppCo Representational Q [UnivCo Phantom Bool Char]) does the trick.
+
+Note [TyConAppCo roles]
+~~~~~~~~~~~~~~~~~~~~~~~
+The TyConAppCo constructor has a role parameter, indicating the role at
+which the coercion proves equality. The choice of this parameter affects
+the required roles of the arguments of the TyConAppCo. To help explain
+it, assume the following definition:
+
+newtype Age = MkAge Int
+
+Nominal: All arguments must have role Nominal. Why? So that Foo Age ~N Foo Int
+does *not* hold.
+
+Representational: All arguments must have the roles corresponding to the
+result of tyConRoles on the TyCon. This is the whole point of having
+roles on the TyCon to begin with. So, we can have Foo Age ~R Foo Int,
+if Foo's parameter has role R.
+
+If a Representational TyConAppCo is over-saturated (which is otherwise fine),
+the spill-over arguments must all be at Nominal. This corresponds to the
+behavior for AppCo.
+
+Phantom: All arguments must have role Phantom. This one isn't strictly
+necessary for soundness, but this choice removes ambiguity.
+
+
+
+The rules here also dictate what the parameters to mkTyConAppCo.
 
 %************************************************************************
 %*									*
@@ -654,25 +713,26 @@ decomposeCo :: Arity -> Coercion -> [Coercion]
 decomposeCo arity co 
   = [mkNthCo n co | n <- [0..(arity-1)] ]
            -- Remember, Nth is zero-indexed
--- TODO (RAE): This needs to take roles into account.
 
 -- | Attempts to obtain the type variable underlying a 'Coercion'
 getCoVar_maybe :: Coercion -> Maybe CoVar
 getCoVar_maybe (CoVarCo cv) = Just cv  
 getCoVar_maybe _            = Nothing
 
+-- first result has role equal to input; second result is Nominal
 splitAppCo_maybe :: Coercion -> Maybe (Coercion, Coercion)
 -- ^ Attempt to take a coercion application apart.
 splitAppCo_maybe (AppCo co1 co2) = Just (co1, co2)
 splitAppCo_maybe (TyConAppCo r tc cos)
   | isDecomposableTyCon tc || cos `lengthExceeds` tyConArity tc 
   , Just (cos', co') <- snocView cos
-  = Just (mkTyConAppCo r tc cos', co') -- Never create unsaturated type family apps!
+  , Just co'' <- unSubCo_maybe co'
+  = Just (mkTyConAppCo r tc cos', co'') -- Never create unsaturated type family apps!
        -- Use mkTyConAppCo to preserve the invariant
        --  that identity coercions are always represented by Refl
 splitAppCo_maybe (Refl r ty) 
   | Just (ty1, ty2) <- splitAppTy_maybe ty 
-  = Just (Refl r ty1, Refl r ty2)
+  = Just (Refl r ty1, Refl Nominal ty2)
 splitAppCo_maybe _ = Nothing
 
 splitForAllCo_maybe :: Coercion -> Maybe (TyVar, Coercion)
@@ -727,8 +787,7 @@ mkAxInstCo :: Role -> CoAxiom br -> BranchIndex -> [Type] -> Coercion
 mkAxInstCo role ax index tys
   | arity == n_tys = maybeSubCo2 role ax_role $ AxiomInstCo ax_br index rtys
   | otherwise      = ASSERT( arity < n_tys )
-                     ASSERT( ax_role == Nominal ) -- RAE: This is broken.
-                     maybeSubCo role $
+                     maybeSubCo2 role ax_role $
                      foldl AppCo (AxiomInstCo ax_br index (take arity rtys))
                                  (drop arity rtys)
   where
@@ -764,32 +823,30 @@ mkUnbranchedAxInstRHS :: CoAxiom Unbranched -> [Type] -> Type
 mkUnbranchedAxInstRHS ax = mkAxInstRHS ax 0
 
 -- | Apply a 'Coercion' to another 'Coercion'.
--- It is the caller's responsibility to make sure that the roles of the
--- coercions passed in are correct.
-mkAppCo :: Role -> Coercion -> Coercion -> Coercion
-mkAppCo r (Refl _ ty1) (Refl _ ty2)
+mkAppCo :: Coercion -> Coercion -> Coercion
+mkAppCo (Refl r ty1) (Refl _ ty2)
   = Refl r (mkAppTy ty1 ty2)
-mkAppCo Phantom co1 co2
-  = let Pair ty1 ty1' = coercionKind co1
-        Pair ty2 ty2' = coercionKind co2
-    in UnivCo Phantom (mkAppTy ty1 ty2) (mkAppTy ty1' ty2')
-mkAppCo r (Refl _ (TyConApp tc tys)) co2
-  = TyConAppCo r tc ((zipWith mkReflCo (tyConRolesX tc r) tys) ++ [co2])
-mkAppCo r g@(TyConAppCo r' tc cos) co
-  | r == r'
-  = TyConAppCo r tc (cos ++ [co])
-  | otherwise
-  = pprPanic "mkAppCo" (ppr g)
+mkAppCo (Refl r (TyConApp tc tys)) co2
+  = TyConAppCo r tc (zip_roles (tyConRolesX r tc) tys)
+  where
+    zip_roles (r1:_) []         = applyRole r1 co2
+    zip_roles (r1:rs) (ty1:tys) = mkReflCo r1 ty1 : zip_roles rs tys
+mkAppCo (TyConAppCo r tc cos) co
+  = case r of
+      Nominal          -> TyConAppCo Nominal tc (cos ++ [co])
+      Representational -> TyConAppCo Representational tc (cos ++ [co'])
+        where new_role = (tyConRolesX Representational tc) !! (length cos)
+              co'      = applyRole new_role co
 
-mkAppCo r co1 co2 = maybeSubCo r $ AppCo co1 co2
+mkAppCo co1 co2 = AppCo co1 co2
 -- Note, mkAppCo is careful to maintain invariants regarding
 -- where Refl constructors appear; see the comments in the definition
 -- of Coercion and the Note [Refl invariant] in types/TypeRep.lhs.
 
 -- | Applies multiple 'Coercion's to another 'Coercion', from left to right.
 -- See also 'mkAppCo'. 
-mkAppCos :: Role -> Coercion -> [Coercion] -> Coercion
-mkAppCos r co1 cos = foldl (mkAppCo r) co1 cos
+mkAppCos :: Coercion -> [Coercion] -> Coercion
+mkAppCos co1 cos = foldl mkAppCo co1 cos
 
 -- | Apply a type constructor to a list of coercions. It is once again the
 -- caller's responsibility to get the roles correct on argument coercions.
@@ -797,7 +854,7 @@ mkTyConAppCo :: Role -> TyCon -> [Coercion] -> Coercion
 mkTyConAppCo r tc cos
 	       -- Expand type synonyms
   | Just (tv_co_prs, rhs_ty, leftover_cos) <- tcExpandTyCon_maybe tc cos
-  = mkAppCos r (liftCoSubst r tv_co_prs rhs_ty) leftover_cos
+  = mkAppCos (liftCoSubst r tv_co_prs rhs_ty) leftover_cos
 
   | Just tys <- traverse isReflCo_maybe cos 
   = Refl r (mkTyConApp tc tys)	-- See Note [Refl invariant]
@@ -835,12 +892,14 @@ mkTransCo co (Refl {}) = co
 mkTransCo co1 co2      = TransCo co1 co2
 
 mkNthCo :: Int -> Coercion -> Coercion
-mkNthCo n (Refl eq ty) = ASSERT( ok_tc_app ty n ) 
-                         Refl eq (tyConAppArgN n ty)
-mkNthCo n co           = ASSERT( ok_tc_app _ty1 n && ok_tc_app _ty2 n )
-                         NthCo n co
-                    where
-                      Pair _ty1 _ty2 = coercionKind co
+mkNthCo n (Refl r ty)
+  = ASSERT( ok_tc_app ty n ) 
+    Refl (nthRole r tc n) (tyConAppArgN n ty)
+  where tc = tyConAppTyCon ty
+mkNthCo n co = ASSERT( ok_tc_app _ty1 n && ok_tc_app _ty2 n )
+               NthCo n co
+               where
+                 Pair _ty1 _ty2 = coercionKind co
 
 mkLRCo :: LeftOrRight -> Coercion -> Coercion
 mkLRCo lr (Refl eq ty) = Refl eq (pickLR lr (splitAppTy ty))
@@ -865,24 +924,23 @@ mkUnsafeCo = mkUnivCo Representational
 
 mkUnivCo :: Role -> Type -> Type -> Coercion
 mkUnivCo role ty1 ty2 | ty1 `eqType` ty2 = Refl role ty1
---mkUnivCo (TyConApp tc1 tys1) (TyConApp tc2 tys2)
---  | tc1 == tc2
---  = mkTyConAppCo tc1 (zipWith mkUnivCo tys1 tys2)
-  -- RAE: This is broken. fix.
+mkUnivCo (TyConApp tc1 tys1) (TyConApp tc2 tys2)
+  | tc1 == tc2
+  = mkTyConAppCo role tc1 (zipWith3 mkUnivCo (tyConRolesX role tc) tys1 tys2)
 
 mkUnivCo role (FunTy a1 r1) (FunTy a2 r2)
   = mkFunCo role (mkUnivCo role a1 a2) (mkUnivCo role r1 r2)
 
 mkUnivCo role ty1 ty2 = UnivCo role ty1 ty2
 
+-- input coercion is Nominal
 mkSubCo :: Coercion -> Coercion
-mkSubCo (Refl _ ty) = Refl Representational ty
+mkSubCo (Refl Nominal ty) = Refl Representational ty
 mkSubCo (TyConAppCo Nominal tc cos)
   = TyConAppCo Representational tc (applyRoles tc cos)
-mkSubCo co@(TyConAppCo Representational _ _) = co
+mkSubCo (UnivCo Nominal ty1 ty2) = UnivCo Representational ty1 ty2
 mkSubCo co = ASSERT( coercionRole co == Nominal )
              SubCo co
--- TODO (RAE): If UnivCo Nominal is allowed, update.
 
 -- takes a Nominal coercion and possibly casts it into a Representational one
 maybeSubCo :: Role -> Coercion -> Coercion
@@ -898,6 +956,20 @@ maybeSubCo2 Nominal Representational = pprPanic "maybeSubCo2 R->N" . ppr
 maybeSubCo2 Phantom _                = mkPhantomCo
 maybeSubCo2 _ _                      = id
 
+-- if co is Nominal, returns it; otherwise, unwraps a SubCo; otherwise, fails
+unSubCo_maybe :: Coercion -> Maybe Coercion
+unSubCo_maybe (SubCo co)  = Just co
+unSubCo_maybe (Refl _ ty) = Just $ Refl Nominal ty
+unSubCo_maybe (TyConAppCo Representational tc cos)
+  = do { cos' <- mapM unSubCo_maybe cos
+       ; return $ TyConAppCo Nominal tc cos' }
+unSubCo_maybe (UnivCo Representational ty1 ty2) = Just $ UnivCo Nominal ty1 ty2
+  -- We do *not* promote UnivCo Phantom, as that's unsafe.
+  -- UnivCo Nominal is no more unsafe than UnivCo Representational
+unSubCo_maybe co
+  | Nominal <- coercionRole co = Just co
+unSubCo_maybe _ = Nothing
+
 -- takes any coercion and turns it into a Phantom coercion
 mkPhantomCo :: Coercion -> Coercion
 mkPhantomCo co
@@ -911,9 +983,23 @@ applyRole Nominal          = id
 applyRole Representational = mkSubCo
 applyRole Phantom          = mkPhantomCo
 
+-- Convert args to a TyConAppCo Nominal to the same TyConAppCo Representational
 applyRoles :: TyCon -> [Coercion] -> [Coercion]
 applyRoles tc cos
-  = zipWith applyRole (tyConRolesX tc Representational) cos
+  = zipWith applyRole (tyConRolesX Representational tc) cos
+
+-- the Role parameter is the Role of the TyConAppCo
+-- defined here because this is intimiately concerned with the implementation
+-- of TyConAppCo
+tyConRolesX :: Role -> TyCon -> [Role]
+tyConRolesX Representational tc = tyConRoles tc ++ repeat Nominal
+tyConRolesX role             _  = repeat role
+
+nthRole :: Role -> TyCon -> Int -> Role
+nthRole Nominal _ _ = Nominal
+nthRole Phantom _ _ = Phantom
+nthRole Representational tc n
+  = (tyConRolesX Representational tc) !! n
 
 -- See note [Newtype coercions] in TyCon
 
@@ -943,6 +1029,7 @@ mkPiCo  :: Role -> Var -> Coercion -> Coercion
 mkPiCo r v co | isTyVar v = mkForAllCo v co
               | otherwise = mkFunCo r (mkReflCo r (varType v)) co
 
+-- The first coercion *must* be Nominal.
 mkCoCast :: Coercion -> Coercion -> Coercion
 -- (mkCoCast (c :: s1 ~# t1) (g :: (s1 ~# t1) ~# (s2 ~# t2)
 mkCoCast c g
@@ -1192,7 +1279,7 @@ subst_co subst co
     go (Refl eq ty)          = Refl eq $! go_ty ty
     go (TyConAppCo eq tc cos)   = let args = map go cos
                                   in  args `seqList` TyConAppCo eq tc args
-    go (AppCo co1 co2)       = mkAppCo Nominal (go co1) $! go co2
+    go (AppCo co1 co2)       = mkAppCo (go co1) $! go co2
     go (ForAllCo tv co)      = case substTyVarBndr subst tv of
                                  (subst', tv') ->
                                    ForAllCo tv' $! subst_co subst' co
@@ -1309,9 +1396,9 @@ ty_co_subst subst role ty
                                 `orElse` Refl role (TyVarTy tv)
        			     -- A type variable from a non-cloned forall
 			     -- won't be in the substitution
-    go role (AppTy ty1 ty2)   = mkAppCo role (go Nominal ty1) (go Nominal ty2)
+    go role (AppTy ty1 ty2)   = mkAppCo (go role ty1) (go Nominal ty2)
     go role (TyConApp tc tys) = mkTyConAppCo role tc
-                                           (zipWith go (tyConRolesX tc role) tys)
+                                           (zipWith go (tyConRolesX role tc) tys)
                            -- IA0_NOTE: Do we need to do anything
                            -- about kind instantiations? I don't think
                            -- so.  see Note [Kind coercions]
@@ -1460,7 +1547,7 @@ pushRefl (Refl Nominal (AppTy ty1 ty2))
 pushRefl (Refl r (FunTy ty1 ty2))
   = Just (TyConAppCo r funTyCon [Refl r ty1, Refl r ty2])
 pushRefl (Refl r (TyConApp tc tys))
-  = Just (TyConAppCo r tc (zipWith mkReflCo (tyConRolesX tc r) tys))
+  = Just (TyConAppCo r tc (zipWith mkReflCo (tyConRolesX r tc) tys))
 pushRefl (Refl r (ForAllTy tv ty)) = Just (ForAllCo tv (Refl r ty))
 pushRefl _                          = Nothing
 \end{code}
@@ -1549,7 +1636,7 @@ coercionRole = go
   where
     go (Refl r _)           = r
     go (TyConAppCo r _ _)   = r
-    go (AppCo _ _)          = Nominal
+    go (AppCo co _)         = go co
     go (ForAllCo _ co)      = go co
     go (CoVarCo _)          = Nominal
     go (AxiomInstCo ax _ _) = coAxiomRole ax
@@ -1558,7 +1645,7 @@ coercionRole = go
     go (TransCo co1 _)      = go co1 -- same as go co2
     go (NthCo n co)         = let Pair ty1 _ = coercionKind co
                                   (tc, _) = splitTyConApp ty1
-                              in (tyConRoles tc Representational) !! n
+                              in nthRole (coercionRole co) tc n
     go (LRCo _ _)           = Nominal
     go (InstCo co _)        = go co
     go (SubCo _)            = Representational

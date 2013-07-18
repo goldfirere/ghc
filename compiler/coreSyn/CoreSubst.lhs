@@ -1251,7 +1251,7 @@ dealWithCoercion co dc dc_args
         (ex_args, val_args) = splitAtList dc_ex_tyvars non_univ_args
 
         -- Make the "theta" from Fig 3 of the paper
-        gammas = decomposeCo tc_arity co  -- TODO (RAE): Are these the right roles?
+        gammas = decomposeCo tc_arity co
         theta_subst = liftCoSubstWith 
                          (dc_univ_tyvars ++ dc_ex_tyvars)
                                                 -- existentials are at role N

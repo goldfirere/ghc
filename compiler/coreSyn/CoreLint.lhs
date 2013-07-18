@@ -832,23 +832,20 @@ lintCoercion co@(TyConAppCo r tc cos)
        ; (k2,s2,t2,r2) <- lintCoercion co2
        ; rk <- lintArrow (ptext (sLit "coercion") <+> quotes (ppr co)) k1 k2
        ; checkRoles co tc r [r1, r2]
-       ; checkNotRole co Phantom r -- TODO (RAE): update?
        ; return (rk, mkFunTy s1 s2, mkFunTy t1 t2, r) }
 
   | otherwise
   = do { (ks,ss,ts,rs) <- mapAndUnzip4M lintCoercion cos
        ; rk <- lint_co_app co (tyConKind tc) (ss `zip` ks)
        ; checkRoles co tc r rs
-       ; checkNotRole co Phantom r -- TODO (RAE): update?
        ; return (rk, mkTyConApp tc ss, mkTyConApp tc ts, r) }
 
 lintCoercion co@(AppCo co1 co2)
   = do { (k1,s1,t1,r1) <- lintCoercion co1
        ; (k2,s2,t2,r2) <- lintCoercion co2
        ; rk <- lint_co_app co k1 [(s2,k2)]
-       ; checkRole co Nominal r1
        ; checkRole co Nominal r2
-       ; return (rk, mkAppTy s1 s2, mkAppTy t1 t2, Nominal) }
+       ; return (rk, mkAppTy s1 s2, mkAppTy t1 t2, r1) }
 
 lintCoercion (ForAllCo tv co)
   = do { lintTyBndrKind tv
@@ -875,7 +872,6 @@ lintCoercion co@(UnivCo r ty1 ty2)
 --       ; unless (k1 `eqKind` k2) $ 
 --         failWithL (hang (ptext (sLit "Unsafe coercion changes kind"))
 --                       2 (ppr co))
-       ; checkNotRole co Nominal r -- TODO (RAE): update?
        ; return (k1, ty1, ty2, r) }
 
 lintCoercion (SymCo co) 
@@ -891,10 +887,8 @@ lintCoercion co@(TransCo co1 co2)
        ; checkRole co r1 r2
        ; return (k1, ty1a, ty2b, r1) }
 
--- TODO (RAE): update this case after decision on nth
 lintCoercion the_co@(NthCo n co)
   = do { (_,s,t,r) <- lintCoercion co
-       ; checkRole the_co Representational r
        ; case (splitTyConApp_maybe s, splitTyConApp_maybe t) of
            (Just (tc_s, tys_s), Just (tc_t, tys_t)) 
              | tc_s == tc_t
@@ -904,7 +898,7 @@ lintCoercion the_co@(NthCo n co)
              where
                ts = getNth tys_s n
                tt = getNth tys_t n
-               tr = getNth (tyConRoles tc_s Representational) n
+               tr = nthRole r tc_s n
                ks = typeKind ts
 
            _ -> failWithL (hang (ptext (sLit "Bad getNth:"))
@@ -1158,16 +1152,9 @@ checkRole co r1 r2
             ptext (sLit "got") <+> ppr r2 $$
             ptext (sLit "in") <+> ppr co)
 
-checkNotRole :: Coercion -> Role -> Role -> LintM ()
-checkNotRole co r1 r2
-  = checkL (r1 /= r2)
-           (ptext (sLit "Role incompatibility: expected something other than") <+>
-            ppr r1 $$
-            ptext (sLit "in") <+> ppr co)
-
 checkRoles :: Coercion -> TyCon -> Role -> [Role] -> LintM ()
 checkRoles co tc r rs
-  = zipWithM_ (checkRole co) (tyConRolesX tc r) rs
+  = zipWithM_ (checkRole co) (tyConRolesX r tc) rs
 \end{code}
 
 %************************************************************************

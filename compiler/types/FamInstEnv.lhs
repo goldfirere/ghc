@@ -876,7 +876,7 @@ normaliseTcApp env role tc tys
   where
         -- Normalise the arg types so that they'll match 
         -- when we lookup in in the instance envt
-    (cois, ntys) = zipWithAndUnzip (normaliseType env) (tyConRolesX tc role) tys
+    (cois, ntys) = zipWithAndUnzip (normaliseType env) (tyConRolesX role tc) tys
     tycon_coi    = mkTyConAppCo role tc cois
 
 ---------------
@@ -894,9 +894,9 @@ normaliseType env role (TyConApp tc tys)
   = normaliseTcApp env role tc tys
 normaliseType _env role ty@(LitTy {}) = (Refl role ty, ty)
 normaliseType env role (AppTy ty1 ty2)
-  = let (coi1,nty1) = normaliseType env Nominal ty1
+  = let (coi1,nty1) = normaliseType env role    ty1
         (coi2,nty2) = normaliseType env Nominal ty2
-    in  (mkAppCo role coi1 coi2, mkAppTy nty1 nty2)
+    in  (mkAppCo coi1 coi2, mkAppTy nty1 nty2)
 normaliseType env role (FunTy ty1 ty2)
   = let (coi1,nty1) = normaliseType env role ty1
         (coi2,nty2) = normaliseType env role ty2
