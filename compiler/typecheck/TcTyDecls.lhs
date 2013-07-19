@@ -34,15 +34,20 @@ import DataCon
 import Var
 import Name
 import NameEnv
+import VarEnv
+import VarSet
 import NameSet
 import Avail
 import Digraph
 import BasicTypes
 import SrcLoc
+import Outputable
 import UniqSet
-import Maybes( mapCatMaybes, isJust )
-import Util ( lengthIs, isSingleton )
+import Util
+import ListSetOps
+import Maybes( mapCatMaybes, isJust, isNothing )
 import Data.List
+import Control.Monad
 \end{code}
 
 
@@ -549,7 +554,7 @@ initialRoleEnv1 tc
   | isAlgTyCon tc     = (name, default_role Phantom)
   | isSynTyCon tc     = (name, default_role Phantom)
   | otherwise         = pprPanic "initialRoleEnv1" (ppr tc)
-  where name         = tyConName name
+  where name           = tyConName tc
         default_role r = map (\tv -> if isKindVar tv then Nominal else r)
                              (tyConTyVars tc)
 
@@ -575,8 +580,9 @@ irTyCon tc
   = return ()
 
   where
-    name    = tyConName tc
-    var_ns = zipVarEnv (tyConTyVars tc) [0..]
+    name   = tyConName tc
+    var_ns = mkVarEnv $ zip (tyConTyVars tc) [0..]
+          -- can't use zipVarEnv because that wants equal-length lists!
 
 irDataCon :: DataCon -> RoleM ()
 irDataCon = irType . dataConRepType
@@ -592,10 +598,10 @@ irType = go emptyVarSet
            ; zipWithM_ (go_app lcls) roles tys }
     go lcls (FunTy t1 t2) = go lcls t1 >> go lcls t2
     go lcls (ForAllTy tv ty) = go (extendVarSet lcls tv) ty
-    go lcls (LitTy {}) = return ()
+    go _    (LitTy {}) = return ()
 
     go_app _ Phantom _ = return ()
-    go_app lcls Nominal ty = let nvars = tyVarsOfType tys `minusVarSet` lcls in
+    go_app lcls Nominal ty = let nvars = tyVarsOfType ty `minusVarSet` lcls in
                              mapM_ (updateRole Nominal) (varSetElems nvars)
     go_app lcls Representational ty = go lcls ty
 
@@ -606,6 +612,13 @@ lookupRoles tc
            Just roles -> return roles
            Nothing    -> return $ tyConRoles tc }
 
+lookupRolesName :: Name -> RoleM [Role]
+lookupRolesName name
+  = do { env <- getRoleEnv
+       ; case lookupNameEnv env name of
+           Just roles -> return roles
+           Nothing    -> pprPanic "lookupRolesName" (ppr name) }
+
 updateRole :: Role -> TyVar -> RoleM ()
 updateRole role tv
   = do { var_ns <- getVarNs
@@ -615,7 +628,7 @@ updateRole role tv
        { name <- getTyConName
        ; old_roles <- lookupRolesName name
        ; let old_role = getNth old_roles n
-       ; when old_role /= role $ updateRoleEnv name n role }}}
+       ; when (old_role /= role) $ updateRoleEnv name n role }}}
 
 data RoleInferenceState = RIS { role_env  :: RoleEnv
                               , update    :: Bool }
@@ -623,7 +636,7 @@ data RoleInferenceState = RIS { role_env  :: RoleEnv
 type VarPositions = VarEnv Int
 
 data RoleInferenceInfo = RII { var_ns :: VarPositions
-                               name   :: Name }
+                             , name   :: Name }
 
 newtype RoleM a = RM { unRM :: Maybe RoleInferenceInfo
                             -> RoleInferenceState
@@ -635,17 +648,30 @@ instance Monad RoleM where
 
 runRoleM :: RoleEnv -> RoleM () -> (RoleEnv, Bool)
 runRoleM env thing = (env', update)
-  where RIS { role_env = env', update = update } = unRM thing Nothing state 
+  where RIS { role_env = env', update = update } = snd $ unRM thing Nothing state 
         state = RIS { role_env  = env, update    = False }
 
 addRoleInferenceInfo :: Name -> VarPositions -> RoleM a -> RoleM a
 addRoleInferenceInfo name var_ns thing
-  = RM $ \_nothing state -> ASSERT( isNothing nothing )
+  = RM $ \_nothing state -> ASSERT( isNothing _nothing )
                             unRM thing (Just info) state
   where info = RII { var_ns = var_ns, name = name }
 
 getRoleEnv :: RoleM RoleEnv
-getRoleEnv = RM $ \state@(RIS { role_env = env }) -> (env, state)
+getRoleEnv = RM $ \_ state@(RIS { role_env = env }) -> (env, state)
+
+getVarNs :: RoleM VarPositions
+getVarNs = RM $ \m_info state ->
+                case m_info of
+                  Nothing -> panic "getVarNs"
+                  Just (RII { var_ns = var_ns }) -> (var_ns, state)
+
+getTyConName :: RoleM Name
+getTyConName = RM $ \m_info state ->
+                    case m_info of
+                      Nothing -> panic "getTyConName"
+                      Just (RII { name = name }) -> (name, state)
+
 
 updateRoleEnv :: Name -> Int -> Role -> RoleM ()
 updateRoleEnv name n role

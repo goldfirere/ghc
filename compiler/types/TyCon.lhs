@@ -13,7 +13,7 @@ module TyCon(
 
         AlgTyConRhs(..), visibleDataCons,
         TyConParent(..), isNoParent,
-        SynTyConRhs(..),
+        SynTyConRhs(..), Role(..),
 
         -- ** Constructing TyCons
         mkAlgTyCon,
@@ -944,14 +944,14 @@ mkTupleTyCon name kind arity tyvars con sort prom_tc
 mkForeignTyCon :: Name
                -> Maybe FastString -- ^ Name of the foreign imported thing, maybe
                -> Kind
-               -> Arity
                -> TyCon
-mkForeignTyCon name ext_name kind arity
+mkForeignTyCon name ext_name kind
   = PrimTyCon {
         tyConName    = name,
         tyConUnique  = nameUnique name,
         tc_kind    = kind,
-        tyConArity   = arity,
+        tyConArity   = 0,
+        tc_roles     = [],
         primTyConRep = PtrRep, -- they all do
         isUnLifted   = False,
         tyConExtName = ext_name
@@ -966,7 +966,7 @@ mkPrimTyCon name kind roles rep
 -- | Kind constructors
 mkKindTyCon :: Name -> Kind -> TyCon
 mkKindTyCon name kind
-  = mkPrimTyCon' name kind 0 VoidRep True
+  = mkPrimTyCon' name kind [] VoidRep True
 
 -- | Create a lifted primitive 'TyCon' such as @RealWorld@
 mkLiftedPrimTyCon :: Name  -> Kind -> [Role] -> PrimRep -> TyCon
@@ -980,7 +980,7 @@ mkPrimTyCon' name kind roles rep is_unlifted
         tyConUnique  = nameUnique name,
         tc_kind    = kind,
         tyConArity   = length roles,
-        tc_roles     = roles
+        tc_roles     = roles,
         primTyConRep = rep,
         isUnLifted   = is_unlifted,
         tyConExtName = Nothing

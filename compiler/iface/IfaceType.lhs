@@ -23,7 +23,8 @@ module IfaceType (
 
         -- Printing
         pprIfaceType, pprParendIfaceType, pprIfaceContext,
-        pprIfaceIdBndr, pprIfaceTvBndr, pprIfaceTvBndrs, pprIfaceBndrs,
+        pprIfaceIdBndr, pprIfaceTvBndr, pprIfaceTvBndrs, pprIfaceTvBndrsRoles,
+        pprIfaceBndrs,
         tOP_PREC, tYCON_PREC, noParens, maybeParen, pprIfaceForAllPart,
         pprIfaceCoercion, pprParendIfaceCoercion
 
@@ -181,6 +182,11 @@ pprIfaceTvBndr (tv, kind) = parens (ppr tv <> dcolon <> ppr kind)
 
 pprIfaceTvBndrs :: [IfaceTvBndr] -> SDoc
 pprIfaceTvBndrs tyvars = sep (map pprIfaceTvBndr tyvars)
+
+pprIfaceTvBndrsRoles :: [IfaceTvBndr] -> [Role] -> SDoc
+pprIfaceTvBndrsRoles tyvars roles = sep (zipWith ppr_bndr_role tyvars roles)
+  where
+    ppr_bndr_role bndr role = pprIfaceTvBndr bndr <> char '@' <> ppr role
 \end{code}
 
 ----------------------------- Printing IfaceType ------------------------------------

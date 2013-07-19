@@ -844,7 +844,11 @@ lintCoercion co@(AppCo co1 co2)
   = do { (k1,s1,t1,r1) <- lintCoercion co1
        ; (k2,s2,t2,r2) <- lintCoercion co2
        ; rk <- lint_co_app co k1 [(s2,k2)]
-       ; checkRole co Nominal r2
+       ; if r1 == Phantom
+         then checkL (r2 == Phantom || r2 == Nominal)
+                     (ptext (sLit "Second argument in AppCo cannot be R:") $$
+                      ppr co)
+         else checkRole co Nominal r2
        ; return (rk, mkAppTy s1 s2, mkAppTy t1 t2, r1) }
 
 lintCoercion (ForAllCo tv co)
@@ -866,7 +870,7 @@ lintCoercion (CoVarCo cv)
                                    2 (ppr cv))
        ; return (k, s, t, Nominal) }
 
-lintCoercion co@(UnivCo r ty1 ty2)
+lintCoercion (UnivCo r ty1 ty2)
   = do { k1 <- lintType ty1
        ; _k2 <- lintType ty2
 --       ; unless (k1 `eqKind` k2) $ 

@@ -139,18 +139,18 @@ normaliseFfiType' env ty0 = go initRecTc ty0
           nt_rhs = newTyConInstRhs tc tys
           nothing = return (Refl Representational ty, ty, emptyBag)
 
-    go rec_nts r (FunTy ty1 ty2)
-      = do (coi1,nty1,gres1) <- go rec_nts r ty1
-           (coi2,nty2,gres2) <- go rec_nts r ty2
-           return (mkFunCo r coi1 coi2, mkFunTy nty1 nty2, gres1 `unionBags` gres2)
+    go rec_nts (FunTy ty1 ty2)
+      = do (coi1,nty1,gres1) <- go rec_nts ty1
+           (coi2,nty2,gres2) <- go rec_nts ty2
+           return (mkFunCo Representational coi1 coi2, mkFunTy nty1 nty2, gres1 `unionBags` gres2)
 
-    go rec_nts r (ForAllTy tyvar ty1)
-      = do (coi,nty1,gres1) <- go rec_nts r ty1
+    go rec_nts (ForAllTy tyvar ty1)
+      = do (coi,nty1,gres1) <- go rec_nts ty1
            return (mkForAllCo tyvar coi, ForAllTy tyvar nty1, gres1)
 
-    go _ r ty@(TyVarTy {}) = return (Refl r ty, ty, emptyBag)
-    go _ r ty@(LitTy {})   = return (Refl r ty, ty, emptyBag)
-    go _ r ty@(AppTy {})   = return (Refl r ty, ty, emptyBag)
+    go _ ty@(TyVarTy {}) = return (Refl Representational ty, ty, emptyBag)
+    go _ ty@(LitTy {})   = return (Refl Representational ty, ty, emptyBag)
+    go _ ty@(AppTy {})   = return (Refl Representational ty, ty, emptyBag)
          -- See Note [Don't recur in normaliseFfiType']
 
 checkNewtypeFFI :: GlobalRdrEnv -> TyCon -> Maybe GlobalRdrElt

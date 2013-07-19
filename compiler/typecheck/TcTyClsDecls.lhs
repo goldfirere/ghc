@@ -648,7 +648,7 @@ tcTyClDecl1 _parent rec_info
 
 tcTyClDecl1 _ _
   (ForeignType {tcdLName = L _ tc_name, tcdExtName = tc_ext_name})
-  = return [ATyCon (mkForeignTyCon tc_name tc_ext_name liftedTypeKind 0)]
+  = return [ATyCon (mkForeignTyCon tc_name tc_ext_name liftedTypeKind)]
 \end{code}
 
 \begin{code}
@@ -746,7 +746,7 @@ tcDataDefn rec_info tc_name tvs kind
                      , dd_cons = cons })
   = do { extra_tvs <- tcDataKindSig kind
        ; let final_tvs  = tvs ++ extra_tvs
-       ;     roles      = rti_roles rec_info tc_name
+             roles      = rti_roles rec_info tc_name
        ; stupid_theta <- tcHsContext ctxt
        ; kind_signatures <- xoptM Opt_KindSignatures
        ; is_boot         <- tcIsHsBoot  -- Are we compiling an hs-boot file?
@@ -771,7 +771,7 @@ tcDataDefn rec_info tc_name tvs kind
                    DataType -> return (mkDataTyConRhs data_cons)
                    NewType  -> ASSERT( not (null data_cons) )
                                     mkNewTyConRhs tc_name tycon (head data_cons)
-             ; return (buildAlgTyCon tc_name final_tvs rolesc Type stupid_theta tc_rhs
+             ; return (buildAlgTyCon tc_name final_tvs roles cType stupid_theta tc_rhs
                                      (rti_is_rec rec_info tc_name)
                                      (rti_promotable rec_info)
                                      (not h98_syntax) NoParentTyCon) }

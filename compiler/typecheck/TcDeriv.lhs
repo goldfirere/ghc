@@ -38,7 +38,6 @@ import HscTypes
 import Id( idType )
 import Class
 import Type
-import CoAxiom ( Role(..) )
 import ErrUtils
 import MkId
 import DataCon

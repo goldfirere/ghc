@@ -1487,7 +1487,7 @@ tyConToIfaceDecl env tycon
   | Just syn_rhs <- synTyConRhs_maybe tycon
   = IfaceSyn {  ifName    = getOccName tycon,
                 ifTyVars  = toIfaceTvBndrs tyvars,
-                ifRoles   = tyconRoles tycon,
+                ifRoles   = tyConRoles tycon,
                 ifSynRhs  = to_ifsyn_rhs syn_rhs,
                 ifSynKind = tidyToIfaceType env1 (synTyConResKind tycon) }
 

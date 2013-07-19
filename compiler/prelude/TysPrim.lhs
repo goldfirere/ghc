@@ -469,12 +469,16 @@ or
 where s is a type variable. The only purpose of the type parameter is to
 keep different state threads separate.  It is represented by nothing at all.
 
+The type parameter to State# is intended to keep separate threads separate.
+Even though this parameter is not used in the definition of State#, it is
+given role Nominal to enforce its intended use.
+
 \begin{code}
 mkStatePrimTy :: Type -> Type
 mkStatePrimTy ty = TyConApp statePrimTyCon [ty]
 
 statePrimTyCon :: TyCon   -- See Note [The State# TyCon]
-statePrimTyCon	 = pcPrimTyCon statePrimTyConName [Phantom] VoidRep
+statePrimTyCon	 = pcPrimTyCon statePrimTyConName [Nominal] VoidRep
 
 eqPrimTyCon :: TyCon  -- The representation type for equality predicates
 		      -- See Note [The ~# TyCon]
@@ -490,7 +494,7 @@ RealWorld; it's only used in the type system, to parameterise State#.
 
 \begin{code}
 realWorldTyCon :: TyCon
-realWorldTyCon = mkLiftedPrimTyCon realWorldTyConName liftedTypeKind 0 PtrRep
+realWorldTyCon = mkLiftedPrimTyCon realWorldTyConName liftedTypeKind [] PtrRep
 realWorldTy :: Type
 realWorldTy	     = mkTyConTy realWorldTyCon
 realWorldStatePrimTy :: Type
@@ -510,11 +514,11 @@ defined in \tr{TysWiredIn.lhs}, not here.
 arrayPrimTyCon, mutableArrayPrimTyCon, mutableByteArrayPrimTyCon,
     byteArrayPrimTyCon, arrayArrayPrimTyCon, mutableArrayArrayPrimTyCon :: TyCon
 arrayPrimTyCon             = pcPrimTyCon arrayPrimTyConName             [Representational] PtrRep
-mutableArrayPrimTyCon      = pcPrimTyCon  mutableArrayPrimTyConName     [Phantom, Representational] PtrRep
-mutableByteArrayPrimTyCon  = pcPrimTyCon mutableByteArrayPrimTyConName  [Phantom] PtrRep
+mutableArrayPrimTyCon      = pcPrimTyCon  mutableArrayPrimTyConName     [Nominal, Representational] PtrRep
+mutableByteArrayPrimTyCon  = pcPrimTyCon mutableByteArrayPrimTyConName  [Nominal] PtrRep
 byteArrayPrimTyCon         = pcPrimTyCon0 byteArrayPrimTyConName        PtrRep
 arrayArrayPrimTyCon        = pcPrimTyCon0 arrayArrayPrimTyConName       PtrRep
-mutableArrayArrayPrimTyCon = pcPrimTyCon mutableArrayArrayPrimTyConName [Phantom] PtrRep
+mutableArrayArrayPrimTyCon = pcPrimTyCon mutableArrayArrayPrimTyConName [Nominal] PtrRep
 
 mkArrayPrimTy :: Type -> Type
 mkArrayPrimTy elt    	    = TyConApp arrayPrimTyCon [elt]
@@ -538,7 +542,7 @@ mkMutableArrayArrayPrimTy s = TyConApp mutableArrayArrayPrimTyCon [s]
 
 \begin{code}
 mutVarPrimTyCon :: TyCon
-mutVarPrimTyCon = pcPrimTyCon mutVarPrimTyConName 2 PtrRep
+mutVarPrimTyCon = pcPrimTyCon mutVarPrimTyConName [Nominal, Representational] PtrRep
 
 mkMutVarPrimTy :: Type -> Type -> Type
 mkMutVarPrimTy s elt 	    = TyConApp mutVarPrimTyCon [s, elt]
@@ -552,7 +556,7 @@ mkMutVarPrimTy s elt 	    = TyConApp mutVarPrimTyCon [s, elt]
 
 \begin{code}
 mVarPrimTyCon :: TyCon
-mVarPrimTyCon = pcPrimTyCon mVarPrimTyConName 2 PtrRep
+mVarPrimTyCon = pcPrimTyCon mVarPrimTyConName [Nominal, Representational] PtrRep
 
 mkMVarPrimTy :: Type -> Type -> Type
 mkMVarPrimTy s elt 	    = TyConApp mVarPrimTyCon [s, elt]
@@ -566,7 +570,7 @@ mkMVarPrimTy s elt 	    = TyConApp mVarPrimTyCon [s, elt]
 
 \begin{code}
 tVarPrimTyCon :: TyCon
-tVarPrimTyCon = pcPrimTyCon tVarPrimTyConName 2 PtrRep
+tVarPrimTyCon = pcPrimTyCon tVarPrimTyConName [Nominal, Representational] PtrRep
 
 mkTVarPrimTy :: Type -> Type -> Type
 mkTVarPrimTy s elt = TyConApp tVarPrimTyCon [s, elt]
@@ -580,7 +584,7 @@ mkTVarPrimTy s elt = TyConApp tVarPrimTyCon [s, elt]
 
 \begin{code}
 stablePtrPrimTyCon :: TyCon
-stablePtrPrimTyCon = pcPrimTyCon stablePtrPrimTyConName 1 AddrRep
+stablePtrPrimTyCon = pcPrimTyCon stablePtrPrimTyConName [Representational] AddrRep
 
 mkStablePtrPrimTy :: Type -> Type
 mkStablePtrPrimTy ty = TyConApp stablePtrPrimTyCon [ty]
@@ -594,7 +598,7 @@ mkStablePtrPrimTy ty = TyConApp stablePtrPrimTyCon [ty]
 
 \begin{code}
 stableNamePrimTyCon :: TyCon
-stableNamePrimTyCon = pcPrimTyCon stableNamePrimTyConName 1 PtrRep
+stableNamePrimTyCon = pcPrimTyCon stableNamePrimTyConName [Representational] PtrRep
 
 mkStableNamePrimTy :: Type -> Type
 mkStableNamePrimTy ty = TyConApp stableNamePrimTyCon [ty]
@@ -621,7 +625,7 @@ bcoPrimTyCon = pcPrimTyCon0 bcoPrimTyConName PtrRep
 
 \begin{code}
 weakPrimTyCon :: TyCon
-weakPrimTyCon = pcPrimTyCon weakPrimTyConName 1 PtrRep
+weakPrimTyCon = pcPrimTyCon weakPrimTyConName [Representational] PtrRep
 
 mkWeakPrimTy :: Type -> Type
 mkWeakPrimTy v = TyConApp weakPrimTyCon [v]
@@ -727,7 +731,7 @@ anyTy :: Type
 anyTy = mkTyConTy anyTyCon
 
 anyTyCon :: TyCon
-anyTyCon = mkLiftedPrimTyCon anyTyConName kind 1 PtrRep
+anyTyCon = mkLiftedPrimTyCon anyTyConName kind [Nominal] PtrRep
   where kind = ForAllTy kKiVar (mkTyVarTy kKiVar)
 
 {-   Can't do this yet without messing up kind proxies

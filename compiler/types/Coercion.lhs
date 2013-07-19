@@ -31,7 +31,7 @@ module Coercion (
         mkAxInstCo, mkUnbranchedAxInstCo, mkAxInstLHS, mkAxInstRHS,
         mkUnbranchedAxInstRHS,
         mkPiCo, mkPiCos, mkCoCast,
-        mkSymCo, mkTransCo, mkNthCo, mkLRCo,
+        mkSymCo, mkTransCo, mkNthCo, mkNthCoRole, mkLRCo,
 	mkInstCo, mkAppCo, mkTyConAppCo, mkFunCo,
         mkForAllCo, mkUnsafeCo, mkUnivCo, mkSubCo, mkPhantomCo,
         mkNewTypeCo, maybeSubCo, maybeSubCo2,
@@ -58,7 +58,8 @@ module Coercion (
         substCo, substCos, substCoVar, substCoVars,
         substCoWithTy, substCoWithTys, 
 	cvTvSubst, tvCvSubst, mkCvSubst, zipOpenCvSubst,
-        substTy, extendTvSubst, extendCvSubstAndInScope,
+        substTy, extendTvSubst,
+        extendCvSubstAndInScope, extendTvSubstAndInScope,
 	substTyVarBndr, substCoVarBndr,
 
 	-- ** Lifting
@@ -823,20 +824,24 @@ mkUnbranchedAxInstRHS :: CoAxiom Unbranched -> [Type] -> Type
 mkUnbranchedAxInstRHS ax = mkAxInstRHS ax 0
 
 -- | Apply a 'Coercion' to another 'Coercion'.
+-- The second coercion must be Nominal, unless the first is Phantom.
+-- If the first is Phantom, then the second can be either Phantom or Nominal.
 mkAppCo :: Coercion -> Coercion -> Coercion
 mkAppCo (Refl r ty1) (Refl _ ty2)
   = Refl r (mkAppTy ty1 ty2)
 mkAppCo (Refl r (TyConApp tc tys)) co2
   = TyConAppCo r tc (zip_roles (tyConRolesX r tc) tys)
   where
-    zip_roles (r1:_) []         = applyRole r1 co2
+    zip_roles (r1:_)  []        = [applyRole r1 co2]
     zip_roles (r1:rs) (ty1:tys) = mkReflCo r1 ty1 : zip_roles rs tys
+    zip_roles _       _         = panic "zip_roles" -- but the roles are infinite...
 mkAppCo (TyConAppCo r tc cos) co
   = case r of
       Nominal          -> TyConAppCo Nominal tc (cos ++ [co])
       Representational -> TyConAppCo Representational tc (cos ++ [co'])
         where new_role = (tyConRolesX Representational tc) !! (length cos)
               co'      = applyRole new_role co
+      Phantom          -> TyConAppCo Phantom tc (cos ++ [mkPhantomCo co])
 
 mkAppCo co1 co2 = AppCo co1 co2
 -- Note, mkAppCo is careful to maintain invariants regarding
@@ -848,7 +853,7 @@ mkAppCo co1 co2 = AppCo co1 co2
 mkAppCos :: Coercion -> [Coercion] -> Coercion
 mkAppCos co1 cos = foldl mkAppCo co1 cos
 
--- | Apply a type constructor to a list of coercions. It is once again the
+-- | Apply a type constructor to a list of coercions. It is the
 -- caller's responsibility to get the roles correct on argument coercions.
 mkTyConAppCo :: Role -> TyCon -> [Coercion] -> Coercion
 mkTyConAppCo r tc cos
@@ -891,15 +896,25 @@ mkTransCo (Refl {}) co = co
 mkTransCo co (Refl {}) = co
 mkTransCo co1 co2      = TransCo co1 co2
 
+-- the Role is the desired one. It is the caller's responsibility to make
+-- sure this request is reasonable
+mkNthCoRole :: Role -> Int -> Coercion -> Coercion
+mkNthCoRole role n co
+  = maybeSubCo2 role nth_role $ nth_co
+  where
+    nth_co = mkNthCo n co
+    nth_role = coercionRole nth_co
+
 mkNthCo :: Int -> Coercion -> Coercion
-mkNthCo n (Refl r ty)
-  = ASSERT( ok_tc_app ty n ) 
-    Refl (nthRole r tc n) (tyConAppArgN n ty)
+mkNthCo n (Refl r ty) = ASSERT( ok_tc_app ty n ) 
+                        Refl r' (tyConAppArgN n ty)
   where tc = tyConAppTyCon ty
-mkNthCo n co = ASSERT( ok_tc_app _ty1 n && ok_tc_app _ty2 n )
-               NthCo n co
-               where
-                 Pair _ty1 _ty2 = coercionKind co
+        r' = nthRole r tc n
+mkNthCo n co        = ASSERT( ok_tc_app _ty1 n && ok_tc_app _ty2 n )
+                      NthCo n co
+                    where
+                      Pair _ty1 _ty2 = coercionKind co
+
 
 mkLRCo :: LeftOrRight -> Coercion -> Coercion
 mkLRCo lr (Refl eq ty) = Refl eq (pickLR lr (splitAppTy ty))
@@ -923,15 +938,9 @@ mkUnsafeCo :: Type -> Type -> Coercion
 mkUnsafeCo = mkUnivCo Representational
 
 mkUnivCo :: Role -> Type -> Type -> Coercion
-mkUnivCo role ty1 ty2 | ty1 `eqType` ty2 = Refl role ty1
-mkUnivCo (TyConApp tc1 tys1) (TyConApp tc2 tys2)
-  | tc1 == tc2
-  = mkTyConAppCo role tc1 (zipWith3 mkUnivCo (tyConRolesX role tc) tys1 tys2)
-
-mkUnivCo role (FunTy a1 r1) (FunTy a2 r2)
-  = mkFunCo role (mkUnivCo role a1 a2) (mkUnivCo role r1 r2)
-
-mkUnivCo role ty1 ty2 = UnivCo role ty1 ty2
+mkUnivCo role ty1 ty2
+  | ty1 `eqType` ty2 = Refl role ty1
+  | otherwise        = UnivCo role ty1 ty2
 
 -- input coercion is Nominal
 mkSubCo :: Coercion -> Coercion
@@ -939,7 +948,7 @@ mkSubCo (Refl Nominal ty) = Refl Representational ty
 mkSubCo (TyConAppCo Nominal tc cos)
   = TyConAppCo Representational tc (applyRoles tc cos)
 mkSubCo (UnivCo Nominal ty1 ty2) = UnivCo Representational ty1 ty2
-mkSubCo co = ASSERT( coercionRole co == Nominal )
+mkSubCo co = ASSERT2( coercionRole co == Nominal, ppr co )
              SubCo co
 
 -- takes a Nominal coercion and possibly casts it into a Representational one
@@ -975,9 +984,10 @@ mkPhantomCo :: Coercion -> Coercion
 mkPhantomCo co
   | Just ty <- isReflCo_maybe co    = Refl Phantom ty
   | Pair ty1 ty2 <- coercionKind co = UnivCo Phantom ty1 ty2
-  -- TODO (RAE): Optimize
+  -- don't optimise here... wait for OptCoercion
 
--- All input coercions are assumed to be Nominal
+-- All input coercions are assumed to be Nominal,
+-- or, if Role is Phantom, the Coercion can be Phantom, too.
 applyRole :: Role -> Coercion -> Coercion
 applyRole Nominal          = id
 applyRole Representational = mkSubCo
@@ -1203,6 +1213,12 @@ extendTvSubst :: CvSubst -> TyVar -> Type -> CvSubst
 extendTvSubst (CvSubst in_scope tenv cenv) tv ty
   = CvSubst in_scope (extendVarEnv tenv tv ty) cenv
 
+extendTvSubstAndInScope :: CvSubst -> TyVar -> Type -> CvSubst
+extendTvSubstAndInScope (CvSubst in_scope tenv cenv) tv ty
+  = CvSubst (in_scope `extendInScopeSetSet` tyVarsOfType ty)
+            (extendVarEnv tenv tv ty)
+            cenv
+
 extendCvSubstAndInScope :: CvSubst -> CoVar -> Coercion -> CvSubst
 -- Also extends the in-scope set
 extendCvSubstAndInScope (CvSubst in_scope tenv cenv) cv co
@@ -1295,7 +1311,8 @@ subst_co subst co
 
 substCoVar :: CvSubst -> CoVar -> Coercion
 substCoVar (CvSubst in_scope _ cenv) cv
-  | Just co  <- lookupVarEnv cenv cv      = co
+  | Just co  <- lookupVarEnv cenv cv      = ASSERT2( coercionRole co == Nominal, ppr co )
+                                            co
   | Just cv1 <- lookupInScope in_scope cv = ASSERT( isCoVar cv1 ) CoVarCo cv1
   | otherwise = WARN( True, ptext (sLit "substCoVar not in scope") <+> ppr cv $$ ppr in_scope)
                 ASSERT( isCoVar cv ) CoVarCo cv
@@ -1375,6 +1392,9 @@ liftCoSubstWith :: [TyVar] -> [Coercion] -> Type -> Coercion
 liftCoSubstWith tvs cos ty
   = liftCoSubst Representational (zipEqual "liftCoSubstWith" tvs cos) ty
 
+-- RAE: This is broken. What if a TyVar appears in multiple places in the
+-- type? It can't possibly have the correct role all the time. Sometimes,
+-- we'll need to correct the role.
 liftCoSubst :: Role -> [(TyVar,Coercion)] -> Type -> Coercion
 liftCoSubst r prs ty
  | null prs  = Refl r ty
@@ -1409,16 +1429,15 @@ ty_co_subst subst role ty
     go role ty@(LitTy {})     = ASSERT( role == Nominal )
                                 mkReflCo role ty
 
-    -- TODO (RAE): This is unoptimized. Fix.
-    lift_phantom ty = UnivCo Phantom (liftCoSubstLeft  subst ty)
-                                     (liftCoSubstRight subst ty)
+    lift_phantom ty = mkUnivCo Phantom (liftCoSubstLeft  subst ty)
+                                       (liftCoSubstRight subst ty)
 
 liftCoSubstTyVar :: LiftCoSubst -> Role -> TyVar -> Maybe Coercion
 liftCoSubstTyVar (LCS _ cenv) r tv
   = do { co <- lookupVarEnv cenv tv 
-       ; let co' = if r == Representational
-                   then mkSubCo co
-                   else co
+       ; let co_role = coercionRole co   -- could theoretically take this as
+                                         -- a parameter, but painful
+             co' = maybeSubCo2 r co_role co
        ; return co' }
 
 liftCoSubstTyVarBndr :: LiftCoSubst -> TyVar -> (LiftCoSubst, TyVar)

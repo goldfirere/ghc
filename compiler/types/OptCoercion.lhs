@@ -25,10 +25,11 @@ import VarEnv
 import StaticFlags	( opt_NoOptCoercion )
 import Outputable
 import Pair
-import Maybes( allMaybes )
+import Maybes
 import FastString
 import Util
 import Unify
+import ListSetOps
 import InstEnv
 \end{code}
 
@@ -61,7 +62,7 @@ optCoercion :: CvSubst -> Coercion -> NormalCo
 --   *and* optimises it to reduce its size
 optCoercion env co 
   | opt_NoOptCoercion = substCo env co
-  | otherwise         = opt_co env False co
+  | otherwise         = opt_co env False Nothing co
 
 type NormalCo = Coercion
   -- Invariants: 
@@ -74,6 +75,8 @@ type NormalNonIdCo = NormalCo  -- Extra invariant: not the identity
 
 opt_co, opt_co' :: CvSubst
        		-> Bool	       -- True <=> return (sym co)
+                -> Maybe Role  -- Nothing <=> don't change; otherwise, change
+                               -- INVARIANT: the change is always a *downgrade*
        		-> Coercion
        		-> NormalCo	
 opt_co = opt_co'
@@ -102,73 +105,110 @@ opt_co env sym co
                  | otherwise = substCo env co
 -}
 
-opt_co' env _   (Refl r ty)           = Refl r (substTy env ty)
-opt_co' env sym (SymCo co)            = opt_co env (not sym) co
-opt_co' env sym (TyConAppCo r tc cos) = mkTyConAppCo r tc (map (opt_co env sym) cos)
-opt_co' env sym (AppCo co1 co2)       = mkAppCo (opt_co env sym co1) (opt_co env sym co2)
-opt_co' env sym (ForAllCo tv co)      = case substTyVarBndr env tv of
-                                         (env', tv') -> mkForAllCo tv' (opt_co env' sym co)
+opt_co' env _   mrole (Refl r ty) = Refl (mrole `orElse` r) (substTy env ty)
+opt_co' env sym mrole co
+  |  mrole == Just Phantom 
+  || coercionRole co == Phantom
+  , Pair ty1 ty2 <- coercionKind co
+  = if sym
+    then opt_univ env Phantom ty2 ty1
+    else opt_univ env Phantom ty1 ty2
+
+opt_co' env sym mrole (SymCo co)  = opt_co env (not sym) mrole co
+opt_co' env sym mrole (TyConAppCo r tc cos)
+  = case mrole of
+      Nothing -> mkTyConAppCo r  tc (map (opt_co env sym Nothing) cos)
+      Just r' -> mkTyConAppCo r' tc (zipWith (opt_co env sym)
+                                             (map Just (tyConRolesX r' tc)) cos)
+opt_co' env sym mrole (AppCo co1 co2) = mkAppCo (opt_co env sym mrole   co1)
+                                                (opt_co env sym Nothing co2)
+opt_co' env sym mrole (ForAllCo tv co)
+  = case substTyVarBndr env tv of
+      (env', tv') -> mkForAllCo tv' (opt_co env' sym mrole co)
      -- Use the "mk" functions to check for nested Refls
 
-opt_co' env sym (CoVarCo cv)
+opt_co' env sym mrole (CoVarCo cv)
   | Just co <- lookupCoVar env cv
-  = opt_co (zapCvSubstEnv env) sym co
+  = opt_co (zapCvSubstEnv env) sym mrole co
 
   | Just cv1 <- lookupInScope (getCvInScope env) cv
-  = ASSERT( isCoVar cv1 ) wrapSym sym (CoVarCo cv1)
+  = ASSERT( isCoVar cv1 ) wrapRole mrole Nominal $ wrapSym sym (CoVarCo cv1)
                 -- cv1 might have a substituted kind!
 
   | otherwise = WARN( True, ptext (sLit "opt_co: not in scope:") <+> ppr cv $$ ppr env)
                 ASSERT( isCoVar cv )
-                wrapSym sym (CoVarCo cv)
+                wrapRole mrole Nominal $ wrapSym sym (CoVarCo cv)
 
-opt_co' env sym (AxiomInstCo con ind cos)
+opt_co' env sym mrole (AxiomInstCo con ind cos)
     -- Do *not* push sym inside top-level axioms
     -- e.g. if g is a top-level axiom
     --   g a : f a ~ a
     -- then (sym (g ty)) /= g (sym ty) !!
-  = wrapSym sym $ AxiomInstCo con ind (map (opt_co env False) cos)
+  = wrapRole mrole (coAxiomRole con) $
+    wrapSym sym $
+    AxiomInstCo con ind (map (opt_co env False Nothing) cos)
       -- Note that the_co does *not* have sym pushed into it
 
-opt_co' env sym (UnivCo r ty1 ty2)
-  | ty1' `eqType` ty2' = Refl r ty1'
-  | sym                = mkUnivCo r ty2' ty1'
-  | otherwise          = mkUnivCo r ty1' ty2'
+opt_co' env sym mrole (UnivCo r oty1 oty2)
+  = opt_univ env role a b
   where
-    ty1' = substTy env ty1
-    ty2' = substTy env ty2
+    (a,b) = if sym then (oty2,oty1) else (oty1,oty2)
+    role = mrole `orElse` r
 
-opt_co' env sym (TransCo co1 co2)
+opt_co' env sym mrole (TransCo co1 co2)
   | sym       = opt_trans in_scope opt_co2 opt_co1   -- sym (g `o` h) = sym h `o` sym g
   | otherwise = opt_trans in_scope opt_co1 opt_co2
   where
-    opt_co1 = opt_co env sym co1
-    opt_co2 = opt_co env sym co2
+    opt_co1 = opt_co env sym mrole co1
+    opt_co2 = opt_co env sym mrole co2
     in_scope = getCvInScope env
 
-opt_co' env sym (NthCo n co)
-  | TyConAppCo _ tc cos <- co'
+-- NthCo roles are fiddly!
+opt_co' env sym mrole (NthCo n (TyConAppCo _ _ cos))
+  = opt_co env sym mrole (getNth cos n)
+opt_co' env sym mrole (NthCo n co)
+  | TyConAppCo _ _tc cos <- co'
   , isDecomposableTyCon tc   -- Not synonym families
   = ASSERT( n < length cos )
-    cos !! n  -- TODO (RAE): Might be at the wrong role
-  | otherwise
-  = NthCo n co'
-  where
-    co' = opt_co env sym co
+    ASSERT( _tc == tc )
+    let resultCo = cos !! n
+        resultRole = coercionRole resultCo in
+    case (mrole, resultRole) of
+        -- if we just need an R coercion, try to propagate the SubCo again:
+      (Just Representational, Nominal) -> opt_co (zapCvSubstEnv env) False mrole resultCo
+      _                                -> resultCo
 
-opt_co' env sym (LRCo lr co)
+  | otherwise
+  = wrap_role $ NthCo n co'
+
+  where
+    wrap_role wrapped = wrapRole mrole (coercionRole wrapped) wrapped
+
+    tc = tyConAppTyCon $ pFst $ coercionKind co
+    co' = opt_co env sym mrole' co
+    mrole' = case mrole of
+               Just Representational
+                 | Representational <- nthRole Representational tc n
+                 -> Just Representational
+               _ -> Nothing
+
+opt_co' env sym mrole (LRCo lr co)
+  | Just pr_co <- splitAppCo_maybe co
+  = opt_co env sym mrole (pickLR lr pr_co)
   | Just pr_co <- splitAppCo_maybe co'
-  = pickLR lr pr_co
+  = if mrole == Just Representational
+    then opt_co (zapCvSubstEnv env) False mrole (pickLR lr pr_co)
+    else pickLR lr pr_co
   | otherwise
   = LRCo lr co'
   where
-    co' = opt_co env sym co
+    co' = opt_co env sym Nothing co
 
-opt_co' env sym (InstCo co ty)
+opt_co' env sym mrole (InstCo co ty)
     -- See if the first arg is already a forall
     -- ...then we can just extend the current substitution
   | Just (tv, co_body) <- splitForAllCo_maybe co
-  = opt_co (extendTvSubst env tv ty') sym co_body
+  = opt_co (extendTvSubst env tv ty') sym mrole co_body
 
      -- See if it is a forall after optimization
      -- If so, do an inefficient one-variable substitution
@@ -177,11 +217,35 @@ opt_co' env sym (InstCo co ty)
 
   | otherwise = InstCo co' ty'
   where
-    co' = opt_co env sym co
+    co' = opt_co env sym mrole co
     ty' = substTy env ty
 
-opt_co' env sym (SubCo co)
-  = SubCo (opt_co' env sym co) -- TODO (RAE): Rewrite this.
+opt_co' env sym _ (SubCo co) = opt_co env sym (Just Representational) co
+
+-------------
+opt_univ :: CvSubst -> Role -> Type -> Type -> Coercion
+opt_univ env role oty1 oty2
+  | Just (tc1, tys1) <- splitTyConApp_maybe oty1
+  , Just (tc2, tys2) <- splitTyConApp_maybe oty2
+  , tc1 == tc2
+  = mkTyConAppCo role tc1 (zipWith3 (opt_univ env) (tyConRolesX role tc1) tys1 tys2)
+
+  | Just (l1, r1) <- splitAppTy_maybe oty1
+  , Just (l2, r2) <- splitAppTy_maybe oty2
+  = let role' = if role == Phantom then Phantom else Nominal in
+       -- role' is to comform to mkAppCo's precondition
+    mkAppCo (opt_univ env role l1 l2) (opt_univ env role' r1 r2)
+
+  | Just (tv1, ty1) <- splitForAllTy_maybe oty1
+  , Just (tv2, ty2) <- splitForAllTy_maybe oty2
+  , tyVarKind tv1 `eqType` tyVarKind tv2  -- rule out a weird unsafeCo
+  = case substTyVarBndr2 env tv1 tv2 of { (env1, env2, tv') ->
+    let ty1' = substTy env1 ty1
+        ty2' = substTy env2 ty2 in
+    mkForAllCo tv' (opt_univ (zapCvSubstEnv2 env1 env2) role ty1' ty2') }
+
+  | otherwise
+  = mkUnivCo role (substTy env oty1) (substTy env oty2)
 
 -------------
 opt_transList :: InScopeSet -> [NormalCo] -> [NormalCo] -> [NormalCo]
@@ -414,6 +478,24 @@ wrapSym :: Bool -> Coercion -> Coercion
 wrapSym sym co | sym       = SymCo co
                | otherwise = co
 
+wrapRole :: Maybe Role   -- desired
+         -> Role         -- current
+         -> Coercion -> Coercion
+wrapRole Nothing        _       = id
+wrapRole (Just desired) current = maybeSubCo2 desired current
+
+-----------
+-- takes two tyvars and builds env'ts to map them to the same tyvar
+substTyVarBndr2 :: CvSubst -> TyVar -> TyVar
+                -> (CvSubst, CvSubst, TyVar)
+substTyVarBndr2 env tv1 tv2
+  = case substTyVarBndr env tv1 of
+      (env1, tv1') -> (env1, extendTvSubstAndInScope env tv2 (mkTyVarTy tv1'), tv1')
+    
+zapCvSubstEnv2 :: CvSubst -> CvSubst -> CvSubst
+zapCvSubstEnv2 env1 env2 = mkCvSubst (is1 `unionInScope` is2) []
+  where is1 = getCvInScope env1
+        is2 = getCvInScope env2
 -----------
 isAxiom_maybe :: Coercion -> Maybe (Bool, CoAxiom Branched, Int, [Coercion])
 isAxiom_maybe (SymCo co) 

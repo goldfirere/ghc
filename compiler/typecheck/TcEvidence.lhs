@@ -80,7 +80,10 @@ differences
              of a Coercion   is  t1 ~# t2
 
   * TcCoercions are essentially all at role Nominal -- the type-checker
-    reasons only about nominal equality, not representational
+    reasons only about nominal equality, not representational.
+    --> Exception: there can be newtype axioms wrapped up in TcCoercions.
+                   These, of course, are only used in casts, so the desugarer
+                   will still produce the right 'Coercion's.
 
   * TcAxiomInstCo takes Types, not Coecions as arguments;
     the generality is required only in the Simplifier

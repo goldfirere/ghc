@@ -1713,7 +1713,7 @@ matchClassInst _ clas [ k, ty ] _
                                            }
                   , fim_tys = tys
                   } | Just (_,_,axSing) <- unwrapNewTyCon_maybe tcon ->
-
+                    -- RAE: This is deeply troubling.
                   do let co1 = mkTcSymCo $ mkTcUnbranchedAxInstCo axSing tys
                          co2 = mkTcSymCo $ mkTcUnbranchedAxInstCo axDataFam tys
                          co3 = mkTcSymCo $ mkTcUnbranchedAxInstCo axDict [k,ty]

@@ -526,26 +526,27 @@ pprIfaceDecl (IfaceForeign {ifName = tycon})
 
 pprIfaceDecl (IfaceSyn {ifName = tycon,
                         ifTyVars = tyvars,
+                        ifRoles = roles,
                         ifSynRhs = IfaceSynonymTyCon mono_ty})
-  = hang (ptext (sLit "type") <+> pprIfaceDeclHead [] tycon tyvars)
+  = hang (ptext (sLit "type") <+> pprIfaceDeclHead [] tycon tyvars roles)
        4 (vcat [equals <+> ppr mono_ty])
 
-pprIfaceDecl (IfaceSyn {ifName = tycon, ifTyVars = tyvars,
+pprIfaceDecl (IfaceSyn {ifName = tycon, ifTyVars = tyvars, ifRoles = roles,
                         ifSynRhs = IfaceOpenSynFamilyTyCon, ifSynKind = kind })
-  = hang (ptext (sLit "type family") <+> pprIfaceDeclHead [] tycon tyvars)
+  = hang (ptext (sLit "type family") <+> pprIfaceDeclHead [] tycon tyvars roles)
        4 (dcolon <+> ppr kind)
 
-pprIfaceDecl (IfaceSyn {ifName = tycon, ifTyVars = tyvars,
+pprIfaceDecl (IfaceSyn {ifName = tycon, ifTyVars = tyvars, ifRoles = roles,
                         ifSynRhs = IfaceClosedSynFamilyTyCon {}, ifSynKind = kind })
-  = hang (ptext (sLit "closed type family") <+> pprIfaceDeclHead [] tycon tyvars)
+  = hang (ptext (sLit "closed type family") <+> pprIfaceDeclHead [] tycon tyvars roles)
        4 (dcolon <+> ppr kind)
 
 pprIfaceDecl (IfaceData {ifName = tycon, ifCType = cType,
                          ifCtxt = context,
-                         ifTyVars = tyvars, ifCons = condecls,
+                         ifTyVars = tyvars, ifRoles = roles, ifCons = condecls,
                          ifRec = isrec, ifPromotable = is_prom,
                          ifAxiom = mbAxiom})
-  = hang (pp_nd <+> pprIfaceDeclHead context tycon tyvars)
+  = hang (pp_nd <+> pprIfaceDeclHead context tycon tyvars roles)
        4 (vcat [ pprCType cType
                , pprRec isrec <> comma <+> pp_prom 
                , pp_condecls tycon condecls
@@ -560,9 +561,9 @@ pprIfaceDecl (IfaceData {ifName = tycon, ifCType = cType,
                 IfNewTyCon _        -> ptext (sLit "newtype")
 
 pprIfaceDecl (IfaceClass {ifCtxt = context, ifName = clas, ifTyVars = tyvars,
-                          ifFDs = fds, ifATs = ats, ifSigs = sigs,
+                          ifRoles = roles, ifFDs = fds, ifATs = ats, ifSigs = sigs,
                           ifRec = isrec})
-  = hang (ptext (sLit "class") <+> pprIfaceDeclHead context clas tyvars <+> pprFundeps fds)
+  = hang (ptext (sLit "class") <+> pprIfaceDeclHead context clas tyvars roles <+> pprFundeps fds)
        4 (vcat [pprRec isrec,
                 sep (map ppr ats),
                 sep (map ppr sigs)])
@@ -588,10 +589,10 @@ instance Outputable IfaceClassOp where
 instance Outputable IfaceAT where
    ppr (IfaceAT d defs) = hang (ppr d) 2 (vcat (map ppr defs))
 
-pprIfaceDeclHead :: IfaceContext -> OccName -> [IfaceTvBndr] -> SDoc
-pprIfaceDeclHead context thing tyvars
+pprIfaceDeclHead :: IfaceContext -> OccName -> [IfaceTvBndr] -> [Role] -> SDoc
+pprIfaceDeclHead context thing tyvars roles
   = hsep [pprIfaceContext context, parenSymOcc thing (ppr thing),
-          pprIfaceTvBndrs tyvars]
+          pprIfaceTvBndrsRoles tyvars roles]
 
 pp_condecls :: OccName -> IfaceConDecls -> SDoc
 pp_condecls _  (IfAbstractTyCon {}) = empty
