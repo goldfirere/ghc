@@ -90,6 +90,7 @@ import System.IO.Error
 import System.IO.Unsafe ( unsafePerformIO )
 import System.Process
 import Text.Printf
+import Text.Read ( readMaybe )
 
 #ifndef mingw32_HOST_OS
 import System.Posix hiding ( getEnv )
@@ -145,6 +146,7 @@ ghciCommands = [
   ("cd",        keepGoing' changeDirectory,     completeFilename),
   ("check",     keepGoing' checkModule,         completeHomeModule),
   ("continue",  keepGoing continueCmd,          noCompletion),
+  ("complete",  keepGoing completeCmd,          noCompletion),
   ("cmd",       keepGoing cmdCmd,               completeExpression),
   ("ctags",     keepGoing createCTagsWithLineNumbersCmd, completeFilename),
   ("ctags!",    keepGoing createCTagsWithRegExesCmd, completeFilename),
@@ -232,6 +234,7 @@ defFullHelpText =
   "                               (!: more details; *: all top-level names)\n" ++
   "   :cd <dir>                   change directory to <dir>\n" ++
   "   :cmd <expr>                 run the commands returned by <expr>::IO String\n" ++
+  "   :complete <dom> [<rng>] <s> list completions for partial input string\n" ++
   "   :ctags[!] [<file>]          create tags file for Vi (default: \"tags\")\n" ++
   "                               (!: use regex instead of line number)\n" ++
   "   :def <cmd> <expr>           define command :<cmd> (later defined command has\n" ++
@@ -2293,7 +2296,48 @@ showLanguages' show_all dflags =
 -- -----------------------------------------------------------------------------
 -- Completion
 
-completeCmd, completeMacro, completeIdentifier, completeModule,
+completeCmd :: String -> GHCi ()
+completeCmd argLine0 = case parseLine argLine0 of
+    Just ("repl", resultRange, left) -> do
+        (unusedLine,compls) <- ghciCompleteWord (reverse left,"")
+        let compls' = takeRange resultRange compls
+        liftIO . putStrLn $ unwords [ show (length compls'), show (length compls), show (reverse unusedLine) ]
+        forM_ (takeRange resultRange compls) $ \(Completion r _ _) -> do
+            liftIO $ print r
+    _ -> throwGhcException (CmdLineError "Syntax: :complete repl [<range>] <quoted-string-to-complete>")
+  where
+    parseLine argLine
+        | null argLine = Nothing
+        | null rest1   = Nothing
+        | otherwise    = (,,) dom <$> resRange <*> s
+      where
+        (dom, rest1) = breakSpace argLine
+        (rng, rest2) = breakSpace rest1
+        resRange | head rest1 == '"' = parseRange ""
+                 | otherwise         = parseRange rng
+        s | head rest1 == '"' = readMaybe rest1 :: Maybe String
+          | otherwise         = readMaybe rest2
+        breakSpace = fmap (dropWhile isSpace) . break isSpace
+
+    takeRange (lb,ub) = maybe id (drop . pred) lb . maybe id take ub
+
+    -- syntax: [n-][m] with semantics "drop (n-1) . take m"
+    parseRange :: String -> Maybe (Maybe Int,Maybe Int)
+    parseRange s = case span isDigit s of
+                   (_, "") ->
+                       -- upper limit only
+                       Just (Nothing, bndRead s)
+                   (s1, '-' : s2)
+                    | all isDigit s2 ->
+                       Just (bndRead s1, bndRead s2)
+                   _ ->
+                       Nothing
+      where
+        bndRead x = if null x then Nothing else Just (read x)
+
+
+
+completeGhciCommand, completeMacro, completeIdentifier, completeModule,
     completeSetModule, completeSeti, completeShowiOptions,
     completeHomeModule, completeSetOptions, completeShowOptions,
     completeHomeModuleOrFile, completeExpression
@@ -2301,7 +2345,7 @@ completeCmd, completeMacro, completeIdentifier, completeModule,
 
 ghciCompleteWord :: CompletionFunc GHCi
 ghciCompleteWord line@(left,_) = case firstWord of
-    ':':cmd     | null rest     -> completeCmd line
+    ':':cmd     | null rest     -> completeGhciCommand line
                 | otherwise     -> do
                         completion <- lookupCompletion cmd
                         completion line
@@ -2316,7 +2360,7 @@ ghciCompleteWord line@(left,_) = case firstWord of
             Just (_,_,f) -> return f
             Nothing -> return completeFilename
 
-completeCmd = wrapCompleter " " $ \w -> do
+completeGhciCommand = wrapCompleter " " $ \w -> do
   macros <- liftIO $ readIORef macros_ref
   cmds   <- ghci_commands `fmap` getGHCiState
   let macro_names = map (':':) . map cmdName $ macros

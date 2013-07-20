@@ -404,7 +404,7 @@ stg_addCFinalizzerToWeakzh ( W_ fptr,   // finalizer
 {
   W_ c, info;
 
-  ("ptr" info) = ccall lockClosure(w "ptr");
+  LOCK_CLOSURE(w, info);
 
   if (info == stg_DEAD_WEAK_info) {
     // Already dead.
@@ -439,7 +439,7 @@ stg_finalizzeWeakzh ( gcptr w )
   gcptr f, list;
   W_ info;
 
-  ("ptr" info) = ccall lockClosure(w "ptr");
+  LOCK_CLOSURE(w, info);
 
   // already dead?
   if (info == stg_DEAD_WEAK_info) {
@@ -494,7 +494,7 @@ stg_deRefWeakzh ( gcptr w )
     // alive or not. We use lockClosure to wait for the info pointer to become
     // something other than stg_WHITEHOLE_info.
 
-    ("ptr" info) = ccall lockClosure(w "ptr");
+    LOCK_CLOSURE(w, info);
     unlockClosure(w, info);
   }
 
@@ -1192,16 +1192,7 @@ stg_takeMVarzh ( P_ mvar /* :: MVar a */ )
 {
     W_ val, info, tso, q;
 
-#if defined(THREADED_RTS)
-    if (CInt[n_capabilities] == 1 :: CInt) {
-        info = GET_INFO(mvar);
-    }
-    else {
-        ("ptr" info) = ccall reallyLockClosure(mvar "ptr");
-    }
-#else
-    info = GET_INFO(mvar);
-#endif
+    LOCK_CLOSURE(mvar, info);
 
     /* If the MVar is empty, put ourselves on its blocking queue,
      * and wait until we're woken up.
@@ -1294,16 +1285,7 @@ stg_tryTakeMVarzh ( P_ mvar /* :: MVar a */ )
 {
     W_ val, info, tso, q;
 
-#if defined(THREADED_RTS)
-    if (CInt[n_capabilities] == 1 :: CInt) {
-        info = GET_INFO(mvar);
-    }
-    else {
-        ("ptr" info) = ccall reallyLockClosure(mvar "ptr");
-    }
-#else
-    info = GET_INFO(mvar);
-#endif
+    LOCK_CLOSURE(mvar, info);
 
     /* If the MVar is empty, return 0. */
     if (StgMVar_value(mvar) == stg_END_TSO_QUEUE_closure) {
@@ -1370,16 +1352,7 @@ stg_putMVarzh ( P_ mvar, /* :: MVar a */
 {
     W_ info, tso, q;
 
-#if defined(THREADED_RTS)
-    if (CInt[n_capabilities] == 1 :: CInt) {
-        info = GET_INFO(mvar);
-    }
-    else {
-        ("ptr" info) = ccall reallyLockClosure(mvar "ptr");
-    }
-#else
-    info = GET_INFO(mvar);
-#endif
+    LOCK_CLOSURE(mvar, info);
 
     if (StgMVar_value(mvar) != stg_END_TSO_QUEUE_closure) {
 
@@ -1433,7 +1406,7 @@ loop:
         goto loop;
     }
 
-    // There are takeMVar(s) waiting: wake up the first one
+    // There are readMVar/takeMVar(s) waiting: wake up the first one
 
     tso = StgMVarTSOQueue_tso(q);
     StgMVar_head(mvar) = StgMVarTSOQueue_link(q);
@@ -1441,8 +1414,11 @@ loop:
         StgMVar_tail(mvar) = stg_END_TSO_QUEUE_closure;
     }
 
-    ASSERT(StgTSO_why_blocked(tso) == BlockedOnMVar::I16);
     ASSERT(StgTSO_block_info(tso) == mvar);
+    // save why_blocked here, because waking up the thread destroys
+    // this information
+    W_ why_blocked;
+    why_blocked = TO_W_(StgTSO_why_blocked(tso));
 
     // actually perform the takeMVar
     W_ stack;
@@ -1458,6 +1434,15 @@ loop:
 
     ccall tryWakeupThread(MyCapability() "ptr", tso);
 
+    // If it was an readMVar, then we can still do work,
+    // so loop back. (XXX: This could take a while)
+    if (why_blocked == BlockedOnMVarRead) {
+        q = StgMVarTSOQueue_link(q);
+        goto loop;
+    }
+
+    ASSERT(why_blocked == BlockedOnMVar);
+
     unlockClosure(mvar, info);
     return ();
 }
@@ -1468,16 +1453,7 @@ stg_tryPutMVarzh ( P_ mvar, /* :: MVar a */
 {
     W_ info, tso, q;
 
-#if defined(THREADED_RTS)
-    if (CInt[n_capabilities] == 1 :: CInt) {
-        info = GET_INFO(mvar);
-    }
-    else {
-        ("ptr" info) = ccall reallyLockClosure(mvar "ptr");
-    }
-#else
-    info = GET_INFO(mvar);
-#endif
+    LOCK_CLOSURE(mvar, info);
 
     if (StgMVar_value(mvar) != stg_END_TSO_QUEUE_closure) {
 #if defined(THREADED_RTS)
@@ -1512,8 +1488,11 @@ loop:
         StgMVar_tail(mvar) = stg_END_TSO_QUEUE_closure;
     }
 
-    ASSERT(StgTSO_why_blocked(tso) == BlockedOnMVar::I16);
     ASSERT(StgTSO_block_info(tso) == mvar);
+    // save why_blocked here, because waking up the thread destroys
+    // this information
+    W_ why_blocked;
+    why_blocked = TO_W_(StgTSO_why_blocked(tso));
 
     // actually perform the takeMVar
     W_ stack;
@@ -1529,10 +1508,80 @@ loop:
 
     ccall tryWakeupThread(MyCapability() "ptr", tso);
 
+    // If it was an readMVar, then we can still do work,
+    // so loop back. (XXX: This could take a while)
+    if (why_blocked == BlockedOnMVarRead) {
+        q = StgMVarTSOQueue_link(q);
+        goto loop;
+    }
+
+    ASSERT(why_blocked == BlockedOnMVar);
+
     unlockClosure(mvar, info);
     return (1);
 }
 
+stg_readMVarzh ( P_ mvar, /* :: MVar a */ )
+{
+    W_ val, info, tso, q;
+
+    LOCK_CLOSURE(mvar, info);
+
+    /* If the MVar is empty, put ourselves on the blocked readers
+     * list and wait until we're woken up.
+     */
+    if (StgMVar_value(mvar) == stg_END_TSO_QUEUE_closure) {
+
+        if (info == stg_MVAR_CLEAN_info) {
+            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr");
+        }
+
+        ALLOC_PRIM_WITH_CUSTOM_FAILURE
+            (SIZEOF_StgMVarTSOQueue,
+             unlockClosure(mvar, stg_MVAR_DIRTY_info);
+             GC_PRIM_P(stg_readMVarzh, mvar));
+
+        q = Hp - SIZEOF_StgMVarTSOQueue + WDS(1);
+
+        // readMVars are pushed to the front of the queue, so
+        // they get handled immediately
+        SET_HDR(q, stg_MVAR_TSO_QUEUE_info, CCS_SYSTEM);
+        StgMVarTSOQueue_link(q) = StgMVar_head(mvar);
+        StgMVarTSOQueue_tso(q)  = CurrentTSO;
+
+        StgTSO__link(CurrentTSO)       = q;
+        StgTSO_block_info(CurrentTSO)  = mvar;
+        StgTSO_why_blocked(CurrentTSO) = BlockedOnMVarRead::I16;
+        StgMVar_head(mvar) = q;
+
+        if (StgMVar_tail(mvar) == stg_END_TSO_QUEUE_closure) {
+            StgMVar_tail(mvar) = q;
+        }
+
+        jump stg_block_readmvar(mvar);
+    }
+
+    val = StgMVar_value(mvar);
+
+    unlockClosure(mvar, info);
+    return (val);
+}
+
+stg_tryReadMVarzh ( P_ mvar, /* :: MVar a */ )
+{
+    W_ val, info, tso, q;
+
+    LOCK_CLOSURE(mvar, info);
+
+    if (StgMVar_value(mvar) == stg_END_TSO_QUEUE_closure) {
+        return (0, stg_NO_FINALIZER_closure);
+    }
+
+    val = StgMVar_value(mvar);
+
+    unlockClosure(mvar, info);
+    return (1, val);
+}
 
 /* -----------------------------------------------------------------------------
    Stable pointer primitives
