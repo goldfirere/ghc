@@ -957,13 +957,21 @@ maybeSubCo Nominal          = id
 maybeSubCo Representational = mkSubCo
 maybeSubCo Phantom          = pprPanic "maybeSubCo Phantom" . ppr
 
-maybeSubCo2 :: Role   -- desired role
-            -> Role   -- current role
+maybeSubCo2_maybe :: Role   -- desired role
+                  -> Role   -- current role
+                  -> Coercion -> Maybe Coercion
+maybeSubCo2_maybe Representational Nominal = Just . mkSubCo
+maybeSubCo2_maybe Nominal Representational = const Nothing
+maybeSubCo2_maybe Phantom _                = Just . mkPhantomCo
+maybeSubCo2_maybe _ _                      = Just
+
+maybeSubCo2 :: Role  -- desired role
+            -> Role  -- current role
             -> Coercion -> Coercion
-maybeSubCo2 Representational Nominal = mkSubCo
-maybeSubCo2 Nominal Representational = pprPanic "maybeSubCo2 R->N" . ppr
-maybeSubCo2 Phantom _                = mkPhantomCo
-maybeSubCo2 _ _                      = id
+maybeSubCo2 r1 r2 co
+  = case maybeSubCo2_maybe r1 r2 co of
+      Just co' -> co'
+      Nothing  -> pprPanic "maybeSubCo2" (ppr co)
 
 -- if co is Nominal, returns it; otherwise, unwraps a SubCo; otherwise, fails
 unSubCo_maybe :: Coercion -> Maybe Coercion
@@ -1437,8 +1445,7 @@ liftCoSubstTyVar (LCS _ cenv) r tv
   = do { co <- lookupVarEnv cenv tv 
        ; let co_role = coercionRole co   -- could theoretically take this as
                                          -- a parameter, but painful
-             co' = maybeSubCo2 r co_role co
-       ; return co' }
+       ; maybeSubCo2_maybe r co_role co }
 
 liftCoSubstTyVarBndr :: LiftCoSubst -> TyVar -> (LiftCoSubst, TyVar)
 liftCoSubstTyVarBndr subst@(LCS in_scope cenv) old_var

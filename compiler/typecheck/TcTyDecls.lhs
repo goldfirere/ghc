@@ -44,7 +44,6 @@ import SrcLoc
 import Outputable
 import UniqSet
 import Util
-import ListSetOps
 import Maybes( mapCatMaybes, isJust, isNothing )
 import Data.List
 import Control.Monad
@@ -560,7 +559,8 @@ initialRoleEnv1 tc
 
 irGroup :: RoleEnv -> [TyCon] -> RoleEnv
 irGroup env tcs
-  = let (env', update) = runRoleM env $ mapM_ irTyCon tcs in
+  = pprTrace "irGroup" (ppr tcs) $ -- RAE
+    let (env', update) = runRoleM env $ mapM_ irTyCon tcs in
     if update
     then irGroup env' tcs
     else env'
@@ -568,33 +568,43 @@ irGroup env tcs
 irTyCon :: TyCon -> RoleM ()
 irTyCon tc
   | isAlgTyCon tc
-  = do { old_roles <- lookupRoles tc
-       ; unless (all (== Nominal) old_roles) $  -- also catches data families
-         addRoleInferenceInfo name var_ns $
-         mapM_ irDataCon (visibleDataCons $ algTyConRhs tc) }
+  = pprTrace "irTyCon algTyCon" (ppr tc <+> ppr (tyConTyVars tc)) $ -- RAE
+    do { old_roles <- lookupRoles tc
+       ; unless (all (== Nominal) old_roles) $  -- also catches data families,
+                                                -- which don't want or need role inference
+         mapM_ (irDataCon tc) (visibleDataCons $ algTyConRhs tc) }
 
   | Just (SynonymTyCon ty) <- synTyConRhs_maybe tc
-  = addRoleInferenceInfo name var_ns $ irType ty
+  = pprTrace "irTyCon SynonymTyCon" (ppr tc $$ ppr ty) $ -- RAE
+    addRoleInferenceInfo (tyConName tc) (tyConTyVars tc) $
+    irType emptyVarSet ty
 
   | otherwise
-  = return ()
+  = pprTrace "irTyCon <<nothing>>" (ppr tc) $ -- RAE
+    return ()
 
+irDataCon :: Name -> DataCon -> RoleM ()
+irDataCon tc_name datacon
+  = pprTrace "irDataCon" (vcat [ ppr datacon
+                               , ppr $ dataConUnivTyVars datacon
+                               , ppr $ dataConExTyVars datacon
+                               , ppr $ dataConRepArgTys datacon ]) $ -- RAE
+    -- need to match up the variables used in the datacon with those used
+    -- in the tycon
+    addRoleInferenceInfo tc_name var_ns $
+    let ex_var_set = mkVarSet $ dataConExTyVars datacon in
+    mapM_ (irType ex_var_set) (dataConRepArgTys datacon)
   where
-    name   = tyConName tc
-    var_ns = mkVarEnv $ zip (tyConTyVars tc) [0..]
-          -- can't use zipVarEnv because that wants equal-length lists!
+    var_ns = mkVarEnv $ zip (dataConUnivTyVars datacon) [0..]
 
-irDataCon :: DataCon -> RoleM ()
-irDataCon = irType . dataConRepType
-
-irType :: Type -> RoleM ()
-irType = go emptyVarSet
+irType :: VarSet -> Type -> RoleM ()
+irType = go
   where
     go lcls (TyVarTy tv) = unless (tv `elemVarSet` lcls) $
                            updateRole Representational tv
     go lcls (AppTy t1 t2) = go lcls t1 >> go lcls t2
     go lcls (TyConApp tc tys)
-      = do { roles <- lookupRoles tc
+      = do { roles <- lookupRolesX tc
            ; zipWithM_ (go_app lcls) roles tys }
     go lcls (FunTy t1 t2) = go lcls t1 >> go lcls t2
     go lcls (ForAllTy tv ty) = go (extendVarSet lcls tv) ty
@@ -605,6 +615,11 @@ irType = go emptyVarSet
                              mapM_ (updateRole Nominal) (varSetElems nvars)
     go_app lcls Representational ty = go lcls ty
 
+lookupRolesX :: TyCon -> RoleM [Role]
+lookupRolesX tc
+  = do { roles <- lookupRoles tc
+       ; return $ roles ++ repeat Nominal }
+
 lookupRoles :: TyCon -> RoleM [Role]
 lookupRoles tc
   = do { env <- getRoleEnv
@@ -612,23 +627,22 @@ lookupRoles tc
            Just roles -> return roles
            Nothing    -> return $ tyConRoles tc }
 
-lookupRolesName :: Name -> RoleM [Role]
-lookupRolesName name
-  = do { env <- getRoleEnv
-       ; case lookupNameEnv env name of
-           Just roles -> return roles
-           Nothing    -> pprPanic "lookupRolesName" (ppr name) }
-
 updateRole :: Role -> TyVar -> RoleM ()
 updateRole role tv
   = do { var_ns <- getVarNs
-       ; case lookupVarEnv var_ns tv of
+       ; pprTrace "updateRole" (ppr tv $$ ppr role) $ -- RAE
+         case lookupVarEnv var_ns tv of
        { Nothing -> pprPanic "updateRole" (ppr tv)
        ; Just n  -> do
        { name <- getTyConName
-       ; old_roles <- lookupRolesName name
-       ; let old_role = getNth old_roles n
-       ; when (old_role /= role) $ updateRoleEnv name n role }}}
+       ; updateRoleEnv name n role }}}
+
+ltRole :: Role -> Role -> Bool
+ltRole Phantom          Phantom = False
+ltRole Phantom          _       = True
+ltRole Representational Nominal = True
+ltRole Representational _       = False
+ltRole _                _       = False
 
 data RoleInferenceState = RIS { role_env  :: RoleEnv
                               , update    :: Bool }
@@ -651,7 +665,8 @@ runRoleM env thing = (env', update)
   where RIS { role_env = env', update = update } = snd $ unRM thing Nothing state 
         state = RIS { role_env  = env, update    = False }
 
-addRoleInferenceInfo :: Name -> VarPositions -> RoleM a -> RoleM a
+addRoleInferenceInfo :: Name -> [TyVar] -> RoleM a -> RoleM a
+-- RAE: Stopped here
 addRoleInferenceInfo name var_ns thing
   = RM $ \_nothing state -> ASSERT( isNothing _nothing )
                             unRM thing (Just info) state
@@ -675,14 +690,15 @@ getTyConName = RM $ \m_info state ->
 
 updateRoleEnv :: Name -> Int -> Role -> RoleM ()
 updateRoleEnv name n role
-  = RM $ \_ (RIS { role_env = role_env }) ->
-         let roles' =
-               case lookupNameEnv role_env name of
-                 Nothing -> pprPanic "updateRoleEnv" (ppr name)
-                 Just roles -> let (before, _ : after) = splitAt n roles in
-                               before ++ role : after
-             role_env' = extendNameEnv role_env name roles' in
-         ((), RIS { role_env = role_env', update = True })
+  = RM $ \_ state@(RIS { role_env = role_env }) -> ((),
+         case lookupNameEnv role_env name of
+           Nothing -> pprPanic "updateRoleEnv" (ppr name)
+           Just roles -> let (before, old_role : after) = splitAt n roles in
+                         if old_role `ltRole` role
+                         then let roles' = before ++ role : after
+                                  role_env' = extendNameEnv role_env name roles' in
+                              RIS { role_env = role_env', update = True }
+                         else state )
 
 \end{code}
 

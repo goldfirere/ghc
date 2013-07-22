@@ -79,7 +79,7 @@ opt_co, opt_co' :: CvSubst
                                -- INVARIANT: the change is always a *downgrade*
        		-> Coercion
        		-> NormalCo	
-opt_co = opt_co'
+opt_co = opt_co' 
 {-
 opt_co env sym co
  = pprTrace "opt_co {" (ppr sym <+> ppr co $$ ppr env) $
@@ -516,6 +516,7 @@ matchAxiom sym ax@(CoAxiom { co_ax_tc = tc }) ind co
     case liftCoMatch (mkVarSet qtvs) (if sym then (mkTyConApp tc lhs) else rhs) co of
       Nothing    -> Nothing
       Just subst -> allMaybes (map (liftCoSubstTyVar subst Nominal) qtvs)
+ -- RAE: Change this with axiom roles
 
 -------------
 compatible_co :: Coercion -> Coercion -> Bool
