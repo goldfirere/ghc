@@ -957,6 +957,7 @@ maybeSubCo Nominal          = id
 maybeSubCo Representational = mkSubCo
 maybeSubCo Phantom          = pprPanic "maybeSubCo Phantom" . ppr
 
+-- RAE: die when converting *from* Phantom
 maybeSubCo2_maybe :: Role   -- desired role
                   -> Role   -- current role
                   -> Coercion -> Maybe Coercion
@@ -1395,14 +1396,10 @@ type LiftCoEnv = VarEnv Coercion
      -- Maps *type variables* to *coercions*
      -- That's the whole point of this function!
 
--- always returns a Representational coercion
-liftCoSubstWith :: [TyVar] -> [Coercion] -> Type -> Coercion
-liftCoSubstWith tvs cos ty
-  = liftCoSubst Representational (zipEqual "liftCoSubstWith" tvs cos) ty
+liftCoSubstWith :: Role -> [TyVar] -> [Coercion] -> Type -> Coercion
+liftCoSubstWith r tvs cos ty
+  = liftCoSubst r (zipEqual "liftCoSubstWith" tvs cos) ty
 
--- RAE: This is broken. What if a TyVar appears in multiple places in the
--- type? It can't possibly have the correct role all the time. Sometimes,
--- we'll need to correct the role.
 liftCoSubst :: Role -> [(TyVar,Coercion)] -> Type -> Coercion
 liftCoSubst r prs ty
  | null prs  = Refl r ty
@@ -1440,12 +1437,33 @@ ty_co_subst subst role ty
     lift_phantom ty = mkUnivCo Phantom (liftCoSubstLeft  subst ty)
                                        (liftCoSubstRight subst ty)
 
+\end{code}
+
+Note [liftCoSubstTyVar]
+~~~~~~~~~~~~~~~~~~~~~~~
+This function can fail (i.e., return Nothing) for two separate reasons:
+ 1) The variable is not in the substutition
+ 2) The coercion found is of too low a role
+
+liftCoSubstTyVar is called from two places: in liftCoSubst (naturally), and
+also in matchAxiom in OptCoercion. From liftCoSubst, the so-called lifting
+lemma guarantees that the roles work out. If we fail for reason 2) in this
+case, we really should panic -- something is deeply wrong. But, in matchAxiom,
+failing for reason 2) is fine. matchAxiom is trying to find a set of coercions
+that match, but it may fail, and this is healthy behavior. Bottom line: if
+you find that liftCoSubst is doing weird things (like leaving out-of-scope
+variables lying around), disable coercion optimization (bypassing matchAxiom)
+and use maybeSubCo2 instead of maybeSubCo2_maybe. The panic will then happen,
+and you may learn something useful.
+
+\begin{code}
+
 liftCoSubstTyVar :: LiftCoSubst -> Role -> TyVar -> Maybe Coercion
 liftCoSubstTyVar (LCS _ cenv) r tv
   = do { co <- lookupVarEnv cenv tv 
        ; let co_role = coercionRole co   -- could theoretically take this as
                                          -- a parameter, but painful
-       ; maybeSubCo2_maybe r co_role co }
+       ; maybeSubCo2_maybe r co_role co } -- see Note [liftCoSubstTyVar]
 
 liftCoSubstTyVarBndr :: LiftCoSubst -> TyVar -> (LiftCoSubst, TyVar)
 liftCoSubstTyVarBndr subst@(LCS in_scope cenv) old_var

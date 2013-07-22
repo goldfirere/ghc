@@ -63,6 +63,14 @@ optCoercion :: CvSubst -> Coercion -> NormalCo
 optCoercion env co 
   | opt_NoOptCoercion = substCo env co
   | otherwise         = opt_co env False Nothing co
+{- RAE
+    pprTrace "optCoercion { " (ppr co) $
+    co' `seq`
+    pprTrace "optCoercion } " (ppr co') $
+    co'
+    where
+      co' = opt_co env False Nothing co
+-}
 
 type NormalCo = Coercion
   -- Invariants: 
@@ -404,11 +412,12 @@ opt_trans_rule is co1 co2
   , all (`elemVarSet` pivot_tvs) qtvs
   = fireTransRule "TrPushAxSym" co1 co2 $
     if sym2
-    then liftCoSubstWith qtvs (opt_transList is cos1 (map mkSymCo cos2)) lhs  -- TrPushAxSym
-    else liftCoSubstWith qtvs (opt_transList is (map mkSymCo cos1) cos2) rhs  -- TrPushSymAx
+    then liftCoSubstWith role qtvs (opt_transList is cos1 (map mkSymCo cos2)) lhs  -- TrPushAxSym
+    else liftCoSubstWith role qtvs (opt_transList is (map mkSymCo cos1) cos2) rhs  -- TrPushSymAx
   where
     co1_is_axiom_maybe = isAxiom_maybe co1
     co2_is_axiom_maybe = isAxiom_maybe co2
+    role = coercionRole co1 -- should be the same as coercionRole co2!
 
 opt_trans_rule _ co1 co2	-- Identity rule
   | Pair ty1 _ <- coercionKind co1

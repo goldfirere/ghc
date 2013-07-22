@@ -1252,7 +1252,7 @@ dealWithCoercion co dc dc_args
 
         -- Make the "theta" from Fig 3 of the paper
         gammas = decomposeCo tc_arity co
-        theta_subst = liftCoSubstWith 
+        theta_subst = liftCoSubstWith Representational
                          (dc_univ_tyvars ++ dc_ex_tyvars)
                                                 -- existentials are at role N
                          (gammas         ++ map (mkReflCo Nominal)

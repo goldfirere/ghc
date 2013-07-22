@@ -572,16 +572,19 @@ irTyCon tc
     do { old_roles <- lookupRoles tc
        ; unless (all (== Nominal) old_roles) $  -- also catches data families,
                                                 -- which don't want or need role inference
-         mapM_ (irDataCon tc) (visibleDataCons $ algTyConRhs tc) }
+         mapM_ (irDataCon tc_name) (visibleDataCons $ algTyConRhs tc) }
 
   | Just (SynonymTyCon ty) <- synTyConRhs_maybe tc
   = pprTrace "irTyCon SynonymTyCon" (ppr tc $$ ppr ty) $ -- RAE
-    addRoleInferenceInfo (tyConName tc) (tyConTyVars tc) $
+    addRoleInferenceInfo tc_name (tyConTyVars tc) $
     irType emptyVarSet ty
 
   | otherwise
   = pprTrace "irTyCon <<nothing>>" (ppr tc) $ -- RAE
     return ()
+
+  where
+    tc_name = tyConName tc
 
 irDataCon :: Name -> DataCon -> RoleM ()
 irDataCon tc_name datacon
@@ -589,20 +592,16 @@ irDataCon tc_name datacon
                                , ppr $ dataConUnivTyVars datacon
                                , ppr $ dataConExTyVars datacon
                                , ppr $ dataConRepArgTys datacon ]) $ -- RAE
-    -- need to match up the variables used in the datacon with those used
-    -- in the tycon
-    addRoleInferenceInfo tc_name var_ns $
+    addRoleInferenceInfo tc_name (dataConUnivTyVars datacon) $
     let ex_var_set = mkVarSet $ dataConExTyVars datacon in
     mapM_ (irType ex_var_set) (dataConRepArgTys datacon)
-  where
-    var_ns = mkVarEnv $ zip (dataConUnivTyVars datacon) [0..]
 
 irType :: VarSet -> Type -> RoleM ()
 irType = go
   where
     go lcls (TyVarTy tv) = unless (tv `elemVarSet` lcls) $
                            updateRole Representational tv
-    go lcls (AppTy t1 t2) = go lcls t1 >> go lcls t2
+    go lcls (AppTy t1 t2) = go lcls t1 >> mark_nominal lcls t2
     go lcls (TyConApp tc tys)
       = do { roles <- lookupRolesX tc
            ; zipWithM_ (go_app lcls) roles tys }
@@ -611,9 +610,11 @@ irType = go
     go _    (LitTy {}) = return ()
 
     go_app _ Phantom _ = return ()
-    go_app lcls Nominal ty = let nvars = tyVarsOfType ty `minusVarSet` lcls in
-                             mapM_ (updateRole Nominal) (varSetElems nvars)
+    go_app lcls Nominal ty = mark_nominal lcls ty
     go_app lcls Representational ty = go lcls ty
+
+    mark_nominal lcls ty = let nvars = tyVarsOfType ty `minusVarSet` lcls in
+                           mapM_ (updateRole Nominal) (varSetElems nvars)
 
 lookupRolesX :: TyCon -> RoleM [Role]
 lookupRolesX tc
@@ -666,11 +667,10 @@ runRoleM env thing = (env', update)
         state = RIS { role_env  = env, update    = False }
 
 addRoleInferenceInfo :: Name -> [TyVar] -> RoleM a -> RoleM a
--- RAE: Stopped here
-addRoleInferenceInfo name var_ns thing
+addRoleInferenceInfo name tvs thing
   = RM $ \_nothing state -> ASSERT( isNothing _nothing )
                             unRM thing (Just info) state
-  where info = RII { var_ns = var_ns, name = name }
+  where info = RII { var_ns = mkVarEnv (zip tvs [0..]), name = name }
 
 getRoleEnv :: RoleM RoleEnv
 getRoleEnv = RM $ \_ state@(RIS { role_env = env }) -> (env, state)

@@ -831,13 +831,14 @@ lintCoercion co@(TyConAppCo r tc cos)
   = do { (k1,s1,t1,r1) <- lintCoercion co1
        ; (k2,s2,t2,r2) <- lintCoercion co2
        ; rk <- lintArrow (ptext (sLit "coercion") <+> quotes (ppr co)) k1 k2
-       ; checkRoles co tc r [r1, r2]
+       ; checkRole co1 r r1
+       ; checkRole co2 r r2
        ; return (rk, mkFunTy s1 s2, mkFunTy t1 t2, r) }
 
   | otherwise
   = do { (ks,ss,ts,rs) <- mapAndUnzip4M lintCoercion cos
        ; rk <- lint_co_app co (tyConKind tc) (ss `zip` ks)
-       ; checkRoles co tc r rs
+       ; _ <- zipWith3M checkRole cos (tyConRolesX r tc) rs
        ; return (rk, mkTyConApp tc ss, mkTyConApp tc ts, r) }
 
 lintCoercion co@(AppCo co1 co2)
@@ -1156,9 +1157,6 @@ checkRole co r1 r2
             ptext (sLit "got") <+> ppr r2 $$
             ptext (sLit "in") <+> ppr co)
 
-checkRoles :: Coercion -> TyCon -> Role -> [Role] -> LintM ()
-checkRoles co tc r rs
-  = zipWithM_ (checkRole co) (tyConRolesX r tc) rs
 \end{code}
 
 %************************************************************************

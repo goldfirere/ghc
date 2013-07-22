@@ -187,9 +187,12 @@ mkCast (Coercion e_co) co
   = Coercion (mkCoCast e_co co)
 
 mkCast (Cast expr co2) co
-  = ASSERT(let { Pair  from_ty  _to_ty  = coercionKind co;
-                 Pair _from_ty2  to_ty2 = coercionKind co2} in
-           from_ty `eqType` to_ty2 )
+  = WARN(let { Pair  from_ty  _to_ty  = coercionKind co;
+               Pair _from_ty2  to_ty2 = coercionKind co2} in
+            not (from_ty `eqType` to_ty2),
+             vcat ([ ptext (sLit "expr:") <+> ppr expr
+                   , ptext (sLit "co2:") <+> ppr co2
+                   , ptext (sLit "co:") <+> ppr co ]) )
     mkCast expr (mkTransCo co2 co)
 
 mkCast expr co
