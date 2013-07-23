@@ -358,10 +358,10 @@ data RecTyInfo = RTI { rti_promotable :: Bool
                      , rti_roles      :: Name -> [Role]
                      , rti_is_rec     :: Name -> RecFlag }
 
-calcRecFlags :: ModDetails -> [TyThing] -> RecTyInfo
+calcRecFlags :: ModDetails -> MaybeRoleEnv -> [TyThing] -> RecTyInfo
 -- The 'boot_names' are the things declared in M.hi-boot, if M is the current module.
 -- Any type constructors in boot_names are automatically considered loop breakers
-calcRecFlags boot_details tyclss
+calcRecFlags boot_details mrole_env tyclss
   = RTI { rti_promotable = is_promotable
         , rti_roles      = roles
         , rti_is_rec     = is_rec }
@@ -373,7 +373,7 @@ calcRecFlags boot_details tyclss
 
     is_promotable = all (isPromotableTyCon rec_tycon_names) all_tycons
 
-    roles = inferRoles all_tycons
+    roles = inferRoles mrole_env all_tycons
 
     ----------------- Recursion calculation ----------------
     is_rec n | n `elemNameSet` rec_names = Recursive
@@ -533,9 +533,9 @@ isPromotableType rec_tcs con_arg_ty
 %************************************************************************
 
 \begin{code}
-inferRoles :: [TyCon] -> Name -> [Role]
-inferRoles tycons name
-  = let role_env = initialRoleEnv tycons
+inferRoles :: MaybeRoleEnv -> [TyCon] -> Name -> [Role]
+inferRoles mrole_env tycons name
+  = let role_env = initialRoleEnv mrole_env tycons
         role_env' = irGroup role_env tycons in
     case lookupNameEnv role_env' name of
       Just roles -> roles
@@ -543,19 +543,24 @@ inferRoles tycons name
 
 type RoleEnv = NameEnv [Role]
 
-initialRoleEnv :: [TyCon] -> RoleEnv
-initialRoleEnv = extendNameEnvList emptyNameEnv . map initialRoleEnv1
+initialRoleEnv :: MaybeRoleEnv -> [TyCon] -> RoleEnv
+initialRoleEnv mrole_env = extendNameEnvList emptyNameEnv .
+                           map (initialRoleEnv1 mrole_env)
 
--- RAE: change this once there are role annotations
-initialRoleEnv1 :: TyCon -> (Name, [Role])
-initialRoleEnv1 tc
-  | isFamilyTyCon tc  = (name, default_role Nominal)
-  | isAlgTyCon tc     = (name, default_role Phantom)
-  | isSynTyCon tc     = (name, default_role Phantom)
-  | otherwise         = pprPanic "initialRoleEnv1" (ppr tc)
-  where name           = tyConName tc
-        default_role r = map (\tv -> if isKindVar tv then Nominal else r)
-                             (tyConTyVars tc)
+initialRoleEnv1 :: MaybeRoleEnv -> TyCon -> (Name, [Role])
+initialRoleEnv1 mrole_env tc
+  | isFamilyTyCon tc = (name, map (const Nominal) tyvars)
+  |  isAlgTyCon tc
+  || isSynTyCon tc   = (name, default_roles)
+  | otherwise        = pprPanic "initialRoleEnv1" (ppr tc)
+  where name         = tyConName tc
+        tyvars       = tyConTyVars tc
+        role_annots  = case lookupNameEnv mrole_env name of
+                          Just mroles -> mroles
+                          Nothing     -> pprPanic "initialRoleEnv1 annots" (ppr name)
+        default_roles = let kvs = takeWhile isKindVar tyvars in
+                        map (const Nominal) kvs ++
+                        zipWith orElse role_annots (repeat Phantom)
 
 irGroup :: RoleEnv -> [TyCon] -> RoleEnv
 irGroup env tcs

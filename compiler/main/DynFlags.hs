@@ -533,6 +533,7 @@ data ExtensionFlag
    | Opt_MagicHash
    | Opt_EmptyDataDecls
    | Opt_KindSignatures
+   | Opt_RoleAnnotations
    | Opt_ParallelListComp
    | Opt_TransformListComp
    | Opt_MonadComprehensions
@@ -2636,6 +2637,7 @@ xFlags = [
   ( "MagicHash",                        Opt_MagicHash, nop ),
   ( "ExistentialQuantification",        Opt_ExistentialQuantification, nop ),
   ( "KindSignatures",                   Opt_KindSignatures, nop ),
+  ( "RoleAnnotations",                  Opt_RoleAnnotations, nop ),
   ( "EmptyDataDecls",                   Opt_EmptyDataDecls, nop ),
   ( "ParallelListComp",                 Opt_ParallelListComp, nop ),
   ( "TransformListComp",                Opt_TransformListComp, nop ),
