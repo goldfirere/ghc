@@ -213,8 +213,8 @@ rnHsTyKi isType doc (HsKindSig ty k)
        ; (k', fvs2) <- rnLHsKind doc k
        ; return (HsKindSig ty' k', fvs1 `plusFV` fvs2) }
 
-rnHsTyKi isType doc (HsRoleAnnot ty _) 
-  = illegalRoleAnnotDoc doc ty
+rnHsTyKi _ doc (HsRoleAnnot ty _) 
+  = illegalRoleAnnotDoc doc ty >> failM
 
 rnHsTyKi isType doc (HsPArrTy ty)
   = ASSERT( isType )
@@ -363,7 +363,7 @@ bindHsTyVars :: HsDocContext
 bindHsTyVars doc mb_assoc kv_bndrs tv_bndrs thing_inside
   = do { rdr_env <- getLocalRdrEnv
        ; let tvs = hsQTvBndrs tv_bndrs
-             kvs_from_tv_bndrs = [ kv | L _ (HsTyVarBndr _ (Just kind) _ <- tvs
+             kvs_from_tv_bndrs = [ kv | L _ (HsTyVarBndr _ (Just kind) _) <- tvs
                                  , let (_, kvs) = extractHsTyRdrTyVars kind
                                  , kv <- kvs ]
              all_kvs = filterOut (`elemLocalRdrEnv` rdr_env) $
@@ -388,13 +388,14 @@ bindHsTyVars doc mb_assoc kv_bndrs tv_bndrs thing_inside
              rn_tv_bndr (L loc (HsTyVarBndr name mkind mrole))
                = do { ksig_ok <- xoptM Opt_KindSignatures
                     ; unless ksig_ok $
-                      whenIsJust mkind $ \k -> badSigErr False doc kind
+                      whenIsJust mkind $ \k -> badSigErr False doc k
                     ; rsig_ok <- xoptM Opt_RoleAnnotations
                     ; unless rsig_ok $
-                      whenIsJust mrole $ \r -> badRoleAnnotOpt loc doc
-                    ; nm <- newTyVarNameRn mb_assoc rdr_env loc rdr
+                      whenIsJust mrole $ \_ -> badRoleAnnotOpt loc doc
+                    ; nm <- newTyVarNameRn mb_assoc rdr_env loc name
                     ; (mkind', fvs) <- case mkind of
-                                         Just k  -> rnLHsKind doc k
+                                         Just k  -> do { (kind', fvs) <- rnLHsKind doc k
+                                                       ; return (Just kind', fvs) }
                                          Nothing -> return (Nothing, emptyFVs)
                     ; return (L loc (HsTyVarBndr nm mkind' mrole), fvs) }
 
@@ -483,7 +484,7 @@ illegalRoleAnnotDoc :: HsDocContext -> LHsType RdrName -> TcM ()
 illegalRoleAnnotDoc doc (L loc ty)
   = setSrcSpan loc $ addErr $
     vcat [ ptext (sLit "Illegal role annotation on") <+> (ppr ty)
-         , docOfHsDocContext ]
+         , docOfHsDocContext doc ]
 \end{code}
 
 Note [Renaming associated types]

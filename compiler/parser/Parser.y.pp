@@ -59,6 +59,7 @@ import Type             ( funTyCon )
 import ForeignCall
 import OccName          ( varName, dataName, tcClsName, tvName )
 import DataCon          ( DataCon, dataConName )
+import CoAxiom          ( Role(..) )
 import SrcLoc
 import Module
 import Kind             ( Kind, liftedTypeKind, unliftedTypeKind, mkArrowKind )
@@ -273,6 +274,9 @@ incorrect.
  'group'    { L _ ITgroup }     -- for list transform extension
  'by'       { L _ ITby }        -- for list transform extension
  'using'    { L _ ITusing }     -- for list transform extension
+ 'N'        { L _ ITnominal }            -- Nominal role
+ 'R'        { L _ ITrepresentational }   -- Representational role
+ 'P'        { L _ ITphantom }            -- Phantom role
 
  '{-# INLINE'             { L _ (ITinline_prag _ _) }
  '{-# SPECIALISE'         { L _ ITspec_prag }
@@ -1129,6 +1133,7 @@ atype :: { LHsType RdrName }
         | '[:' ctype ':]'                { LL $ HsPArrTy  $2 }
         | '(' ctype ')'                  { LL $ HsParTy   $2 }
         | '(' ctype '::' kind ')'        { LL $ HsKindSig $2 $4 }
+        | ctype '@' role                 { LL $ HsRoleAnnot $1 (unLoc $3) }
         | quasiquote                     { L1 (HsQuasiQuoteTy (unLoc $1)) }
         | '$(' exp ')'                   { LL $ mkHsSpliceTy $2 }
         | TH_ID_SPLICE                   { LL $ mkHsSpliceTy $ L1 $ HsVar $
@@ -1166,8 +1171,8 @@ tv_bndrs :: { [LHsTyVarBndr RdrName] }
          | {- empty -}                  { [] }
 
 tv_bndr :: { LHsTyVarBndr RdrName }
-        : tyvar                         { L1 (UserTyVar (unLoc $1)) }
-        | '(' tyvar '::' kind ')'       { LL (KindedTyVar (unLoc $2) $4) }
+        : tyvar                         { L1 (HsTyVarBndr (unLoc $1) Nothing Nothing) }
+        | '(' tyvar '::' kind ')'       { LL (HsTyVarBndr (unLoc $2) (Just $4) Nothing) }
 
 fds :: { Located [Located (FunDep RdrName)] }
         : {- empty -}                   { noLoc [] }
@@ -1184,6 +1189,11 @@ fd :: { Located (FunDep RdrName) }
 varids0 :: { Located [RdrName] }
         : {- empty -}                   { noLoc [] }
         | varids0 tyvar                 { LL (unLoc $2 : unLoc $1) }
+
+role :: { Located Role }
+          : 'N'                         { LL Nominal }
+          | 'R'                         { LL Representational }
+          | 'P'                         { LL Phantom }
 
 -----------------------------------------------------------------------------
 -- Kinds

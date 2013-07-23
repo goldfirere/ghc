@@ -72,7 +72,7 @@ mapCatMaybes f (x:xs) = case f x of
 
 whenIsJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
 whenIsJust (Just x) f = f x
-whenIsJust Nothing    = return ()
+whenIsJust Nothing  _ = return ()
 \end{code}
 
 \begin{code}

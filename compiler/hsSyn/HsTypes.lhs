@@ -47,6 +47,7 @@ import Name( Name )
 import RdrName( RdrName )
 import DataCon( HsBang(..) )
 import Type
+import TyCon ( Role(..) )
 import HsDoc
 import BasicTypes
 import SrcLoc
@@ -527,9 +528,9 @@ instance (OutputableBndr name) => Outputable (LHsTyVarBndrs name) where
 
 instance (OutputableBndr name) => Outputable (HsTyVarBndr name) where
     ppr (HsTyVarBndr n Nothing  Nothing)  = ppr n
-    ppr (HsTyVarBndr n (Just k) Nothing)  = parens $ hsep [ppr n, dcolon, ppr kind]
+    ppr (HsTyVarBndr n (Just k) Nothing)  = parens $ hsep [ppr n, dcolon, ppr k]
     ppr (HsTyVarBndr n Nothing  (Just r)) = ppr n <> char '@' <> ppr r
-    ppr (HsTyVarBndr n (Just k) (Just r)) = parens $ hsep [ppr n, dcolon, ppr kind] <> char '@' <> ppr r
+    ppr (HsTyVarBndr n (Just k) (Just r)) = parens $ hsep [ppr n, dcolon, ppr k] <> char '@' <> ppr r
 
 instance (Outputable thing) => Outputable (HsWithBndrs thing) where
     ppr (HsWB { hswb_cts = ty }) = ppr ty

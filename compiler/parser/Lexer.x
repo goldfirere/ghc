@@ -471,6 +471,9 @@ data Token
   | ITgroup
   | ITby
   | ITusing
+  | ITnominal
+  | ITrepresentational
+  | ITphantom
 
   -- Pragmas
   | ITinline_prag InlineSpec RuleMatchInfo
@@ -662,7 +665,10 @@ reservedWordsFM = listToUFM $
 
          ( "rec",            ITrec,           bit arrowsBit .|. 
                                               bit recursiveDoBit),
-         ( "proc",           ITproc,          bit arrowsBit)
+         ( "proc",           ITproc,          bit arrowsBit),
+         ( "N",              ITnominal,       bit roleAnnotationsBit),
+         ( "R",              ITrepresentational, bit roleAnnotationsBit),
+         ( "P",              ITphantom,       bit roleAnnotationsBit)
      ]
 
 reservedSymsFM :: UniqFM (Token, Int -> Bool)
@@ -1870,6 +1876,8 @@ explicitNamespacesBit :: Int
 explicitNamespacesBit = 29
 lambdaCaseBit :: Int
 lambdaCaseBit = 30
+roleAnnotationsBit :: Int
+roleAnnotationsBit = 31
 
 
 always :: Int -> Bool
@@ -1988,6 +1996,7 @@ mkPState flags buf loc =
                .|. typeLiteralsBit             `setBitIf` xopt Opt_DataKinds flags
                .|. explicitNamespacesBit       `setBitIf` xopt Opt_ExplicitNamespaces flags
                .|. lambdaCaseBit               `setBitIf` xopt Opt_LambdaCase               flags
+               .|. roleAnnotationsBit          `setBitIf` xopt Opt_RoleAnnotations flags
       --
       setBitIf :: Int -> Bool -> Int
       b `setBitIf` cond | cond      = bit b

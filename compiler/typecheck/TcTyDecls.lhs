@@ -18,7 +18,8 @@ files for imported data types.
 
 module TcTyDecls(
         calcRecFlags, RecTyInfo(..), 
-        calcSynCycles, calcClassCycles
+        calcSynCycles, calcClassCycles,
+        MaybeRoleEnv
     ) where
 
 #include "HsVersions.h"
@@ -44,7 +45,7 @@ import SrcLoc
 import Outputable
 import UniqSet
 import Util
-import Maybes( mapCatMaybes, isJust, isNothing )
+import Maybes
 import Data.List
 import Control.Monad
 \end{code}
@@ -542,6 +543,7 @@ inferRoles mrole_env tycons name
       Nothing    -> pprPanic "inferRoles" (ppr name)
 
 type RoleEnv = NameEnv [Role]
+type MaybeRoleEnv = NameEnv [Maybe Role]
 
 initialRoleEnv :: MaybeRoleEnv -> [TyCon] -> RoleEnv
 initialRoleEnv mrole_env = extendNameEnvList emptyNameEnv .

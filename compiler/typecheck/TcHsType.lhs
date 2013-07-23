@@ -75,6 +75,7 @@ import UniqSupply
 import Outputable
 import FastString
 import Util
+import Maybes
 
 import Control.Monad ( unless, when, zipWithM )
 import PrelNames( ipClassName, funTyConKey )
@@ -1136,14 +1137,16 @@ kcHsTyVarBndrs strat (HsQTvs { hsq_kvs = kv_ns, hsq_tvs = hs_tvs }) thing_inside
     kc_hs_tv (HsTyVarBndr n mk mr)
       = do { mb_thing <- tcLookupLcl_maybe n
            ; kind <- case (mb_thing, mk) of
-               (Just (AThing k1), Just k2) -> checkKind k1 k2 >> return k1
+               (Just (AThing k1), Just k2) -> do { k2' <- tcLHsKind k2
+                                                 ; checkKind k1 k2'
+                                                 ; return k1 }
                (Just (AThing k),  Nothing) -> return k
-               (Nothing,          Just k)  -> return k
+               (Nothing,          Just k)  -> tcLHsKind k
                (_,                Nothing)
                  | default_to_star         -> return liftedTypeKind
                  | otherwise               -> newMetaKindVar
                (Just thing,       Just _)  -> pprPanic "check_in_scope" (ppr thing)
-           ; return (n, kind, mr) }
+           ; return ((n, kind), mr) }
 
 tcHsTyVarBndrs :: LHsTyVarBndrs Name 
 	       -> ([TcTyVar] -> TcM r)
@@ -1189,7 +1192,7 @@ tcHsTyVarBndr (L _ (HsTyVarBndr name mkind Nothing))
 
 -- tcHsTyVarBndr is never called from a context where roles annotations are allowed
 tcHsTyVarBndr (L _ (HsTyVarBndr name _ _))
-  = addErrTc (illegalRoleAnnot n)
+  = addErrTc (illegalRoleAnnot name) >> failM
 
 ------------------
 kindGeneralize :: TyVarSet -> TcM [KindVar]
@@ -1321,7 +1324,7 @@ tcTyClTyVars tycon (HsQTvs { hsq_kvs = hs_kvs, hsq_tvs = hs_tvs }) roles thing_i
            ; whenIsJust mrole (\r -> do { checkTc (isJust roles) $
                                           illegalRoleAnnot n
                                         ; checkTc (r == role) $
-                                          badRoleAnnot n r role)
+                                          badRoleAnnot n r role })
            ; return $ mkTyVar n kind }
 
 -----------------------------------
@@ -1687,7 +1690,7 @@ badRoleAnnot var annot inferred
 
 illegalRoleAnnot :: Name -> SDoc
 illegalRoleAnnot var
-  = ptext (sLit "Illegal role annotation on variable") <+> ppr var <> semicolon $$
+  = ptext (sLit "Illegal role annotation on variable") <+> ppr var <> semi $$
     ptext (sLit "role annotations are not allowed here")
 \end{code}
 

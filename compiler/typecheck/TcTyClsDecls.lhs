@@ -352,11 +352,11 @@ mk_thing_env (decl : decls)
   = (tcdName (unLoc decl), APromotionErr TyConPE) :
     (mk_thing_env decls)
 
-getInitialKinds :: [LTyClDecl Name] -> TcM ([(Name, TcTyThing)], [Maybe Role])
+getInitialKinds :: [LTyClDecl Name] -> TcM ([(Name, TcTyThing)], MaybeRoleEnv)
 getInitialKinds decls
   = tcExtendTcTyThingEnv (mk_thing_env decls) $
     do { (pairss, mroles) <- mapAndUnzipM (addLocM getInitialKind) decls
-       ; return (concat pairss, mkNameEnv (zip (map tcdName decls) mroles)) }
+       ; return (concat pairss, mkNameEnv (zip (map (tcdName . unLoc) decls) mroles)) }
 
 -- See Note [Kind-checking strategies] in TcHsType
 getInitialKind :: TyClDecl Name -> TcM ([(Name, TcTyThing)], [Maybe Role])
@@ -423,7 +423,7 @@ getFamDeclInitialKind decl@(FamilyDecl { fdLName = L _ name
                                        , fdInfo = info
                                        , fdTyVars = ktvs
                                        , fdKindSig = ksig })
-  = do { (fam_kind, _) <-
+  = do { (fam_kind, _, _) <-
            kcHsTyVarBndrs (kcStrategyFamDecl decl) ktvs $
            do { res_k <- case ksig of
                            Just k  -> tcLHsKind k
@@ -438,7 +438,8 @@ getFamDeclInitialKind decl@(FamilyDecl { fdLName = L _ name
 ----------------
 kcSynDecls :: [SCC (LTyClDecl Name)]
            -> TcM (TcLclEnv, MaybeRoleEnv) -- Kind bindings and roles
-kcSynDecls [] = getLclEnv
+kcSynDecls [] = do { env <- getLclEnv
+                   ; return (env, emptyNameEnv) }
 kcSynDecls (group : groups)
   = do  { (n,k,mr) <- kcSynDecl1 group
         ; (lcl_env, role_env) <- tcExtendKindEnv [(n,k)] (kcSynDecls groups)
@@ -466,12 +467,12 @@ kcSynDecl decl@(SynDecl { tcdTyVars = hs_tvs, tcdLName = L _ name
 kcSynDecl decl = pprPanic "kcSynDecl" (ppr decl)
 
 ------------------------------------------------------------------------
-kcLTyClDecl :: LTyClDecl Name -> TcM MaybeRoleEnv
+kcLTyClDecl :: LTyClDecl Name -> TcM ()
   -- See Note [Kind checking for type and class decls]
 kcLTyClDecl (L loc decl)
   = setSrcSpan loc $ tcAddDeclCtxt decl $ kcTyClDecl decl
 
-kcTyClDecl :: TyClDecl Name -> TcM MaybeRoleEnv
+kcTyClDecl :: TyClDecl Name -> TcM ()
 -- This function is used solely for its side effect on kind variables
 -- and to extract role annotations
 -- NB kind signatures on the type variables and
@@ -626,14 +627,14 @@ tcTyClDecl1 _parent rec_info
             , tcdATs = ats, tcdATDefs = at_defs })
   = ASSERT( isNoParent _parent )
     do { (clas, tvs', gen_dm_env) <- fixM $ \ ~(clas,_,_) ->
-            let roles = rti_roles rec_info tycon_name in
+            let tycon_name = tyConName (classTyCon clas)
+                tc_isrec = rti_is_rec rec_info tycon_name
+                roles = rti_roles rec_info tycon_name in
             tcTyClTyVars class_name tvs (Just roles) $ \ tvs' kind ->
             do { MASSERT( isConstraintKind kind )
-               ; let    -- This little knot is just so we can get
-                        -- hold of the name of the class TyCon, which we
-                        -- need to look up its recursiveness
-                    tycon_name = tyConName (classTyCon clas)
-                    tc_isrec = rti_is_rec rec_info tycon_name
+                 -- This little knot is just so we can get
+                 -- hold of the name of the class TyCon, which we
+                 -- need to look up its recursiveness
 
                ; ctxt' <- tcHsContext ctxt
                ; ctxt' <- zonkTcTypeToTypes emptyZonkEnv ctxt'
