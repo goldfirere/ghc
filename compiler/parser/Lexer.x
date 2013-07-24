@@ -362,14 +362,14 @@ $tab+         { warn Opt_WarnTabs (text "Tab character") }
   @qual @varid                  { idtoken qvarid }
   @qual @conid                  { idtoken qconid }
   @varid                        { varid }
-  @conid                        { idtoken conid }
+  @conid                        { conid }
 }
 
 <0> {
   @qual @varid "#"+ / { ifExtension magicHashEnabled } { idtoken qvarid }
   @qual @conid "#"+ / { ifExtension magicHashEnabled } { idtoken qconid }
   @varid "#"+       / { ifExtension magicHashEnabled } { varid }
-  @conid "#"+       / { ifExtension magicHashEnabled } { idtoken conid }
+  @conid "#"+       / { ifExtension magicHashEnabled } { conid }
 }
 
 -- ToDo: - move `var` and (sym) into lexical syntax?
@@ -665,11 +665,16 @@ reservedWordsFM = listToUFM $
 
          ( "rec",            ITrec,           bit arrowsBit .|. 
                                               bit recursiveDoBit),
-         ( "proc",           ITproc,          bit arrowsBit),
-         ( "N",              ITnominal,       bit roleAnnotationsBit),
-         ( "R",              ITrepresentational, bit roleAnnotationsBit),
-         ( "P",              ITphantom,       bit roleAnnotationsBit)
+         ( "proc",           ITproc,          bit arrowsBit)
      ]
+
+reservedUpcaseWordsFM :: UniqFM (Token, Int)
+reservedUpcaseWordsFM = listToUFM $
+    map (\(x, y, z) -> (mkFastString x, (y, z)))
+       [ ( "N",     ITnominal,          0 ), -- no extension bit for better error msgs
+         ( "R",     ITrepresentational, 0 ),
+         ( "P",     ITphantom,          0 )
+       ]
 
 reservedSymsFM :: UniqFM (Token, Int -> Bool)
 reservedSymsFM = listToUFM $
@@ -1016,8 +1021,20 @@ varid span buf len =
   where
     !fs = lexemeToFastString buf len
 
-conid :: StringBuffer -> Int -> Token
-conid buf len = ITconid $! lexemeToFastString buf len
+conid :: Action
+conid span buf len =
+  case lookupUFM reservedUpcaseWordsFM fs of
+    Just (keyword, 0) -> return $ L span keyword
+
+    Just (keyword, exts) -> do
+      extsEnabled <- extension $ \i -> exts .&. i /= 0
+      if extsEnabled
+        then return $ L span keyword
+        else return $ L span $ ITconid fs
+
+    Nothing -> return $ L span $ ITconid fs
+  where
+    !fs = lexemeToFastString buf len
 
 qvarsym, qconsym, prefixqvarsym, prefixqconsym :: StringBuffer -> Int -> Token
 qvarsym buf len = ITqvarsym $! splitQualName buf len False
@@ -1876,8 +1893,6 @@ explicitNamespacesBit :: Int
 explicitNamespacesBit = 29
 lambdaCaseBit :: Int
 lambdaCaseBit = 30
-roleAnnotationsBit :: Int
-roleAnnotationsBit = 31
 
 
 always :: Int -> Bool
@@ -1996,7 +2011,7 @@ mkPState flags buf loc =
                .|. typeLiteralsBit             `setBitIf` xopt Opt_DataKinds flags
                .|. explicitNamespacesBit       `setBitIf` xopt Opt_ExplicitNamespaces flags
                .|. lambdaCaseBit               `setBitIf` xopt Opt_LambdaCase               flags
-               .|. roleAnnotationsBit          `setBitIf` xopt Opt_RoleAnnotations flags
+
       --
       setBitIf :: Int -> Bool -> Int
       b `setBitIf` cond | cond      = bit b

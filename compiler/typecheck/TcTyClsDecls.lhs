@@ -152,7 +152,7 @@ tcTyClGroup boot_details tyclds
        ; tcExtendGlobalEnv tyclss $ do
        { traceTc "Starting validity check" (ppr tyclss)
        ; checkNoErrs $
-         mapM_ (recoverM (return ()) . addLocM checkValidTyCl) tyclds
+         mapM_ (recoverM (return ()) . addLocM (checkValidTyCl role_env)) tyclds
            -- We recover, which allows us to report multiple validity errors
            -- but we then fail if any are wrong.  Lacking the checkNoErrs
            -- we get Trac #7175
@@ -262,7 +262,7 @@ Nothing indicates no role annotation. Just r indicates an annotation r.
 performs role inference. The role annotations are used to initialize the role
 inference algorithm.
 
-3. During type-checking (RAE: enter function name here), the inferred roles are
+3. During validity-checking (RAE: enter function name here), the inferred roles are
 then checked against the annotations. If they don't match, an error is reported.
 This is also where the presence of the RoleAnnotations flag is checked.
 
@@ -608,17 +608,15 @@ tcTyClDecl1 parent _rec_info (FamDecl { tcdFam = fd })
 tcTyClDecl1 _parent rec_info
             (SynDecl { tcdLName = L _ tc_name, tcdTyVars = tvs, tcdRhs = rhs })
   = ASSERT( isNoParent _parent )
-    tcTyClTyVars tc_name tvs (Just roles) $ \ tvs' kind ->
+    tcTyClTyVars tc_name tvs $ \ tvs' kind ->
     tcTySynRhs rec_info tc_name tvs' kind rhs
-  where roles = rti_roles rec_info tc_name
 
   -- "data/newtype" declaration
 tcTyClDecl1 _parent rec_info
             (DataDecl { tcdLName = L _ tc_name, tcdTyVars = tvs, tcdDataDefn = defn })
   = ASSERT( isNoParent _parent )
-    tcTyClTyVars tc_name tvs (Just roles) $ \ tvs' kind ->
+    tcTyClTyVars tc_name tvs $ \ tvs' kind ->
     tcDataDefn rec_info tc_name tvs' kind defn
-  where roles = rti_roles rec_info tc_name
 
 tcTyClDecl1 _parent rec_info
             (ClassDecl { tcdLName = L _ class_name, tcdTyVars = tvs
@@ -627,14 +625,14 @@ tcTyClDecl1 _parent rec_info
             , tcdATs = ats, tcdATDefs = at_defs })
   = ASSERT( isNoParent _parent )
     do { (clas, tvs', gen_dm_env) <- fixM $ \ ~(clas,_,_) ->
-            let tycon_name = tyConName (classTyCon clas)
-                tc_isrec = rti_is_rec rec_info tycon_name
-                roles = rti_roles rec_info tycon_name in
-            tcTyClTyVars class_name tvs (Just roles) $ \ tvs' kind ->
+            tcTyClTyVars class_name tvs $ \ tvs' kind ->
             do { MASSERT( isConstraintKind kind )
                  -- This little knot is just so we can get
                  -- hold of the name of the class TyCon, which we
                  -- need to look up its recursiveness
+               ; let tycon_name = tyConName (classTyCon clas)
+                     tc_isrec = rti_is_rec rec_info tycon_name
+                     roles = rti_roles rec_info tycon_name
 
                ; ctxt' <- tcHsContext ctxt
                ; ctxt' <- zonkTcTypeToTypes emptyZonkEnv ctxt'
@@ -683,9 +681,10 @@ tcTyClDecl1 _ _
 tcFamDecl1 :: TyConParent -> FamilyDecl Name -> TcM [TyThing]
 tcFamDecl1 parent
             (FamilyDecl {fdInfo = OpenTypeFamily, fdLName = L _ tc_name, fdTyVars = tvs})
-  = tcTyClTyVars tc_name tvs Nothing $ \ tvs' kind -> do
+  = tcTyClTyVars tc_name tvs $ \ tvs' kind -> do
   { traceTc "open type family:" (ppr tc_name)
   ; checkFamFlag tc_name
+  ; checkNoRoles tvs
   ; let roles = map (const Nominal) tvs'
   ; tycon <- buildSynTyCon tc_name tvs' roles OpenSynFamilyTyCon kind parent
   ; return [ATyCon tycon] }
@@ -697,10 +696,11 @@ tcFamDecl1 parent
 -- of both the type family and the equations for a CoAxiom.
   = do { traceTc "closed type family:" (ppr tc_name)
          -- the variables in the header have no scope:
-       ; (tvs', kind) <- tcTyClTyVars tc_name tvs Nothing $ \ tvs' kind ->
+       ; (tvs', kind) <- tcTyClTyVars tc_name tvs $ \ tvs' kind ->
                          return (tvs', kind)
 
        ; checkFamFlag tc_name -- make sure we have -XTypeFamilies
+       ; checkNoRoles tvs
 
          -- check to make sure all the names used in the equations are
          -- consistent
@@ -737,9 +737,10 @@ tcFamDecl1 parent
 
 tcFamDecl1 parent
            (FamilyDecl {fdInfo = DataFamily, fdLName = L _ tc_name, fdTyVars = tvs})
-  = tcTyClTyVars tc_name tvs Nothing $ \ tvs' kind -> do
+  = tcTyClTyVars tc_name tvs $ \ tvs' kind -> do
   { traceTc "data family:" (ppr tc_name)
   ; checkFamFlag tc_name
+  ; checkNoRoles tvs
   ; extra_tvs <- tcDataKindSig kind
   ; let final_tvs = tvs' ++ extra_tvs    -- we may not need these
         roles     = map (const Nominal) final_tvs
@@ -1304,8 +1305,8 @@ checkClassCycleErrs cls
   where cls_cycles = calcClassCycles cls
 
 checkValidDecl :: SDoc -- the context for error checking
-               -> Located Name -> TcM ()
-checkValidDecl ctxt lname
+               -> Located Name -> MaybeRoleEnv -> TcM ()
+checkValidDecl ctxt lname mroles
   = addErrCtxt ctxt $
     do  { traceTc "Validity of 1" (ppr lname)
         ; env <- getGblEnv
@@ -1316,16 +1317,16 @@ checkValidDecl ctxt lname
         ; case thing of
             ATyCon tc -> do
                 traceTc "  of kind" (ppr (tyConKind tc))
-                checkValidTyCon tc
+                checkValidTyCon tc mroles
             AnId _    -> return ()  -- Generic default methods are checked
                                     -- with their parent class
             _         -> panic "checkValidTyCl"
         ; traceTc "Done validity of" (ppr thing)
         }
 
-checkValidTyCl :: TyClDecl Name -> TcM ()
-checkValidTyCl decl
-  = do { checkValidDecl (tcMkDeclCtxt decl) (tyClDeclLName decl)
+checkValidTyCl :: MaybeRoleEnv -> TyClDecl Name -> TcM ()
+checkValidTyCl mroles decl
+  = do { checkValidDecl (tcMkDeclCtxt decl) (tyClDeclLName decl) mroles
        ; case decl of
            ClassDecl { tcdATs = ats } ->
              mapM_ (checkValidFamDecl . unLoc) ats
@@ -1336,6 +1337,7 @@ checkValidFamDecl (FamilyDecl { fdLName = lname, fdInfo = flav })
   = checkValidDecl (hsep [ptext (sLit "In the"), ppr flav,
                           ptext (sLit "declaration for"), quotes (ppr lname)])
                    lname
+                   (pprPanic "checkValidFamDecl" (ppr lname)) -- no roles on families
 
 -------------------------
 -- For data types declared with record syntax, we require
@@ -1352,19 +1354,24 @@ checkValidFamDecl (FamilyDecl { fdLName = lname, fdInfo = flav })
 --        T2 { f1 :: c, f2 :: c, f3 ::Int } :: T
 -- Here we do not complain about f1,f2 because they are existential
 
-checkValidTyCon :: TyCon -> TcM ()
-checkValidTyCon tc
+checkValidTyCon :: TyCon -> MaybeRoleEnv -> TcM ()
+checkValidTyCon tc mroles
   | Just cl <- tyConClass_maybe tc
-  = checkValidClass cl
+  = do { check_roles
+       ; checkValidClass cl }
 
   | Just syn_rhs <- synTyConRhs_maybe tc
   = case syn_rhs of
       ClosedSynFamilyTyCon ax -> checkValidClosedCoAxiom ax
       OpenSynFamilyTyCon  -> return ()
-      SynonymTyCon ty     -> checkValidType syn_ctxt ty
+      SynonymTyCon ty     -> 
+        do { check_roles
+           ; checkValidType syn_ctxt ty }
 
   | otherwise
-  = do { -- Check the context on the data decl
+  = do { check_roles
+
+         -- Check the context on the data decl
        ; traceTc "cvtc1" (ppr tc)
        ; checkValidTheta (DataTyCtxt name) (tyConStupidTheta tc)
 
@@ -1384,6 +1391,20 @@ checkValidTyCon tc
     syn_ctxt  = TySynCtxt name
     name      = tyConName tc
     data_cons = tyConDataCons tc
+
+     -- Role annotations are given only on *type* variables, but a tycon stores
+     -- roles for all variables. So, we drop the kind roles (which are all
+     -- Nominal, anyway).
+    tyvars                 = tyConTyVars tc
+    (kind_vars, type_vars) = span isKindVar tyvars
+    roles                  = tyConRoles tc
+    type_roles             = dropList kind_vars roles
+
+    role_annots = case lookupNameEnv mroles name of
+                    Just rs -> rs
+                    Nothing -> pprPanic "checkValidTyCon role_annots" (ppr name)
+
+    check_roles = void $ zipWith3M checkRoleAnnot type_vars role_annots type_roles
 
     groups = equivClasses cmp_fld (concatMap get_fields data_cons)
     cmp_fld (f1,_) (f2,_) = f1 `compare` f2
@@ -1424,6 +1445,12 @@ checkValidTyCon tc
                 ts2 = mkVarSet tvs2
                 fty2 = dataConFieldType con2 label
     check_fields [] = panic "checkValidTyCon/check_fields []"
+
+checkRoleAnnot :: TyVar -> Maybe Role -> Role -> TcM ()
+checkRoleAnnot _  Nothing   _  = return ()
+checkRoleAnnot tv (Just r1) r2
+  = when (r1 /= r2) $
+    addErrTc $ badRoleAnnot (tyVarName tv) r1 r2
 
 checkValidClosedCoAxiom :: CoAxiom Branched -> TcM ()
 checkValidClosedCoAxiom (CoAxiom { co_ax_branches = branches, co_ax_tc = tc })
@@ -1614,6 +1641,13 @@ checkFamFlag tc_name
   where
     err_msg = hang (ptext (sLit "Illegal family declaraion for") <+> quotes (ppr tc_name))
                  2 (ptext (sLit "Use -XTypeFamilies to allow indexed type families"))
+
+checkNoRoles :: LHsTyVarBndrs Name -> TcM ()
+checkNoRoles (HsQTvs { hsq_tvs = tvs })
+  = mapM_ check tvs
+  where
+    check (L _ (HsTyVarBndr _ _ Nothing))     = return ()
+    check (L _ (HsTyVarBndr name _ (Just _))) = addErrTc $ illegalRoleAnnot name
 \end{code}
 
 
@@ -1994,5 +2028,12 @@ inaccessibleCoAxBranch :: TyCon -> CoAxBranch -> SDoc
 inaccessibleCoAxBranch tc fi
   = ptext (sLit "Inaccessible family instance equation:") $$
       (pprCoAxBranch tc fi)
+
+badRoleAnnot :: Name -> Role -> Role -> SDoc
+badRoleAnnot var annot inferred
+  = hang (ptext (sLit "Role mismatch on variable") <+> ppr var <> colon)
+       2 (sep [ ptext (sLit "Annotation says"), ppr annot
+              , ptext (sLit "but role"), ppr inferred
+              , ptext (sLit "is required") ])
 
 \end{code}

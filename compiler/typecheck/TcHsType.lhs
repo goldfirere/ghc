@@ -20,7 +20,7 @@ module TcHsType (
                 -- Type checking type and class decls
 	kcLookupKind, kcTyClTyVars, tcTyClTyVars,
         tcHsConArgType, tcDataKindSig, 
-        tcClassSigType, 
+        tcClassSigType, illegalRoleAnnot,
 
 		-- Kind-checking types
                 -- No kind generalisation, no checkValidType
@@ -1286,8 +1286,6 @@ kcTyClTyVars name (HsQTvs { hsq_kvs = kvs, hsq_tvs = hs_tvs }) thing_inside
 
 -----------------------
 tcTyClTyVars :: Name -> LHsTyVarBndrs Name	-- LHS of the type or class decl
-             -> Maybe [Role] -- inferred roles
-                             -- if nothing: no role annotations allowed!
              -> ([TyVar] -> Kind -> TcM a) -> TcM a
 -- Used for the type variables of a type or class decl,
 -- on the second pass when constructing the final result
@@ -1300,7 +1298,7 @@ tcTyClTyVars :: Name -> LHsTyVarBndrs Name	-- LHS of the type or class decl
 --
 -- No need to freshen the k's because they are just skolem 
 -- constants here, and we are at top level anyway.
-tcTyClTyVars tycon (HsQTvs { hsq_kvs = hs_kvs, hsq_tvs = hs_tvs }) roles thing_inside
+tcTyClTyVars tycon (HsQTvs { hsq_kvs = hs_kvs, hsq_tvs = hs_tvs }) thing_inside
   = kcScopedKindVars hs_kvs $ -- Bind scoped kind vars to fresh kind univ vars
                               -- There may be fewer of these than the kvs of
                               -- the type constructor, of course
@@ -1312,19 +1310,13 @@ tcTyClTyVars tycon (HsQTvs { hsq_kvs = hs_kvs, hsq_tvs = hs_tvs }) roles thing_i
                      -- TcTyClDecls, where the local env is extended with
                      -- the generalized_env (mapping Names to AThings).
              ; (kvs, body)  = splitForAllTys kind
-             ; (kinds, res) = splitKindFunTysN (length hs_tvs) body
-             ; roles_or_N   = roles `orElse` (repeat Nominal)
-             ; tv_roles     = dropList kvs roles_or_N }
-       ; tvs <- zipWith3M tc_hs_tv hs_tvs kinds tv_roles
+             ; (kinds, res) = splitKindFunTysN (length hs_tvs) body }
+       ; tvs <- zipWithM tc_hs_tv hs_tvs kinds
        ; tcExtendTyVarEnv tvs (thing_inside (kvs ++ tvs) res) }
   where
-    tc_hs_tv (L _ (HsTyVarBndr n mkind mrole)) kind role
-      = do { whenIsJust mkind (\k -> do { tc_kind <- tcLHsKind k
-                                        ; checkKind kind tc_kind })
-           ; whenIsJust mrole (\r -> do { checkTc (isJust roles) $
-                                          illegalRoleAnnot n
-                                        ; checkTc (r == role) $
-                                          badRoleAnnot n r role })
+    tc_hs_tv (L _ (HsTyVarBndr n mkind _)) kind
+      = do { whenIsJust mkind $ \k -> do { tc_kind <- tcLHsKind k
+                                         ; checkKind kind tc_kind }
            ; return $ mkTyVar n kind }
 
 -----------------------------------
@@ -1680,13 +1672,6 @@ checkExpectedKind ty act_kind (EK exp_kind ek_ctxt)
 
       ; traceTc "checkExpectedKind 1" (ppr ty $$ ppr tidy_act_kind $$ ppr tidy_exp_kind $$ ppr env1 $$ ppr env2)
       ; failWithTcM (env2, err) } } }
-
-badRoleAnnot :: Name -> Role -> Role -> SDoc
-badRoleAnnot var annot inferred
-  = hang (ptext (sLit "Role mismatch on variable") <+> ppr var <> colon)
-       2 (sep [ ptext (sLit "Annotation says"), ppr annot
-              , ptext (sLit "but role"), ppr inferred
-              , ptext (sLit "is required") ])
 
 illegalRoleAnnot :: Name -> SDoc
 illegalRoleAnnot var

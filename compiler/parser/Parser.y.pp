@@ -1133,7 +1133,7 @@ atype :: { LHsType RdrName }
         | '[:' ctype ':]'                { LL $ HsPArrTy  $2 }
         | '(' ctype ')'                  { LL $ HsParTy   $2 }
         | '(' ctype '::' kind ')'        { LL $ HsKindSig $2 $4 }
-        | ctype '@' role                 { LL $ HsRoleAnnot $1 (unLoc $3) }
+        | atype '@' role                 { LL $ HsRoleAnnot $1 (unLoc $3) }
         | quasiquote                     { L1 (HsQuasiQuoteTy (unLoc $1)) }
         | '$(' exp ')'                   { LL $ mkHsSpliceTy $2 }
         | TH_ID_SPLICE                   { LL $ mkHsSpliceTy $ L1 $ HsVar $
@@ -1936,7 +1936,7 @@ qtycon :: { Located RdrName }   -- Qualified or unqualified
         | tycon                         { $1 }
 
 tycon   :: { Located RdrName }  -- Unqualified
-        : CONID                         { L1 $! mkUnqual tcClsName (getCONID $1) }
+        : upcase_id                     { L1 $! mkUnqual tcClsName (unLoc $1) }
 
 qtyconsym :: { Located RdrName }
         : QCONSYM                       { L1 $! mkQual tcClsName (getQCONSYM $1) }
@@ -2081,7 +2081,7 @@ qconid :: { Located RdrName }   -- Qualified or unqualified
         | PREFIXQCONSYM         { L1 $! mkQual dataName (getPREFIXQCONSYM $1) }
 
 conid   :: { Located RdrName }
-        : CONID                 { L1 $ mkUnqual dataName (getCONID $1) }
+        : upcase_id             { L1 $ mkUnqual dataName (unLoc $1) }
 
 qconsym :: { Located RdrName }  -- Qualified or unqualified
         : consym                { $1 }
@@ -2118,7 +2118,7 @@ close :: { () }
 -- Miscellaneous (mostly renamings)
 
 modid   :: { Located ModuleName }
-        : CONID                 { L1 $ mkModuleNameFS (getCONID $1) }
+        : upcase_id             { L1 $ mkModuleNameFS (unLoc $1) }
         | QCONID                { L1 $ let (mod,c) = getQCONID $1 in
                                   mkModuleNameFS
                                    (mkFastString
@@ -2128,6 +2128,12 @@ modid   :: { Located ModuleName }
 commas :: { Int }   -- One or more commas
         : commas ','                    { $1 + 1 }
         | ','                           { 1 }
+
+upcase_id :: { Located FastString }
+        : CONID                         { L1 $! getCONID $1 }
+        | 'N'                           { L1 (fsLit "N") }
+        | 'R'                           { L1 (fsLit "R") }
+        | 'P'                           { L1 (fsLit "P") }
 
 -----------------------------------------------------------------------------
 -- Documentation comments
