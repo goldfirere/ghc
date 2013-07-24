@@ -1031,7 +1031,7 @@ extract_lty (L _ ty) acc
       HsTyLit _                 -> acc
       HsWrapTy _ _              -> panic "extract_lty"
       HsKindSig ty ki           -> extract_lty ty (extract_lkind ki acc)
-      HsRoleAnnot _ _           -> pprPanic "extract_lty HsRoleAnnot" (ppr ty)
+      HsRoleAnnot ty _          -> extract_lty ty acc
       HsForAllTy _ tvs cx ty    -> extract_hs_tv_bndrs tvs acc $
                                    extract_lctxt cx   $
                                    extract_lty ty ([],[])

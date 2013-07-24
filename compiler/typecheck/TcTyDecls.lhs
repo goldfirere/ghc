@@ -566,8 +566,7 @@ initialRoleEnv1 mrole_env tc
 
 irGroup :: RoleEnv -> [TyCon] -> RoleEnv
 irGroup env tcs
-  = pprTrace "irGroup" (ppr tcs) $ -- RAE
-    let (env', update) = runRoleM env $ mapM_ irTyCon tcs in
+  = let (env', update) = runRoleM env $ mapM_ irTyCon tcs in
     if update
     then irGroup env' tcs
     else env'
@@ -575,31 +574,24 @@ irGroup env tcs
 irTyCon :: TyCon -> RoleM ()
 irTyCon tc
   | isAlgTyCon tc
-  = pprTrace "irTyCon algTyCon" (ppr tc <+> ppr (tyConTyVars tc)) $ -- RAE
-    do { old_roles <- lookupRoles tc
+  = do { old_roles <- lookupRoles tc
        ; unless (all (== Nominal) old_roles) $  -- also catches data families,
                                                 -- which don't want or need role inference
          mapM_ (irDataCon tc_name) (visibleDataCons $ algTyConRhs tc) }
 
   | Just (SynonymTyCon ty) <- synTyConRhs_maybe tc
-  = pprTrace "irTyCon SynonymTyCon" (ppr tc $$ ppr ty) $ -- RAE
-    addRoleInferenceInfo tc_name (tyConTyVars tc) $
+  = addRoleInferenceInfo tc_name (tyConTyVars tc) $
     irType emptyVarSet ty
 
   | otherwise
-  = pprTrace "irTyCon <<nothing>>" (ppr tc) $ -- RAE
-    return ()
+  = return ()
 
   where
     tc_name = tyConName tc
 
 irDataCon :: Name -> DataCon -> RoleM ()
 irDataCon tc_name datacon
-  = pprTrace "irDataCon" (vcat [ ppr datacon
-                               , ppr $ dataConUnivTyVars datacon
-                               , ppr $ dataConExTyVars datacon
-                               , ppr $ dataConRepArgTys datacon ]) $ -- RAE
-    addRoleInferenceInfo tc_name (dataConUnivTyVars datacon) $
+  = addRoleInferenceInfo tc_name (dataConUnivTyVars datacon) $
     let ex_var_set = mkVarSet $ dataConExTyVars datacon in
     mapM_ (irType ex_var_set) (dataConRepArgTys datacon)
 
@@ -638,8 +630,7 @@ lookupRoles tc
 updateRole :: Role -> TyVar -> RoleM ()
 updateRole role tv
   = do { var_ns <- getVarNs
-       ; pprTrace "updateRole" (ppr tv $$ ppr role) $ -- RAE
-         case lookupVarEnv var_ns tv of
+       ; case lookupVarEnv var_ns tv of
        { Nothing -> pprPanic "updateRole" (ppr tv)
        ; Just n  -> do
        { name <- getTyConName

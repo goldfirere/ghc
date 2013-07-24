@@ -1,5 +1,10 @@
 \begin{code}
 {-# LANGUAGE CPP, KindSignatures #-}
+
+#if __GLASGOW_HASKELL__ > 706
+{-# LANGUAGE RoleAnnotations #-}
+#endif
+
 module HsExpr where
 
 import SrcLoc     ( Located )
@@ -8,18 +13,24 @@ import {-# SOURCE #-} HsPat  ( LPat )
 
 import Data.Data
 
+#if __GLASGOW_HASKELL__ > 706
+data HsExpr (i :: *)@R
+data HsCmd  (i :: *)@R
+data HsSplice (i :: *)@R
+data MatchGroup (a :: *)@R (body :: *)@R
+data GRHSs (a :: *)@R (body :: *)@R
+
+instance Typeable HsSplice
+instance Typeable HsExpr
+instance Typeable MatchGroup
+instance Typeable GRHSs
+#else
 data HsExpr (i :: *)
 data HsCmd  (i :: *)
 data HsSplice (i :: *)
 data MatchGroup (a :: *) (body :: *)
 data GRHSs (a :: *) (body :: *)
 
-#if __GLASGOW_HASKELL__ > 706
-instance Typeable HsSplice
-instance Typeable HsExpr
-instance Typeable MatchGroup
-instance Typeable GRHSs
-#else
 instance Typeable1 HsSplice
 instance Typeable1 HsExpr
 instance Typeable1 HsCmd
