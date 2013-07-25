@@ -1479,7 +1479,11 @@ mkNewTypeEqn orig dflags tvs
         arity_msg = quotes (ppr (mkClassPred cls cls_tys)) <+> ptext (sLit "does not have arity 1")
         eta_msg   = ptext (sLit "cannot eta-reduce the representation type enough")
         ats_msg   = ptext (sLit "the class has associated types")
-        roles_msg = ptext (sLit "a member of the class inspects its last parameter")
+        roles_msg = ptext (sLit "it is not type-safe to use") <+>
+                    ptext (sLit "GeneralizedNewtypeDeriving on this class;") $$
+                    ptext (sLit "the last parameter of") <+>
+                    quotes (ppr (className cls)) <+>
+                    ptext (sLit "is at role N")
 
 \end{code}
 

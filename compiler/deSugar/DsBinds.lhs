@@ -65,6 +65,7 @@ import Maybes
 import OrdList
 import Bag
 import BasicTypes hiding ( TopLevel )
+import Pair
 import DynFlags
 import FastString
 import ErrUtils( MsgDoc )
@@ -825,6 +826,10 @@ ds_tc_coercion :: CvSubst -> Role -> TcCoercion -> Coercion
 ds_tc_coercion subst role tc_co
   = go role tc_co
   where
+    go Phantom co
+      = mkUnivCo Phantom ty1 ty2
+      where Pair ty1 ty2 = tcCoercionKind co
+
     go r (TcRefl ty)            = Refl r (Coercion.substTy subst ty)
     go r (TcTyConAppCo tc cos)  = mkTyConAppCo r tc (zipWith go (tyConRolesX r tc) cos)
     go r (TcAppCo co1 co2)      = mkAppCo (go r co1) (go Nominal co2)

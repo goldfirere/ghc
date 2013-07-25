@@ -1369,7 +1369,7 @@ checkValidTyCon tc mroles
            ; checkValidType syn_ctxt ty }
 
   | otherwise
-  = do { check_roles
+  = do { unless (isFamilyTyCon tc) $ check_roles -- don't check data families!
 
          -- Check the context on the data decl
        ; traceTc "cvtc1" (ppr tc)

@@ -2347,9 +2347,9 @@ kindedRoledTVName = libFun (fsLit "kindedRoledTV") kindedRoledTVIdKey
 
 -- data Role = ...
 nominalName, representationalName, phantomName :: Name
-nominalName          = libFun (fsLit "Nominal")          nominalIdKey
-representationalName = libFun (fsLit "Representational") representationalIdKey
-phantomName          = libFun (fsLit "Phantom")          phantomIdKey
+nominalName          = libFun (fsLit "nominal")          nominalIdKey
+representationalName = libFun (fsLit "representational") representationalIdKey
+phantomName          = libFun (fsLit "phantom")          phantomIdKey
 
 -- data Kind = ...
 varKName, conKName, tupleKName, arrowKName, listKName, appKName,
