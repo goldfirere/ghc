@@ -1575,7 +1575,6 @@ ty_co_match menv subst (AppTy ty1 ty2) co
   = do { subst' <- ty_co_match menv subst ty1 co1 
        ; ty_co_match menv subst' ty2 co2 }
 
--- RAE: this is broken. fix.
 ty_co_match menv subst (TyConApp tc1 tys) (TyConAppCo _ tc2 cos)
   | tc1 == tc2 = ty_co_matches menv subst tys cos
 

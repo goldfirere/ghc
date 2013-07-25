@@ -1369,9 +1369,7 @@ checkValidTyCon tc mroles
            ; checkValidType syn_ctxt ty }
 
   | otherwise
-  = do { unless (isFamilyTyCon tc) $ check_roles -- don't check data families!
-
-         -- Check the context on the data decl
+  = do { -- Check the context on the data decl
        ; traceTc "cvtc1" (ppr tc)
        ; checkValidTheta (DataTyCtxt name) (tyConStupidTheta tc)
 
@@ -1383,6 +1381,11 @@ checkValidTyCon tc mroles
        ; gadt_ok         <- xoptM Opt_GADTs
        ; let ex_ok = existential_ok || gadt_ok  -- Data cons can have existential context
        ; mapM_ (checkValidDataCon dflags ex_ok tc) data_cons
+
+         -- This *must* be after checkValidDataCon -- otherwise the pattern-match
+         -- in rejigConRes might fail, and checking roles forces the evaluation of
+         -- that function. Yuck!
+       ; unless (isFamilyTyCon tc) $ check_roles -- don't check data families!
 
         -- Check that fields with the same name share a type
        ; mapM_ check_fields groups }

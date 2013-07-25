@@ -38,6 +38,7 @@ import NameEnv
 import VarEnv
 import VarSet
 import NameSet
+import Coercion ( ltRole )
 import Avail
 import Digraph
 import BasicTypes
