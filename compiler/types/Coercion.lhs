@@ -18,7 +18,7 @@ module Coercion (
         -- * Main data type
         Coercion(..), Var, CoVar,
         LeftOrRight(..), pickLR,
-        Role(..),
+        Role(..), ltRole,
 
         -- ** Functions over coercions
         coVarKind,
@@ -342,7 +342,8 @@ Now (Nth 0 g) will optimise to Refl, but perhaps not instantly.
 Note [Roles]
 ~~~~~~~~~~~~
 Roles are a solution to the GeneralizedNewtypeDeriving problem, articulated
-in Trac #1496. The full story is in docs/core-spec/core-spec.pdf.
+in Trac #1496. The full story is in docs/core-spec/core-spec.pdf. Also, see
+http://ghc.haskell.org/trac/ghc/wiki/RolesImplementation
 
 Here is one way to phrase the problem:
 
@@ -1019,6 +1020,14 @@ nthRole Nominal _ _ = Nominal
 nthRole Phantom _ _ = Phantom
 nthRole Representational tc n
   = (tyConRolesX Representational tc) !! n
+
+-- is one role "less" than another?
+ltRole :: Role -> Role -> Bool
+ltRole Phantom          Phantom = False
+ltRole Phantom          _       = True
+ltRole Representational Nominal = True
+ltRole Representational _       = False
+ltRole _                _       = False
 
 -- See note [Newtype coercions] in TyCon
 

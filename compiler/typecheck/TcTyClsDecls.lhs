@@ -267,7 +267,7 @@ then checked against the annotations. If they don't match, an error is reported.
 This is also where the presence of the RoleAnnotations flag is checked.
 
 \begin{code}
-kcTyClGroup :: TyClGroup Name -> TcM ([(Name,Kind)], MaybeRoleEnv)
+kcTyClGroup :: TyClGroup Name -> TcM ([(Name,Kind)], RoleAnnots)
 -- Kind check this group, kind generalize, and return the resulting local env
 -- This bindds the TyCons and Classes of the group, but not the DataCons
 -- See Note [Kind checking for type and class decls]
@@ -352,7 +352,7 @@ mk_thing_env (decl : decls)
   = (tcdName (unLoc decl), APromotionErr TyConPE) :
     (mk_thing_env decls)
 
-getInitialKinds :: [LTyClDecl Name] -> TcM ([(Name, TcTyThing)], MaybeRoleEnv)
+getInitialKinds :: [LTyClDecl Name] -> TcM ([(Name, TcTyThing)], RoleAnnots)
 getInitialKinds decls
   = tcExtendTcTyThingEnv (mk_thing_env decls) $
     do { (pairss, mroles) <- mapAndUnzipM (addLocM getInitialKind) decls
@@ -437,7 +437,7 @@ getFamDeclInitialKind decl@(FamilyDecl { fdLName = L _ name
 
 ----------------
 kcSynDecls :: [SCC (LTyClDecl Name)]
-           -> TcM (TcLclEnv, MaybeRoleEnv) -- Kind bindings and roles
+           -> TcM (TcLclEnv, RoleAnnots) -- Kind bindings and roles
 kcSynDecls [] = do { env <- getLclEnv
                    ; return (env, emptyNameEnv) }
 kcSynDecls (group : groups)
@@ -1305,7 +1305,7 @@ checkClassCycleErrs cls
   where cls_cycles = calcClassCycles cls
 
 checkValidDecl :: SDoc -- the context for error checking
-               -> Located Name -> MaybeRoleEnv -> TcM ()
+               -> Located Name -> RoleAnnots -> TcM ()
 checkValidDecl ctxt lname mroles
   = addErrCtxt ctxt $
     do  { traceTc "Validity of 1" (ppr lname)
@@ -1324,7 +1324,7 @@ checkValidDecl ctxt lname mroles
         ; traceTc "Done validity of" (ppr thing)
         }
 
-checkValidTyCl :: MaybeRoleEnv -> TyClDecl Name -> TcM ()
+checkValidTyCl :: RoleAnnots -> TyClDecl Name -> TcM ()
 checkValidTyCl mroles decl
   = do { checkValidDecl (tcMkDeclCtxt decl) (tyClDeclLName decl) mroles
        ; case decl of
@@ -1354,7 +1354,7 @@ checkValidFamDecl (FamilyDecl { fdLName = lname, fdInfo = flav })
 --        T2 { f1 :: c, f2 :: c, f3 ::Int } :: T
 -- Here we do not complain about f1,f2 because they are existential
 
-checkValidTyCon :: TyCon -> MaybeRoleEnv -> TcM ()
+checkValidTyCon :: TyCon -> RoleAnnots -> TcM ()
 checkValidTyCon tc mroles
   | Just cl <- tyConClass_maybe tc
   = do { check_roles
