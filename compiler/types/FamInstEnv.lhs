@@ -490,7 +490,7 @@ mkCoAxBranch :: [TyVar] -- original, possibly stale, tyvars
 mkCoAxBranch tvs lhs rhs loc
   = CoAxBranch { cab_tvs     = tvs1
                , cab_lhs     = tidyTypes env lhs
-               , cab_roles   = map (const Nominal) lhs
+               , cab_roles   = map (const Nominal) tvs1
                , cab_rhs     = tidyType  env rhs
                , cab_loc     = loc
                , cab_incomps = placeHolderIncomps }

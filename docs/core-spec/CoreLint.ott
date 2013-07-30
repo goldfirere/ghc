@@ -284,9 +284,31 @@ R' <= R
 ---------- :: TyVarTy
 O |- n : R
 
-% RAE: HERE!
---------------------------
+</ Ri // i /> = tyConRoles T
+</ Ri in { Nom, Rep } => O |- ti : Ri // i />
+-------------------------- :: TyConAppRep
 O |- T </ ti // i /> : Rep
+
+</ O |- ti : Nom // i />
+--------------------------- :: TyConAppNom
+O |- T </ ti // i /> : Nom
+
+O |- t1 : R
+O |- t2 : Nom
+-------------------------- :: AppTy
+O |- t1 t2 : R
+
+O |- t1 : R
+O |- t2 : R
+------------------- :: FunTy
+O |- t1 -> t2 : R
+
+O, n : Nom |- t : R
+--------------------- :: ForAllTy
+O |- forall n. t : R
+
+------------------ :: LitTy
+O |- lit : R
 
 defn G |- ki k ok ::  :: lintKind :: 'K_'
   {{ com Kind validity, \coderef{coreSyn/CoreLint.lhs}{lintKind} }}
