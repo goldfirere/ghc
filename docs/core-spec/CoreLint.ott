@@ -285,7 +285,7 @@ R' <= R
 O |- n : R
 
 </ Ri // i /> = tyConRoles T
-</ Ri in { Nom, Rep } => O |- ti : Ri // i />
+</ Ri elt { Nom, Rep } => O |- ti : Ri // i />
 -------------------------- :: TyConAppRep
 O |- T </ ti // i /> : Rep
 
@@ -309,6 +309,20 @@ O |- forall n. t : R
 
 ------------------ :: LitTy
 O |- lit : R
+
+defn R1 <= R2 ::  :: ltRole :: 'Rlt_'
+  {{ com Sub-role relation, \coderef{types/Coercion.lhs}{ltRole} }}
+  {{ tex [[R1]] \leq [[R2]] }}
+by
+
+-------- :: Nominal
+Nom <= R
+
+-------- :: Phantom
+R <= Ph
+
+------- :: Refl
+R <= R 
 
 defn G |- ki k ok ::  :: lintKind :: 'K_'
   {{ com Kind validity, \coderef{coreSyn/CoreLint.lhs}{lintKind} }}
@@ -484,24 +498,24 @@ by
 ------------------------------------------------ :: NoBranch
 no_conflict(C, </ si // i/>, ind, -1)
 
-C = T </ axBranchkk // kk />
-forall </ ni // i />. (</ tj // j /> ~> t') = (</ axBranchkk // kk />)[ind2]
+C = T_R </ axBranchkk // kk />
+forall </ ni_Ri // i />. (</ tj // j /> ~> t') = (</ axBranchkk // kk />)[ind2]
 apart(</ sj // j />, </ tj // j />)
 no_conflict(C, </ sj // j />, ind1, ind2-1)
 ------------------------------------------------ :: Incompat
 no_conflict(C, </ sj // j />, ind1, ind2)
 
-C = T </ axBranchkk // kk />
-forall </ ni // i />. (</ tj // j /> ~> s) = (</ axBranchkk // kk />)[ind1]
-forall </ n'i // i />. (</ t'j // j /> ~> s') = (</ axBranchkk // kk />)[ind2]
+C = T_R </ axBranchkk // kk />
+forall </ ni_Ri // i />. (</ tj // j /> ~> s) = (</ axBranchkk // kk />)[ind1]
+forall </ n'i_R'i // i />. (</ t'j // j /> ~> s') = (</ axBranchkk // kk />)[ind2]
 apart(</ tj // j />, </ t'j // j />)
 no_conflict(C, </ sj // j />, ind1, ind2-1)
 ------------------------------------------- :: CompatApart
 no_conflict(C, </ sj // j />, ind1, ind2)
 
-C = T </ axBranchkk // kk />
-forall </ ni // i />. (</ tj // j /> ~> s) = (</ axBranchkk // kk />)[ind1]
-forall </ n'i // i />. (</ t'j // j /> ~> s') = (</ axBranchkk // kk />)[ind2]
+C = T_R </ axBranchkk // kk />
+forall </ ni_Ri // i />. (</ tj // j /> ~> s) = (</ axBranchkk // kk />)[ind1]
+forall </ n'i_R'i // i />. (</ t'j // j /> ~> s') = (</ axBranchkk // kk />)[ind2]
 unify(</ tj // j />, </ t'j // j />) = subst
 subst(s) = subst(s')
 ----------------------------------------- :: CompatCoincident

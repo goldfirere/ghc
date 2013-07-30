@@ -208,6 +208,7 @@ role_list :: 'RoleList_' ::= {{ com List of roles }}
   | tyConRolesX R T        :: M :: tyConRolesX
   | tyConRoles T           :: M :: tyConRoles
   | ( role_list )          :: M :: Parens
+  | { role_list }          :: M :: Braces
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%  Terminals  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -317,6 +318,10 @@ formula :: 'formula_' ::=
   | R1 /= R2                           ::   :: role_neq
   | R1 = R2                            ::   :: eq_role
   | </ Ki // i /> = tyConDataCons T    ::   :: tyConDataCons
+  | O ( n ) = R                        ::   :: role_lookup
+  | R elt role_list                    ::   :: role_elt
+  | formula1 => formula2               ::   :: implication
+    {{ tex [[formula1]] \implies [[formula2]] }}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%  Subrules and Parsing  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

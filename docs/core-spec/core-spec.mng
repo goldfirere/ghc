@@ -325,7 +325,15 @@ There are two very similar checks for names, one declared as a local function:
 \subsection{Role inference}
 \label{sec:tyconroles}
 
-blah blah blah
+During type-checking, role inference is carried out, assigning roles to the
+arguments of every type constructor. The function $[[tyConRoles]]$ extracts these
+roles. Also used in other judgments is $[[tyConRolesX]]$, which is the same as
+$[[tyConRoles]]$, but with an arbitrary number of $[[Nom]]$ at the end, to account
+for potential oversaturation.
+
+The checks encoded in the following
+judgments are run from \coderef{typecheck/TcTyClsDecls.lhs}{checkValidTyCon}
+when \texttt{-dcore-lint} is set.
 
 \ottdefncheckValidRoles{}
 
@@ -333,6 +341,9 @@ blah blah blah
 
 \ottdefncheckXXtyXXroles{}
 
+These judgments depend on a sub-role relation:
+
+\ottdefnltRole{}
 
 \subsection{Branched axiom conflict checking}
 \label{sec:no_conflict}
