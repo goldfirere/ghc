@@ -157,6 +157,7 @@ pprAxBranch mtycon (IfaceAxBranch { ifaxbTyVars = tvs
 -- this is just like CoAxBranch
 data IfaceAxBranch = IfaceAxBranch { ifaxbTyVars  :: [IfaceTvBndr]
                                    , ifaxbLHS     :: [IfaceType]
+                                   , ifaxbRoles   :: [Role]
                                    , ifaxbRHS     :: IfaceType
                                    , ifaxbIncomps :: [BranchIndex] }
                                      -- See Note [Storing compatibility] in CoAxiom

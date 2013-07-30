@@ -733,7 +733,6 @@ mkPArrTy ty  = mkTyConApp parrTyCon [ty]
 --
 parrTyCon :: TyCon
 parrTyCon  = pcNonRecDataTyCon parrTyConName Nothing alpha_tyvar [parrDataCon]
- -- RAE: Check that role R is appropriate here
 
 parrDataCon :: DataCon
 parrDataCon  = pcDataCon

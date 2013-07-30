@@ -243,7 +243,6 @@ tcLocalBinds (HsIPBinds (IPBinds ip_binds _)) thing_inside
     -- co : t -> IP "x" t
     toDict ipClass x ty =
       case unwrapNewTyCon_maybe (classTyCon ipClass) of
-        -- RAE: This looks very bad.
         Just (_,_,ax) -> HsWrap $ WpCast $ mkTcSymCo $ mkTcUnbranchedAxInstCo ax [x,ty]
         Nothing       -> panic "The dictionary for `IP` is not a newtype?"
 

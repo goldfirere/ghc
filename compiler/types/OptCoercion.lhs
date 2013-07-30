@@ -523,13 +523,13 @@ matchAxiom :: Bool -- True = match LHS, False = match RHS
 -- If we succeed in matching, then *all the quantified type variables are bound*
 -- E.g.   if tvs = [a,b], lhs/rhs = [b], we'll fail
 matchAxiom sym ax@(CoAxiom { co_ax_tc = tc }) ind co
-  = let (CoAxBranch { cab_tvs = qtvs
-                    , cab_lhs = lhs
-                    , cab_rhs = rhs }) = coAxiomNthBranch ax ind in
+  = let (CoAxBranch { cab_tvs   = qtvs
+                    , cab_roles = roles
+                    , cab_lhs   = lhs
+                    , cab_rhs   = rhs }) = coAxiomNthBranch ax ind in
     case liftCoMatch (mkVarSet qtvs) (if sym then (mkTyConApp tc lhs) else rhs) co of
       Nothing    -> Nothing
-      Just subst -> allMaybes (map (liftCoSubstTyVar subst Nominal) qtvs)
- -- RAE: Change this with axiom roles
+      Just subst -> allMaybes (zipWith (liftCoSubstTyVar subst) roles qtvs)
 
 -------------
 compatible_co :: Coercion -> Coercion -> Bool

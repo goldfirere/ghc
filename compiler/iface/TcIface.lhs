@@ -576,14 +576,15 @@ tc_iface_decl _ _ (IfaceAxiom { ifName = ax_occ, ifTyCon = tc
 tc_ax_branches :: [CoAxBranch] -> IfaceAxBranch -> IfL [CoAxBranch]
 tc_ax_branches prev_branches
                (IfaceAxBranch { ifaxbTyVars = tv_bndrs, ifaxbLHS = lhs, ifaxbRHS = rhs
-                              , ifaxbIncomps = incomps })
+                              , ifaxbRoles = roles, ifaxbIncomps = incomps })
   = bindIfaceTyVars tv_bndrs $ \ tvs -> do  -- Variables will all be fresh
     { tc_lhs <- mapM tcIfaceType lhs
     ; tc_rhs <- tcIfaceType rhs
-    ; let br = CoAxBranch { cab_loc = noSrcSpan
-                          , cab_tvs = tvs
-                          , cab_lhs = tc_lhs
-                          , cab_rhs = tc_rhs
+    ; let br = CoAxBranch { cab_loc     = noSrcSpan
+                          , cab_tvs     = tvs
+                          , cab_lhs     = tc_lhs
+                          , cab_roles   = roles
+                          , cab_rhs     = tc_rhs
                           , cab_incomps = map (prev_branches !!) incomps }
     ; return (prev_branches ++ [br]) }
 

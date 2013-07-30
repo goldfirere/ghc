@@ -22,7 +22,7 @@ metavar alpha {{ tex \alpha }}, beta {{ tex \beta }} ::=
 metavar N ::=   {{ com Type-level constructor names }}
 metavar K ::=   {{ com Term-level data constructor names }}
 
-indexvar i, j, kk {{ tex k }} ::= {{ com Indices to be used in lists }}
+indexvar i, j, kk {{ tex k }}, aa {{ tex a }}, bb {{ tex b }}, cc {{ tex c }} ::= {{ com Indices to be used in lists }}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%  Syntax  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -91,12 +91,17 @@ t {{ tex \tau }}, k {{ tex \kappa }}, s {{ tex \sigma }}
   | tyConKind T             :: M :: tyConKind     {{ com \coderef{types/TyCon.lhs}{tyConKind} }}
   | t1 ~# k t2              :: M :: unliftedEq    {{ com Metanotation for coercion types }}
     {{ tex [[t1]] \mathop{\sim_{\#}^{[[k]]} } [[t2]] }}
+  | t1 ~R# k t2             :: M :: unliftedREq   {{ com Metanotation for coercion types }}
+    {{ tex [[t1]] \mathop{\sim_{\mathsf{R}\#}^{[[k]]} } [[t2]] }}
   | literalType t           :: M :: literalType   {{ com \coderef{basicTypes/Literal.lhs}{literalType} }}
   | ( t )                   :: M :: parens        {{ com Parentheses }}
   | t [ n |-> s ]           :: M :: TySubst       {{ com Type substitution }}
   | subst ( k )             :: M :: TySubstList   {{ com Type substitution list }}
   | t subst                 :: M :: TySubstListPost {{ com Type substitution list }}
   | dataConRepType K        :: M :: dataConRepType {{ com Type of DataCon }}
+  | forall </ ni // , // i /> . t
+                            :: M :: ForAllTys     {{ com Nested polymorphism }}
+  | </ ti // i /> @ -> t'   :: M :: FunTys        {{ com Nested arrows }}
 
 %% COERCIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -122,7 +127,7 @@ LorR :: 'LeftOrRight_' ::= {{ com left or right deconstructor, \coderef{types/Co
   | Right            ::   :: CRight               {{ com Right projection }}
 
 C :: 'CoAxiom_' ::= {{ com Axioms, \coderef{types/TyCon.lhs}{CoAxiom} }}
-  | T </ axBranchi // ; // i />    ::   :: CoAxiom  {{ com Axiom }}
+  | T RA </ axBranchi // ; // i /> ::   :: CoAxiom  {{ com Axiom }}
   | ( C )                          :: M :: Parens   {{ com Parentheses }}
 
 R {{ tex \rho }} :: 'Role_' ::= {{ com Roles, \coderef{types/CoAxiom.lhs}{Role} }}
@@ -132,10 +137,11 @@ R {{ tex \rho }} :: 'Role_' ::= {{ com Roles, \coderef{types/CoAxiom.lhs}{Role} 
     {{ tex \mathsf{R} }}
   | Ph               ::   :: Phantom              {{ com Phantom }}
     {{ tex \mathsf{P} }}
+  | role_list [ i ]  :: M :: RoleListIndex        {{ com Look up in list }}
 
 axBranch, b :: 'CoAxBranch_' ::= {{ com Axiom branches, \coderef{types/TyCon.lhs}{CoAxBranch} }}
-  | forall </ ni // i /> . ( </ tj // j /> ~> RA s )  ::   :: CoAxBranch  {{ com Axiom branch }}
-  | ( </ axBranchi // i /> ) [ ind ]                  :: M :: lookup      {{ com List lookup }}
+  | forall </ ni RAi // i /> . ( </ tj // j /> ~> s )  ::   :: CoAxBranch  {{ com Axiom branch }}
+  | ( </ axBranchi // i /> ) [ ind ]                   :: M :: lookup      {{ com List lookup }}
 
 %% TYCONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -167,6 +173,10 @@ G {{ tex \Gamma }} :: 'LintM_Bindings_' ::= {{ com List of bindings, \coderef{co
   | </ Gi // , // i />       ::   :: Concat    {{ com Context concatenation }}
   | vars_of binding          :: M :: VarsOf    {{ com \coderef{coreSyn/CoreSyn.lhs}{bindersOf} }}
 
+O {{ tex \Omega }} :: 'VarEnv_Role_' ::= {{ com Mapping from type variables to roles }}
+  | </ ni : Ri // i />       ::   :: List      {{ com List of bindings }}
+  | O1 , O2                  :: M :: Concat    {{ com Concatenate two lists }}
+
 %% UTILITY %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 B {{ tex \mathbb{B} }} :: 'Bool_' ::= {{ com Booleans in metatheory }}
@@ -189,9 +199,15 @@ ind :: 'Ind_' ::= {{ com Indices, numbers }}
   | ind - 1                     :: M :: decrement
   | -1                          :: M :: minusOne
 
-RA {{ tex \!\!{}_{\rho} }} :: 'RoleAnnot_' ::= {{ com Role annotation }}
+RA {{ tex {\!\!\!{}_{\rho} } }} :: 'RoleAnnot_' ::= {{ com Role annotation }}
   | _ R                    :: M :: annotation
   {{ tex {}_{[[R]]} }}
+
+role_list :: 'RoleList_' ::= {{ com List of roles }}
+  | </ Ri // , // i />     ::   :: List
+  | tyConRolesX R T        :: M :: tyConRolesX
+  | tyConRoles T           :: M :: tyConRoles
+  | ( role_list )          :: M :: Parens
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%  Terminals  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -250,6 +266,11 @@ terminals :: 'terminals_' ::=
   | no_conflict  ::   :: no_conflict      {{ tex \textsf{no\_conflict} }}
   | apart        ::   :: apart            {{ tex \textsf{apart} }}
   | unify        ::   :: unify            {{ tex \textsf{unify} }}
+  | tyConRolesX  ::   :: tyConRolesX      {{ tex \textsf{tyConRolesX} }}
+  | tyConRoles   ::   :: tyConRoles       {{ tex \textsf{tyConRoles} }}
+  | tyConDataCons ::  :: tyConDataCons    {{ tex \textsf{tyConDataCons} }}
+  | validRoles   ::   :: validRoles       {{ tex \textsf{validRoles} }}
+  | validDcRoles ::   :: validDcRoles     {{ tex \textsf{validDcRoles} }}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%  Formulae  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -292,6 +313,10 @@ formula :: 'formula_' ::=
   | C1 = C2                            ::   :: axiom_rewrite
   | apart ( </ ti // i /> , </ sj // j /> ) :: :: apart
   | unify ( </ ti // i /> , </ sj // j /> ) = subst :: :: unify
+  | role_list1 = role_list2            ::   :: eq_role_list
+  | R1 /= R2                           ::   :: role_neq
+  | R1 = R2                            ::   :: eq_role
+  | </ Ki // i /> = tyConDataCons T    ::   :: tyConDataCons
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%  Subrules and Parsing  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -316,3 +341,4 @@ Subst_List <= Type_TySubstList
 
 Subst_Mapping <= Type_TySubstListPost
 
+Coercion_TyConAppCo <= Coercion_AppCo

@@ -612,9 +612,8 @@ then roles(T) = r_1 .. r_n
 roles(->) = R, R
 roles(~#) = N, N
 
-
-We currently do not check the output of this algorithm against this specification,
-but we might in the future. RAE: Write the check!
+With -dcore-lint on, the output of this algorithm is checked in checkValidRoles,
+called from checkValidTycon.
 
 \begin{code}
 type RoleEnv    = NameEnv [Role]        -- from tycon names to roles

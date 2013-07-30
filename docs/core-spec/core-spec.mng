@@ -7,6 +7,7 @@
 \usepackage{xcolor}
 \usepackage{fullpage}
 \usepackage{multirow}
+\usepackage{url}
 
 \newcommand{\ghcfile}[1]{\textsl{#1}}
 \newcommand{\arraylabel}[1]{\multicolumn{2}{l}{\!\!\!\!\!\!\!\!\!\text{\underline{#1}:}}}
@@ -139,7 +140,11 @@ reflexive, use $[[T_R </ gi // i />]]$, never $[[<T>_R g1 g2]] \ldots$.
 be a type function.
 \end{itemize}
 
-Roles:
+Roles label what equality relation a coercion is a witness of. Nominal equality
+means that two types are identical (have the same name); representational equality
+means that two types have the same representation (introduced by newtypes); and
+phantom equality includes all types. See \url{http://ghc.haskell.org/trac/ghc/wiki/Roles}
+for more background.
 
 \gram{\ottR}
 
@@ -279,6 +284,8 @@ In \ottdrulename{Co\_AxiomInstCo}, the use of $[[inits]]$ creates substitutions 
 the first $i$ mappings in $[[ </ [ni |-> si] // i /> ]]$. This has the effect of 
 folding the substitution over the kinds for kind-checking.
 
+See Section~\ref{sec:tyconroles} for more information about $[[tyConRolesX]]$.
+
 \subsection{Name consistency}
 
 There are two very similar checks for names, one declared as a local function:
@@ -314,6 +321,18 @@ There are two very similar checks for names, one declared as a local function:
 \subsection{Sub-kinding}
 
 \ottdefnisSubKind{}
+
+\subsection{Role inference}
+\label{sec:tyconroles}
+
+blah blah blah
+
+\ottdefncheckValidRoles{}
+
+\ottdefncheckXXdcXXroles{}
+
+\ottdefncheckXXtyXXroles{}
+
 
 \subsection{Branched axiom conflict checking}
 \label{sec:no_conflict}

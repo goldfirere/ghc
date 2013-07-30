@@ -569,15 +569,6 @@ fdC k m = foldTM (foldTM k) (km_refl m)
 
 \end{code}
 
-Note [RoleMap]
-~~~~~~~~~~~~~~
-Roles are used in Coercion, but they do not always have the same type after
-them, so it is necessary to make RoleMap polymorphic. The class TrieMap
-is not enough, as it does not expose a method that takes a non-empty environment.
-Hence, TrieMapX.
-
-RAE: remove this comment
-
 \begin{code}
 
 newtype RoleMap a = RM { unRM :: (IntMap.IntMap a) }
@@ -606,58 +597,6 @@ fdR f (RM m) = foldTM f m
 mapR :: (a -> b) -> RoleMap a -> RoleMap b
 mapR f = RM . mapTM f . unRM
 
-{- RAE
-data RoleMap a
-  = EmptyRM
-  | TrieMapX a => RM { rm_nom   :: a
-                     , rm_repr  :: a
-                     , rm_phant :: a }
-
-instance TrieMap RoleMap where
-   type Key RoleMap = Role
-   emptyTM  = EmptyRM
-   lookupTM = lkR emptyCME
-   alterTM  = xtR emptyCME
-   foldTM   = fdR
-   mapTM    = mapR
-
-{- RAE
-class TripMap m => TrieMapX m where
-   lookupTMX :: CmEnv -> Key m -> m a -> Maybe a
-
-instance TrieMapX TypeMap where
-  lookupTMX = lkT
-instance TrieMapX CoercionMap where
-  lookupTMX = lkC
--}
-
-mapR :: (a->b) -> RoleMap a -> RoleMap b
-mapR _ EmptyRM = EmptyRM
-mapR f (RM { rm_nom = nom, rm_repr = repr, rm_phant = phant })
-  = RM { rm_nom   = f nom
-       , rm_repr  = f repr
-       , rm_phant = f phant }
- 
-lkR :: CmEnv -> Role -> RoleMap a -> Maybe a
-lkR env role m
-  | EmptyRM <- m = Nothing
-  | otherwise    = go role m
-  where
-    go Nominal          = rm_nom   >.> Just
-    go Representational = rm_repr  >.> Just
-    go Phantom          = rm_phant >.> Just
-
-xtR :: CmEnv -> Role -> XT a -> RoleMap a -> RoleMap a
-xtR env Nominal    f m = m { am_deflt = am_deflt m |> xtE env rhs f }
-xtR env Representational   f m = m { am_lit   = am_lit m   |> xtLit l |>> xtE env rhs f }
-xtR env  f m = m { am_data  = am_data m  |> xtNamed d 
-                                                             |>> xtE (extendCMEs env bs) rhs f }
-
-fdA :: (a -> b -> b) -> AltMap a -> b -> b
-fdA k m = foldTM k (am_deflt m)
-        . foldTM (foldTM k) (am_data m)
-        . foldTM (foldTM k) (am_lit m)
--}
 \end{code}
 
 

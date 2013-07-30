@@ -22,8 +22,8 @@ module CoAxiom (
        coAxiomName, coAxiomArity, coAxiomBranches,
        coAxiomTyCon, isImplicitCoAxiom, coAxiomNumPats,
        coAxiomNthBranch, coAxiomSingleBranch_maybe, coAxiomRole,
-       coAxiomSingleBranch, coAxBranchTyVars, coAxBranchLHS,
-       coAxBranchRHS, coAxBranchSpan, coAxBranchIncomps,
+       coAxiomSingleBranch, coAxBranchTyVars, coAxBranchRoles,
+       coAxBranchLHS, coAxBranchRHS, coAxBranchSpan, coAxBranchIncomps,
        placeHolderIncomps,
 
        Role(..)
@@ -251,6 +251,7 @@ data CoAxBranch
                                     -- See Note [CoAxiom locations]
     , cab_tvs      :: [TyVar]       -- Bound type variables; not necessarily fresh
                                     -- See Note [CoAxBranch type variables]
+    , cab_roles    :: [Role]        -- See Note [CoAxBranch roles]
     , cab_lhs      :: [Type]        -- Type patterns to match against
     , cab_rhs      :: Type          -- Right-hand side of the equality
     , cab_incomps  :: [CoAxBranch]  -- The previous incompatible branches
@@ -308,6 +309,9 @@ coAxBranchLHS = cab_lhs
 coAxBranchRHS :: CoAxBranch -> Type
 coAxBranchRHS = cab_rhs
 
+coAxBranchRoles :: CoAxBranch -> [Role]
+coAxBranchRoles = cab_roles
+
 coAxBranchSpan :: CoAxBranch -> SrcSpan
 coAxBranchSpan = cab_loc
 
@@ -343,6 +347,29 @@ class decl, we use the same 'b' to make the same check easy.
 
 So, unlike FamInsts, there is no expectation that the cab_tvs
 are fresh wrt each other, or any other CoAxBranch.
+
+Note [CoAxBranch roles]
+~~~~~~~~~~~~~~~~~~~~~~~
+Consider this code:
+
+  newtype Age = MkAge Int
+  newtype Wrap a = MkWrap a
+
+  convert :: Wrap Age -> Int
+  convert (MkWrap (MkAge i)) = i
+
+We want this to compile to:
+
+  NTCo:Wrap :: forall a. Wrap a ~R a
+  NTCo:Age  :: Age ~R Int
+  convert = \x -> x |> (NTCo:Wrap[0] NTCo:Age[0])
+
+But, note that NTCo:Age is at role R. Thus, we need to be able to pass
+coercions at role R into axioms. However, we don't *always* want to be able to
+do this, as it would be disastrous with type families. The solution is to
+annotate the arguments to the axiom with roles, much like we annotate tycon
+tyvars. Where do these roles get set? Newtype axioms inherit their roles from
+the newtype tycon; family axioms are all at role N.
 
 Note [CoAxiom locations]
 ~~~~~~~~~~~~~~~~~~~~~~~~

@@ -481,16 +481,18 @@ We print out axioms and don't want to print stuff like
 Instead we must tidy those kind variables.  See Trac #7524.
 
 \begin{code}
+-- all axiom roles are Nominal, as this is only used with type families
 mkCoAxBranch :: [TyVar] -- original, possibly stale, tyvars
              -> [Type]  -- LHS patterns
              -> Type    -- RHS
              -> SrcSpan
              -> CoAxBranch
 mkCoAxBranch tvs lhs rhs loc
-  = CoAxBranch { cab_tvs = tvs1
-               , cab_lhs = tidyTypes env lhs
-               , cab_rhs = tidyType  env rhs
-               , cab_loc = loc
+  = CoAxBranch { cab_tvs     = tvs1
+               , cab_lhs     = tidyTypes env lhs
+               , cab_roles   = map (const Nominal) lhs
+               , cab_rhs     = tidyType  env rhs
+               , cab_loc     = loc
                , cab_incomps = placeHolderIncomps }
   where
     (env, tvs1) = tidyTyVarBndrs emptyTidyEnv tvs

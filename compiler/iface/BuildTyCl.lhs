@@ -80,7 +80,7 @@ mkNewTyConRhs :: Name -> TyCon -> DataCon -> TcRnIf m n AlgTyConRhs
 --   because the latter is part of a knot, whereas the former is not.
 mkNewTyConRhs tycon_name tycon con 
   = do	{ co_tycon_name <- newImplicitBinder tycon_name mkNewTyCoOcc
-	; let co_tycon = mkNewTypeCo co_tycon_name tycon etad_tvs etad_rhs
+	; let co_tycon = mkNewTypeCo co_tycon_name tycon etad_tvs etad_roles etad_rhs
 	; traceIf (text "mkNewTyConRhs" <+> ppr co_tycon)
 	; return (NewTyCon { data_con    = con, 
 		       	     nt_rhs      = rhs_ty,
@@ -90,6 +90,7 @@ mkNewTyConRhs tycon_name tycon con
                              -- for nt_co, or uses explicit coercions otherwise
   where
     tvs    = tyConTyVars tycon
+    roles  = tyConRoles tycon
     inst_con_ty = applyTys (dataConUserType con) (mkTyVarTys tvs)
     rhs_ty = ASSERT( isFunTy inst_con_ty ) funArgTy inst_con_ty
 	-- Instantiate the data con with the 
@@ -101,20 +102,22 @@ mkNewTyConRhs tycon_name tycon con
   	-- has a single argument (Foo a) that is a *type class*, so
 	-- dataConInstOrigArgTys returns [].
 
-    etad_tvs :: [TyVar]	-- Matched lazily, so that mkNewTypeCo can
-    etad_rhs :: Type	-- return a TyCon without pulling on rhs_ty
-			-- See Note [Tricky iface loop] in LoadIface
-    (etad_tvs, etad_rhs) = eta_reduce (reverse tvs) rhs_ty
+    etad_tvs   :: [TyVar]  -- Matched lazily, so that mkNewTypeCo can
+    etad_roles :: [Role]   -- return a TyCon without pulling on rhs_ty
+    etad_rhs   :: Type     -- See Note [Tricky iface loop] in LoadIface
+    (etad_tvs, etad_roles, etad_rhs) = eta_reduce (reverse tvs) (reverse roles) rhs_ty
  
-    eta_reduce :: [TyVar]		-- Reversed
-	       -> Type			-- Rhs type
-	       -> ([TyVar], Type)	-- Eta-reduced version (tyvars in normal order)
-    eta_reduce (a:as) ty | Just (fun, arg) <- splitAppTy_maybe ty,
-			   Just tv <- getTyVar_maybe arg,
-			   tv == a,
-			   not (a `elemVarSet` tyVarsOfType fun)
-			 = eta_reduce as fun
-    eta_reduce tvs ty = (reverse tvs, ty)
+    eta_reduce :: [TyVar]	-- Reversed
+               -> [Role]        -- also reversed
+	       -> Type		-- Rhs type
+	       -> ([TyVar], [Role], Type)  -- Eta-reduced version
+                                           -- (tyvars in normal order)
+    eta_reduce (a:as) (_:rs) ty | Just (fun, arg) <- splitAppTy_maybe ty,
+			          Just tv <- getTyVar_maybe arg,
+			          tv == a,
+			          not (a `elemVarSet` tyVarsOfType fun)
+			        = eta_reduce as rs fun
+    eta_reduce tvs rs ty = (reverse tvs, reverse rs, ty)
 				
 
 ------------------------------------------------------

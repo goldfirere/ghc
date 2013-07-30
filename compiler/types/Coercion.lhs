@@ -167,7 +167,6 @@ data Coercion
                        -- result role depends on the tycon of the variable's type
 
     -- AxiomInstCo :: e -> _ -> [N] -> e
-    -- RAE: update with axiom roles
   | AxiomInstCo (CoAxiom Branched) BranchIndex [Coercion]
      -- See also [CoAxiom index]
      -- The coercion arguments always *precisely* saturate 
@@ -811,11 +810,13 @@ mkAxInstCo role ax index tys
                      foldl AppCo (AxiomInstCo ax_br index (take arity rtys))
                                  (drop arity rtys)
   where
-    n_tys = length tys
-    arity = coAxiomArity ax index
-    rtys  = map (Refl Nominal) tys
-    ax_br = toBranchedAxiom ax
-    ax_role = coAxiomRole ax
+    n_tys     = length tys
+    ax_br     = toBranchedAxiom ax
+    branch    = coAxiomNthBranch ax_br index
+    arity     = length $ coAxBranchTyVars branch
+    arg_roles = coAxBranchRoles branch
+    rtys      = zipWith mkReflCo (arg_roles ++ repeat Nominal) tys
+    ax_role   = coAxiomRole ax
 
 -- to be used only with unbranched axioms
 mkUnbranchedAxInstCo :: Role -> CoAxiom Unbranched -> [Type] -> Coercion
@@ -976,13 +977,14 @@ maybeSubCo Nominal          = id
 maybeSubCo Representational = mkSubCo
 maybeSubCo Phantom          = pprPanic "maybeSubCo Phantom" . ppr
 
--- RAE: die when converting *from* Phantom
 maybeSubCo2_maybe :: Role   -- desired role
                   -> Role   -- current role
                   -> Coercion -> Maybe Coercion
 maybeSubCo2_maybe Representational Nominal = Just . mkSubCo
 maybeSubCo2_maybe Nominal Representational = const Nothing
+maybeSubCo2_maybe Phantom Phantom          = Just
 maybeSubCo2_maybe Phantom _                = Just . mkPhantomCo
+maybeSubCo2_maybe _ Phantom                = const Nothing
 maybeSubCo2_maybe _ _                      = Just
 
 maybeSubCo2 :: Role  -- desired role
@@ -1054,18 +1056,19 @@ ltRole Nominal          _       = True
 --   'CoAxiom', the 'TyVar's the arguments expected by the @newtype@ and
 --   the type the appropriate right hand side of the @newtype@, with
 --   the free variables a subset of those 'TyVar's.
-mkNewTypeCo :: Name -> TyCon -> [TyVar] -> Type -> CoAxiom Unbranched
-mkNewTypeCo name tycon tvs rhs_ty
+mkNewTypeCo :: Name -> TyCon -> [TyVar] -> [Role] -> Type -> CoAxiom Unbranched
+mkNewTypeCo name tycon tvs roles rhs_ty
   = CoAxiom { co_ax_unique   = nameUnique name
             , co_ax_name     = name
             , co_ax_implicit = True  -- See Note [Implicit axioms] in TyCon
             , co_ax_role     = Representational
             , co_ax_tc       = tycon
             , co_ax_branches = FirstBranch branch }
-  where branch = CoAxBranch { cab_loc = getSrcSpan name
-                            , cab_tvs = tvs
-                            , cab_lhs = mkTyVarTys tvs
-                            , cab_rhs = rhs_ty
+  where branch = CoAxBranch { cab_loc     = getSrcSpan name
+                            , cab_tvs     = tvs
+                            , cab_lhs     = mkTyVarTys tvs
+                            , cab_roles   = roles
+                            , cab_rhs     = rhs_ty
                             , cab_incomps = [] }
 
 mkPiCos :: Role -> [Var] -> Coercion -> Coercion

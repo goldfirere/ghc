@@ -864,10 +864,13 @@ lintCoercion (CoVarCo cv)
        ; cv' <- lookupIdInScope cv 
        ; let (s,t) = coVarKind cv'
              k     = typeKind s
+             r     = coVarRole cv'
        ; when (isSuperKind k) $
-         checkL (s `eqKind` t) (hang (ptext (sLit "Non-refl kind equality"))
-                                   2 (ppr cv))
-       ; return (k, s, t, coVarRole cv) }
+         do { checkL (r == Nominal) (hang (ptext (sLit "Non-nominal kind equality"))
+                                     2 (ppr cv))
+            ; checkL (s `eqKind` t) (hang (ptext (sLit "Non-refl kind equality"))
+                                     2 (ppr cv)) }
+       ; return (k, s, t, r) }
 
 lintCoercion (UnivCo r ty1 ty2)
   = do { k1 <- lintType ty1
@@ -937,15 +940,16 @@ lintCoercion co@(AxiomInstCo con ind cos)
   = do { unless (0 <= ind && ind < brListLength (coAxiomBranches con))
                 (bad_ax (ptext (sLit "index out of range")))
          -- See Note [Kind instantiation in coercions]
-       ; let CoAxBranch { cab_tvs = ktvs
-                        , cab_lhs = lhs
-                        , cab_rhs = rhs } = coAxiomNthBranch con ind
+       ; let CoAxBranch { cab_tvs   = ktvs
+                        , cab_roles = roles
+                        , cab_lhs   = lhs
+                        , cab_rhs   = rhs } = coAxiomNthBranch con ind
        ; unless (equalLength ktvs cos) (bad_ax (ptext (sLit "lengths")))
        ; in_scope <- getInScope
        ; let empty_subst = mkTvSubst in_scope emptyTvSubstEnv
        ; (subst_l, subst_r) <- foldlM check_ki 
                                       (empty_subst, empty_subst) 
-                                      (ktvs `zip` cos)
+                                      (zip3 ktvs roles cos)
        ; let lhs' = Type.substTys subst_l lhs
              rhs' = Type.substTy subst_r rhs
        ; case checkAxInstCo co of
@@ -956,9 +960,9 @@ lintCoercion co@(AxiomInstCo con ind cos)
     bad_ax what = addErrL (hang (ptext (sLit "Bad axiom application") <+> parens what)
                         2 (ppr co))
 
-    check_ki (subst_l, subst_r) (ktv, co)
+    check_ki (subst_l, subst_r) (ktv, role, co)
       = do { (k, t1, t2, r) <- lintCoercion co
-           ; checkRole co Nominal r -- TODO (RAE): update if axiom roles
+           ; checkRole co role r
            ; let ktv_kind = Type.substTy subst_l (tyVarKind ktv)
                   -- Using subst_l is ok, because subst_l and subst_r
                   -- must agree on kind equalities

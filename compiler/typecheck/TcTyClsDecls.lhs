@@ -271,7 +271,7 @@ Nothing indicates no role annotation. Just r indicates an annotation r.
 performs role inference. The role annotations are used to initialize the role
 inference algorithm.
 
-3. During validity-checking (RAE: enter function name here), the inferred roles are
+3. During validity-checking (in checkRoleAnnot), the inferred roles are
 then checked against the annotations. If they don't match, an error is reported.
 This is also where the presence of the RoleAnnotations flag is checked.
 
@@ -1483,7 +1483,7 @@ checkRoleAnnot tv (Just r1) r2
     addErrTc $ badRoleAnnot (tyVarName tv) r1 r2
 
 -- This is a double-check on the role inference algorithm. It is only run when
--- -dcore-lint is enabled.
+-- -dcore-lint is enabled. See Note [Role inference] in TcTyDecls
 checkValidRoles :: TyCon -> TcM ()
 -- If you edit this function, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in CoreLint

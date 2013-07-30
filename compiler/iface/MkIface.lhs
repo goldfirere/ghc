@@ -1468,9 +1468,11 @@ coAxBranchToIfaceBranch env0 lhs_s
 -- use this one for standalone branches without incompatibles
 coAxBranchToIfaceBranch' :: TidyEnv -> CoAxBranch -> IfaceAxBranch
 coAxBranchToIfaceBranch' env0
-                        (CoAxBranch { cab_tvs = tvs, cab_lhs = lhs, cab_rhs = rhs })
+                        (CoAxBranch { cab_tvs = tvs, cab_lhs = lhs
+                                    , cab_roles = roles, cab_rhs = rhs })
   = IfaceAxBranch { ifaxbTyVars = toIfaceTvBndrs tv_bndrs
                   , ifaxbLHS    = map (tidyToIfaceType env1) lhs
+                  , ifaxbRoles  = roles
                   , ifaxbRHS    = tidyToIfaceType env1 rhs
                   , ifaxbIncomps = [] }
   where
