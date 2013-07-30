@@ -1,3 +1,9 @@
+%%
+%% CoreLint.ott
+%%
+%% defines formal version of core typing rules
+%%
+%% See accompanying README file
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%  Static semantics  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

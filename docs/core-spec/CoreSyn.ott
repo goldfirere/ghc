@@ -1,3 +1,9 @@
+%%
+%% CoreSyn.ott
+%%
+%% defines formal version of core syntax
+%%
+%% See accompanying README file
 
 embed {{ tex-preamble
   \newcommand{\coderef}[2]{\ghcfile{#1}:\texttt{#2}%
@@ -95,14 +101,14 @@ t {{ tex \tau }}, k {{ tex \kappa }}, s {{ tex \sigma }}
 %% COERCIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 g {{ tex \gamma }} :: 'Coercion_' ::= {{ com Coercions, \coderef{types/Coercion.lhs}{Coercion} }}
-  | < t >                   ::   :: Refl          {{ com Reflexivity }}
-    {{ tex \langle [[t]] \rangle }}
-  | T </ gi // i />         ::   :: TyConAppCo    {{ com Type constructor application }}
+  | < t > _ R               ::   :: Refl          {{ com Reflexivity }}
+    {{ tex {\langle [[t]] \rangle}_{[[R]]} }}
+  | T RA  </ gi // i />     ::   :: TyConAppCo    {{ com Type constructor application }}
   | g1 g2                   ::   :: AppCo         {{ com Application }}
   | forall n . g            ::   :: ForAllCo      {{ com Polymorphism }}
   | n                       ::   :: CoVarCo       {{ com Variable }}
   | C ind </ gj // j />     ::   :: AxiomInstCo   {{ com Axiom application }}
-  | t1 ==>! t2              ::   :: UnsafeCo      {{ com Unsafe coercion }}
+  | t1 ==>! RA t2           ::   :: UnivCo        {{ com Universal coercion }}
   | sym g                   ::   :: SymCo         {{ com Symmetry }}
   | g1 ; g2                 ::   :: TransCo       {{ com Transitivity }}
   | nth i g                 ::   :: NthCo         {{ com Projection (0-indexed) }}
@@ -119,9 +125,17 @@ C :: 'CoAxiom_' ::= {{ com Axioms, \coderef{types/TyCon.lhs}{CoAxiom} }}
   | T </ axBranchi // ; // i />    ::   :: CoAxiom  {{ com Axiom }}
   | ( C )                          :: M :: Parens   {{ com Parentheses }}
 
+R {{ tex \rho }} :: 'Role_' ::= {{ com Roles, \coderef{types/CoAxiom.lhs}{Role} }}
+  | Nom              ::   :: Nominal              {{ com Nominal }}
+    {{ tex \mathsf{N} }}
+  | Rep              ::   :: Representational     {{ com Representational }}
+    {{ tex \mathsf{R} }}
+  | Ph               ::   :: Phantom              {{ com Phantom }}
+    {{ tex \mathsf{P} }}
+
 axBranch, b :: 'CoAxBranch_' ::= {{ com Axiom branches, \coderef{types/TyCon.lhs}{CoAxBranch} }}
-  | forall </ ni // i /> . ( </ tj // j /> ~> s )  ::   :: CoAxBranch  {{ com Axiom branch }}
-  | ( </ axBranchi // i /> ) [ ind ]               :: M :: lookup      {{ com List lookup }}
+  | forall </ ni // i /> . ( </ tj // j /> ~> RA s )  ::   :: CoAxBranch  {{ com Axiom branch }}
+  | ( </ axBranchi // i /> ) [ ind ]                  :: M :: lookup      {{ com List lookup }}
 
 %% TYCONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -139,6 +153,7 @@ T :: 'TyCon_' ::= {{ com Type constructors, \coderef{types/TyCon.lhs}{TyCon} }}
 H :: 'PrimTyCon_' ::= {{ com Primitive type constructors, \coderef{prelude/TysPrim.lhs}{} }}
   | Int#         ::   :: intPrimTyCon           {{ com Unboxed Int }}
   | ( ~# )       ::   :: eqPrimTyCon            {{ com Unboxed equality }}
+  | ( ~R# )      ::   :: eqReprPrimTyCon        {{ com Unboxed representational equality }}
   | BOX          ::   :: superKindTyCon         {{ com Sort of kinds }}
   | *            ::   :: liftedTypeKindTyCon    {{ com Kind of lifted types }}
   | #            ::   :: unliftedTypeKindTyCon  {{ com Kind of unlifted types }}
@@ -174,6 +189,10 @@ ind :: 'Ind_' ::= {{ com Indices, numbers }}
   | ind - 1                     :: M :: decrement
   | -1                          :: M :: minusOne
 
+RA {{ tex \!\!{}_{\rho} }} :: 'RoleAnnot_' ::= {{ com Role annotation }}
+  | _ R                    :: M :: annotation
+  {{ tex {}_{[[R]]} }}
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%  Terminals  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -199,6 +218,7 @@ terminals :: 'terminals_' ::=
   | BOX          ::   :: BOX              {{ tex \Box }}
   | Int#         ::   :: int_hash         {{ tex {\textsf{Int} }_{\#} }}
   | ~#           ::   :: eq_hash          {{ tex \mathop{ {\sim}_{\#} } }}
+  | ~R#          ::   :: eq_repr_hash     {{ tex \mathop{ {\sim}_{\mathsf{R}\#} } }}
   | OpenKind     ::   :: OpenKind         {{ tex \textsf{OpenKind} }}
   | ok           ::   :: ok               {{ tex \textsf{ ok} }}
   | no_duplicates ::  :: no_duplicates    {{ tex \textsf{no\_duplicates } }}

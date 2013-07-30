@@ -24,7 +24,6 @@ import Demand
 import CoreSyn
 import CoreFVs
 import CoreUtils
-import Pair
 import Bag
 import Literal
 import DataCon
@@ -401,9 +400,9 @@ lintCoreExpr (Type ty)
   = pprPanic "lintCoreExpr" (ppr ty)
 
 lintCoreExpr (Coercion co)
-  = do { co' <- lintInCo co
-       ; let Pair ty1 ty2 = coercionKind co'
-       ; return (mkCoercionType ty1 ty2) }
+  = do { (_kind, ty1, ty2, role) <- lintInCo co
+       ; checkRole co Nominal role
+       ; return (mkCoercionType role ty1 ty2) }
 
 \end{code}
 
@@ -805,14 +804,13 @@ lint_app doc kfn kas
 %************************************************************************
 
 \begin{code}
-lintInCo :: InCoercion -> LintM OutCoercion
+lintInCo :: InCoercion -> LintM (LintedKind, LintedType, LintedType, Role)
 -- Check the coercion, and apply the substitution to it
 -- See Note [Linting type lets]
 lintInCo co
   = addLoc (InCo co) $
     do  { co' <- applySubstCo co
-        ; _   <- lintCoercion co'
-        ; return co' }
+        ; lintCoercion co' }
 
 lintCoercion :: OutCoercion -> LintM (LintedKind, LintedType, LintedType, Role)
 -- Check the kind of a coercion term, returning the kind
@@ -869,7 +867,7 @@ lintCoercion (CoVarCo cv)
        ; when (isSuperKind k) $
          checkL (s `eqKind` t) (hang (ptext (sLit "Non-refl kind equality"))
                                    2 (ppr cv))
-       ; return (k, s, t, Nominal) }
+       ; return (k, s, t, coVarRole cv) }
 
 lintCoercion (UnivCo r ty1 ty2)
   = do { k1 <- lintType ty1
@@ -1150,7 +1148,10 @@ checkTys :: OutType -> OutType -> MsgDoc -> LintM ()
 -- Assumes ty1,ty2 are have alrady had the substitution applied
 checkTys ty1 ty2 msg = checkL (ty1 `eqType` ty2) msg
 
-checkRole :: Coercion -> Role -> Role -> LintM ()
+checkRole :: Coercion
+          -> Role      -- expected
+          -> Role      -- actual
+          -> LintM ()
 checkRole co r1 r2
   = checkL (r1 == r2)
            (ptext (sLit "Role incompatibility: expected") <+> ppr r1 <> comma <+>

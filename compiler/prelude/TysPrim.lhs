@@ -71,6 +71,7 @@ module TysPrim(
         word64PrimTyCon,        word64PrimTy,
 
         eqPrimTyCon,            -- ty1 ~# ty2
+        eqReprPrimTyCon,        -- ty1 ~R# ty2  (at role Representational)
 
 	-- * Any
 	anyTy, anyTyCon, anyTypeOfKind,
@@ -134,6 +135,7 @@ primTyCons
     , word64PrimTyCon
     , anyTyCon
     , eqPrimTyCon
+    , eqReprPrimTyCon
 
     , liftedTypeKindTyCon
     , unliftedTypeKindTyCon
@@ -155,7 +157,7 @@ mkPrimTc fs unique tycon
 		  (ATyCon tycon)	-- Relevant TyCon
 		  UserSyntax		-- None are built-in syntax
 
-charPrimTyConName, intPrimTyConName, int32PrimTyConName, int64PrimTyConName, wordPrimTyConName, word32PrimTyConName, word64PrimTyConName, addrPrimTyConName, floatPrimTyConName, doublePrimTyConName, statePrimTyConName, realWorldTyConName, arrayPrimTyConName, arrayArrayPrimTyConName, byteArrayPrimTyConName, mutableArrayPrimTyConName, mutableByteArrayPrimTyConName, mutableArrayArrayPrimTyConName, mutVarPrimTyConName, mVarPrimTyConName, tVarPrimTyConName, stablePtrPrimTyConName, stableNamePrimTyConName, bcoPrimTyConName, weakPrimTyConName, threadIdPrimTyConName, eqPrimTyConName, floatX4PrimTyConName, doubleX2PrimTyConName, int32X4PrimTyConName, int64X2PrimTyConName :: Name
+charPrimTyConName, intPrimTyConName, int32PrimTyConName, int64PrimTyConName, wordPrimTyConName, word32PrimTyConName, word64PrimTyConName, addrPrimTyConName, floatPrimTyConName, doublePrimTyConName, statePrimTyConName, realWorldTyConName, arrayPrimTyConName, arrayArrayPrimTyConName, byteArrayPrimTyConName, mutableArrayPrimTyConName, mutableByteArrayPrimTyConName, mutableArrayArrayPrimTyConName, mutVarPrimTyConName, mVarPrimTyConName, tVarPrimTyConName, stablePtrPrimTyConName, stableNamePrimTyConName, bcoPrimTyConName, weakPrimTyConName, threadIdPrimTyConName, eqPrimTyConName, eqReprPrimTyConName, floatX4PrimTyConName, doubleX2PrimTyConName, int32X4PrimTyConName, int64X2PrimTyConName :: Name
 charPrimTyConName    	      = mkPrimTc (fsLit "Char#") charPrimTyConKey charPrimTyCon
 intPrimTyConName     	      = mkPrimTc (fsLit "Int#") intPrimTyConKey  intPrimTyCon
 int32PrimTyConName	      = mkPrimTc (fsLit "Int32#") int32PrimTyConKey int32PrimTyCon
@@ -168,6 +170,7 @@ floatPrimTyConName   	      = mkPrimTc (fsLit "Float#") floatPrimTyConKey floatP
 doublePrimTyConName  	      = mkPrimTc (fsLit "Double#") doublePrimTyConKey doublePrimTyCon
 statePrimTyConName            = mkPrimTc (fsLit "State#") statePrimTyConKey statePrimTyCon
 eqPrimTyConName               = mkPrimTc (fsLit "~#") eqPrimTyConKey eqPrimTyCon
+eqReprPrimTyConName           = mkPrimTc (fsLit "~R#") eqReprPrimTyConKey eqReprPrimTyCon
 realWorldTyConName            = mkPrimTc (fsLit "RealWorld") realWorldTyConKey realWorldTyCon
 arrayPrimTyConName   	      = mkPrimTc (fsLit "Array#") arrayPrimTyConKey arrayPrimTyCon
 byteArrayPrimTyConName	      = mkPrimTc (fsLit "ByteArray#") byteArrayPrimTyConKey byteArrayPrimTyCon
@@ -486,6 +489,17 @@ eqPrimTyCon  = mkPrimTyCon eqPrimTyConName kind [Nominal, Nominal, Nominal] Void
   where kind = ForAllTy kv $ mkArrowKinds [k, k] unliftedTypeKind
         kv = kKiVar
         k = mkTyVarTy kv
+
+-- like eqPrimTyCon, but the type for *Representational* coercions
+-- this should only ever appear as the type of a covar. Its role is
+-- interpreted in coercionRole
+eqReprPrimTyCon :: TyCon
+eqReprPrimTyCon = mkPrimTyCon eqReprPrimTyConName kind
+                                  -- the roles really should be irrelevant!
+                              [Nominal, Representational, Representational] VoidRep
+  where kind = ForAllTy kv $ mkArrowKinds [k, k] unliftedTypeKind
+        kv = kKiVar
+        k  = mkTyVarTy kv
 \end{code}
 
 RealWorld is deeply magical.  It is *primitive*, but it is not

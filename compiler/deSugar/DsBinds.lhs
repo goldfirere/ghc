@@ -812,7 +812,7 @@ dsTcCoercion role co thing_inside
          eq_nm = idName eqv
          occ = nameOccName eq_nm
          loc = nameSrcSpan eq_nm
-         ty  = mkCoercionType ty1 ty2
+         ty  = mkCoercionType Nominal ty1 ty2
          (ty1, ty2) = getEqPredTys (evVarPred eqv)
 
     wrap_in_case result_ty (eqv, cov) body 

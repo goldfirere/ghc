@@ -142,12 +142,13 @@ opt_co' env sym mrole (CoVarCo cv)
   = opt_co (zapCvSubstEnv env) sym mrole co
 
   | Just cv1 <- lookupInScope (getCvInScope env) cv
-  = ASSERT( isCoVar cv1 ) wrapRole mrole Nominal $ wrapSym sym (CoVarCo cv1)
+  = ASSERT( isCoVar cv1 ) wrapRole mrole cv_role $ wrapSym sym (CoVarCo cv1)
                 -- cv1 might have a substituted kind!
 
   | otherwise = WARN( True, ptext (sLit "opt_co: not in scope:") <+> ppr cv $$ ppr env)
                 ASSERT( isCoVar cv )
-                wrapRole mrole Nominal $ wrapSym sym (CoVarCo cv)
+                wrapRole mrole cv_role $ wrapSym sym (CoVarCo cv)
+  where cv_role = coVarRole cv
 
 opt_co' env sym mrole (AxiomInstCo con ind cos)
     -- Do *not* push sym inside top-level axioms

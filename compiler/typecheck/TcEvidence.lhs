@@ -102,7 +102,7 @@ data TcCoercion
   | TcAppCo TcCoercion TcCoercion
   | TcForAllCo TyVar TcCoercion 
   | TcInstCo TcCoercion TcType
-  | TcCoVarCo EqVar
+  | TcCoVarCo EqVar               -- variable always at role N
   | TcAxiomInstCo (CoAxiom Branched) Int [TcType] -- Int specifies branch number
                                                   -- See [CoAxiom Index] in Coercion.lhs
   | TcSymCo TcCoercion

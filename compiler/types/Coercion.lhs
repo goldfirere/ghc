@@ -21,7 +21,7 @@ module Coercion (
         Role(..), ltRole,
 
         -- ** Functions over coercions
-        coVarKind,
+        coVarKind, coVarRole,
         coercionType, coercionKind, coercionKinds, isReflCo,
         isReflCo_maybe, coercionRole,
         mkCoercionType,
@@ -102,7 +102,7 @@ import Outputable
 import Unique
 import Pair
 import SrcLoc
-import PrelNames	( funTyConKey, eqPrimTyConKey )
+import PrelNames	( funTyConKey, eqPrimTyConKey, eqReprPrimTyConKey )
 import Control.Applicative
 import Data.Traversable (traverse, sequenceA)
 import FastString
@@ -163,7 +163,8 @@ data Coercion
          -- :: _ -> e -> e
 
   -- These are special
-  | CoVarCo CoVar      -- :: _ -> N
+  | CoVarCo CoVar      -- :: _ -> (N or R)
+                       -- result role depends on the tycon of the variable's type
 
     -- AxiomInstCo :: e -> _ -> [N] -> e
     -- RAE: update with axiom roles
@@ -497,7 +498,8 @@ isCoVar v = isCoVarType (varType v)
 isCoVarType :: Type -> Bool
 isCoVarType ty 	    -- Tests for t1 ~# t2, the unboxed equality
   = case splitTyConApp_maybe ty of
-      Just (tc,tys) -> tc `hasKey` eqPrimTyConKey && tys `lengthAtLeast` 2
+      Just (tc,tys) -> (tc `hasKey` eqPrimTyConKey || tc `hasKey` eqReprPrimTyConKey)
+                       && tys `lengthAtLeast` 2
       Nothing       -> False
 \end{code}
 
@@ -747,14 +749,30 @@ splitForAllCo_maybe _                = Nothing
 coVarKind :: CoVar -> (Type,Type) 
 coVarKind cv
  | Just (tc, [_kind,ty1,ty2]) <- splitTyConApp_maybe (varType cv)
- = ASSERT(tc `hasKey` eqPrimTyConKey)
+ = ASSERT(tc `hasKey` eqPrimTyConKey || tc `hasKey` eqReprPrimTyConKey)
    (ty1,ty2)
  | otherwise = panic "coVarKind, non coercion variable"
 
+coVarRole :: CoVar -> Role
+coVarRole cv
+  | tc `hasKey` eqPrimTyConKey
+  = Nominal
+  | tc `hasKey` eqReprPrimTyConKey
+  = Representational
+  | otherwise
+  = pprPanic "coVarRole: unknown tycon" (ppr cv)
+
+  where
+    tc = case tyConAppTyCon_maybe (varType cv) of
+           Just tc0 -> tc0
+           Nothing  -> pprPanic "coVarRole: not tyconapp" (ppr cv)
+
 -- | Makes a coercion type from two types: the types whose equality 
 -- is proven by the relevant 'Coercion'
-mkCoercionType :: Type -> Type -> Type
-mkCoercionType = mkPrimEqPred
+mkCoercionType :: Role -> Type -> Type -> Type
+mkCoercionType Nominal          = mkPrimEqPred
+mkCoercionType Representational = mkReprPrimEqPred
+mkCoercionType Phantom          = panic "mkCoercionType"
 
 isReflCo :: Coercion -> Bool
 isReflCo (Refl {})         = True
@@ -1641,7 +1659,7 @@ seqCos (co:cos) = seqCo co `seq` seqCos cos
 \begin{code}
 coercionType :: Coercion -> Type
 coercionType co = case coercionKind co of
-                    Pair ty1 ty2 -> mkCoercionType ty1 ty2
+                    Pair ty1 ty2 -> mkCoercionType (coercionRole co) ty1 ty2
 
 ------------------
 -- | If it is the case that
@@ -1690,7 +1708,7 @@ coercionRole = go
     go (TyConAppCo r _ _)   = r
     go (AppCo co _)         = go co
     go (ForAllCo _ co)      = go co
-    go (CoVarCo _)          = Nominal
+    go (CoVarCo cv)         = coVarRole cv
     go (AxiomInstCo ax _ _) = coAxiomRole ax
     go (UnivCo r _ _)       = r
     go (SymCo co)           = go co
