@@ -795,7 +795,7 @@ updateRoleEnv name n role
          case lookupNameEnv role_env name of
            Nothing -> pprPanic "updateRoleEnv" (ppr name)
            Just roles -> let (before, old_role : after) = splitAt n roles in
-                         if old_role `ltRole` role
+                         if role `ltRole` old_role
                          then let roles' = before ++ role : after
                                   role_env' = extendNameEnv role_env name roles' in
                               RIS { role_env = role_env', update = True }

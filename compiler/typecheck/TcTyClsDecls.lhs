@@ -38,8 +38,9 @@ import TcType
 import TysWiredIn( unitTy )
 import FamInst
 import FamInstEnv( isDominatedBy, mkCoAxBranch, mkBranchedCoAxiom )
-import Coercion( pprCoAxBranch )
+import Coercion( pprCoAxBranch, ltRole )
 import Type
+import TypeRep   -- for checkValidRoles
 import Kind
 import Class
 import CoAxiom
@@ -1430,7 +1431,10 @@ checkValidTyCon tc mroles
                     Just rs -> rs
                     Nothing -> pprPanic "checkValidTyCon role_annots" (ppr name)
 
-    check_roles = void $ zipWith3M checkRoleAnnot type_vars role_annots type_roles
+    check_roles
+      = do { _ <- zipWith3M checkRoleAnnot type_vars role_annots type_roles
+           ; lint <- goptM Opt_DoCoreLinting
+           ; when lint $ checkValidRoles tc }
 
     groups = equivClasses cmp_fld (concatMap get_fields data_cons)
     cmp_fld (f1,_) (f2,_) = f1 `compare` f2
@@ -1477,6 +1481,71 @@ checkRoleAnnot _  Nothing   _  = return ()
 checkRoleAnnot tv (Just r1) r2
   = when (r1 /= r2) $
     addErrTc $ badRoleAnnot (tyVarName tv) r1 r2
+
+-- This is a double-check on the role inference algorithm. It is only run when
+-- -dcore-lint is enabled.
+checkValidRoles :: TyCon -> TcM ()
+-- If you edit this function, you may need to update the GHC formalism
+-- See Note [GHC Formalism] in CoreLint
+checkValidRoles tc
+  | isAlgTyCon tc
+    -- tyConDataCons returns an empty list for data families
+  = mapM_ check_dc_roles (tyConDataCons tc)
+  | Just (SynonymTyCon rhs) <- synTyConRhs_maybe tc
+  = check_ty_roles (zipVarEnv (tyConTyVars tc) (tyConRoles tc)) Representational rhs
+  | otherwise
+  = return ()
+  where
+    check_dc_roles datacon
+      = let univ_tvs   = dataConUnivTyVars datacon
+            ex_tvs     = dataConExTyVars datacon
+            args       = dataConRepArgTys datacon
+            univ_roles = zipVarEnv univ_tvs (tyConRoles tc)
+              -- zipVarEnv uses zipEqual, but we don't want that for ex_tvs
+            ex_roles   = mkVarEnv (zip ex_tvs (repeat Nominal))
+            role_env   = univ_roles `plusVarEnv` ex_roles in
+        mapM_ (check_ty_roles role_env Representational) args
+
+    check_ty_roles env role (TyVarTy tv)
+      = case lookupVarEnv env tv of
+          Just role' -> unless (role' `ltRole` role || role' == role) $
+                        report_error $ ptext (sLit "type variable") <+> quotes (ppr tv) <+>
+                                       ptext (sLit "cannot have role") <+> ppr role <+>
+                                       ptext (sLit "because it was assigned role") <+> ppr role'
+          Nothing    -> report_error $ ptext (sLit "type variable") <+> quotes (ppr tv) <+>
+                                       ptext (sLit "missing in environment")
+
+    check_ty_roles env Representational (TyConApp tc tys)
+      = let roles' = tyConRoles tc in
+        zipWithM_ (maybe_check_ty_roles env) roles' tys
+
+    check_ty_roles env Nominal (TyConApp _ tys)
+      = mapM_ (check_ty_roles env Nominal) tys
+
+    check_ty_roles _   Phantom ty@(TyConApp {})
+      = pprPanic "check_ty_roles" (ppr ty)
+
+    check_ty_roles env role (AppTy ty1 ty2)
+      =  check_ty_roles env role    ty1
+      >> check_ty_roles env Nominal ty2
+
+    check_ty_roles env role (FunTy ty1 ty2)
+      =  check_ty_roles env role ty1
+      >> check_ty_roles env role ty2
+
+    check_ty_roles env role (ForAllTy tv ty)
+      = check_ty_roles (extendVarEnv env tv Nominal) role ty
+
+    check_ty_roles _   _    (LitTy {}) = return ()
+
+    maybe_check_ty_roles env role ty
+      = when (role == Nominal || role == Representational) $
+        check_ty_roles env role ty
+
+    report_error doc
+      = addErrTc $ vcat [ptext (sLit "Internal error in role inference:"),
+                         doc,
+                         ptext (sLit "Please report this as a GHC bug: http://www.haskell.org/ghc/reportabug")]
 
 checkValidClosedCoAxiom :: CoAxiom Branched -> TcM ()
 checkValidClosedCoAxiom (CoAxiom { co_ax_branches = branches, co_ax_tc = tc })

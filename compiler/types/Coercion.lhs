@@ -1041,11 +1041,11 @@ nthRole Representational tc n
 
 -- is one role "less" than another?
 ltRole :: Role -> Role -> Bool
-ltRole Phantom          Phantom = False
-ltRole Phantom          _       = True
-ltRole Representational Nominal = True
+ltRole Phantom          _       = False
+ltRole Representational Phantom = True
 ltRole Representational _       = False
-ltRole _                _       = False
+ltRole Nominal          Nominal = False
+ltRole Nominal          _       = True
 
 -- See note [Newtype coercions] in TyCon
 
