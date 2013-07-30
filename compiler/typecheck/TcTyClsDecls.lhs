@@ -123,13 +123,13 @@ tcTyClGroup boot_details tyclds
             -- (possibly-polymorphic) kind of each TyCon and Class
             -- See Note [Kind checking for type and class decls]
             -- See also Note [Role annotations]
-         (names_w_poly_kinds, role_env) <- kcTyClGroup tyclds
+         (names_w_poly_kinds, role_annots) <- kcTyClGroup tyclds
        ; traceTc "tcTyAndCl generalized kinds" (ppr names_w_poly_kinds)
 
             -- Step 2: type-check all groups together, returning
             -- the final TyCons and Classes
        ; tyclss <- fixM $ \ rec_tyclss -> do
-           { let rec_flags = calcRecFlags boot_details role_env rec_tyclss
+           { let rec_flags = calcRecFlags boot_details role_annots rec_tyclss
 
                  -- Populate environment with knot-tied ATyCon for TyCons
                  -- NB: if the decls mention any ill-staged data cons
@@ -151,11 +151,19 @@ tcTyClGroup boot_details tyclds
            -- expects well-formed TyCons
        ; tcExtendGlobalEnv tyclss $ do
        { traceTc "Starting validity check" (ppr tyclss)
-       ; checkNoErrs $
-         mapM_ (recoverM (return ()) . addLocM (checkValidTyCl role_env)) tyclds
+       ; -- Step 3a: Check datacons only. Why? Because checking tycons in general
+         -- also checks for role consistency, which looks at types. But, a mal-formed
+         -- GADT return type means that a datacon has a panic in its types
+         -- (see rejigConRes). So, we check all datacons first, before doing other
+         -- checks.
+         checkNoErrs $
+         mapM_ (recoverM (return ()) . addLocM checkValidTyClDataConsOnly) tyclds
+           -- The checkNoErrs above fixes Trac #7175
+
+           -- Step 3b: do the rest of validity checking
+       ; mapM_ (recoverM (return ()) . addLocM (checkValidTyCl role_annots)) tyclds
            -- We recover, which allows us to report multiple validity errors
-           -- but we then fail if any are wrong.  Lacking the checkNoErrs
-           -- we get Trac #7175
+           -- but we then fail if any are wrong.
 
            -- Step 4: Add the implicit things;
            -- we want them in the environment because
@@ -378,27 +386,30 @@ getInitialKind :: TyClDecl Name -> TcM ([(Name, TcTyThing)], [Maybe Role])
 -- No family instances are passed to getInitialKinds
 
 getInitialKind decl@(ClassDecl { tcdLName = L _ name, tcdTyVars = ktvs, tcdATs = ats })
-  = do { (cl_kind, inner_prs, mroles) <-
+  = do { (cl_kind, inner_prs, role_annots) <-
            kcHsTyVarBndrs (kcStrategy decl) ktvs $
            do { inner_prs <- getFamDeclInitialKinds ats
               ; return (constraintKind, inner_prs) }
        ; let main_pr = (name, AThing cl_kind)
-       ; return ((main_pr : inner_prs), mroles) }
+       ; return ((main_pr : inner_prs), role_annots) }
 
 getInitialKind decl@(DataDecl { tcdLName = L _ name
                                 , tcdTyVars = ktvs
                                 , tcdDataDefn = HsDataDefn { dd_kindSig = m_sig
                                                            , dd_cons = cons } })
-  = do { (decl_kind, _, mroles) <-
+  = do { (decl_kind, num_extra_tvs, role_annots) <-
            kcHsTyVarBndrs (kcStrategy decl) ktvs $
            do { res_k <- case m_sig of
                            Just ksig -> tcLHsKind ksig
                            Nothing   -> return liftedTypeKind
-              ; return (res_k, ()) }
+                 -- return the number of extra type arguments from the res_k so
+                 -- we can extend the role_annots list
+              ; return (res_k, length $ fst $ splitKindFunTys res_k) }
        ; let main_pr = (name, AThing decl_kind)
              inner_prs = [ (unLoc (con_name con), APromotionErr RecDataConPE)
                          | L _ con <- cons ]
-       ; return ((main_pr : inner_prs), mroles) }
+             role_annots' = role_annots ++ replicate num_extra_tvs Nothing
+       ; return ((main_pr : inner_prs), role_annots') }
 
 getInitialKind (FamDecl { tcdFam = decl }) 
   = do { pairs <- getFamDeclInitialKind decl
@@ -1324,6 +1335,28 @@ checkValidDecl ctxt lname mroles
         ; traceTc "Done validity of" (ppr thing)
         }
 
+checkValidTyClDataConsOnly :: TyClDecl Name -> TcM ()
+checkValidTyClDataConsOnly decl
+  | DataDecl {} <- decl  = check_datacons_decl
+  | otherwise            = return ()
+  where
+    lname = tyClDeclLName decl
+    check_datacons_decl
+      = addErrCtxt (tcMkDeclCtxt decl) $
+        do { thing <- tcLookupLocatedGlobal lname
+           ; case thing of
+               ATyCon tc -> check_datacons_tycon tc
+               _         -> pprPanic "checkValidTyClDataConsOnly" (ppr lname) }
+
+    check_datacons_tycon tc
+      = do {      -- Check arg types of data constructors
+             dflags <- getDynFlags
+           ; existential_ok <- xoptM Opt_ExistentialQuantification
+           ; gadt_ok        <- xoptM Opt_GADTs
+           ; let ex_ok = existential_ok || gadt_ok  -- Data cons can have existential context
+           ; mapM_ (checkValidDataCon dflags ex_ok tc) (tyConDataCons tc) }
+                          
+
 checkValidTyCl :: RoleAnnots -> TyClDecl Name -> TcM ()
 checkValidTyCl mroles decl
   = do { checkValidDecl (tcMkDeclCtxt decl) (tyClDeclLName decl) mroles
@@ -1369,23 +1402,13 @@ checkValidTyCon tc mroles
            ; checkValidType syn_ctxt ty }
 
   | otherwise
-  = do { -- Check the context on the data decl
+  = do { unless (isFamilyTyCon tc) $ check_roles -- don't check data families!
+
+-- Check the context on the data decl
        ; traceTc "cvtc1" (ppr tc)
        ; checkValidTheta (DataTyCtxt name) (tyConStupidTheta tc)
 
-        -- Check arg types of data constructors
        ; traceTc "cvtc2" (ppr tc)
-
-       ; dflags          <- getDynFlags
-       ; existential_ok  <- xoptM Opt_ExistentialQuantification
-       ; gadt_ok         <- xoptM Opt_GADTs
-       ; let ex_ok = existential_ok || gadt_ok  -- Data cons can have existential context
-       ; mapM_ (checkValidDataCon dflags ex_ok tc) data_cons
-
-         -- This *must* be after checkValidDataCon -- otherwise the pattern-match
-         -- in rejigConRes might fail, and checking roles forces the evaluation of
-         -- that function. Yuck!
-       ; unless (isFamilyTyCon tc) $ check_roles -- don't check data families!
 
         -- Check that fields with the same name share a type
        ; mapM_ check_fields groups }

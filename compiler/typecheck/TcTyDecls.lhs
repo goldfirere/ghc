@@ -667,7 +667,8 @@ irTyCon tc
   = do { old_roles <- lookupRoles tc
        ; unless (all (== Nominal) old_roles) $  -- also catches data families,
                                                 -- which don't want or need role inference
-         mapM_ (irDataCon tc_name) (visibleDataCons $ algTyConRhs tc) }
+    do { whenIsJust (tyConClass_maybe tc) (irClass tc_name)
+       ; mapM_ (irDataCon tc_name) (visibleDataCons $ algTyConRhs tc) }}
 
   | Just (SynonymTyCon ty) <- synTyConRhs_maybe tc
   = addRoleInferenceInfo tc_name (tyConTyVars tc) $
@@ -678,6 +679,19 @@ irTyCon tc
 
   where
     tc_name = tyConName tc
+
+-- any type variable used in an associated type must be Nominal
+irClass :: Name -> Class -> RoleM ()
+irClass tc_name cls
+  = addRoleInferenceInfo tc_name cls_tvs $
+    mapM_ ir_at (classATs cls)
+  where
+    cls_tvs    = classTyVars cls
+    cls_tv_set = mkVarSet cls_tvs
+
+    ir_at at_tc
+      = mapM_ (updateRole Nominal) (varSetElems nvars)
+      where nvars = (mkVarSet $ tyConTyVars at_tc) `intersectVarSet` cls_tv_set
 
 -- See Note [Role inference]
 irDataCon :: Name -> DataCon -> RoleM ()
