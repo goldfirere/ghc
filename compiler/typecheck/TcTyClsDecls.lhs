@@ -364,8 +364,8 @@ mk_thing_env (decl : decls)
 getInitialKinds :: [LTyClDecl Name] -> TcM ([(Name, TcTyThing)], RoleAnnots)
 getInitialKinds decls
   = tcExtendTcTyThingEnv (mk_thing_env decls) $
-    do { (pairss, mroles) <- mapAndUnzipM (addLocM getInitialKind) decls
-       ; return (concat pairss, mkNameEnv (zip (map (tcdName . unLoc) decls) mroles)) }
+    do { (pairss, annots) <- mapAndUnzipM (addLocM getInitialKind) decls
+       ; return (concat pairss, mkNameEnv (zip (map (tcdName . unLoc) decls) annots)) }
 
 -- See Note [Kind-checking strategies] in TcHsType
 getInitialKind :: TyClDecl Name -> TcM ([(Name, TcTyThing)], [Maybe Role])

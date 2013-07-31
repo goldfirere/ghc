@@ -20,7 +20,7 @@
 \setlength{\parindent}{0in}
 \setlength{\parskip}{1ex}
 
-\newcommand{\gram}[1]{\ottgrammartabular{#1\ottinterrule}}
+\newcommand{\gram}[1]{\ottgrammartabular{#1\ottafterlastrule}}
 
 \begin{document}
 
@@ -278,6 +278,14 @@ a dead id and for one-tuples. These checks are omitted here.
 
 \subsection{Coercion typing}
 
+In the coercion typing judgment, the $\#$ marks are left off the equality
+operators to reduce clutter. This is not actually inconsistent, because
+the GHC function that implements this check, \texttt{lintCoercion}, actually
+returns four separate values (the kind, the two types, and the role), not
+a type with head $[[(~#)]]$ or $[[(~R#)]]$. Note that the difference between
+these two forms of equality is interpreted in the rules \ottdrulename{Co\_CoVarCoNom}
+and \ottdrulename{Co\_CoVarCoRepr}.
+
 \ottdefnlintCoercion{}
 
 In \ottdrulename{Co\_AxiomInstCo}, the use of $[[inits]]$ creates substitutions from
@@ -322,7 +330,7 @@ There are two very similar checks for names, one declared as a local function:
 
 \ottdefnisSubKind{}
 
-\subsection{Role inference}
+\subsection{Roles}
 \label{sec:tyconroles}
 
 During type-checking, role inference is carried out, assigning roles to the
@@ -338,6 +346,8 @@ when \texttt{-dcore-lint} is set.
 \ottdefncheckValidRoles{}
 
 \ottdefncheckXXdcXXroles{}
+
+In the following judgment, the role $[[R]]$ is an \emph{input}, not an output.
 
 \ottdefncheckXXtyXXroles{}
 

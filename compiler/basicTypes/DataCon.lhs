@@ -650,11 +650,12 @@ mkDataCon name declared_infix
       | isJust (promotableTyCon_maybe rep_tycon)
           -- The TyCon is promotable only if all its datacons
           -- are, so the promoteType for prom_kind should succeed
-      = Just (mkPromotedDataCon con name (getUnique name) prom_kind arity)
+      = Just (mkPromotedDataCon con name (getUnique name) prom_kind roles)
       | otherwise 
       = Nothing          
     prom_kind = promoteType (dataConUserType con)
-    arity     = dataConSourceArity con
+    roles = map (const Nominal)          (univ_tvs ++ ex_tvs) ++
+            map (const Representational) orig_arg_tys
 
 eqSpecPreds :: [(TyVar,Type)] -> ThetaType
 eqSpecPreds spec = [ mkEqPred (mkTyVarTy tv) ty | (tv,ty) <- spec ]

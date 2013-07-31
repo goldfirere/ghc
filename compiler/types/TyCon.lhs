@@ -272,6 +272,28 @@ This is important. In an instance declaration we expect
      data T p [x] = T1 x | T2 p
      type F [x] q (Tree y) = (x,y,q)
 
+Note [TyCon Role signatures]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Every tycon has a role signature, assigning a role to each of the tyConTyVars
+(or of equal length to the tyConArity, if there are no tyConTyVars). An
+example demonstrates these best: say we have a tycon T, with parameters a@N,
+b@R, and c@P. Then, to prove representational equality between T a1 b1 c1 and
+T a2 b2 c2, we need to have nominal equality between a1 and a2, representational
+equality between b1 and b2, and nothing in particular (i.e., phantom equality)
+between c1 and c2. This might happen, say, with the following declaration:
+
+  data T a b c where
+    MkT :: b -> T Int b c
+
+Data and class tycons have their roles inferred (see inferRoles in TcTyDecls),
+as do vanilla synonym tycons. Family tycons have all parameters at role N,
+though it is conceivable that we could relax this restriction. (->)'s and
+tuples' parameters are at role R. Each primitive tycon declares its roles;
+it's worth noting that (~#)'s parameters are at role N. Promoted data
+constructors' type arguments are at role R. All kind arguments are at role
+N.
+
 %************************************************************************
 %*                                                                      *
 \subsection{The data type}
@@ -324,6 +346,7 @@ data TyCon
                                   -- Note that it does /not/ scope over the data constructors.
         tc_roles     :: [Role],   -- ^ The role for each type variable
                                   -- This list has the same length as tyConTyVars
+                                  -- See also Note [TyCon Role signatures]
         
         tyConCType   :: Maybe CType, -- The C type that should be used
                                      -- for this type when using the FFI
@@ -414,6 +437,7 @@ data TyCon
         tyConUnique :: Unique, -- ^ Same Unique as the data constructor
         tyConName   :: Name,   -- ^ Same Name as the data constructor
         tyConArity  :: Arity,
+        tc_roles    :: [Role], -- ^ Roles: N for kind vars, R for type vars
         tc_kind     :: Kind,   -- ^ Translated type of the data constructor
         dataCon     :: DataCon -- ^ Corresponding data constructor
     }
@@ -1004,15 +1028,18 @@ mkSynTyCon name kind tyvars roles rhs parent
 -- Somewhat dodgily, we give it the same Name
 -- as the data constructor itself; when we pretty-print
 -- the TyCon we add a quote; see the Outputable TyCon instance
-mkPromotedDataCon :: DataCon -> Name -> Unique -> Kind -> Arity -> TyCon
-mkPromotedDataCon con name unique kind arity
+mkPromotedDataCon :: DataCon -> Name -> Unique -> Kind -> [Role] -> TyCon
+mkPromotedDataCon con name unique kind roles
   = PromotedDataCon {
         tyConName   = name,
         tyConUnique = unique,
         tyConArity  = arity,
+        tc_roles    = roles,
         tc_kind     = kind,
         dataCon     = con
   }
+  where
+    arity = length roles
 
 -- | Create a promoted type constructor 'TyCon'
 -- Somewhat dodgily, we give it the same Name
@@ -1411,18 +1438,19 @@ algTyConRhs other = pprPanic "algTyConRhs" (ppr other)
 
 -- | Get the list of roles for the type parameters of a TyCon
 tyConRoles :: TyCon -> [Role]
+-- See also Note [TyCon Role signatures]
 tyConRoles tc
   = case tc of
-    { FunTyCon {}                    -> const_role Representational
-    ; AlgTyCon { tc_roles = roles }  -> roles
-    ; TupleTyCon {}                  -> const_role Representational
-    ; SynTyCon { tc_roles = roles }  -> roles
-    ; PrimTyCon { tc_roles = roles } -> roles
-    ; PromotedDataCon {}             -> const_role Nominal
-    ; PromotedTyCon {}               -> const_role Nominal
+    { FunTyCon {}                          -> const_role Representational
+    ; AlgTyCon { tc_roles = roles }        -> roles
+    ; TupleTyCon {}                        -> const_role Representational
+    ; SynTyCon { tc_roles = roles }        -> roles
+    ; PrimTyCon { tc_roles = roles }       -> roles
+    ; PromotedDataCon { tc_roles = roles } -> roles
+    ; PromotedTyCon {}                     -> const_role Nominal
     }
   where
-    const_role eq = replicate (tyConArity tc) eq
+    const_role r = replicate (tyConArity tc) r
 
 \end{code}
 

@@ -148,7 +148,7 @@ hALF_WORD_SIZE_IN_BITS dflags = platformWordSize (targetPlatform dflags) `shiftL
 \begin{code}
 
 #if __GLASGOW_HASKELL__ > 706
--- RAE: Improve with newtype coercions!
+-- TODO: Improve with newtype coercions!
 
 newtype UArrayStgWord i = UArrayStgWord (Array.UArray i Word64)
 

@@ -1146,7 +1146,9 @@ kcHsTyVarBndrs strat (HsQTvs { hsq_kvs = kv_ns, hsq_tvs = hs_tvs }) thing_inside
                  | default_to_star         -> return liftedTypeKind
                  | otherwise               -> newMetaKindVar
                (Just thing,       Just _)  -> pprPanic "check_in_scope" (ppr thing)
-           ; return ((n, kind), mr) }
+           ; is_boot <- tcIsHsBoot  -- in boot files, roles default to R
+           ; let default_role = if is_boot then Just Representational else Nothing
+           ; return ((n, kind), firstJust mr default_role) }
 
 tcHsTyVarBndrs :: LHsTyVarBndrs Name 
 	       -> ([TcTyVar] -> TcM r)

@@ -63,16 +63,6 @@ optCoercion :: CvSubst -> Coercion -> NormalCo
 optCoercion env co 
   | opt_NoOptCoercion = substCo env co
   | otherwise         = opt_co env False Nothing co
-{- RAE
-  = pprTrace "optCoercion { " (ppr co $$ ppr env $$ ppr (coercionRole co)) $
-    co' `seq`
-    pprTrace "optCoercion } " (ppr co' $$ ppr (coercionRole co')) $
-    if (coercionRole co) /= (coercionRole co')
-       then pprTrace "different!" empty co'
-       else co'
-    where
-      co' = opt_co env False Nothing co
--}
 
 type NormalCo = Coercion
   -- Invariants: 

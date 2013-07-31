@@ -624,10 +624,10 @@ type RoleAnnots = NameEnv [Maybe Role]  -- from tycon names to role annotations,
 -- field of a tycon we are inferring roles about!
 -- See Note [Role inference]
 inferRoles :: RoleAnnots -> [TyCon] -> Name -> [Role]
-inferRoles annots tycons name
+inferRoles annots tycons
   = let role_env  = initialRoleEnv annots tycons
         role_env' = irGroup role_env tycons in
-    case lookupNameEnv role_env' name of
+    \name -> case lookupNameEnv role_env' name of
       Just roles -> roles
       Nothing    -> pprPanic "inferRoles" (ppr name)
 

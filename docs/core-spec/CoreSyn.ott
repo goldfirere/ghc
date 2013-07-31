@@ -157,14 +157,14 @@ T :: 'TyCon_' ::= {{ com Type constructors, \coderef{types/TyCon.lhs}{TyCon} }}
   | dataConTyCon K :: M :: dataConTyCon    {{ com TyCon extracted from DataCon }}
 
 H :: 'PrimTyCon_' ::= {{ com Primitive type constructors, \coderef{prelude/TysPrim.lhs}{} }}
-  | Int#         ::   :: intPrimTyCon           {{ com Unboxed Int }}
-  | ( ~# )       ::   :: eqPrimTyCon            {{ com Unboxed equality }}
-  | ( ~R# )      ::   :: eqReprPrimTyCon        {{ com Unboxed representational equality }}
-  | BOX          ::   :: superKindTyCon         {{ com Sort of kinds }}
-  | *            ::   :: liftedTypeKindTyCon    {{ com Kind of lifted types }}
-  | #            ::   :: unliftedTypeKindTyCon  {{ com Kind of unlifted types }}
-  | OpenKind     ::   :: openTypeKindTyCon      {{ com Either $*$ or $\#$ }}
-  | Constraint   ::   :: constraintTyCon        {{ com Constraint }}
+  | Int#         ::   :: intPrimTyCon           {{ com Unboxed Int (\texttt{intPrimTyCon}) }}
+  | ( ~# )       ::   :: eqPrimTyCon            {{ com Unboxed equality (\texttt{eqPrimTyCon}) }}
+  | ( ~R# )      ::   :: eqReprPrimTyCon        {{ com Unboxed representational equality (\texttt{eqReprPrimTyCon}) }}
+  | BOX          ::   :: superKindTyCon         {{ com Sort of kinds (\texttt{superKindTyCon}) }}
+  | *            ::   :: liftedTypeKindTyCon    {{ com Kind of lifted types (\texttt{liftedTypeKindTyCon}) }}
+  | #            ::   :: unliftedTypeKindTyCon  {{ com Kind of unlifted types (\texttt{unliftedTypeKindTyCon}) }}
+  | OpenKind     ::   :: openTypeKindTyCon      {{ com Either $*$ or $\#$ (\texttt{openTypeKindTyCon}) }}
+  | Constraint   ::   :: constraintTyCon        {{ com Constraint (\texttt{constraintTyCon}) }}
 
 %% CONTEXTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
