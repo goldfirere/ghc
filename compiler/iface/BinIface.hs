@@ -416,11 +416,3 @@ getWayDescr dflags
         -- can't be used by a registerised build.
 
 
-                      ; return (IfaceTyConApp tc tys) }
-
-              30 -> do n <- get bh
-                       return (IfaceLitTy n)
-
-              _  -> panic ("get IfaceType " ++ show h)
-
-   

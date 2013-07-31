@@ -19,10 +19,7 @@ module TcInstDcls ( tcInstDecls1, tcInstDecls2 ) where
 
 import HsSyn
 import TcBinds
-import TcTyClsDecls( tcAddImplicits, tcAddTyFamInstCtxt, tcAddDataFamInstCtxt,
-                     tcSynFamInstDecl, 
-                     wrongKindOfFamily, tcFamTyPats, kcDataDefn, dataDeclChecks,
-                     tcConDecls, checkValidTyCon )
+import TcTyClsDecls
 import TcClassDcl( tcClassDecl2, 
                    HsSigFun, lookupHsSig, mkHsSigFun, emptyHsSigs,
                    findMethodBind, instantiateMethod, tcInstanceMethodBody )
@@ -713,6 +710,7 @@ tcDataFamInstDecl mb_clsinfo
 
          -- Remember to check validity; no recursion to worry about here
        ; let role_annots = unitNameEnv rep_tc_name (repeat Nothing)
+       ; checkValidTyConDataConsOnly rep_tc
        ; checkValidTyCon rep_tc role_annots
        ; return fam_inst } }
   where

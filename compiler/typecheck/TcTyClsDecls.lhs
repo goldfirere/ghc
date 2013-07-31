@@ -14,6 +14,7 @@ module TcTyClsDecls (
         -- Functions used by TcInstDcls to check
         -- data/type family instance declarations
         kcDataDefn, tcConDecls, dataDeclChecks, checkValidTyCon,
+        checkValidTyConDataConsOnly,
         tcSynFamInstDecl, tcFamTyPats,
         tcAddTyFamInstCtxt, tcAddDataFamInstCtxt,
         wrongKindOfFamily,
@@ -1346,18 +1347,18 @@ checkValidTyClDataConsOnly decl
       = addErrCtxt (tcMkDeclCtxt decl) $
         do { thing <- tcLookupLocatedGlobal lname
            ; case thing of
-               ATyCon tc -> check_datacons_tycon tc
+               ATyCon tc -> checkValidTyConDataConsOnly tc
                _         -> pprPanic "checkValidTyClDataConsOnly" (ppr lname) }
 
-    check_datacons_tycon tc
-      = do {      -- Check arg types of data constructors
-             dflags <- getDynFlags
-           ; existential_ok <- xoptM Opt_ExistentialQuantification
-           ; gadt_ok        <- xoptM Opt_GADTs
-           ; let ex_ok = existential_ok || gadt_ok  -- Data cons can have existential context
-           ; mapM_ (checkValidDataCon dflags ex_ok tc) (tyConDataCons tc) }
+checkValidTyConDataConsOnly :: TyCon -> TcM ()
+checkValidTyConDataConsOnly tc
+  = do {      -- Check arg types of data constructors
+         dflags <- getDynFlags
+       ; existential_ok <- xoptM Opt_ExistentialQuantification
+       ; gadt_ok        <- xoptM Opt_GADTs
+       ; let ex_ok = existential_ok || gadt_ok  -- Data cons can have existential context
+       ; mapM_ (checkValidDataCon dflags ex_ok tc) (tyConDataCons tc) }
                           
-
 checkValidTyCl :: RoleAnnots -> TyClDecl Name -> TcM ()
 checkValidTyCl mroles decl
   = do { checkValidDecl (tcMkDeclCtxt decl) (tyClDeclLName decl) mroles

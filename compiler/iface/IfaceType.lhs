@@ -407,8 +407,6 @@ instance Binary IfaceType where
             putByte bh 3
             put_ bh ag
             put_ bh ah
-    put_ bh (IfaceCoConApp cc tys)
-      = do { putByte bh 4; put_ bh cc; put_ bh tys }
     put_ bh (IfaceTyConApp tc tys)
       = do { putByte bh 5; put_ bh tc; put_ bh tys }
 
@@ -429,8 +427,6 @@ instance Binary IfaceType where
               3 -> do ag <- get bh
                       ah <- get bh
                       return (IfaceFunTy ag ah)
-              4 -> do { cc <- get bh; tys <- get bh
-                      ; return (IfaceCoConApp cc tys) }
               5 -> do { tc <- get bh; tys <- get bh
                       ; return (IfaceTyConApp tc tys) }
 
@@ -546,17 +542,6 @@ instance Binary IfaceCoercion where
                    return $ IfaceSubCo a
            _ -> panic ("get IfaceCoercion " ++ show tag)             
 
-instance Binary Role where
-  put_ bh Nominal          = putByte bh 1
-  put_ bh Representational = putByte bh 2
-  put_ bh Phantom          = putByte bh 3
-
-  get bh = do tag <- getByte bh
-              case tag of 1 -> return Nominal
-                          2 -> return Representational
-                          3 -> return Phantom
-                          _ -> panic ("get Role " ++ show tag)
-
 \end{code}
 
 %************************************************************************
@@ -588,7 +573,7 @@ toIfaceType :: Type -> IfaceType
 toIfaceType (TyVarTy tv)      = IfaceTyVar (toIfaceTyVar tv)
 toIfaceType (AppTy t1 t2)     = IfaceAppTy (toIfaceType t1) (toIfaceType t2)
 toIfaceType (FunTy t1 t2)     = IfaceFunTy (toIfaceType t1) (toIfaceType t2)
-9toIfaceType (TyConApp tc tys) = IfaceTyConApp (toIfaceTyCon tc) (toIfaceTypes tys)
+toIfaceType (TyConApp tc tys) = IfaceTyConApp (toIfaceTyCon tc) (toIfaceTypes tys)
 toIfaceType (LitTy n)         = IfaceLitTy (toIfaceTyLit n)
 toIfaceType (ForAllTy tv t)   = IfaceForAllTy (toIfaceTvBndr tv) (toIfaceType t)
 

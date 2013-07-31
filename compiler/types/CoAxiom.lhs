@@ -36,6 +36,7 @@ import Name
 import Unique
 import Var
 import Util
+import Binary
 import BasicTypes
 import Data.Typeable ( Typeable )
 import SrcLoc
@@ -443,5 +444,16 @@ instance Outputable Role where
   ppr Nominal          = char 'N'
   ppr Representational = char 'R'
   ppr Phantom          = char 'P'
+
+instance Binary Role where
+  put_ bh Nominal          = putByte bh 1
+  put_ bh Representational = putByte bh 2
+  put_ bh Phantom          = putByte bh 3
+
+  get bh = do tag <- getByte bh
+              case tag of 1 -> return Nominal
+                          2 -> return Representational
+                          3 -> return Phantom
+                          _ -> panic ("get Role " ++ show tag)
 
 \end{code}
