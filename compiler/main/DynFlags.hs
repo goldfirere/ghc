@@ -32,7 +32,7 @@ module DynFlags (
         lang_set,
         whenGeneratingDynamicToo, ifGeneratingDynamicToo,
         whenCannotGenerateDynamicToo,
-        doDynamicToo,
+        dynamicTooMkDynamicDynFlags,
         DynFlags(..),
         HasDynFlags(..), ContainsDynFlags(..),
         RtsOptsEnabled(..),
@@ -884,11 +884,6 @@ opt_lc dflags = sOpt_lc (settings dflags)
 -- 'HscNothing' can be used to avoid generating any output, however, note
 -- that:
 --
---  * This will not run the desugaring step, thus no warnings generated in
---    this step will be output.  In particular, this includes warnings related
---    to pattern matching.  You can run the desugarer manually using
---    'GHC.desugarModule'.
---
 --  * If a program uses Template Haskell the typechecker may try to run code
 --    from an imported module.  This will fail if no code has been generated
 --    for this module.  You can use 'GHC.needsTemplateHaskell' to detect
@@ -1182,16 +1177,17 @@ generateDynamicTooConditional dflags canGen cannotGen notTryingToGen
               if b then canGen else cannotGen
       else notTryingToGen
 
-doDynamicToo :: DynFlags -> DynFlags
-doDynamicToo dflags0 = let dflags1 = addWay' WayDyn dflags0
-                           dflags2 = dflags1 {
-                                         outputFile = dynOutputFile dflags1,
-                                         hiSuf = dynHiSuf dflags1,
-                                         objectSuf = dynObjectSuf dflags1
-                                     }
-                           dflags3 = updateWays dflags2
-                           dflags4 = gopt_unset dflags3 Opt_BuildDynamicToo
-                       in dflags4
+dynamicTooMkDynamicDynFlags :: DynFlags -> DynFlags
+dynamicTooMkDynamicDynFlags dflags0
+    = let dflags1 = addWay' WayDyn dflags0
+          dflags2 = dflags1 {
+                        outputFile = dynOutputFile dflags1,
+                        hiSuf = dynHiSuf dflags1,
+                        objectSuf = dynObjectSuf dflags1
+                    }
+          dflags3 = updateWays dflags2
+          dflags4 = gopt_unset dflags3 Opt_BuildDynamicToo
+      in dflags4
 
 -----------------------------------------------------------------------------
 
@@ -2860,24 +2856,23 @@ optLevelFlags
 
 standardWarnings :: [WarningFlag]
 standardWarnings
-    = [ Opt_WarnWarningsDeprecations,
+    = [ Opt_WarnOverlappingPatterns,
+        Opt_WarnWarningsDeprecations,
         Opt_WarnDeprecatedFlags,
         Opt_WarnUnrecognisedPragmas,
-        Opt_WarnOverlappingPatterns,
+        Opt_WarnPointlessPragmas,
+        Opt_WarnDuplicateConstraints,
+        Opt_WarnDuplicateExports,
         Opt_WarnMissingFields,
         Opt_WarnMissingMethods,
-        Opt_WarnDuplicateExports,
         Opt_WarnLazyUnliftedBindings,
-        Opt_WarnDodgyForeignImports,
         Opt_WarnWrongDoBind,
-        Opt_WarnAlternativeLayoutRuleTransitional,
-        Opt_WarnPointlessPragmas,
         Opt_WarnUnsupportedCallingConventions,
-        Opt_WarnUnsupportedLlvmVersion,
+        Opt_WarnDodgyForeignImports,
+        Opt_WarnTypeableInstances,
         Opt_WarnInlineRuleShadowing,
-        Opt_WarnDuplicateConstraints,
-        Opt_WarnInlineRuleShadowing,
-        Opt_WarnTypeableInstances
+        Opt_WarnAlternativeLayoutRuleTransitional,
+        Opt_WarnUnsupportedLlvmVersion
       ]
 
 minusWOpts :: [WarningFlag]

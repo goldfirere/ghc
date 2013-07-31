@@ -637,6 +637,7 @@ hscCompileOneShot hsc_env extCore_filename mod_summary src_changed
         compile mb_old_hash reason = runHsc hsc_env' $ do
             liftIO $ msg reason
             tc_result <- genericHscFrontend mod_summary
+            guts0 <- hscDesugar' (ms_location mod_summary) tc_result
             dflags <- getDynFlags
             case hscTarget dflags of
                 HscNothing -> return HscNotGeneratingCode
@@ -647,8 +648,7 @@ hscCompileOneShot hsc_env extCore_filename mod_summary src_changed
                            liftIO $ hscWriteIface dflags iface changed mod_summary
                            return HscUpdateBoot
                     _ ->
-                        do guts0 <- hscDesugar' (ms_location mod_summary) tc_result
-                           guts <- hscSimplify' guts0
+                        do guts <- hscSimplify' guts0
                            (iface, changed, _details, cgguts) <- hscNormalIface' extCore_filename guts mb_old_hash
                            liftIO $ hscWriteIface dflags iface changed mod_summary
                            return $ HscRecomp cgguts mod_summary
@@ -1135,7 +1135,7 @@ hscWriteIface dflags iface no_change mod_summary = do
         -- TODO: Should handle the dynamic hi filename properly
         let dynIfaceFile = replaceExtension ifaceFile (dynHiSuf dflags)
             dynIfaceFile' = addBootSuffix_maybe (mi_boot iface) dynIfaceFile
-            dynDflags = doDynamicToo dflags
+            dynDflags = dynamicTooMkDynamicDynFlags dflags
         writeIfaceFile dynDflags dynIfaceFile' iface
 
 -- | Compile to hard-code.
