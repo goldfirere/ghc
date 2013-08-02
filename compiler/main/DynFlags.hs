@@ -413,6 +413,8 @@ data WarningFlag =
    | Opt_WarnIncompletePatterns
    | Opt_WarnIncompleteUniPatterns
    | Opt_WarnIncompletePatternsRecUpd
+   | Opt_WarnOverflowedLiterals
+   | Opt_WarnEmptyEnumerations
    | Opt_WarnMissingFields
    | Opt_WarnMissingImportList
    | Opt_WarnMissingMethods
@@ -558,6 +560,7 @@ data ExtensionFlag
    | Opt_LambdaCase
    | Opt_MultiWayIf
    | Opt_TypeHoles
+   | Opt_NegativeLiterals
    | Opt_EmptyCase
    deriving (Eq, Enum, Show)
 
@@ -2433,6 +2436,8 @@ fWarningFlags = [
   ( "warn-dodgy-foreign-imports",       Opt_WarnDodgyForeignImports, nop ),
   ( "warn-dodgy-exports",               Opt_WarnDodgyExports, nop ),
   ( "warn-dodgy-imports",               Opt_WarnDodgyImports, nop ),
+  ( "warn-overflowed-literals",         Opt_WarnOverflowedLiterals, nop ),
+  ( "warn-empty-enumerations",          Opt_WarnEmptyEnumerations, nop ),
   ( "warn-duplicate-exports",           Opt_WarnDuplicateExports, nop ),
   ( "warn-duplicate-constraints",       Opt_WarnDuplicateConstraints, nop ),
   ( "warn-hi-shadowing",                Opt_WarnHiShadows, nop ),
@@ -2726,6 +2731,7 @@ xFlags = [
   ( "IncoherentInstances",              Opt_IncoherentInstances, nop ),
   ( "PackageImports",                   Opt_PackageImports, nop ),
   ( "TypeHoles",                        Opt_TypeHoles, nop ),
+  ( "NegativeLiterals",                 Opt_NegativeLiterals, nop ),
   ( "EmptyCase",                        Opt_EmptyCase, nop )
   ]
 
@@ -2863,6 +2869,8 @@ standardWarnings
         Opt_WarnPointlessPragmas,
         Opt_WarnDuplicateConstraints,
         Opt_WarnDuplicateExports,
+        Opt_WarnOverflowedLiterals,
+        Opt_WarnEmptyEnumerations,
         Opt_WarnMissingFields,
         Opt_WarnMissingMethods,
         Opt_WarnLazyUnliftedBindings,
