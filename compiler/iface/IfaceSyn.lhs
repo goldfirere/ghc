@@ -42,7 +42,7 @@ import Demand
 import Annotations
 import Class
 import NameSet
-import CoAxiom ( BranchIndex, Role )
+import CoAxiom ( Role )
 import Name
 import CostCentre
 import Literal
@@ -299,7 +299,7 @@ data IfaceAxBranch = IfaceAxBranch { ifaxbTyVars  :: [IfaceTvBndr]
                                    , ifaxbLHS     :: [IfaceType]
                                    , ifaxbRoles   :: [Role]
                                    , ifaxbRHS     :: IfaceType
-                                   , ifaxbIncomps :: [BranchIndex] }
+                                   , ifaxbIncomps :: [Int] }
                                      -- See Note [Storing compatibility] in CoAxiom
 
 instance Binary IfaceAxBranch where

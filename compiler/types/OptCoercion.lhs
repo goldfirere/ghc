@@ -10,6 +10,8 @@
 --     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
+{-# LANGUAGE ExistentialQuantification #-}
+
 module OptCoercion ( optCoercion, checkAxInstCo ) where 
 
 #include "HsVersions.h"
@@ -29,6 +31,7 @@ import Pair
 import Maybes
 import FastString
 import Util
+import Unique
 import Unify
 import ListSetOps
 import InstEnv
@@ -372,7 +375,7 @@ opt_trans_rule is co1 co2
 opt_trans_rule is co1 co2
 
   -- TrPushSymAxR
-  | Just (sym, con, ind, cos1) <- co1_is_axiom_maybe
+  | YesAxiom sym con ind cos1 <- co1_is_axiom_maybe
   , Just cos2 <- matchAxiom sym con ind co2
   , True <- sym
   , let newAxInst = AxiomInstCo con ind (opt_transList is (map mkSymCo cos2) cos1)
@@ -380,7 +383,7 @@ opt_trans_rule is co1 co2
   = fireTransRule "TrPushSymAxR" co1 co2 $ SymCo newAxInst
 
   -- TrPushAxR
-  | Just (sym, con, ind, cos1) <- co1_is_axiom_maybe
+  | YesAxiom sym con ind cos1 <- co1_is_axiom_maybe
   , Just cos2 <- matchAxiom sym con ind co2
   , False <- sym
   , let newAxInst = AxiomInstCo con ind (opt_transList is cos1 cos2)
@@ -388,7 +391,7 @@ opt_trans_rule is co1 co2
   = fireTransRule "TrPushAxR" co1 co2 newAxInst
 
   -- TrPushSymAxL
-  | Just (sym, con, ind, cos2) <- co2_is_axiom_maybe
+  | YesAxiom sym con ind cos2 <- co2_is_axiom_maybe
   , Just cos1 <- matchAxiom (not sym) con ind co1
   , True <- sym
   , let newAxInst = AxiomInstCo con ind (opt_transList is cos2 (map mkSymCo cos1))
@@ -396,7 +399,7 @@ opt_trans_rule is co1 co2
   = fireTransRule "TrPushSymAxL" co1 co2 $ SymCo newAxInst
 
   -- TrPushAxL  
-  | Just (sym, con, ind, cos2) <- co2_is_axiom_maybe
+  | YesAxiom sym con ind cos2 <- co2_is_axiom_maybe
   , Just cos1 <- matchAxiom (not sym) con ind co1
   , False <- sym
   , let newAxInst = AxiomInstCo con ind (opt_transList is cos1 cos2)
@@ -404,10 +407,10 @@ opt_trans_rule is co1 co2
   = fireTransRule "TrPushAxL" co1 co2 newAxInst
 
   -- TrPushAxSym/TrPushSymAx
-  | Just (sym1, con1, ind1, cos1) <- co1_is_axiom_maybe
-  , Just (sym2, con2, ind2, cos2) <- co2_is_axiom_maybe
-  , con1 == con2
-  , ind1 == ind2
+  | YesAxiom sym1 con1 ind1 cos1 <- co1_is_axiom_maybe
+  , YesAxiom sym2 con2 ind2 cos2 <- co2_is_axiom_maybe
+  , getUnique con1 == getUnique con2
+  , ind1 `eqBrIndex` ind2
   , sym1 == not sym2
   , let branch = coAxiomNthBranch con1 ind1
         qtvs = coAxBranchTyVars branch
@@ -515,16 +518,22 @@ zapCvSubstEnv2 env1 env2 = mkCvSubst (is1 `unionInScope` is2) []
   where is1 = getCvInScope env1
         is2 = getCvInScope env2
 -----------
-isAxiom_maybe :: Coercion -> Maybe (Bool, CoAxiom Branched, Int, [Coercion])
+-- can't use a tuple for return type of isAxiom_maybe because of existential,
+-- so, we use this to wrap up the values
+data MaybeAxiom
+  = NoAxiom
+  | forall br. YesAxiom Bool (CoAxiom br) (BranchIndex br) [Coercion]
+
+isAxiom_maybe :: Coercion -> MaybeAxiom
 isAxiom_maybe (SymCo co) 
-  | Just (sym, con, ind, cos) <- isAxiom_maybe co
-  = Just (not sym, con, ind, cos)
+  | YesAxiom sym con ind cos <- isAxiom_maybe co
+  = YesAxiom (not sym) con ind cos
 isAxiom_maybe (AxiomInstCo con ind cos)
-  = Just (False, con, ind, cos)
-isAxiom_maybe _ = Nothing
+  = YesAxiom False con ind cos
+isAxiom_maybe _ = NoAxiom
 
 matchAxiom :: Bool -- True = match LHS, False = match RHS
-           -> CoAxiom br -> Int -> Coercion -> Maybe [Coercion]
+           -> CoAxiom br -> BranchIndex br -> Coercion -> Maybe [Coercion]
 -- If we succeed in matching, then *all the quantified type variables are bound*
 -- E.g.   if tvs = [a,b], lhs/rhs = [b], we'll fail
 matchAxiom sym ax@(CoAxiom { co_ax_tc = tc }) ind co

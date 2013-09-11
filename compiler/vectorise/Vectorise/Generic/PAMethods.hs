@@ -99,7 +99,7 @@ buildToPRepr vect_tc repr_ax _ _ repr
   where
     ty_args        = mkTyVarTys (tyConTyVars vect_tc)
 
-    wrap_repr_inst = wrapTypeUnbranchedFamInstBody repr_ax ty_args
+    wrap_repr_inst = wrapTypeFamInstBody repr_ax ty_args
 
     -- CoreExp to convert the given argument to the generic representation.
     -- We start by doing a case branch on the possible data constructors.
@@ -162,7 +162,7 @@ buildFromPRepr vect_tc repr_ax _ _ repr
       arg_ty <- mkPReprType res_ty
       arg <- newLocalVar (fsLit "x") arg_ty
 
-      result <- from_sum (unwrapTypeUnbranchedFamInstScrut repr_ax ty_args (Var arg))
+      result <- from_sum (unwrapTypeFamInstScrut repr_ax ty_args (Var arg))
                          repr
       return $ Lam arg result
   where

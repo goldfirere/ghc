@@ -26,8 +26,7 @@ module MkId (
 
         wrapNewTypeBody, unwrapNewTypeBody,
         wrapFamInstBody, unwrapFamInstScrut,
-        wrapTypeFamInstBody, wrapTypeUnbranchedFamInstBody, unwrapTypeFamInstScrut,
-        unwrapTypeUnbranchedFamInstScrut,
+        wrapTypeFamInstBody, unwrapTypeFamInstScrut,
 
         DataConBoxer(..), mkDataConRep, mkDataConWorkId,
 
@@ -863,13 +862,9 @@ wrapFamInstBody tycon args body
 
 -- Same as `wrapFamInstBody`, but for type family instances, which are
 -- represented by a `CoAxiom`, and not a `TyCon`
-wrapTypeFamInstBody :: CoAxiom br -> Int -> [Type] -> CoreExpr -> CoreExpr
-wrapTypeFamInstBody axiom ind args body
-  = mkCast body (mkSymCo (mkAxInstCo Representational axiom ind args))
-
-wrapTypeUnbranchedFamInstBody :: CoAxiom Unbranched -> [Type] -> CoreExpr -> CoreExpr
-wrapTypeUnbranchedFamInstBody axiom
-  = wrapTypeFamInstBody axiom 0
+wrapTypeFamInstBody :: CoAxiom Unbranched -> [Type] -> CoreExpr -> CoreExpr
+wrapTypeFamInstBody axiom args body
+  = mkCast body (mkSymCo (mkUnbranchedAxInstCo Representational axiom args))
 
 unwrapFamInstScrut :: TyCon -> [Type] -> CoreExpr -> CoreExpr
 unwrapFamInstScrut tycon args scrut
@@ -878,13 +873,9 @@ unwrapFamInstScrut tycon args scrut
   | otherwise
   = scrut
 
-unwrapTypeFamInstScrut :: CoAxiom br -> Int -> [Type] -> CoreExpr -> CoreExpr
-unwrapTypeFamInstScrut axiom ind args scrut
-  = mkCast scrut (mkAxInstCo Representational axiom ind args)
-
-unwrapTypeUnbranchedFamInstScrut :: CoAxiom Unbranched -> [Type] -> CoreExpr -> CoreExpr
-unwrapTypeUnbranchedFamInstScrut axiom
-  = unwrapTypeFamInstScrut axiom 0
+unwrapTypeFamInstScrut :: CoAxiom Unbranched -> [Type] -> CoreExpr -> CoreExpr
+unwrapTypeFamInstScrut axiom args scrut
+  = mkCast scrut (mkUnbranchedAxInstCo Representational axiom args)
 \end{code}
 
 

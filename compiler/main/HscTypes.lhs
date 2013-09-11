@@ -60,7 +60,7 @@ module HscTypes (
         -- * TyThings and type environments
         TyThing(..),  tyThingAvailInfo,
         tyThingTyCon, tyThingDataCon,
-        tyThingId, tyThingCoAxiom, tyThingParent_maybe, tyThingsTyVars,
+        tyThingId, withTyThingCoAxiom, tyThingParent_maybe, tyThingsTyVars,
         implicitTyThings, implicitTyConThings, implicitClassThings,
         isImplicitTyThing,
 
@@ -68,7 +68,7 @@ module HscTypes (
         typeEnvFromEntities, mkTypeEnvWithImplicits,
         extendTypeEnv, extendTypeEnvList, extendTypeEnvWithIds, lookupTypeEnv,
         typeEnvElts, typeEnvTyCons, typeEnvIds,
-        typeEnvDataCons, typeEnvCoAxioms, typeEnvClasses,
+        typeEnvDataCons, typeEnvClasses,
 
         -- * MonadThings
         MonadThings(..),
@@ -1391,7 +1391,7 @@ extras_plus thing = thing : implicitTyThings thing
 -- For newtypes and closed type families (only) add the implicit coercion tycon
 implicitCoTyCon :: TyCon -> [TyThing]
 implicitCoTyCon tc
-  | Just co <- newTyConCo_maybe tc = [ACoAxiom $ toBranchedAxiom co]
+  | Just co <- newTyConCo_maybe tc = [ACoAxiom co]
   | Just co <- isClosedSynFamilyTyCon_maybe tc
                                    = [ACoAxiom co]
   | otherwise                      = []
@@ -1465,7 +1465,7 @@ type TypeEnv = NameEnv TyThing
 emptyTypeEnv    :: TypeEnv
 typeEnvElts     :: TypeEnv -> [TyThing]
 typeEnvTyCons   :: TypeEnv -> [TyCon]
-typeEnvCoAxioms :: TypeEnv -> [CoAxiom Branched]
+-- no typeEnvCoAxioms because of ACoAxiom's existential type
 typeEnvIds      :: TypeEnv -> [Id]
 typeEnvDataCons :: TypeEnv -> [DataCon]
 typeEnvClasses  :: TypeEnv -> [Class]
@@ -1474,7 +1474,6 @@ lookupTypeEnv   :: TypeEnv -> Name -> Maybe TyThing
 emptyTypeEnv        = emptyNameEnv
 typeEnvElts     env = nameEnvElts env
 typeEnvTyCons   env = [tc | ATyCon tc   <- typeEnvElts env]
-typeEnvCoAxioms env = [ax | ACoAxiom ax <- typeEnvElts env]
 typeEnvIds      env = [id | AnId id     <- typeEnvElts env]
 typeEnvDataCons env = [dc | ADataCon dc <- typeEnvElts env]
 typeEnvClasses  env = [cl | tc <- typeEnvTyCons env,
@@ -1494,7 +1493,7 @@ typeEnvFromEntities ids tcs famInsts =
   mkTypeEnv (   map AnId ids
              ++ map ATyCon all_tcs
              ++ concatMap implicitTyConThings all_tcs
-             ++ map (ACoAxiom . toBranchedAxiom . famInstAxiom) famInsts
+             ++ map (ACoAxiom . famInstAxiom) famInsts
             )
  where
   all_tcs = tcs ++ famInstsRepTyCons famInsts
@@ -1555,10 +1554,11 @@ tyThingTyCon :: TyThing -> TyCon
 tyThingTyCon (ATyCon tc) = tc
 tyThingTyCon other       = pprPanic "tyThingTyCon" (pprTyThing other)
 
--- | Get the 'CoAxiom' from a 'TyThing' if it is a coercion axiom thing. Panics otherwise
-tyThingCoAxiom :: TyThing -> CoAxiom Branched
-tyThingCoAxiom (ACoAxiom ax) = ax
-tyThingCoAxiom other         = pprPanic "tyThingCoAxiom" (pprTyThing other)
+-- | Get the 'CoAxiom' from a 'TyThing' and pass it to the given function,
+-- if it is a coercion axiom thing. Panics otherwise
+withTyThingCoAxiom :: TyThing -> (forall br. CoAxiom br -> a) -> a
+withTyThingCoAxiom (ACoAxiom ax) f = f ax
+withTyThingCoAxiom other         _ = pprPanic "withTyThingCoAxiom" (pprTyThing other)
 
 -- | Get the 'DataCon' from a 'TyThing' if it is a data constructor thing. Panics otherwise
 tyThingDataCon :: TyThing -> DataCon

@@ -4,21 +4,23 @@
 
 \begin{code}
 
-{-# LANGUAGE GADTs, ScopedTypeVariables #-}
+{-# LANGUAGE GADTs, ScopedTypeVariables, StandaloneDeriving #-}
 
 -- | Module for coercion axioms, used to represent type family instances
 -- and newtypes
 
 module CoAxiom (
        Branched, Unbranched, BranchIndex, BranchList(..),
+       brIndexToInt, brIndexFromInt, eqBrIndex, noBranchIndex,
+       refineBranchFlag,
        toBranchList, fromBranchList,
-       toBranchedList, toUnbranchedList,
+       -- RAE toBranchedList, toUnbranchedList,
        brListLength, brListNth, brListMap, brListFoldr, brListMapM,
-       brListFoldlM_, brListZipWith,
+       brListFoldlM_, brListZipWith, brListInRange,
 
        CoAxiom(..), CoAxBranch(..), 
 
-       toBranchedAxiom, toUnbranchedAxiom,
+       -- RAE toBranchedAxiom, toUnbranchedAxiom,
        coAxiomName, coAxiomArity, coAxiomBranches,
        coAxiomTyCon, isImplicitCoAxiom, coAxiomNumPats,
        coAxiomNthBranch, coAxiomSingleBranch_maybe, coAxiomRole,
@@ -126,16 +128,51 @@ code to use promoted types.
 %************************************************************************
 
 \begin{code}
-type BranchIndex = Int  -- The index of the branch in the list of branches
-                        -- Counting from zero
-
 -- the phantom type labels
 data Unbranched deriving Typeable
 data Branched deriving Typeable
 
+data BranchIndex br where
+  BranchIndex :: Int -> BranchIndex Branched
+  NoBranchIndex :: BranchIndex Unbranched
+
+deriving instance Data.Typeable BranchIndex
+
+instance Typeable br => Data.Data (BranchIndex br) where
+  -- don't traverse?
+  toConstr _   = abstractConstr "BranchIndex"
+  gunfold _ _  = error "gunfold"
+  dataTypeOf _ = mkNoRepType "BranchIndex"
+
+-- convert BranchIndex to Int
+brIndexToInt :: BranchIndex br -> Int
+brIndexToInt NoBranchIndex   = 0
+brIndexToInt (BranchIndex n) = n
+
+brIndexFromInt :: Int -> BranchIndex Branched
+brIndexFromInt = BranchIndex
+
+noBranchIndex :: BranchIndex Unbranched
+noBranchIndex = NoBranchIndex
+
+-- equality on BranchIndexes
+eqBrIndex :: BranchIndex br1 -> BranchIndex br2 -> Bool
+NoBranchIndex    `eqBrIndex` NoBranchIndex    = True
+(BranchIndex n1) `eqBrIndex` (BranchIndex n2) = n1 == n2
+_                `eqBrIndex` _                = False
+
 data BranchList a br where
   FirstBranch :: a -> BranchList a br
   NextBranch :: a -> BranchList a br -> BranchList a Branched
+
+-- do type-case on the branch parameter
+-- this is necessary, e.g., to define a Data instance for Coercion
+refineBranchFlag :: BranchIndex br
+                 -> (br ~ Unbranched => a)
+                 -> (br ~ Branched   => a)
+                 -> a
+refineBranchFlag (BranchIndex _) _          branched = branched
+refineBranchFlag NoBranchIndex   unbranched _        = unbranched
 
 -- convert to/from lists
 toBranchList :: [a] -> BranchList a Branched
@@ -147,6 +184,7 @@ fromBranchList :: BranchList a br -> [a]
 fromBranchList (FirstBranch b) = [b]
 fromBranchList (NextBranch h t) = h : (fromBranchList t)
 
+{- RAE
 -- convert from any BranchList to a Branched BranchList
 toBranchedList :: BranchList a br -> BranchList a Branched
 toBranchedList (FirstBranch b) = FirstBranch b
@@ -156,6 +194,12 @@ toBranchedList (NextBranch h t) = NextBranch h t
 toUnbranchedList :: BranchList a br -> BranchList a Unbranched
 toUnbranchedList (FirstBranch b) = FirstBranch b
 toUnbranchedList _ = pprPanic "toUnbranchedList" empty
+-}
+
+-- first element
+brListHead :: BranchList a br -> a
+brListHead (FirstBranch a)  = a
+brListHead (NextBranch h _) = h
 
 -- length
 brListLength :: BranchList a br -> Int
@@ -163,11 +207,15 @@ brListLength (FirstBranch _) = 1
 brListLength (NextBranch _ t) = 1 + brListLength t
 
 -- lookup
-brListNth :: BranchList a br -> BranchIndex -> a
-brListNth (FirstBranch b) 0 = b
-brListNth (NextBranch h _) 0 = h
-brListNth (NextBranch _ t) n = brListNth t (n-1)
-brListNth _ _ = pprPanic "brListNth" empty
+brListNth :: BranchList a br -> BranchIndex br -> a
+brListNth (FirstBranch b) _ = b
+brListNth list@(NextBranch {}) (BranchIndex n) = branched_list_nth list n
+  where
+    branched_list_nth :: BranchList a br -> Int -> a
+    branched_list_nth list 0 = brListHead list
+    branched_list_nth (NextBranch _ t) n = branched_list_nth t (n-1)
+    branched_list_nth _ _ = panic "branched_list_nth"
+brListNth _ _ = panic "brListNth" -- the typechecker should prevent this!
 
 -- map, fold
 brListMap :: (a -> b) -> BranchList a br -> [b]
@@ -200,7 +248,21 @@ brListZipWith f (FirstBranch a) (NextBranch b _) = [f a b]
 brListZipWith f (NextBranch a _) (FirstBranch b) = [f a b]
 brListZipWith f (NextBranch a ta) (NextBranch b tb) = f a b : brListZipWith f ta tb
 
+-- check if an index is in range
+brListInRange :: BranchList a br -> BranchIndex br -> Bool
+brListInRange _ NoBranchIndex = True
+brListInRange list (BranchIndex n) = list_in_range list n
+  where
+    list_in_range :: BranchList a br -> Int -> Bool
+    list_in_range _                0 = True
+    list_in_range (NextBranch _ t) n | n > 0     = list_in_range t (n-1)
+                                     | otherwise = False
+    list_in_range (FirstBranch {}) _ = panic "brListInRange"
+
 -- pretty-printing
+instance Outputable (BranchIndex br) where
+  ppr (BranchIndex n) = ppr n
+  ppr NoBranchIndex   = ptext (sLit "{- no branches -}")
 
 instance Outputable a => Outputable (BranchList a br) where
   ppr = ppr . fromBranchList
@@ -264,22 +326,14 @@ data CoAxBranch
     }
   deriving Typeable
 
-toBranchedAxiom :: CoAxiom br -> CoAxiom Branched
-toBranchedAxiom (CoAxiom unique name role tc branches implicit)
-  = CoAxiom unique name role tc (toBranchedList branches) implicit
-
-toUnbranchedAxiom :: CoAxiom br -> CoAxiom Unbranched
-toUnbranchedAxiom (CoAxiom unique name role tc branches implicit)
-  = CoAxiom unique name role tc (toUnbranchedList branches) implicit
-
 coAxiomNumPats :: CoAxiom br -> Int
-coAxiomNumPats = length . coAxBranchLHS . (flip coAxiomNthBranch 0)
+coAxiomNumPats = length . coAxBranchLHS . brListHead . coAxiomBranches
 
-coAxiomNthBranch :: CoAxiom br -> BranchIndex -> CoAxBranch
+coAxiomNthBranch :: CoAxiom br -> BranchIndex br -> CoAxBranch
 coAxiomNthBranch (CoAxiom { co_ax_branches = bs }) index
   = brListNth bs index
 
-coAxiomArity :: CoAxiom br -> BranchIndex -> Arity
+coAxiomArity :: CoAxiom br -> BranchIndex br -> Arity
 coAxiomArity ax index
   = length $ cab_tvs $ coAxiomNthBranch ax index
 

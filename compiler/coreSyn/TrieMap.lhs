@@ -22,6 +22,7 @@ module TrieMap(
    lookupTypeMapTyCon
  ) where
 
+import CoAxiom ( brIndexToInt )
 import CoreSyn
 import Coercion
 import Literal
@@ -529,7 +530,7 @@ lkC env co m
   where
     go (Refl r ty)             = km_refl   >.> lookupTM r >=> lkT env ty
     go (TyConAppCo r tc cs)    = km_tc_app >.> lookupTM r >=> lkNamed tc >=> lkList (lkC env) cs
-    go (AxiomInstCo ax ind cs) = km_axiom  >.> lkNamed ax >=> lookupTM ind >=> lkList (lkC env) cs
+    go (AxiomInstCo ax ind cs) = km_axiom  >.> lkNamed ax >=> lookupTM (brIndexToInt ind) >=> lkList (lkC env) cs
     go (AppCo c1 c2)           = km_app    >.> lkC env c1 >=> lkC env c2
     go (TransCo c1 c2)         = km_trans  >.> lkC env c1 >=> lkC env c2
     go (UnivCo r t1 t2)        = km_univ   >.> lookupTM r >=> lkT env t1 >=> lkT env t2
@@ -551,7 +552,7 @@ xtC :: CmEnv -> Coercion -> XT a -> CoercionMap a -> CoercionMap a
 xtC env co f EmptyKM = xtC env co f wrapEmptyKM
 xtC env (Refl r ty)             f m = m { km_refl   = km_refl m   |> xtR r |>> xtT env ty f }
 xtC env (TyConAppCo r tc cs)    f m = m { km_tc_app = km_tc_app m |> xtR r |>> xtNamed tc |>> xtList (xtC env) cs f }
-xtC env (AxiomInstCo ax ind cs) f m = m { km_axiom  = km_axiom m  |> xtNamed ax |>> xtInt ind |>> xtList (xtC env) cs f }
+xtC env (AxiomInstCo ax ind cs) f m = m { km_axiom  = km_axiom m  |> xtNamed ax |>> xtInt (brIndexToInt ind) |>> xtList (xtC env) cs f }
 xtC env (AppCo c1 c2)           f m = m { km_app    = km_app m    |> xtC env c1 |>> xtC env c2 f }
 xtC env (TransCo c1 c2)         f m = m { km_trans  = km_trans m  |> xtC env c1 |>> xtC env c2 f }
 xtC env (UnivCo r t1 t2)        f m = m { km_univ   = km_univ   m |> xtR r |>> xtT env t1 |>> xtT env t2 f }

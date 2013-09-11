@@ -173,11 +173,11 @@ tcLookupTyCon name = do
         ATyCon tc -> return tc
         _         -> wrongThingErr "type constructor" (AGlobal thing) name
 
-tcLookupAxiom :: Name -> TcM (CoAxiom Branched)
-tcLookupAxiom name = do
+tcLookupAxiom :: Name -> (forall br. CoAxiom br -> TcM a) -> TcM a
+tcLookupAxiom name thing_inside = do
     thing <- tcLookupGlobal name
     case thing of
-        ACoAxiom ax -> return ax
+        ACoAxiom ax -> thing_inside ax
         _           -> wrongThingErr "axiom" (AGlobal thing) name
 
 tcLookupLocatedGlobalId :: Located Name -> TcM Id

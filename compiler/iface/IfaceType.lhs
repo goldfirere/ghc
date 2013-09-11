@@ -98,7 +98,7 @@ data IfaceCoercion
   | IfaceAppCo       IfaceCoercion IfaceCoercion
   | IfaceForAllCo    IfaceTvBndr IfaceCoercion
   | IfaceCoVarCo     IfLclName
-  | IfaceAxiomInstCo IfExtName BranchIndex [IfaceCoercion]
+  | IfaceAxiomInstCo IfExtName Int [IfaceCoercion]
   | IfaceUnivCo      Role IfaceType IfaceType
   | IfaceSymCo       IfaceCoercion
   | IfaceTransCo     IfaceCoercion IfaceCoercion
@@ -629,7 +629,7 @@ toIfaceCoercion (ForAllCo v co)     = IfaceForAllCo (toIfaceTvBndr v)
                                                     (toIfaceCoercion co)
 toIfaceCoercion (CoVarCo cv)        = IfaceCoVarCo  (toIfaceCoVar cv)
 toIfaceCoercion (AxiomInstCo con ind cos)
-                                    = IfaceAxiomInstCo (coAxiomName con) ind
+                                    = IfaceAxiomInstCo (coAxiomName con) (brIndexToInt ind)
                                                        (map toIfaceCoercion cos)
 toIfaceCoercion (UnivCo r ty1 ty2)  = IfaceUnivCo r (toIfaceType ty1)
                                                   (toIfaceType ty2)

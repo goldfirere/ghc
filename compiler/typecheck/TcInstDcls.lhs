@@ -461,7 +461,7 @@ addFamInsts fam_insts thing_inside
        ; tcg_env <- tcAddImplicits things
        ; setGblEnv tcg_env thing_inside }
   where
-    axioms = map (toBranchedAxiom . famInstAxiom) fam_insts
+    axioms = map famInstAxiom fam_insts
     tycons = famInstsRepTyCons fam_insts
     things = map ATyCon tycons ++ map ACoAxiom axioms 
 \end{code}

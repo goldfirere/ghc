@@ -3,6 +3,8 @@
 %
 
 \begin{code}
+{-# LANGUAGE ExistentialQuantification, StandaloneDeriving #-}
+
 module TcEvidence (
 
   -- HsWrapper
@@ -105,7 +107,7 @@ data TcCoercion
   | TcForAllCo TyVar TcCoercion 
   | TcInstCo TcCoercion TcType
   | TcCoVarCo EqVar               -- variable always at role N
-  | TcAxiomInstCo (CoAxiom Branched) Int [TcType] -- Int specifies branch number
+  | forall br. TcAxiomInstCo (CoAxiom br) (BranchIndex br) [TcType] 
                                                   -- See [CoAxiom Index] in Coercion.lhs
   -- This is number of types and coercions are expected to macth to CoAxiomRule
   -- (i.e., the CoAxiomRules are always fully saturated)
@@ -116,7 +118,9 @@ data TcCoercion
   | TcLRCo LeftOrRight TcCoercion
   | TcCastCo TcCoercion TcCoercion     -- co1 |> co2
   | TcLetCo TcEvBinds TcCoercion
-  deriving (Data.Data, Data.Typeable)
+
+deriving instance Data.Typeable TcCoercion
+instance Data.Data TcCoercion where { } -- RAE: fix !!
 
 isEqVar :: Var -> Bool 
 -- Is lifted coercion variable (only!)
@@ -150,23 +154,22 @@ mkTcTyConAppCo tc cos   -- No need to expand type synonyms
 
   | otherwise = TcTyConAppCo tc cos
 
-mkTcAxInstCo :: CoAxiom br -> Int -> [TcType] -> TcCoercion
+mkTcAxInstCo :: CoAxiom br -> BranchIndex br -> [TcType] -> TcCoercion
 mkTcAxInstCo ax ind tys
-  | arity == n_tys = TcAxiomInstCo ax_br ind tys
+  | arity == n_tys = TcAxiomInstCo ax ind tys
   | otherwise      = ASSERT( arity < n_tys )
-                     foldl TcAppCo (TcAxiomInstCo ax_br ind (take arity tys))
+                     foldl TcAppCo (TcAxiomInstCo ax ind (take arity tys))
                                    (map TcRefl (drop arity tys))
   where
     n_tys = length tys
     arity = coAxiomArity ax ind
-    ax_br = toBranchedAxiom ax
 
 mkTcAxiomRuleCo :: CoAxiomRule -> [TcType] -> [TcCoercion] -> TcCoercion
 mkTcAxiomRuleCo = TcAxiomRuleCo
 
 mkTcUnbranchedAxInstCo :: CoAxiom Unbranched -> [TcType] -> TcCoercion
 mkTcUnbranchedAxInstCo ax tys
-  = mkTcAxInstCo ax 0 tys
+  = mkTcAxInstCo ax noBranchIndex tys
 
 mkTcAppCo :: TcCoercion -> TcCoercion -> TcCoercion
 -- No need to deal with TyConApp on the left; see Note [TcCoercions]

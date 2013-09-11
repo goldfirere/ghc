@@ -10,6 +10,8 @@
 --     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
+{-# LANGUAGE ExistentialQuantification, StandaloneDeriving, ScopedTypeVariables #-}
+
 -- | Module for (a) type kinds and (b) type coercions, 
 -- as used in System FC. See 'CoreSyn.Expr' for
 -- more on System FC and how coercions fit into it.
@@ -109,7 +111,8 @@ import Control.Applicative
 import Data.Traversable (traverse, sequenceA)
 import FastString
 
-import qualified Data.Data as Data hiding ( TyCon )
+import Data.Data ( Data(..), Typeable, mkConstr, mkDataType, Fixity(..),
+                   constrIndex )
 \end{code}
 
 %************************************************************************
@@ -168,8 +171,9 @@ data Coercion
   | CoVarCo CoVar      -- :: _ -> (N or R)
                        -- result role depends on the tycon of the variable's type
 
-    -- AxiomInstCo :: e -> _ -> [N] -> e
-  | AxiomInstCo (CoAxiom Branched) BranchIndex [Coercion]
+    -- AxiomInstCo :: e -> _ -> [??] -> e     See Note [AxiomInstCo roles]
+  | forall br. AxiomInstCo (CoAxiom br) (BranchIndex br) [Coercion]
+     -- TODO (RAE): update note
      -- See also [CoAxiom index]
      -- The coercion arguments always *precisely* saturate 
      -- arity of (that branch of) the CoAxiom.  If there are
@@ -196,12 +200,34 @@ data Coercion
 
   | SubCo Coercion                  -- Turns a ~N into a ~R
     -- :: N -> R
-  deriving (Data.Data, Data.Typeable)
+
+deriving instance Typeable Coercion
+
+instance Data Coercion where
+  gfoldl k z (Refl a b) = z Refl `k` a `k` b
+  gfoldl k z (AxiomInstCo a b c)
+    = refineBranchFlag b
+                       (z AxiomInstCo `k` a `k` b `k` c)
+                       (z AxiomInstCo `k` a `k` b `k` c)
+
+  gunfold k (z :: forall r. r -> c r) c = case constrIndex c of
+    { 1 -> k (k (z Refl))
+    ; 2 -> k (k (k (z AxiomInstCo) :: c (BranchIndex Branched -> [Coercion] -> Coercion)))
+    }
+
+  toConstr (Refl _ _) = con_Refl
+  toConstr (AxiomInstCo _ _ _) = con_AxiomInstCo
+  
+  dataTypeOf _ = ty_Coercion
+
+con_Refl = mkConstr ty_Coercion "Refl" [] Prefix
+con_AxiomInstCo = mkConstr ty_Coercion "AxiomInstCo" [] Prefix
+ty_Coercion = mkDataType "Coercion.Coercion" [con_Refl, con_AxiomInstCo]
 
 -- If you edit this type, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.lhs
 data LeftOrRight = CLeft | CRight 
-                 deriving( Eq, Data.Data, Data.Typeable )
+                 deriving( Eq, Data, Typeable )
 
 instance Binary LeftOrRight where
    put_ bh CLeft  = putByte bh 0
@@ -271,6 +297,13 @@ Now we have
   sym (C b) ; C g
 
 which can be optimized to F g.
+
+Note [AxiomInstCo roles]
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Somewhat like TyConAppCo, the roles of the arguments to an AxiomInstCo are
+determined by the cab_roles field of the applied CoAxiom branch. See also
+Note [CoAxBranch roles] in CoAxiom.
 
 Note [CoAxiom index]
 ~~~~~~~~~~~~~~~~~~~~
@@ -733,7 +766,7 @@ pprCoAxBranch fam_tc (CoAxBranch { cab_tvs = tvs
   = hang (ifPprDebug (pprForAll tvs))
        2 (hang (pprTypeApp fam_tc lhs) 2 (equals <+> (ppr rhs)))
 
-pprCoAxBranchHdr :: CoAxiom br -> BranchIndex -> SDoc
+pprCoAxBranchHdr :: CoAxiom br -> BranchIndex br -> SDoc
 pprCoAxBranchHdr ax@(CoAxiom { co_ax_tc = fam_tc, co_ax_name = name }) index
   | CoAxBranch { cab_lhs = tys, cab_loc = loc } <- coAxiomNthBranch ax index
   = hang (pprTypeApp fam_tc tys)
@@ -847,19 +880,18 @@ mkCoVarCo cv
 mkReflCo :: Role -> Type -> Coercion
 mkReflCo = Refl
 
-mkAxInstCo :: Role -> CoAxiom br -> BranchIndex -> [Type] -> Coercion
+mkAxInstCo :: Role -> CoAxiom br -> BranchIndex br -> [Type] -> Coercion
 -- mkAxInstCo can legitimately be called over-staturated; 
 -- i.e. with more type arguments than the coercion requires
 mkAxInstCo role ax index tys
-  | arity == n_tys = maybeSubCo2 role ax_role $ AxiomInstCo ax_br index rtys
+  | arity == n_tys = maybeSubCo2 role ax_role $ AxiomInstCo ax index rtys
   | otherwise      = ASSERT( arity < n_tys )
                      maybeSubCo2 role ax_role $
-                     foldl AppCo (AxiomInstCo ax_br index (take arity rtys))
+                     foldl AppCo (AxiomInstCo ax index (take arity rtys))
                                  (drop arity rtys)
   where
     n_tys     = length tys
-    ax_br     = toBranchedAxiom ax
-    branch    = coAxiomNthBranch ax_br index
+    branch    = coAxiomNthBranch ax index
     arity     = length $ coAxBranchTyVars branch
     arg_roles = coAxBranchRoles branch
     rtys      = zipWith mkReflCo (arg_roles ++ repeat Nominal) tys
@@ -868,9 +900,9 @@ mkAxInstCo role ax index tys
 -- to be used only with unbranched axioms
 mkUnbranchedAxInstCo :: Role -> CoAxiom Unbranched -> [Type] -> Coercion
 mkUnbranchedAxInstCo role ax tys
-  = mkAxInstCo role ax 0 tys
+  = mkAxInstCo role ax noBranchIndex tys
 
-mkAxInstLHS, mkAxInstRHS :: CoAxiom br -> BranchIndex -> [Type] -> Type
+mkAxInstLHS, mkAxInstRHS :: CoAxiom br -> BranchIndex br -> [Type] -> Type
 -- Instantiate the axiom with specified types,
 -- returning the instantiated RHS
 -- A companion to mkAxInstCo: 
@@ -888,7 +920,7 @@ mkAxInstRHS ax index tys
     mkAppTys (substTyWith tvs tys1 rhs) tys2
 
 mkUnbranchedAxInstRHS :: CoAxiom Unbranched -> [Type] -> Type
-mkUnbranchedAxInstRHS ax = mkAxInstRHS ax 0
+mkUnbranchedAxInstRHS ax = mkAxInstRHS ax noBranchIndex
 
 -- | Apply a 'Coercion' to another 'Coercion'.
 -- The second coercion must be Nominal, unless the first is Phantom.
@@ -1228,8 +1260,8 @@ coreEqCoercion2 env (CoVarCo cv1) (CoVarCo cv2)
   = rnOccL env cv1 == rnOccR env cv2
 
 coreEqCoercion2 env (AxiomInstCo con1 ind1 cos1) (AxiomInstCo con2 ind2 cos2)
-  = con1 == con2
-    && ind1 == ind2
+  = getUnique con1 == getUnique con2
+    && ind1 `eqBrIndex` ind2
     && all2 (coreEqCoercion2 env) cos1 cos2
 
 coreEqCoercion2 env (UnivCo r1 ty11 ty12) (UnivCo r2 ty21 ty22)

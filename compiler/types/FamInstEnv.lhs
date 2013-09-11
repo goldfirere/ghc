@@ -789,19 +789,19 @@ chooseAxiom envs role tc tys
   = Nothing
 
 -- The axiom can be oversaturated. (Closed families only.)
-chooseBranch :: CoAxiom Branched -> [Type] -> Maybe (BranchIndex, [Type])
+chooseBranch :: CoAxiom Branched -> [Type] -> Maybe (BranchIndex Branched, [Type])
 chooseBranch axiom tys
   = do { let num_pats = coAxiomNumPats axiom
              (target_tys, extra_tys) = splitAt num_pats tys
              branches = coAxiomBranches axiom
        ; (ind, inst_tys) <- findBranch (fromBranchList branches) 0 target_tys
-       ; return (ind, inst_tys ++ extra_tys) }
+       ; return (brIndexFromInt ind, inst_tys ++ extra_tys) }
 
 -- The axiom must *not* be oversaturated
 findBranch :: [CoAxBranch]             -- branches to check
-           -> BranchIndex              -- index of current branch
+           -> Int                      -- index of current branch
            -> [Type]                   -- target types
-           -> Maybe (BranchIndex, [Type])
+           -> Maybe (Int, [Type])
 findBranch (CoAxBranch { cab_tvs = tpl_tvs, cab_lhs = tpl_lhs, cab_incomps = incomps }
               : rest) ind target_tys
   = case tcMatchTys (mkVarSet tpl_tvs) tpl_lhs target_tys of

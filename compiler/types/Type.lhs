@@ -1046,7 +1046,7 @@ mkFamilyTyConApp tc tys
 
 -- | Get the type on the LHS of a coercion induced by a type/data
 -- family instance.
-coAxNthLHS :: CoAxiom br -> Int -> Type
+coAxNthLHS :: CoAxiom br -> BranchIndex br -> Type
 coAxNthLHS ax ind =
   mkTyConApp (coAxiomTyCon ax) (coAxBranchLHS (coAxiomNthBranch ax ind))
 

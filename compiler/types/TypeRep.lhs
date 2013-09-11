@@ -24,7 +24,8 @@ Note [The Type-related module hierarchy]
 
 -- We expose the relevant stuff from this module via the Type module
 {-# OPTIONS_HADDOCK hide #-}
-{-# LANGUAGE DeriveDataTypeable, DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
+{-# LANGUAGE DeriveDataTypeable, DeriveFunctor, DeriveFoldable, DeriveTraversable,
+             ExistentialQuantification #-}
 module TypeRep (
 	TyThing(..),
 	Type(..),
@@ -367,8 +368,28 @@ data TyThing
   = AnId     Id
   | ADataCon DataCon
   | ATyCon   TyCon       -- TyCons and classes; see Note [ATyCon for classes]
-  | ACoAxiom (CoAxiom Branched)
-  deriving (Eq, Ord)
+  | forall br. ACoAxiom (CoAxiom br)
+
+-- can't derive Eq and Ord automatically
+instance Eq TyThing where
+  (AnId id1)     == (AnId id2)     = id1 == id2
+  (ADataCon dc1) == (ADataCon dc2) = dc1 == dc2
+  (ATyCon tc1)   == (ATyCon tc2)   = tc1 == tc2
+  (ACoAxiom ax1) == (ACoAxiom ax2) = getUnique ax1 == getUnique ax2
+  _              == _              = False
+
+instance Ord TyThing where
+  (AnId id1)     `compare` (AnId id2)     = id1 `compare` id2
+  (ADataCon dc1) `compare` (ADataCon dc2) = dc1 `compare` dc2
+  (ATyCon tc1)   `compare` (ATyCon tc2)   = tc1 `compare` tc2
+  (ACoAxiom ax1) `compare` (ACoAxiom ax2) = getUnique ax1 `compare` getUnique ax2
+  thing1         `compare` thing2         = get_rank thing1 `compare` get_rank thing2
+    where
+      get_rank :: TyThing -> Int
+      get_rank (AnId _)     = 1
+      get_rank (ADataCon _) = 2
+      get_rank (ATyCon _)   = 3
+      get_rank (ACoAxiom _) = 4
 
 instance Outputable TyThing where 
   ppr = pprTyThing
