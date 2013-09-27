@@ -21,7 +21,7 @@ import Pair(Pair)
 import HscTypes
 import FamInstEnv
 import InstEnv( roughMatchTcs )
-import Coercion( pprCoAxBranchHdr )
+import Coercion( pprCoAxHdr )
 import LoadIface
 import TypeRep
 import TcRnMonad
@@ -316,7 +316,7 @@ addFamInstsErr herald insts
   = ASSERT( not (null insts) )
     setSrcSpan srcSpan $ addErr $
     hang herald
-       2 (vcat [ pprCoAxBranchHdr (famInstAxiom fi) 0
+       2 (vcat [ pprCoAxHdr (famInstAxiom fi)
                | fi <- sorted ])
  where
    getSpan   = getSrcLoc . famInstAxiom

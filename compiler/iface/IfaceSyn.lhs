@@ -107,10 +107,11 @@ data IfaceDecl
                                                 --   with the class recursive?
     }
 
-  | IfaceAxiom { ifName       :: OccName,        -- Axiom name
-                 ifTyCon      :: IfaceTyCon,     -- LHS TyCon
-                 ifRole       :: Role,           -- Role of axiom
-                 ifAxBranches :: [IfaceAxBranch] -- Branches
+  | IfaceAxiom { ifName       :: OccName,         -- Axiom name
+                 ifTyCon      :: IfaceTyCon,      -- LHS TyCon
+                 ifRole       :: Role,            -- Role of axiom
+                 ifAxBranches :: [IfaceAxBranch], -- Branches
+                 ifBranched   :: True             -- is this a branched axiom?
     }
 
   | IfaceForeign { ifName :: OccName,           -- Needs expanding when we move

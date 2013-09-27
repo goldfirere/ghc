@@ -949,8 +949,8 @@ lintCoercion (InstCo co arg_ty)
             -> failWithL (ptext (sLit "Kind mis-match in inst coercion"))
 	  _ -> failWithL (ptext (sLit "Bad argument of inst")) }
 
-lintCoercion co@(AxiomInstCo con ind cos)
-  = do { unless (brListInRange con ind)
+lintCoercion co@(AxiomInstCo con@(CoAxiom { co_ax_branches = branches }) ind cos)
+  = do { unless (brListInRange branches ind)
                 (bad_ax (ptext (sLit "index out of range")))
          -- See Note [Kind instantiation in coercions]
        ; let CoAxBranch { cab_tvs   = ktvs

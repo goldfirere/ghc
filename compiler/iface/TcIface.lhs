@@ -561,19 +561,27 @@ tc_iface_decl _ _ (IfaceForeign {ifName = rdr_name, ifExtName = ext_name})
         ; return (ATyCon (mkForeignTyCon name ext_name 
                                          liftedTypeKind)) }
 
-tc_iface_decl _ _ (IfaceAxiom { ifName = ax_occ, ifTyCon = tc
+tc_iface_decl _ _ (IfaceAxiom { ifName = ax_occ, ifTyCon = tc, ifBranched = branched
                               , ifAxBranches = branches, ifRole = role })
   = do { tc_name     <- lookupIfaceTop ax_occ
        ; tc_tycon    <- tcIfaceTyCon tc
        ; tc_branches <- foldlM tc_ax_branches [] branches
-       ; let axiom = computeAxiomIncomps $
+       ; let mk_axiom branch_list = computeAxiomIncomps $
                      CoAxiom { co_ax_unique   = nameUnique tc_name
                              , co_ax_name     = tc_name
                              , co_ax_tc       = tc_tycon
                              , co_ax_role     = role
-                             , co_ax_branches = toBranchList tc_branches
+                             , co_ax_branches = branch_list
                              , co_ax_implicit = False }
-       ; return (ACoAxiom axiom) }
+       ; if branched
+         then return $ ACoAxiom $ mk_axiom $ toBranchList tc_branches
+         else case tc_branches of
+                   [branch] -> return $ ACoAxiom $ mk_axiom $ FirstBranch branch
+                   _        -> failWithTc $ err_msg ax_occ }
+  where
+    err_msg ax_occ = text "Error in interface file: axiom" <+> ppr ax_occ <+>
+                     text "has multiple branches," $$
+                     text "but expected only one"
 
 tc_ax_branches :: [CoAxBranch] -> IfaceAxBranch -> IfL [CoAxBranch]
 tc_ax_branches prev_branches

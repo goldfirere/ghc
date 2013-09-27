@@ -119,8 +119,12 @@ data TcCoercion
   | TcCastCo TcCoercion TcCoercion     -- co1 |> co2
   | TcLetCo TcEvBinds TcCoercion
 
-deriving instance Data.Typeable TcCoercion
-instance Data.Data TcCoercion where { } -- RAE: fix !!
+deriving instance Data.Typeable TcCoercion  -- must be standalone because of existential
+instance Data.Data TcCoercion where
+    -- see Note [Coercion's Data instance] in Coercion
+    toConstr _   = abstractConstr "TcCoercion"
+    gunfold _ _  = error "gunfold"
+    dataTypeOf _ = mkNoRepType "TcCoercion"
 
 isEqVar :: Var -> Bool 
 -- Is lifted coercion variable (only!)

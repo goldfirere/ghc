@@ -76,7 +76,7 @@ module Coercion (
         
         -- * Pretty-printing
         pprCo, pprParendCo, 
-        pprCoAxiom, pprCoAxBranch, pprCoAxBranchHdr, 
+        pprCoAxiom, pprCoAxBranch, pprCoAxBranchHdr, pprCoAxHdr,
 
         -- * Tidying
         tidyCo, tidyCos,
@@ -110,9 +110,7 @@ import PrelNames	( funTyConKey, eqPrimTyConKey, eqReprPrimTyConKey )
 import Control.Applicative
 import Data.Traversable (traverse, sequenceA)
 import FastString
-
-import Data.Data ( Data(..), Typeable, mkConstr, mkDataType, Fixity(..),
-                   constrIndex )
+import qualified Data.Data as Data
 \end{code}
 
 %************************************************************************
@@ -201,33 +199,17 @@ data Coercion
   | SubCo Coercion                  -- Turns a ~N into a ~R
     -- :: N -> R
 
-deriving instance Typeable Coercion
-
-instance Data Coercion where
-  gfoldl k z (Refl a b) = z Refl `k` a `k` b
-  gfoldl k z (AxiomInstCo a b c)
-    = refineBranchFlag b
-                       (z AxiomInstCo `k` a `k` b `k` c)
-                       (z AxiomInstCo `k` a `k` b `k` c)
-
-  gunfold k (z :: forall r. r -> c r) c = case constrIndex c of
-    { 1 -> k (k (z Refl))
-    ; 2 -> k (k (k (z AxiomInstCo) :: c (BranchIndex Branched -> [Coercion] -> Coercion)))
-    }
-
-  toConstr (Refl _ _) = con_Refl
-  toConstr (AxiomInstCo _ _ _) = con_AxiomInstCo
-  
-  dataTypeOf _ = ty_Coercion
-
-con_Refl = mkConstr ty_Coercion "Refl" [] Prefix
-con_AxiomInstCo = mkConstr ty_Coercion "AxiomInstCo" [] Prefix
-ty_Coercion = mkDataType "Coercion.Coercion" [con_Refl, con_AxiomInstCo]
+deriving instance Data.Typeable Coercion  -- must be standalone b/c of existential
+instance Data.Data Coercion where
+  -- see Note [Coercion's Data instance]
+    toConstr _   = abstractConstr "Coercion"
+    gunfold _ _  = error "gunfold"
+    dataTypeOf _ = mkNoRepType "Coercion"
 
 -- If you edit this type, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.lhs
 data LeftOrRight = CLeft | CRight 
-                 deriving( Eq, Data, Typeable )
+                 deriving( Eq, Data.Data, Data.Typeable )
 
 instance Binary LeftOrRight where
    put_ bh CLeft  = putByte bh 0
@@ -242,6 +224,15 @@ pickLR :: LeftOrRight -> (a,a) -> a
 pickLR CLeft  (l,_) = l
 pickLR CRight (_,r) = r
 \end{code}
+
+Note [Coercion's Data instance]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The AxiomInstCo constructor of Coercion contains an existentally-bound type
+variable, preventing automatic derivation (even with StandaloneDeriving) of a
+Data instance. The hand-written Data instance would be long, verbose, and
+require some delicate tip-toeing around the existential. However, as of Sept '13,
+Simon PJ was unaware of any *users* of these Data instances, so we (Simon and
+Richard E.) agreed not to bother.
 
 Note [Refl invariant]
 ~~~~~~~~~~~~~~~~~~~~~
@@ -779,6 +770,9 @@ pprCoAxBranchHdr ax@(CoAxiom { co_ax_tc = fam_tc, co_ax_name = name }) index
           | otherwise
           = ptext (sLit "in") <+>
               quotes (ppr (nameModule name))
+
+pprCoAxHdr :: CoAxiom Unbranched -> SDoc
+pprCoAxHdr ax = pprCoAxBranchHdr ax noBranchIndex
 \end{code}
 
 %************************************************************************

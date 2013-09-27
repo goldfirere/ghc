@@ -12,7 +12,6 @@
 module CoAxiom (
        Branched, Unbranched, BranchIndex, BranchList(..),
        brIndexToInt, brIndexFromInt, eqBrIndex, noBranchIndex,
-       refineBranchFlag,
        toBranchList, fromBranchList,
        -- RAE toBranchedList, toUnbranchedList,
        brListLength, brListNth, brListMap, brListFoldr, brListMapM,
@@ -136,7 +135,11 @@ data BranchIndex br where
   BranchIndex :: Int -> BranchIndex Branched
   NoBranchIndex :: BranchIndex Unbranched
 
+#if __GLASGOW_HASKELL__ <= 706
+deriving instance Data.Typeable1 BranchIndex
+#else
 deriving instance Data.Typeable BranchIndex
+#endif
 
 instance Typeable br => Data.Data (BranchIndex br) where
   -- don't traverse?
@@ -164,15 +167,6 @@ _                `eqBrIndex` _                = False
 data BranchList a br where
   FirstBranch :: a -> BranchList a br
   NextBranch :: a -> BranchList a br -> BranchList a Branched
-
--- do type-case on the branch parameter
--- this is necessary, e.g., to define a Data instance for Coercion
-refineBranchFlag :: BranchIndex br
-                 -> (br ~ Unbranched => a)
-                 -> (br ~ Branched   => a)
-                 -> a
-refineBranchFlag (BranchIndex _) _          branched = branched
-refineBranchFlag NoBranchIndex   unbranched _        = unbranched
 
 -- convert to/from lists
 toBranchList :: [a] -> BranchList a Branched

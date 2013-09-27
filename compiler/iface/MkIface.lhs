@@ -4,6 +4,7 @@
 %
 
 \begin{code}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- | Module for constructing @ModIface@ values (interface files),
 -- writing them to disk and comparing two versions to see if
 -- recompilation is required.
@@ -114,6 +115,7 @@ import Data.Function
 import Data.List
 import Data.Map (Map)
 import qualified Data.Map as Map
+import qualified Data.Typeable as Typeable
 import Data.Ord
 import Data.IORef
 import System.Directory
@@ -1444,7 +1446,7 @@ idToIfaceDecl id
 
 
 --------------------------
-coAxiomToIfaceDecl :: CoAxiom br -> IfaceDecl
+coAxiomToIfaceDecl :: forall br. Typeable.Typeable br => CoAxiom br -> IfaceDecl
 -- We *do* tidy Axioms, because they are not (and cannot
 -- conveniently be) built in tidy form
 coAxiomToIfaceDecl ax@(CoAxiom { co_ax_tc = tycon, co_ax_branches = branches
@@ -1452,11 +1454,18 @@ coAxiomToIfaceDecl ax@(CoAxiom { co_ax_tc = tycon, co_ax_branches = branches
  = IfaceAxiom { ifName       = name
               , ifTyCon      = toIfaceTyCon tycon
               , ifRole       = role
+              , ifBranched   = branched
               , ifAxBranches = brListMap (coAxBranchToIfaceBranch
                                             emptyTidyEnv
                                             (brListMap coAxBranchLHS branches)) branches }
  where
    name = getOccName ax
+#if __GLASGOW_HASKELL__ <= 706
+    branched = Typeable.typeOf (undefined :: br) == Typeable.typeOf (undefined :: Branched)
+#else
+    branched = Typeable.typeRep ax ==
+                 Typeable.typeRep (Typeable.Proxy :: Typeable.Proxy Branched)
+#endif
 
 -- 2nd parameter is the list of branch LHSs, for conversion from incompatible branches
 -- to incompatible indices

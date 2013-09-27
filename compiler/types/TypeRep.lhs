@@ -368,7 +368,8 @@ data TyThing
   = AnId     Id
   | ADataCon DataCon
   | ATyCon   TyCon       -- TyCons and classes; see Note [ATyCon for classes]
-  | forall br. ACoAxiom (CoAxiom br)
+  | forall br. Typeable br => ACoAxiom (CoAxiom br) -- see Note [ACoAxiom is existential]
+    -- TODO (RAE): Write note.
 
 -- can't derive Eq and Ord automatically
 instance Eq TyThing where
