@@ -4,7 +4,9 @@ module TcSimplify(
        simplifyAmbiguityCheck,
        simplifyDefault,
        simplifyRule, simplifyTop, simplifyInteractive,
-       solveWantedsTcM
+       solveWantedsTcM,
+
+       UserSolver
   ) where
 
 #include "HsVersions.h"
@@ -57,15 +59,40 @@ simplifyTop :: WantedConstraints -> TcM (Bag EvBind)
 simplifyTop wanteds
   = do { traceTc "simplifyTop {" $ text "wanted = " <+> ppr wanteds
        ; ev_binds_var <- newTcEvBinds
-       ; zonked_final_wc <- solveWantedsTcMWithEvBinds ev_binds_var wanteds simpl_top
+       ; zonked_final_wc <- solver_loop ev_binds_var wanteds
+
+
        ; binds1 <- TcRnMonad.getTcEvBinds ev_binds_var
        ; traceTc "End simplifyTop }" empty
+
+       ; 
 
        ; traceTc "reportUnsolved {" empty
        ; binds2 <- reportUnsolved zonked_final_wc
        ; traceTc "reportUnsolved }" empty
 
        ; return (binds1 `unionBags` binds2) }
+
+  where
+    solver_loop :: EvBindsVar -> WantedConstraints -> TcM WantedConstraints
+    solver_loop ev_binds_var wanteds
+#ifndef GHCI
+      = solveWantedsTcMWithEvBinds ev_binds_var wanteds simpl_top
+#else
+      = do { wc_residual <- solveWantedsTcMWithEvBinds ev_binds_var wanteds simpl_top
+           ; try_user_solver ev_binds_var wc_residual }
+
+    try_user_solver :: EvBindsVar -> WantedConstraints -> TcM WantedConstraints
+    try_user_solver ev_binds_var wc
+      | isEmpty wc || insolubleWC wc
+      = return wc
+        
+      | otherwise
+      = do { (made_progress, wc_residual) <- runUserSolver ev_binds_var wc
+           ; if made_progress
+             then solver_loop ev_binds_var wc_residual
+             else return wc_residual }
+#endif
 
 simpl_top :: WantedConstraints -> TcS WantedConstraints
     -- See Note [Top-level Defaulting Plan]
@@ -105,6 +132,7 @@ simpl_top wanteds
              then do { wc_residual <- nestTcS (solve_wanteds_and_drop wc)
                      ; try_class_defaulting wc_residual }
              else return wc }
+                 
 \end{code}
 
 Note [Must simplify after defaulting]
@@ -1280,3 +1308,78 @@ dealing with the (Num a) context arising from f's definition;
 we try to unify a with Int (to default it), but find that it's
 already been unified with the rigid variable from g's type sig
 
+*********************************************************************************
+*                                                                               *
+*                           User solvers                                        *
+*                                                                               *
+*********************************************************************************
+
+\begin{code}
+
+-- this needs to outside the #ifdef GHCI so that CustomSolver in libraries/base
+-- can see it
+type UserSolver =  WantedConstraints
+                -> (WantedConstraints, [(TcTyVar, TcType)], [(EvVar, EvTerm)])
+
+#ifdef GHCI
+
+runUserSolver :: EvBindsVar -> WantedConstraints -> TcM (Bool, WantedConstraints)
+runUserSolver ev_binds_var wc
+  = do { inst_envs <- tcGetInstEnvs
+                      -- CustomSolver has to be around if its instances are
+       ; mb_thing <- tcLookupGlobal_maybe customSolverName
+       ; let mb_class = case mb_thing of
+                          Succeeded (ATyCon tc) -> tyConClass_maybe tc
+                          _                     -> Nothing
+                            -- failure here means there are no custom solvers.
+       ; case mb_class of
+         { Nothing -> return (False, wc)
+         ; Just custom_solver_class ->
+    do { let cls_insts = [ cls_inst
+                         | cls_inst <- classInstances inst_envs custom_solver_class
+                         , isExternalName (getName (instanceDFunId cls_inst)) ]
+             -- HERE: Need to get the solveConstraintsId.
+       ; run_user_solver cls_insts }}}
+  where
+    run_user_solver :: [ClsInst] -> TcM (Bool, WantedConstraints)
+    run_user_solver [] = (False, wc)
+    run_user_solver (cls_inst : cls_insts)
+      = do { solver <- slurp_in_solver cls_inst
+           ; let (wc_residual, ty_binds, ev_binds) = solver wc
+           ; -- TODO (RAE): add lots of checking here!!
+           ; made_progress1 <- write_ty_binds ty_binds
+           ; made_progress2 <- write_ev_binds ev_binds_var ev_binds
+           ; if made_progress1 || made_progress2
+             then return (True, wc_residual)
+             else run_user_solver cls_insts }
+
+slurp_in_solver :: ClsInst -> TcM UserSolver
+slurp_in_solver (ClsInst { is_tvs = [], is_tys = tys, is_dfun = dfun })
+  = do { let expr = mkCoreApps (varToCoreExpr solveConstraintsId)
+                               [ kExpr, constraintExpr, dfunExpr
+                               , proxyExpr ]
+       ; ds_expr <- initDsTc (dsLExpr expr)
+       ; hsc_env <- getTopEnv
+       ; either_hval = tryM $ liftIO $
+                       hscCompileCoreExpr hsc_env noLoc ds_expr
+       ; case either_hval of
+           Left exception -> pprPanic "slurp_in_solver" (ppr exception)
+           Right hval -> return (unsafeCoerce# hval :: UserSolver) }
+  where
+    [kExpr, constraintExpr] = map Type tys
+    dfunExpr = varToCoreExpr dfun
+    proxyTypeExpr = mkCoreApp (varToCoreExpr proxyHashId) constraintExpr
+                              
+write_ty_binds :: [(TcTyVar, TcType)] -> TcM Bool
+write_ty_binds mappings
+  = do { forM_ mappings (uncurry writeMetaTyVar)
+       ; return (not (null mappings)) }
+
+write_ev_binds :: EvBindsVar -> [(EvVar, EvTerm)] -> TcM Bool
+write_ev_binds ev_binds_var mappings
+  = do { forM_ mappings (uncurry (addTcEvBind ev_binds_var))
+       ; return (not (null mappings)) }
+
+#endif
+
+\end{code}

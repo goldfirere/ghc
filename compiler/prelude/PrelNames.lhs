@@ -329,6 +329,9 @@ basicKnownKeyNames
 
         -- GHCi Sandbox
         , ghciIoClassName, ghciStepIoMName
+
+        -- User constraint solver
+        , customSolverName, solveConstraintsName,
     ]
 
 genericTyConNames :: [Name]
@@ -355,7 +358,7 @@ genericTyConNames = [
 pRELUDE :: Module
 pRELUDE         = mkBaseModule_ pRELUDE_NAME
 
-gHC_PRIM, gHC_TYPES, gHC_GENERICS, gHC_MAGIC, gHC_COERCIBLE,
+gHC_PRIM, gHC_TYPES, gHC_GENERICS, gHC_MAGIC, gHC_COERCIBLE, gHC_CUSTOM_SOLVER,
     gHC_CLASSES, gHC_BASE, gHC_ENUM, gHC_GHCI, gHC_CSTRING,
     gHC_SHOW, gHC_READ, gHC_NUM, gHC_INTEGER_TYPE, gHC_LIST,
     gHC_TUPLE, dATA_TUPLE, dATA_EITHER, dATA_STRING, dATA_FOLDABLE, dATA_TRAVERSABLE, dATA_MONOID,
@@ -373,6 +376,7 @@ gHC_MAGIC       = mkPrimModule (fsLit "GHC.Magic")
 gHC_CSTRING     = mkPrimModule (fsLit "GHC.CString")
 gHC_CLASSES     = mkPrimModule (fsLit "GHC.Classes")
 gHC_COERCIBLE   = mkPrimModule (fsLit "GHC.Coercible")
+gHC_CUSTOM_SOLVER = mkPrimModule (fsLit "GHC.CustomSolver")
 
 gHC_BASE        = mkBaseModule (fsLit "GHC.Base")
 gHC_ENUM        = mkBaseModule (fsLit "GHC.Enum")
@@ -1171,6 +1175,11 @@ cORE_MONAD :: Module
 cORE_MONAD = mkThisGhcModule (fsLit "CoreMonad")
 pluginTyConName :: Name
 pluginTyConName = tcQual cORE_MONAD (fsLit "Plugin") pluginTyConKey
+
+-- custom user solvers
+customSolverName, solveConstraintsName :: Name
+customSolverName = clsQual gHC_CUSTOM_SOLVER (fsLit "CustomSolver") customSolverClassKey
+solveConstraintsName = varQual gHC_CUSTOM_SOLVER (fsLit "solveConstraints") solveConstraintsIdKey
 \end{code}
 
 %************************************************************************
@@ -1292,6 +1301,9 @@ oldTypeable4ClassKey       = mkPreludeClassUnique 50
 oldTypeable5ClassKey       = mkPreludeClassUnique 51
 oldTypeable6ClassKey       = mkPreludeClassUnique 52
 oldTypeable7ClassKey       = mkPreludeClassUnique 53
+
+customSolverClassKey :: Unique
+customSolverClassKey = mkPreludeClassUnique 54
 \end{code}
 
 %************************************************************************
@@ -1812,6 +1824,10 @@ toListClassOpKey = mkPreludeMiscIdUnique 501
 
 proxyHashKey :: Unique
 proxyHashKey = mkPreludeMiscIdUnique 502
+
+-- custom solver
+solveConstraintsIdKey :: Unique
+solveConstraintsIdKey = mkPreludeMiscIdUnique 503
 
 ---------------- Template Haskell -------------------
 --      USES IdUniques 200-499

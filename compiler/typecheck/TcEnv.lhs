@@ -15,7 +15,7 @@ module TcEnv(
         -- Global environment
         tcExtendGlobalEnv, tcExtendGlobalEnvImplicit, setGlobalTypeEnv,
         tcExtendGlobalValEnv,
-        tcLookupLocatedGlobal, tcLookupGlobal, 
+        tcLookupLocatedGlobal, tcLookupGlobal, tcLookupGlobal_maybe
         tcLookupField, tcLookupTyCon, tcLookupClass, tcLookupDataCon,
         tcLookupLocatedGlobalId, tcLookupLocatedTyCon,
         tcLookupLocatedClass, tcLookupInstance, tcLookupAxiom,
@@ -111,29 +111,37 @@ tcLookupLocatedGlobal name
   = addLocM tcLookupGlobal name
 
 tcLookupGlobal :: Name -> TcM TyThing
+tcLookupGlobal name
+  = do { mb_thing <- tcLookupGlobal_maybe name
+       ; case mb_thing of
+           Succeeded thing   -> return thing
+           Failed Nothing    -> notFound name
+           Failed (Just msg) -> failWithTc msg }
+
+tcLookupGlobal_maybe :: Name -> TcM (MaybeErr (Maybe MsgDoc) TyThing)
 -- The Name is almost always an ExternalName, but not always
 -- In GHCi, we may make command-line bindings (ghci> let x = True)
 -- that bind a GlobalId, but with an InternalName
-tcLookupGlobal name
+tcLookupGlobal_maybe name
   = do  {    -- Try local envt
           env <- getGblEnv
         ; case lookupNameEnv (tcg_type_env env) name of { 
-                Just thing -> return thing ;
+                Just thing -> return (Succeeded thing) ;
                 Nothing    ->
          
                 -- Should it have been in the local envt?
           case nameModule_maybe name of {
-                Nothing -> notFound name ; -- Internal names can happen in GHCi
+                Nothing -> return (Failed Nothing) ; -- Internal names can happen in GHCi
 
                 Just mod | mod == tcg_mod env   -- Names from this module 
-                         -> notFound name       -- should be in tcg_type_env
+                         -> return (Failed Nothing)   -- should be in tcg_type_env
                          | otherwise -> do
 
            -- Try home package table and external package table
         { mb_thing <- tcLookupImported_maybe name
         ; case mb_thing of
-            Succeeded thing -> return thing
-            Failed msg      -> failWithTc msg
+            Succeeded thing -> return (Succeeded thing)
+            Failed msg      -> return (Failed (Just msg))
         }}}}
 
 tcLookupField :: Name -> TcM Id         -- Returns the selector Id
