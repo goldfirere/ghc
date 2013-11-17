@@ -4,9 +4,7 @@ module TcSimplify(
        simplifyAmbiguityCheck,
        simplifyDefault,
        simplifyRule, simplifyTop, simplifyInteractive,
-       solveWantedsTcM,
-
-       UserSolver
+       solveWantedsTcM
   ) where
 
 #include "HsVersions.h"
@@ -41,6 +39,10 @@ import BasicTypes       ( RuleName )
 import Outputable
 import FastString
 import TrieMap () -- DV: for now
+
+#ifdef GHCI
+import {-# SOURCE #-} TcCustom
+#endif
 \end{code}
 
 
@@ -84,7 +86,7 @@ simplifyTop wanteds
 
     try_user_solver :: EvBindsVar -> WantedConstraints -> TcM WantedConstraints
     try_user_solver ev_binds_var wc
-      | isEmpty wc || insolubleWC wc
+      | isEmptyWC wc || insolubleWC wc
       = return wc
         
       | otherwise
@@ -1308,78 +1310,3 @@ dealing with the (Num a) context arising from f's definition;
 we try to unify a with Int (to default it), but find that it's
 already been unified with the rigid variable from g's type sig
 
-*********************************************************************************
-*                                                                               *
-*                           User solvers                                        *
-*                                                                               *
-*********************************************************************************
-
-\begin{code}
-
--- this needs to outside the #ifdef GHCI so that CustomSolver in libraries/base
--- can see it
-type UserSolver =  WantedConstraints
-                -> (WantedConstraints, [(TcTyVar, TcType)], [(EvVar, EvTerm)])
-
-#ifdef GHCI
-
-runUserSolver :: EvBindsVar -> WantedConstraints -> TcM (Bool, WantedConstraints)
-runUserSolver ev_binds_var wc
-  = do { inst_envs <- tcGetInstEnvs
-                      -- CustomSolver has to be around if its instances are
-       ; mb_thing <- tcLookupGlobal_maybe customSolverName
-       ; let mb_class = case mb_thing of
-                          Succeeded (ATyCon tc) -> tyConClass_maybe tc
-                          _                     -> Nothing
-                            -- failure here means there are no custom solvers.
-       ; case mb_class of
-         { Nothing -> return (False, wc)
-         ; Just custom_solver_class ->
-    do { let cls_insts = [ cls_inst
-                         | cls_inst <- classInstances inst_envs custom_solver_class
-                         , isExternalName (getName (instanceDFunId cls_inst)) ]
-             -- HERE: Need to get the solveConstraintsId.
-       ; run_user_solver cls_insts }}}
-  where
-    run_user_solver :: [ClsInst] -> TcM (Bool, WantedConstraints)
-    run_user_solver [] = (False, wc)
-    run_user_solver (cls_inst : cls_insts)
-      = do { solver <- slurp_in_solver cls_inst
-           ; let (wc_residual, ty_binds, ev_binds) = solver wc
-           ; -- TODO (RAE): add lots of checking here!!
-           ; made_progress1 <- write_ty_binds ty_binds
-           ; made_progress2 <- write_ev_binds ev_binds_var ev_binds
-           ; if made_progress1 || made_progress2
-             then return (True, wc_residual)
-             else run_user_solver cls_insts }
-
-slurp_in_solver :: ClsInst -> TcM UserSolver
-slurp_in_solver (ClsInst { is_tvs = [], is_tys = tys, is_dfun = dfun })
-  = do { let expr = mkCoreApps (varToCoreExpr solveConstraintsId)
-                               [ kExpr, constraintExpr, dfunExpr
-                               , proxyExpr ]
-       ; ds_expr <- initDsTc (dsLExpr expr)
-       ; hsc_env <- getTopEnv
-       ; either_hval = tryM $ liftIO $
-                       hscCompileCoreExpr hsc_env noLoc ds_expr
-       ; case either_hval of
-           Left exception -> pprPanic "slurp_in_solver" (ppr exception)
-           Right hval -> return (unsafeCoerce# hval :: UserSolver) }
-  where
-    [kExpr, constraintExpr] = map Type tys
-    dfunExpr = varToCoreExpr dfun
-    proxyTypeExpr = mkCoreApp (varToCoreExpr proxyHashId) constraintExpr
-                              
-write_ty_binds :: [(TcTyVar, TcType)] -> TcM Bool
-write_ty_binds mappings
-  = do { forM_ mappings (uncurry writeMetaTyVar)
-       ; return (not (null mappings)) }
-
-write_ev_binds :: EvBindsVar -> [(EvVar, EvTerm)] -> TcM Bool
-write_ev_binds ev_binds_var mappings
-  = do { forM_ mappings (uncurry (addTcEvBind ev_binds_var))
-       ; return (not (null mappings)) }
-
-#endif
-
-\end{code}

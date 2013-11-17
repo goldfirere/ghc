@@ -331,7 +331,7 @@ basicKnownKeyNames
         , ghciIoClassName, ghciStepIoMName
 
         -- User constraint solver
-        , customSolverName, solveConstraintsName,
+        , customSolverName, solveConstraintsName
     ]
 
 genericTyConNames :: [Name]
@@ -358,7 +358,7 @@ genericTyConNames = [
 pRELUDE :: Module
 pRELUDE         = mkBaseModule_ pRELUDE_NAME
 
-gHC_PRIM, gHC_TYPES, gHC_GENERICS, gHC_MAGIC, gHC_COERCIBLE, gHC_CUSTOM_SOLVER,
+gHC_PRIM, gHC_TYPES, gHC_GENERICS, gHC_MAGIC, gHC_COERCIBLE,
     gHC_CLASSES, gHC_BASE, gHC_ENUM, gHC_GHCI, gHC_CSTRING,
     gHC_SHOW, gHC_READ, gHC_NUM, gHC_INTEGER_TYPE, gHC_LIST,
     gHC_TUPLE, dATA_TUPLE, dATA_EITHER, dATA_STRING, dATA_FOLDABLE, dATA_TRAVERSABLE, dATA_MONOID,
@@ -376,7 +376,6 @@ gHC_MAGIC       = mkPrimModule (fsLit "GHC.Magic")
 gHC_CSTRING     = mkPrimModule (fsLit "GHC.CString")
 gHC_CLASSES     = mkPrimModule (fsLit "GHC.Classes")
 gHC_COERCIBLE   = mkPrimModule (fsLit "GHC.Coercible")
-gHC_CUSTOM_SOLVER = mkPrimModule (fsLit "GHC.CustomSolver")
 
 gHC_BASE        = mkBaseModule (fsLit "GHC.Base")
 gHC_ENUM        = mkBaseModule (fsLit "GHC.Enum")
@@ -1177,9 +1176,12 @@ pluginTyConName :: Name
 pluginTyConName = tcQual cORE_MONAD (fsLit "Plugin") pluginTyConKey
 
 -- custom user solvers
+tC_CUSTOM :: Module
+tC_CUSTOM = mkThisGhcModule (fsLit "TcCustom")
+
 customSolverName, solveConstraintsName :: Name
-customSolverName = clsQual gHC_CUSTOM_SOLVER (fsLit "CustomSolver") customSolverClassKey
-solveConstraintsName = varQual gHC_CUSTOM_SOLVER (fsLit "solveConstraints") solveConstraintsIdKey
+customSolverName = clsQual tC_CUSTOM (fsLit "CustomSolver") customSolverClassKey
+solveConstraintsName = varQual tC_CUSTOM (fsLit "solveConstraints") solveConstraintsIdKey
 \end{code}
 
 %************************************************************************

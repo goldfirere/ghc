@@ -1,0 +1,10 @@
+\begin{code}
+module TcCustom where
+
+import TcEvidence ( EvBindsVar )
+import TcRnTypes  ( WantedConstraints )
+import TcRnMonad  ( TcM )
+
+runUserSolver :: EvBindsVar -> WantedConstraints -> TcM (Bool, WantedConstraints)
+
+\end{code}

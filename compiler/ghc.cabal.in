@@ -544,4 +544,5 @@ Library
             Linker
             ObjLink
             RtClosureInspect
+            TcCustom
             DebuggerUtils
