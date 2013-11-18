@@ -53,8 +53,8 @@ type UserSolver =  WantedConstraints
 -- | Checks to see if a @Name@ matches a Template Haskell 'Name'. The Template Haskell
 -- 'Name' should be created with the @'name@ or @''Type@ syntax. The first parameter
 -- *must* be a top-level name (that is, a name with a module).
-nameMatches :: Name -> TH.Name -> Bool
-nameMatches ghc_name (TH.Name (TH.OccName th_name_str) flavour)
+nameMatches :: NamedThing a => a -> TH.Name -> Bool
+nameMatches thing (TH.Name (TH.OccName th_name_str) flavour)
   = case flavour of
       TH.NameS                  -> occs_match
       TH.NameQ (TH.ModName mod) -> occs_match
@@ -70,6 +70,7 @@ nameMatches ghc_name (TH.Name (TH.OccName th_name_str) flavour)
                                      TH.DataName  -> isDataConName ghc_name
                                      TH.TcClsName -> isTyConName ghc_name
   where
+    ghc_name       = getName thing
     ghc_occ_name   = nameOccName ghc_name
     ghc_module     = nameModule ghc_name
     ghc_module_str = moduleNameString $ moduleName ghc_module
