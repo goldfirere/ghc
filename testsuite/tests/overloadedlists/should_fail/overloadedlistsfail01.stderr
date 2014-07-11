@@ -5,8 +5,8 @@ overloadedlistsfail01.hs:5:8:
     Note: there are several potential instances:
       instance [safe] Show Data.Version.Version
         -- Defined in ‘Data.Version’
-      instance Show a => Show (Maybe a) -- Defined in ‘GHC.Show’
       instance Show Ordering -- Defined in ‘GHC.Show’
+      instance Show Integer -- Defined in ‘GHC.Show’
       ...plus 23 others
     In the expression: print [1]
     In an equation for ‘main’: main = print [1]

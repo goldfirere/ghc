@@ -4,7 +4,7 @@
 \section[HscTypes]{Types for the per-module compiler}
 -}
 
-{-# LANGUAGE CPP, DeriveDataTypeable, ScopedTypeVariables #-}
+{-# LANGUAGE CPP, DeriveDataTypeable, ScopedTypeVariables, DataKinds #-}
 
 -- | Types for the per-module compiler
 module HscTypes (
@@ -1692,7 +1692,7 @@ extras_plus thing = thing : implicitTyThings thing
 implicitCoTyCon :: TyCon -> [TyThing]
 implicitCoTyCon tc
   | Just co <- newTyConCo_maybe tc = [ACoAxiom $ toBranchedAxiom co]
-  | Just co <- isClosedSynFamilyTyCon_maybe tc
+  | Just co <- isClosedTypeFamilyTyCon_maybe tc
                                    = [ACoAxiom co]
   | otherwise                      = []
 

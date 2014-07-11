@@ -1,0 +1,43 @@
+
+<interactive>:9:15:
+    Type family equations violate injectivity annotation:
+      F Char Bool Int -- Defined at <interactive>:9:15
+      F Bool Int Char -- Defined at <interactive>:10:15
+
+<interactive>:13:15:
+    Type family equations violate injectivity annotation:
+      I Int Char Bool -- Defined at <interactive>:13:15
+      I Int Int Int -- Defined at <interactive>:14:15
+
+<interactive>:23:15:
+    Calling type family ‘Id’ is not allowed in injective type family equation:
+      IdProxy a -- Defined at <interactive>:23:15
+
+<interactive>:31:15:
+    Type family equations violate injectivity annotation:
+      P 'Z m -- Defined at <interactive>:31:15
+      P ('S n) m -- Defined at <interactive>:32:15
+
+<interactive>:32:15:
+    Calling type family ‘P’ is not allowed in injective type family equation:
+      P ('S n) m -- Defined at <interactive>:32:15
+
+<interactive>:37:15:
+    Family instance declaration violates injectivity annotation.
+    Type variable ‘b’ should appear in the RHS of type family equation:
+      J Int b c -- Defined at <interactive>:37:15
+
+<interactive>:41:15:
+    Family instance declaration violates injectivity annotation.
+    Type variable ‘n’ should appear in the RHS of type family equation:
+      K ('S n) m -- Defined at <interactive>:41:15
+
+<interactive>:45:15:
+    Calling type family ‘Id’ is not allowed in injective type family equation:
+      L a -- Defined at <interactive>:45:15
+
+<interactive>:50:15:
+    Family instance declaration violates injectivity annotation.
+    Non-injective type variable ‘b’ should not appear
+    in the RHS of type family equation:
+      Q Int b -- Defined at <interactive>:50:15

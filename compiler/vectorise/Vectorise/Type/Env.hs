@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, DataKinds #-}
 
 -- Vectorise a modules type and class declarations.
 --
@@ -358,10 +358,10 @@ vectTypeEnv tycons vectTypeDecls vectClassDecls
         vectName  = tyConName vectTyCon
 
         mkSyn canonName ty = mkSynonymTyCon canonName (typeKind ty) [] [] ty
-        
+
         defDataCons
           | isAbstract = return ()
-          | otherwise  
+          | otherwise
           = do { MASSERT(length (tyConDataCons origTyCon) == length (tyConDataCons vectTyCon))
                ; zipWithM_ defDataCon (tyConDataCons origTyCon) (tyConDataCons vectTyCon)
                }

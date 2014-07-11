@@ -1,0 +1,53 @@
+[1 of 5] Compiling T6018Bfail       ( T6018Bfail.hs, T6018Bfail.o )
+[2 of 5] Compiling T6018Dfail       ( T6018Dfail.hs, T6018Dfail.o )
+[3 of 5] Compiling T6018Cfail       ( T6018Cfail.hs, T6018Cfail.o )
+[4 of 5] Compiling T6018Afail       ( T6018Afail.hs, T6018Afail.o )
+[5 of 5] Compiling T6018fail        ( T6018fail.hs, T6018fail.o )
+
+T6018Afail.hs:7:15:
+    Type family equations violate injectivity annotation:
+      G Char Bool Int -- Defined at T6018Afail.hs:7:15
+      G Bool Int Char -- Defined at T6018fail.hs:14:15
+
+T6018Cfail.hs:8:15:
+    Type family equations violate injectivity annotation:
+      T6018Bfail.H Char Bool Int -- Defined at T6018Cfail.hs:8:15
+      T6018Bfail.H Bool Int Char -- Defined at T6018Dfail.hs:7:15
+
+T6018fail.hs:11:15:
+    Type family equations violate injectivity annotation:
+      F Char Bool Int -- Defined at T6018fail.hs:11:15
+      F Bool Int Char -- Defined at T6018fail.hs:12:15
+
+T6018fail.hs:17:15:
+    Type family equations violate injectivity annotation:
+      I Int Char Bool -- Defined at T6018fail.hs:17:15
+      I Int Int Int -- Defined at T6018fail.hs:18:15
+
+T6018fail.hs:27:15:
+    Calling type family ‘Id’ is not allowed in injective type family equation:
+      IdProxy a -- Defined at T6018fail.hs:27:15
+
+T6018fail.hs:36:15:
+    Calling type family ‘P’ is not allowed in injective type family equation:
+      P ('S n) m -- Defined at T6018fail.hs:36:15
+
+T6018fail.hs:41:15:
+    Family instance declaration violates injectivity annotation.
+    Type variable ‘b’ should appear in the RHS of type family equation:
+      J Int b c -- Defined at T6018fail.hs:41:15
+
+T6018fail.hs:45:15:
+    Family instance declaration violates injectivity annotation.
+    Type variable ‘n’ should appear in the RHS of type family equation:
+      K ('S n) m -- Defined at T6018fail.hs:45:15
+
+T6018fail.hs:49:15:
+    Calling type family ‘Id’ is not allowed in injective type family equation:
+      L a -- Defined at T6018fail.hs:49:15
+
+T6018fail.hs:54:15:
+    Family instance declaration violates injectivity annotation.
+    Non-injective type variable ‘b’ should not appear
+    in the RHS of type family equation:
+      Q Int b -- Defined at T6018fail.hs:54:15

@@ -1,9 +1,10 @@
-
 -- | Generate methods for the PA class.
 --
 --   TODO: there is a large amount of redundancy here between the 
 --   a, PData a, and PDatas a forms. See if we can factor some of this out.
 --
+{-# LANGUAGE DataKinds #-}
+
 module Vectorise.Generic.PAMethods
   ( buildPReprTyCon
   , buildPAScAndMethods 
@@ -62,7 +63,7 @@ buildPReprTyCon orig_tc vect_tc repr
 --   @
 --
 type PAInstanceBuilder
-        =  TyCon        -- ^ Vectorised TyCon 
+        =  TyCon        -- ^ Vectorised TyCon
         -> CoAxiom Unbranched
                         -- ^ Coercion to the representation TyCon
         -> TyCon        -- ^ 'PData'  TyCon

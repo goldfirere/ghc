@@ -51,13 +51,17 @@ buildSynonymTyCon tc_name tvs roles rhs rhs_kind
   where kind = mkPiKinds tvs rhs_kind
 
 
-buildFamilyTyCon :: Name -> [TyVar]
-                 -> FamTyConFlav
-                 -> Kind                   -- ^ Kind of the RHS
-                 -> TyConParent
+buildFamilyTyCon :: Name         -- ^ Type family name
+                 -> [TyVar]      -- ^ Type variables
+                 -> Maybe Name   -- ^ Result variable name
+                 -> FamTyConFlav -- ^ Open, closed or in a boot file?
+                 -> Kind         -- ^ Kind of the RHS
+                 -> TyConParent  -- ^ Parent, if exists
+                 -> Maybe [Bool] -- ^ Injectivity annotation
+                                 -- See [Injectivity annotation] in HsDecls
                  -> TcRnIf m n TyCon
-buildFamilyTyCon tc_name tvs rhs rhs_kind parent
-  = return (mkFamilyTyCon tc_name kind tvs rhs parent)
+buildFamilyTyCon tc_name tvs res_tv rhs rhs_kind parent injectivity
+  = return (mkFamilyTyCon tc_name kind tvs res_tv rhs parent injectivity)
   where kind = mkPiKinds tvs rhs_kind
 
 

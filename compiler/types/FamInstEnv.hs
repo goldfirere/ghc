@@ -2,7 +2,7 @@
 --
 -- FamInstEnv: Type checked family instance declarations
 
-{-# LANGUAGE CPP, GADTs, ScopedTypeVariables #-}
+{-# LANGUAGE CPP, GADTs, ScopedTypeVariables, DataKinds #-}
 
 module FamInstEnv (
         FamInst(..), FamFlavor(..), famInstAxiom, famInstTyCon, famInstRHS,
@@ -19,7 +19,12 @@ module FamInstEnv (
         computeAxiomIncomps,
 
         FamInstMatch(..),
-        lookupFamInstEnv, lookupFamInstEnvConflicts,
+        lookupFamInstEnv, lookupFamInstEnvConflicts, lookupFamInstEnvByTyCon,
+
+        -- Injectivity
+        lookupFamInjInstEnvConflicts, unusedInjTvsInRHS,
+        tyFamsUsedInRHS, injectiveBranches,
+
         isDominatedBy,
 
         -- Normalisation
@@ -36,7 +41,7 @@ module FamInstEnv (
 import InstEnv
 import Unify
 import Type
-import TcType ( orphNamesOfTypes )
+import TcType ( orphNamesOfTypes, tcTyFamInsts )
 import TypeRep
 import TyCon
 import Coercion
@@ -80,8 +85,9 @@ Note [FamInsts and CoAxioms]
 -}
 
 data FamInst  -- See Note [FamInsts and CoAxioms]
-  = FamInst { fi_axiom  :: CoAxiom Unbranched  -- The new coercion axiom introduced
-                                               -- by this family instance
+  = FamInst { fi_axiom  :: CoAxiom Unbranched -- The new coercion axiom
+                                              -- introduced by this family
+                                              -- instance
             , fi_flavor :: FamFlavor
 
             -- Everything below here is a redundant,
@@ -94,14 +100,14 @@ data FamInst  -- See Note [FamInsts and CoAxioms]
             , fi_tcs   :: [Maybe Name]  -- Top of type args
                 -- INVARIANT: fi_tcs = roughMatchTcs fi_tys
 
-                -- Used for "proper matching"; ditto
+            -- Used for "proper matching"; ditto
             , fi_tvs    :: [TyVar]      -- Template tyvars for full match
                                  -- Like ClsInsts, these variables are always
                                  -- fresh. See Note [Template tyvars are fresh]
                                  -- in InstEnv
+                                 -- INVARIANT: fi_tvs = coAxiomTyVars fi_axiom
 
             , fi_tys    :: [Type]       --   and its arg types
-                -- INVARIANT: fi_tvs = coAxiomTyVars fi_axiom
 
             , fi_rhs    :: Type         --   the RHS, with its freshened vars
             }
@@ -441,8 +447,7 @@ potentially-overlapping group is closed.
 
 As another example, consider this:
 
-type family G x
-type instance where
+type family G x where
   G Int = Bool
   G a   = Double
 
@@ -479,6 +484,42 @@ compatibleBranches (CoAxBranch { cab_lhs = lhs1, cab_rhs = rhs1 })
         | Type.substTy subst rhs1 `eqType` Type.substTy subst rhs2
         -> True
       _ -> False
+
+
+-- | Check whether two type family axioms don't violate injectivity annotation.
+-- Nothing means that branches don't violate injectivity annotation (possibly
+-- under substitution). If equations conflict with an injectivity annotation
+-- this function returns new axioms with substitution unifying RHS applied to
+-- both LHSs and RHSs. This is useful when doing injectivity check for closed
+-- type families where we have to detect possible overlap after substitution.
+-- Note that if any of the RHSs contains a type family this function will lie by
+-- reporting Nothing. See code comments for further details.
+injectiveBranches :: [Bool] -> CoAxBranch -> CoAxBranch
+                  -> Maybe (CoAxBranch, CoAxBranch)
+injectiveBranches injectivity
+                  ax1@(CoAxBranch { cab_lhs = lhs1, cab_rhs = rhs1 })
+                  ax2@(CoAxBranch { cab_lhs = lhs2, cab_rhs = rhs2 })
+  -- See Note [Injectivity annotation check]. This function implements first
+  -- check described there.
+  = let getInjArgs  = filterByList injectivity
+    in case tcUnifyTy rhs1 rhs2 of
+       Nothing -> Nothing -- RHS are different, so equations are injective.
+                          -- Note however that this is not true in the presence
+                          -- of type families.
+                          -- See Note [Injectivity annotation check]
+       Just subst -> -- RHS unify under a substitution
+           let lhs1Subst = Type.substTys subst (getInjArgs lhs1)
+               lhs2Subst = Type.substTys subst (getInjArgs lhs2)
+           -- If LHSs are equal under the substitution used for RHSs then this
+           -- pair of equations does not violate injectivity annotation. If LHSs
+           -- are not equal under that substitution then this pair of equations
+           -- violates injectivity annotation.
+           in if eqTypes lhs1Subst lhs2Subst
+              then Nothing
+              else Just ( ax1 { cab_lhs = Type.substTys subst lhs1
+                              , cab_rhs = Type.substTy  subst rhs1 }
+                        , ax2 { cab_lhs = Type.substTys subst lhs2
+                              , cab_rhs = Type.substTy  subst rhs2 } )
 
 -- takes a CoAxiom with unknown branch incompatibilities and computes
 -- the compatibilities
@@ -551,7 +592,8 @@ mkUnbranchedCoAxiom ax_name fam_tc branch
             , co_ax_implicit = False
             , co_ax_branches = FirstBranch (branch { cab_incomps = [] }) }
 
-mkSingleCoAxiom :: Name -> [TyVar] -> TyCon -> [Type] -> Type -> CoAxiom Unbranched
+mkSingleCoAxiom :: Name -> [TyVar] -> TyCon -> [Type] -> Type
+                -> CoAxiom Unbranched
 mkSingleCoAxiom ax_name tvs fam_tc lhs_tys rhs_ty
   = CoAxiom { co_ax_unique   = nameUnique ax_name
             , co_ax_name     = ax_name
@@ -599,6 +641,14 @@ instance Outputable FamInstMatch where
                     , fim_tys      = tys })
     = ptext (sLit "match with") <+> parens (ppr inst) <+> ppr tys
 
+lookupFamInstEnvByTyCon :: FamInstEnvs -> TyCon -> [FamInst]
+lookupFamInstEnvByTyCon (pkg_ie, home_ie) fam_tc
+  = get pkg_ie ++ get home_ie
+  where
+    get ie = case lookupUFM ie fam_tc of
+               Nothing          -> []
+               Just (FamIE fis) -> fis
+
 lookupFamInstEnv
     :: FamInstEnvs
     -> TyCon -> [Type]          -- What we are looking for
@@ -640,6 +690,167 @@ lookupFamInstEnvConflicts envs fam_inst@(FamInst { fi_axiom = new_axiom })
 
     noSubst = panic "lookupFamInstEnvConflicts noSubst"
     new_branch = coAxiomSingleBranch new_axiom
+
+-- Note [Injectivity annotation check]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--
+-- Injectivity means that the RHS of a type family uniquely determines the LHS
+-- (see Note [Type inference for type families with injectivity]). So when we
+-- check a new equation of a type family we need to make sure that adding this
+-- equation to already known equations of that type family does not violate
+-- injectivity annotation supplied by the user (see Note [Injectivity
+-- annotation]). Of course if the type family has no injectivity annotation then
+-- no check is required.  But if a type family has injectivity annotation we
+-- need to make sure that the following conditions hold:
+--
+-- 1. For each pair of different equations of a type family one of the following
+--    conditions holds:
+--
+--    A. RHSs are different.
+--
+--    B. OPEN TYPE FAMILIES: If the RHSs can be unified under some substitution
+--       then it must be possible to unify the LHSs under the same substitution.
+--       Example:
+--
+--          type family FunnyId a = r | r -> a
+--          type instance FunnyId Int = Int
+--          type instance FunnyId a = a
+--
+--       RHSs of these two equations unify under [ a |-> Int ] substitution.
+--       Under this substitution LHSs are equal therefore these equations don't
+--       violate injectivity annotation.
+--
+--       CLOSED TYPE FAMILIES: If the RHSs can be unified under some
+--       substitution then either the LHSs unify under the same substitution or
+--       the LHS of the latter equation is overlapped by earlier equations.
+--       Example 1:
+--
+--          type family SwapIntChar a = r | r -> a where
+--              SwapIntChar Int  = Char
+--              SwapIntChar Char = Int
+--              SwapIntChar a    = a
+--
+--       Say we are checking the last two equations. RHSs unify under [ a |->
+--       Int ] substitution but LHSs don't. So we apply the substitution to LHS
+--       of last equation and check whether it is overlapped by any of previous
+--       equations. Since it is overlapped by the first equation we conclude
+--       that pair of last two equations does not violate injectivity
+--       annotation.
+--
+--    A special case of B is when RHSs unify witn an empty substitution ie. they
+--    are identical.
+--
+--    If any of the above two conditions holds we conclude that the pair of
+--    equations does not violate injectivity annotation. But if we find a pair
+--    of equations where neither of the above holds we report that this pair
+--    violates injectivity annotation because for a given RHS we don't have a
+--    unique LHS. (Note that (B) actually implies (A).)
+--
+--    Note that we only take into account these LHS patterns that were declared
+--    as injective.
+--
+--    In the presence of type families in the RHS the above check is not
+--    reliable - see point (3).
+--
+-- 2. Type variables mentioned in the LHS (ie. variables used in patterns) can
+--    appear in the RHS if and only if type family is declared to be injective
+--    in these variables. Here's a trivial example why this is necessary:
+--
+--        type family Foo a b = r | r -> a b
+--        type instance Foo Int b = Int
+--
+--    `Foo` is not injective in its second parameter because both `Foo Int Int`
+--    and `Foo Int Char` return the same result Int. Note however that if `Foo`
+--    was not declared injective in its second argument the above instance
+--    declaration would be entirely correct. Here's an example of converse
+--    situation (non-injective type variable mentioned in the RHS):
+--
+--        type family F a b = r | r -> a
+--        type instance F Int b = b
+--
+--    Here `b` appears in the RHS but the user does not claim injectivity in
+--    this argument.
+--
+-- 3. RHS of a type instance is not allowed to call any type families. One
+--    reason is that check outlined in (1) would fail. Consider this example of
+--    a type family calling itself:
+--
+--        type family F (a :: Nat) = (r :: Nat) | r -> a where
+--             F Z     = Z
+--             F (S Z) = F Z
+--
+--    Obviously it is not injective. But we won't discover this with check (1)
+--    because the RHSs of these two equations don't unify and we will
+--    incorrectly claim they don't violate injectivity annotation. Thus we rule
+--    out type families in the RHS. There are other examples demonstrating that
+--    checking injectivity in the presence of type families is non
+--    trivial. Here's one more.  Let us assume that we have type families `X`
+--    and `Y` that we already know are injective, and type constructors `Bar ::
+--    * -> *` and `Baz :: * -> * -> *`.  Now we declare:
+--
+--        type family Foo a = r | r -> a where
+--             Foo (Bar a)   = X a
+--             Foo (Baz a b) = Y a b
+--
+--    Here we would need to check whether results of `X a` and `Y a b` can
+--    overlap.  I [JS] am not aware of any good way of doing this.
+--
+-- See also Note [Injective type families] in TyCon
+
+
+-- | Check whether an open type family equation can be added to already existing
+-- instance environment without causing conflicts with supplied injectivity
+-- annotations. Returns list of conflicting type instance declarations.
+lookupFamInjInstEnvConflicts
+    :: [Bool]         -- injectivity annotation for this type family instance
+                      -- INVARIANT: list contains at least one True value
+    -> FamInstEnvs    -- all type instances seens so far
+    -> FamInst        -- new type instance that we're checking
+    -> [FamInst]      -- conflicting instance delcarations
+lookupFamInjInstEnvConflicts injList (pkg_ie, home_ie)
+                             fam_inst@(FamInst { fi_axiom = new_axiom })
+  -- See Note [Injectivity annotation check]. This function implements first
+  -- check for open type families described there.
+  = lookup_inj_fam_conflicts home_ie ++ lookup_inj_fam_conflicts pkg_ie
+    where
+      fam        = famInstTyCon fam_inst
+      new_branch = coAxiomSingleBranch new_axiom
+
+      -- filtering function used by `lookup_inj_fam_conflicts` to check whether
+      -- a pair of equations is compatible with injectivity annotation.
+      isInjConflict (FamInst { fi_axiom = old_axiom })
+          = isJust $
+            injectiveBranches injList (coAxiomSingleBranch old_axiom) new_branch
+
+      lookup_inj_fam_conflicts ie
+          | isOpenFamilyTyCon fam, Just (FamIE insts) <- lookupUFM ie fam
+          = filter isInjConflict insts
+          | otherwise = []
+
+
+-- | Return a list of type variables that the function is injective in and that
+-- are not used in the RHS of family instance declaration.
+unusedInjTvsInRHS :: [Bool] -> [Type] -> Type -> (TyVarSet, TyVarSet)
+-- INVARIANT: [Bool] list contains at least one True value
+unusedInjTvsInRHS injList lhs rhs =
+    -- See Note [Injectivity annotation check]. This function implements second
+    -- check described there.
+    let -- get the list of type variables in which type family is injective
+        injVars = tyVarsOfTypes (filterByList injList lhs)
+        rhsVars = tyVarsOfType   rhs
+    in  -- return all injective variables not mentioned in the RHS
+        -- and all non-injective variables mentioned in the RHS
+        ( injVars `minusVarSet` rhsVars
+        , rhsVars `minusVarSet` injVars )
+
+
+-- | Return a list of type families used in the RHS of family instance
+-- declaration.
+tyFamsUsedInRHS :: Type -> [TyCon]
+tyFamsUsedInRHS rhs =
+    -- See Note [Injectivity annotation check]. This function implements third
+    -- check described there.
+    map fst (tcTyFamInsts rhs)
 
 {-
 Note [Family instance overlap conflicts]
@@ -716,8 +927,8 @@ lookup_fam_inst_env' match_fun ie fam match_tys
 lookup_fam_inst_env           -- The worker, local to this module
     :: MatchFun
     -> FamInstEnvs
-    -> TyCon -> [Type]          -- What we are looking for
-    -> [FamInstMatch]           -- Successful matches
+    -> TyCon -> [Type]        -- What we are looking for
+    -> [FamInstMatch]         -- Successful matches
 
 -- Precondition: the tycon is saturated (or over-saturated)
 
@@ -809,13 +1020,12 @@ reduceTyFamApp_maybe envs role tc tys
   , FamInstMatch { fim_instance = fam_inst
                  , fim_tys =      inst_tys } : _ <- lookupFamInstEnv envs tc tys
       -- NB: Allow multiple matches because of compatible overlap
-                                                    
   = let ax     = famInstAxiom fam_inst
         co     = mkUnbranchedAxInstCo role ax inst_tys
         ty     = pSnd (coercionKind co)
     in Just (co, ty)
 
-  | Just ax <- isClosedSynFamilyTyCon_maybe tc
+  | Just ax <- isClosedTypeFamilyTyCon_maybe tc
   , Just (ind, inst_tys) <- chooseBranch ax tys
   = let co     = mkAxInstCo role ax ind inst_tys
         ty     = pSnd (coercionKind co)

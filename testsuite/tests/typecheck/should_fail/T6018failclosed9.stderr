@@ -1,0 +1,14 @@
+
+T6018failclosed9.hs:8:3:
+    Type family equations violate injectivity annotation:
+      E2 a = 'False
+      E2 'True = 'False
+    In the equations for closed type family ‘E2’
+    In the type family declaration for ‘E2’
+
+T6018failclosed9.hs:8:3:
+    Family instance declaration violates injectivity annotation.
+    Type variable ‘a’ should appear in the RHS of type family equation:
+      E2 a = 'False
+    In the equations for closed type family ‘E2’
+    In the type family declaration for ‘E2’

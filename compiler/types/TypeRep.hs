@@ -15,7 +15,8 @@ Note [The Type-related module hierarchy]
   Coercion imports Type
 -}
 
-{-# LANGUAGE CPP, DeriveDataTypeable, DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
+{-# LANGUAGE CPP, DeriveDataTypeable, DeriveFunctor, DeriveFoldable,
+             DeriveTraversable, DataKinds #-}
 {-# OPTIONS_HADDOCK hide #-}
 -- We expose the relevant stuff from this module via the Type module
 
@@ -81,7 +82,7 @@ import DynFlags
 
 -- libraries
 import Data.List( mapAccumL, partition )
-import qualified Data.Data        as Data hiding ( TyCon )
+import qualified Data.Data as Data hiding ( TyCon )
 
 {-
 ************************************************************************

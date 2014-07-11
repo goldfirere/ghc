@@ -385,6 +385,9 @@ test('T6055', normal, compile, [''])
 test('DfltProb1', normal, compile, [''])
 test('DfltProb2', normal, compile, [''])
 test('T6134', normal, compile, [''])
+test('T6018', extra_clean(['T6018.hi' , 'T6018.o'
+                          ,'T6018A.hi', 'T6018A.o'])
+            , multimod_compile, ['T6018', ''])
 test('TcLambdaCase', when(compiler_lt('ghc', '7.5'), skip), compile, [''])
 test('T7147', normal, compile, [''])
 test('T7171',normal,run_command,

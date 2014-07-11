@@ -107,8 +107,10 @@ typeNatLeqTyCon =
   mkFamilyTyCon name
     (mkArrowKinds [ typeNatKind, typeNatKind ] boolKind)
     (take 2 $ tyVarList typeNatKind)
+    Nothing
     (BuiltInSynFamTyCon ops)
     NoParentTyCon
+    Nothing
 
   where
   name = mkWiredInTyConName UserSyntax gHC_TYPELITS (fsLit "<=?")
@@ -124,8 +126,10 @@ typeNatCmpTyCon =
   mkFamilyTyCon name
     (mkArrowKinds [ typeNatKind, typeNatKind ] orderingKind)
     (take 2 $ tyVarList typeNatKind)
+    Nothing
     (BuiltInSynFamTyCon ops)
     NoParentTyCon
+    Nothing
 
   where
   name = mkWiredInTyConName UserSyntax gHC_TYPELITS (fsLit "CmpNat")
@@ -141,8 +145,10 @@ typeSymbolCmpTyCon =
   mkFamilyTyCon name
     (mkArrowKinds [ typeSymbolKind, typeSymbolKind ] orderingKind)
     (take 2 $ tyVarList typeSymbolKind)
+    Nothing
     (BuiltInSynFamTyCon ops)
     NoParentTyCon
+    Nothing
 
   where
   name = mkWiredInTyConName UserSyntax gHC_TYPELITS (fsLit "CmpSymbol")
@@ -163,9 +169,10 @@ mkTypeNatFunTyCon2 op tcb =
   mkFamilyTyCon op
     (mkArrowKinds [ typeNatKind, typeNatKind ] typeNatKind)
     (take 2 $ tyVarList typeNatKind)
+    Nothing
     (BuiltInSynFamTyCon tcb)
     NoParentTyCon
-
+    Nothing
 
 
 

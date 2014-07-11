@@ -1,24 +1,24 @@
 type family (GHC.TypeLits.*) (a :: GHC.TypeLits.Nat)
-                             (b :: GHC.TypeLits.Nat) ::
-  GHC.TypeLits.Nat
+                             (b :: GHC.TypeLits.Nat)
+  :: GHC.TypeLits.Nat
 type family (GHC.TypeLits.+) (a :: GHC.TypeLits.Nat)
-                             (b :: GHC.TypeLits.Nat) ::
-  GHC.TypeLits.Nat
+                             (b :: GHC.TypeLits.Nat)
+  :: GHC.TypeLits.Nat
 type family (GHC.TypeLits.-) (a :: GHC.TypeLits.Nat)
-                             (b :: GHC.TypeLits.Nat) ::
-  GHC.TypeLits.Nat
+                             (b :: GHC.TypeLits.Nat)
+  :: GHC.TypeLits.Nat
 type (GHC.TypeLits.<=) (x :: GHC.TypeLits.Nat)
                        (y :: GHC.TypeLits.Nat) =
   (x GHC.TypeLits.<=? y) ~ 'True
 type family (GHC.TypeLits.<=?) (a :: GHC.TypeLits.Nat)
-                               (b :: GHC.TypeLits.Nat) ::
-  Bool
+                               (b :: GHC.TypeLits.Nat)
+  :: Bool
 type family GHC.TypeLits.CmpNat (a :: GHC.TypeLits.Nat)
-                                (b :: GHC.TypeLits.Nat) ::
-  Ordering
+                                (b :: GHC.TypeLits.Nat)
+  :: Ordering
 type family GHC.TypeLits.CmpSymbol (a :: GHC.TypeLits.Symbol)
-                                   (b :: GHC.TypeLits.Symbol) ::
-  Ordering
+                                   (b :: GHC.TypeLits.Symbol)
+  :: Ordering
 class GHC.TypeLits.KnownNat (n :: GHC.TypeLits.Nat) where
   GHC.TypeLits.natSing :: GHC.TypeLits.SNat n
 class GHC.TypeLits.KnownSymbol (n :: GHC.TypeLits.Symbol) where
@@ -32,8 +32,8 @@ data GHC.TypeLits.SomeSymbol where
                              (Data.Proxy.Proxy n) -> GHC.TypeLits.SomeSymbol
 data GHC.TypeLits.Symbol
 type family (GHC.TypeLits.^) (a :: GHC.TypeLits.Nat)
-                             (b :: GHC.TypeLits.Nat) ::
-  GHC.TypeLits.Nat
+                             (b :: GHC.TypeLits.Nat)
+  :: GHC.TypeLits.Nat
 GHC.TypeLits.natVal ::
   GHC.TypeLits.KnownNat n => proxy n -> Integer
 GHC.TypeLits.natVal' ::

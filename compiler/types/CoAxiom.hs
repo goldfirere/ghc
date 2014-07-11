@@ -1,12 +1,13 @@
 -- (c) The University of Glasgow 2012
 
-{-# LANGUAGE CPP, DeriveDataTypeable, GADTs, ScopedTypeVariables #-}
+{-# LANGUAGE CPP, DeriveDataTypeable, GADTs, ScopedTypeVariables, DataKinds,
+             KindSignatures, StandaloneDeriving #-}
 
 -- | Module for coercion axioms, used to represent type family instances
 -- and newtypes
 
 module CoAxiom (
-       Branched, Unbranched, BranchIndex, BranchList(..),
+       AxiomBranched(..), BranchIndex, BranchList(..), Unbranched, Branched,
        toBranchList, fromBranchList,
        toBranchedList, toUnbranchedList,
        brListLength, brListNth, brListMap, brListFoldr, brListMapM,
@@ -55,7 +56,7 @@ from the axiom.
 
 For example, consider the axiom derived from the following declaration:
 
-type instance where
+type family F a where
   F [Int] = Bool
   F [a]   = Double
   F (a b) = Char
@@ -81,7 +82,7 @@ can unify with the supplied arguments. After all, it is possible that some
 of the type arguments are lambda-bound type variables whose instantiation may
 cause an earlier match among the branches. We wish to prohibit this behavior,
 so the type checker rules out the choice of a branch where a previous branch
-can unify. See also [Branched instance checking] in FamInstEnv.hs.
+can unify. See also [Apartness] in FamInstEnv.hs.
 
 For example, the following is malformed, where 'a' is a lambda-bound type
 variable:
@@ -93,7 +94,7 @@ apply, not branch 2. This is a vital consistency check; without it, we could
 derive Int ~ Bool, and that is a Bad Thing.
 
 Note [Branched axioms]
-~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
 Although a CoAxiom has the capacity to store many branches, in certain cases,
 we want only one. These cases are in data/newtype family instances, newtype
 coercions, and type family instances declared with "type instance ...", not
@@ -108,13 +109,6 @@ declaring whether it is known to be a singleton or not. The list of branches
 is stored using a special form of list, declared below, that ensures that the
 type variable is accurate.
 
-As of this writing (Dec 2012), it would not be appropriate to use a promoted
-type as the phantom type, so we use empty datatypes. We wish to have GHC
-remain compilable with GHC 7.2.1. If you are revising this code and GHC no
-longer needs to remain compatible with GHC 7.2.x, then please update this
-code to use promoted types.
-
-
 ************************************************************************
 *                                                                      *
                     Branch lists
@@ -125,13 +119,30 @@ code to use promoted types.
 type BranchIndex = Int  -- The index of the branch in the list of branches
                         -- Counting from zero
 
--- the phantom type labels
-data Unbranched deriving Typeable
-data Branched deriving Typeable
+-- type labels. See Note [Branched axioms]
+data AxiomBranched = Unbranched
+                   | Branched
+                   deriving ( Data.Data, Typeable )
 
-data BranchList a br where
+-- These synonyms allow to use promoted data types without ticks. Normally this
+-- would cause warnings with -Wall.
+type Unbranched = 'Unbranched
+type Branched   = 'Branched
+
+-- When DataKinds are enabled GHC 7.8 does not derive Typeable instances for
+-- promoted types so we have to derive this instance by ourselves. But GHC 7.10
+-- derives Typeable instances for promoted types so the declaration below would
+-- cause a "duplicate instances" error. Please remove this when GHC is no longer
+-- required to bootstrap with GHC 7.8
+#if __GLASGOW_HASKELL__ < 709
+deriving instance Typeable 'Branched
+#endif
+
+data BranchList a (br :: AxiomBranched) where
   FirstBranch :: a -> BranchList a br
   NextBranch :: a -> BranchList a br -> BranchList a Branched
+
+deriving instance Typeable BranchList
 
 -- convert to/from lists
 toBranchList :: [a] -> BranchList a Branched
@@ -258,7 +269,7 @@ data CoAxBranch
     , cab_incomps  :: [CoAxBranch]  -- The previous incompatible branches
                                     -- See Note [Storing compatibility]
     }
-  deriving Typeable
+  deriving ( Data.Data, Data.Typeable )
 
 toBranchedAxiom :: CoAxiom br -> CoAxiom Branched
 toBranchedAxiom (CoAxiom unique name role tc branches implicit)

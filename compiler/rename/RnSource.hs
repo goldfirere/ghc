@@ -1020,7 +1020,8 @@ rnTyClDecl (DataDecl { tcdLName = tycon, tcdTyVars = tyvars, tcdDataDefn = defn 
        ; let kvs = extractDataDefnKindVars defn
              doc = TyDataCtx tycon
        ; traceRn (text "rntycl-data" <+> ppr tycon <+> ppr kvs)
-       ; ((tyvars', defn'), fvs) <- bindHsTyVars doc Nothing kvs tyvars $ \ tyvars' ->
+       ; ((tyvars', defn'), fvs) <-
+                      bindHsTyVars doc Nothing kvs tyvars $ \ tyvars' ->
                                     do { (defn', fvs) <- rnDataDefn doc defn
                                        ; return ((tyvars', defn'), fvs) }
        ; return (DataDecl { tcdLName = tycon', tcdTyVars = tyvars'
@@ -1188,26 +1189,80 @@ badGadtStupidTheta _
   = vcat [ptext (sLit "No context is allowed on a GADT-style data declaration"),
           ptext (sLit "(You can put a context on each contructor, though.)")]
 
-rnFamDecl :: Maybe Name
-                    -- Just cls => this FamilyDecl is nested
-                    --             inside an *class decl* for cls
-                    --             used for associated types
+rnFamDecl :: Maybe Name -- Just cls => this FamilyDecl is nested
+                        --             inside an *class decl* for cls
+                        --             used for associated types
           -> FamilyDecl RdrName
           -> RnM (FamilyDecl Name, FreeVars)
 rnFamDecl mb_cls (FamilyDecl { fdLName = tycon, fdTyVars = tyvars
-                             , fdInfo = info, fdKindSig = kind })
-  = do { ((tycon', tyvars', kind'), fv1) <-
-           bindHsTyVars fmly_doc mb_cls kvs tyvars $ \tyvars' ->
+                             , fdInfo = info, fdResultSig = L sigSpan resultSig
+                             , fdInjectivityAnn = injectivity })
+  = do { rdr_env <- getLocalRdrEnv
+       ; ((tycon', tyvars', resultSig', injectivity'), fv1) <-
+           bindHsTyVars fmly_doc mb_cls kvs extTvs $ \rndTyvars ->
            do { tycon' <- lookupLocatedTopBndrRn tycon
-              ; (kind', fv_kind) <- rnLHsMaybeKind fmly_doc kind
-              ; return ((tycon', tyvars', kind'), fv_kind) }
+              ; (resultSig', fv_kind, tyvars') <- case resultSig of
+                  NoSig -> return (NoSig, emptyFVs, rndTyvars)
+                  KindSig kind -> do
+                   (rndKind, ftvs) <- rnLHsKind fmly_doc kind
+                   return (KindSig rndKind, ftvs, rndTyvars)
+                  TyVarSig tvbndr -> do
+                   -- `TyVarSig` tells us that user named the result of a type
+                   -- family by writing `= tyvar` or `= (tyvar :: kind)`. In
+                   -- such case we want to be sure that the supplied result name
+                   -- is not identical to an already in-scope type variables:
+                   --
+                   --  a) one of already declared type family arguments. Example
+                    --    of disallowed declaration:
+                   --        type family F a = a
+                   --
+                   --  b) already in-scope type variable. This second case might
+                   --     happen for associated types, where type class head
+                   --     bounds some type variables. Example of disallowed
+                   --     declaration:
+                   --         class C a b where
+                   --            type F b = a
+                   --
+                   -- Case a) is handled internally by bindHsTyVars. (Note that
+                   -- we add the result type variable binding to the list of
+                   -- type variable bindings). Case b is handled below.
+                   let -- if the user supplied a binding for result type
+                       -- variable we have to remove it from the front of the
+                       -- variable bindings list. See definition of extTyvars in
+                       -- the where clause below. Note that this pattern match
+                       -- is safe - when resultSig is TyVarSig the list of
+                       -- variable bindings is guaranteed to be non-empty.
+                       (rndKind : rndTvs) = hsq_tvs rndTyvars
+                       resName            = hsLTyVarName tvbndr
+                   when (resName `elemLocalRdrEnv` rdr_env) $
+                       addErrAt (getLoc tvbndr)
+                              (hsep [ text "Type variable"
+                                    , quotes . ppr $ resName
+                                    , text "naming a type family result shadows"
+                                    ] $$
+                               text "an already bound type variable.")
+                   return ( TyVarSig rndKind, emptyFVs
+                          , rndTyvars { hsq_tvs = rndTvs })
+
+              ; injectivity' <- traverse (rnInjectivityAnn tvBndrs resultSig)
+                                          injectivity
+
+              ; return ( (tycon', tyvars', resultSig', injectivity')
+                       , fv_kind )  }
        ; (info', fv2) <- rn_info info
        ; return (FamilyDecl { fdLName = tycon', fdTyVars = tyvars'
-                            , fdInfo = info', fdKindSig = kind' }
+                            , fdInfo = info', fdResultSig = L sigSpan resultSig'
+                            , fdInjectivityAnn = injectivity' }
                 , fv1 `plusFV` fv2) }
   where
      fmly_doc = TyFamilyCtx tycon
-     kvs = extractRdrKindSigVars kind
+     kvs      = extractRdrKindSigVars resultSig
+     tvBndrs  = hsQTvBndrs tyvars
+     -- if the user supplied a binding for result type variable we add it to the
+     -- list of type variable bindings (extTvs = extended type variables)
+     extTvs   = case resultSig of
+                  TyVarSig bndr -> tyvars { hsq_tvs = bndr : hsq_tvs tyvars }
+                  _             -> tyvars
 
      rn_info (ClosedTypeFamily eqns)
        = do { (eqns', fvs) <- rnList (rnTyFamInstEqn Nothing) eqns
@@ -1215,6 +1270,143 @@ rnFamDecl mb_cls (FamilyDecl { fdLName = tycon, fdTyVars = tyvars
             ; return (ClosedTypeFamily eqns', fvs) }
      rn_info OpenTypeFamily = return (OpenTypeFamily, emptyFVs)
      rn_info DataFamily     = return (DataFamily, emptyFVs)
+
+-- Note [Renaming injectivity annotation]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--
+-- During renaming of injectivity annotation we have to make several checks to
+-- make sure that it is well-formed. At the moment injectivity annotation
+-- consists of a single injectivity condition, so these terms might be used
+-- interchangeably. See Note [Injectivity annotation] for a detailed discussion
+-- of currently allowed injectivity annotations.
+--
+-- Checking LHS is simple because the only type variable allowed on the LHS of
+-- injectivity condition is the variable naming the result in type family head.
+-- Example of disallowed annotation:
+--
+--     type family Foo a b = r | b -> a
+--
+-- Verifying RHS of injectivity condition is more involved. We require that:
+--
+--  1. only variables defined in type family head appear on the RHS.  Example of
+--     disallowed annotation:
+--
+--        type family Foo a = r | r -> b
+--
+--  2. each variable appears at most once. Example of disallowed annotation:
+--
+--        type family Foo a = r | r -> a a
+--
+--  3. variables are listed in the order in which they were bound in type family
+--     head. Example of disallowed annotation:
+--
+--        type family Foo a b = r | r -> b a
+--
+--  4. for associated types the result variable does not shadow any of type
+--     class variables. Example of disallowed annotation:
+--
+--        class Foo a b where
+--           type F a = b | b -> a
+--
+-- Breaking any of these assumptions results in an error. Note that there is no
+-- one-to-one correspondence between these conditions and error messages
+-- generated below. The reason is that when we see an unexpected variable we
+-- don't try to find out whether that happened because variable was repeated or
+-- because the order of variables was incorrect.
+--
+-- Note that while injectivity annotations are allowed in the presence of kind
+-- polymorphism we only admit type variables in injectivity annotations.
+
+
+-- | Rename injectivity annotation. Note that injectivity annotation is just the
+-- part after the "|".  Everything that appears before it is renamed in
+-- rnFamDecl.
+rnInjectivityAnn :: [LHsTyVarBndr RdrName]     -- ^ Type variables declared in
+                                               --   type family head
+                 -> FamilyResultSig RdrName    -- ^ Result signature
+                 -> LInjectivityAnn RdrName    -- ^ Injectivity annotation
+                 -> RnM (LInjectivityAnn Name)
+rnInjectivityAnn tvBndrs (TyVarSig resTv)
+                 (L srcSpan (InjectivityAnn injFrom injTo))
+ = do
+   let tvNames = map hsLTyVarName tvBndrs
+       resName = hsLTyVarName resTv
+       -- See Note [Renaming injectivity annotation]
+       lhsValid   = resName == unLoc injFrom
+       rhsValid   = merge tvNames injTo
+       merge :: [RdrName] -> [Located RdrName] -> Maybe (SDoc, SrcSpan)
+       merge _     [] = Nothing
+       merge [] (L lx _:_) = Just ( vcat
+          -- we've run out of type variables in type family head but there are
+          -- still some variables left in the injectivity condition
+          [ text $ "Too many type variables on RHS of injectivity condition."
+          , nest 5
+          ( vcat [ hsep [ text "You listed"   , speakN (length injTo) <>
+                          text ":"            , interpp'SP injTo        ]
+                 , hsep [ text "But at most"  , speakN (length tvBndrs)
+                        , isOrAre tvNames     , text "allowed:"
+                        , interpp'SP tvNames  ]
+                 ]
+          )], lx)
+       merge (x:xs) ys'@(L ly y:ys)
+           | x == y    = merge xs ys
+           | otherwise = -- type variables in head and injectivity
+                         -- condition are not equal
+               case merge xs ys' of
+                 Nothing -> Nothing   -- this may be perfectly fine if a
+                                      -- variable was simply skipped
+                 Just _ -> Just (vcat -- but it may also be wrong if
+                                      -- variables were listed in incorrect
+                                      -- order. In that case discard
+                                      -- previous error and construct error
+                                      -- here. This ensures that we will
+                                      -- always report on the first
+                                      -- offending variable.
+                    [ text "Unexpected type variable on the RHS" <+>
+                      text "of injectivity condition:" <+> quotes (ppr y)
+                    , text "All variables should appear at most once and in" <+>
+                      text "exactly the same order"
+                    , text "as they were declared in type family head."
+                    ], ly)
+
+   (injDecl', noRnErrors) <- askNoErrs $ do
+     injFrom' <- rnLTyVar True injFrom
+     injTo'   <- mapM (rnLTyVar True) injTo
+     return $ L srcSpan (InjectivityAnn injFrom' injTo')
+
+   -- if renaming of type variables ended with errors (eg. there were
+   -- not-in-scope variables) don't check the validity of injectivity
+   -- annotation. This gives better error messages and saves us from
+   -- unnecessary computations if renaming of type variables fails.
+   when (noRnErrors && not lhsValid) $
+        addErrAt (getLoc injFrom)
+              ( vcat [ text $ "Incorrect type variable on the LHS of "
+                           ++ "injectivity condition"
+              , nest 5
+              ( vcat [ text "Expected :" <+> ppr resName
+                     , text "Actual   :" <+> ppr injFrom ])])
+
+   case (noRnErrors, rhsValid) of
+     (True, Just (err, span)) -> addErrAt span err
+     _                        -> return ()
+
+   return $ injDecl'
+
+-- We can only hit this case when the user writes injectivity annotation without
+-- naming the result:
+--
+--   type family F a | result -> a
+--   type family F a :: * | result -> a
+--
+-- So we rename injectivity annotation like we normally would except that
+-- this time we expect "result" to be reported not in scope by rnLTyVar.
+rnInjectivityAnn _ _ (L srcSpan (InjectivityAnn injFrom injTo)) =
+   setSrcSpan srcSpan $ do
+   (injDecl', _) <- askNoErrs $ do
+     injFrom' <- rnLTyVar True injFrom
+     injTo'   <- mapM (rnLTyVar True) injTo
+     return $ L srcSpan (InjectivityAnn injFrom' injTo')
+   return $ injDecl'
 
 {-
 Note [Stupid theta]

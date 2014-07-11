@@ -6,7 +6,7 @@
 TcTyClsDecls: Typecheck type and class declarations
 -}
 
-{-# LANGUAGE CPP, TupleSections #-}
+{-# LANGUAGE CPP, TupleSections, DataKinds #-}
 
 module TcTyClsDecls (
         tcTyAndClassDecls, tcAddImplicits,
@@ -36,7 +36,7 @@ import TcMType
 import TcType
 import TysWiredIn( unitTy )
 import FamInst
-import FamInstEnv( isDominatedBy, mkCoAxBranch, mkBranchedCoAxiom )
+import FamInstEnv
 import Coercion( pprCoAxBranch, ltRole )
 import Type
 import TypeRep   -- for checkValidRoles
@@ -144,7 +144,7 @@ tcTyClGroup boot_details tyclds
 
                  -- Populate environment with knot-tied ATyCon for TyCons
                  -- NB: if the decls mention any ill-staged data cons
-                 -- (see Note [Recusion and promoting data constructors]
+                 -- (see Note [Recusion and promoting data constructors])
                  -- we will have failed already in kcTyClGroup, so no worries here
            ; tcExtendRecEnv (zipRecTyClss names_w_poly_kinds rec_tyclss) $
 
@@ -406,16 +406,19 @@ getFamDeclInitialKinds decls
 
 getFamDeclInitialKind :: FamilyDecl Name
                       -> TcM [(Name, TcTyThing)]
-getFamDeclInitialKind decl@(FamilyDecl { fdLName = L _ name
-                                       , fdTyVars = ktvs
-                                       , fdKindSig = ksig })
+getFamDeclInitialKind decl@(FamilyDecl { fdLName     = L _ name
+                                       , fdTyVars    = ktvs
+                                       , fdResultSig = L _ resultSig })
   = do { (fam_kind, _) <-
            kcHsTyVarBndrs (famDeclHasCusk decl) ktvs $
-           do { res_k <- case ksig of
-                           Just k  -> tcLHsKind k
-                           Nothing
-                             | famDeclHasCusk decl -> return liftedTypeKind
-                             | otherwise           -> newMetaKindVar
+           do { res_k <- case resultSig of
+                      KindSig ki                        -> tcLHsKind ki
+                      TyVarSig (L _ (KindedTyVar _ ki)) -> tcLHsKind ki
+                      _ -- open type families have * return kind by default
+                        | famDeclHasCusk decl      -> return liftedTypeKind
+                        -- closed type families have their return kind inferred
+                        -- by default
+                        | otherwise                -> newMetaKindVar
               ; return (res_k, ()) }
        ; return [ (name, AThing fam_kind) ] }
 
@@ -664,22 +667,27 @@ tcTyClDecl1 _parent rec_info
                Nothing  -> pprPanic "tc_fd_tyvar" (ppr name $$ ppr tv $$ ppr ty) }
 
 tcFamDecl1 :: TyConParent -> FamilyDecl Name -> TcM [TyThing]
-tcFamDecl1 parent
-            (FamilyDecl {fdInfo = OpenTypeFamily, fdLName = L _ tc_name, fdTyVars = tvs})
+tcFamDecl1 parent (FamilyDecl { fdInfo = OpenTypeFamily, fdLName = L _ tc_name
+                              , fdTyVars = tvs, fdResultSig = L _ sig
+                              , fdInjectivityAnn = inj })
   = tcTyClTyVars tc_name tvs $ \ tvs' kind -> do
   { traceTc "open type family:" (ppr tc_name)
   ; checkFamFlag tc_name
-  ; tycon <- buildFamilyTyCon tc_name tvs' OpenSynFamilyTyCon kind parent
+  ; tycon <- buildFamilyTyCon tc_name tvs' (resultVariableName sig)
+                              OpenSynFamilyTyCon kind parent
+                              (getInjectivityList tvs' inj)
   ; return [ATyCon tycon] }
 
-tcFamDecl1 parent
-            (FamilyDecl { fdInfo = ClosedTypeFamily eqns
-                        , fdLName = lname@(L _ tc_name), fdTyVars = tvs })
+tcFamDecl1 parent (FamilyDecl { fdInfo = ClosedTypeFamily eqns
+                              , fdLName = lname@(L _ tc_name), fdTyVars = tvs
+                              , fdResultSig = L _ sig, fdInjectivityAnn = inj
+                              })
 -- Closed type families are a little tricky, because they contain the definition
 -- of both the type family and the equations for a CoAxiom.
 -- Note: eqns might be empty, in a hs-boot file!
   = do { traceTc "closed type family:" (ppr tc_name)
-         -- the variables in the header have no scope:
+         -- the variables in the header scope only over the injectivity
+         -- declaration but this is not involved here
        ; (tvs', kind) <- tcTyClTyVars tc_name tvs $ \ tvs' kind ->
                          return (tvs', kind)
 
@@ -710,10 +718,12 @@ tcFamDecl1 parent
        ; let co_ax = mkBranchedCoAxiom co_ax_name fam_tc branches
 
          -- now, finally, build the TyCon
-       ; let syn_rhs = if null eqns
-                       then AbstractClosedSynFamilyTyCon
-                       else ClosedSynFamilyTyCon co_ax
-       ; tycon <- buildFamilyTyCon tc_name tvs' syn_rhs kind parent
+       ; let fam_flav = if null eqns
+                        then AbstractClosedSynFamilyTyCon
+                        else ClosedSynFamilyTyCon co_ax
+       ; tycon <- buildFamilyTyCon tc_name tvs' (resultVariableName sig)
+                                   fam_flav kind parent
+                                   (getInjectivityList tvs' inj)
 
        ; let result = if null eqns
                       then [ATyCon tycon]
@@ -1441,7 +1451,8 @@ checkValidTyCon tc
 
   | Just fam_flav <- famTyConFlav_maybe tc
   = case fam_flav of
-    { ClosedSynFamilyTyCon ax      -> checkValidClosedCoAxiom ax
+    { ClosedSynFamilyTyCon ax      ->
+           checkValidClosedCoAxiom ax (familyTyConInjectivityInfo tc)
     ; AbstractClosedSynFamilyTyCon ->
       do { hsBoot <- tcIsHsBootOrSig
          ; checkTc hsBoot $
@@ -1511,15 +1522,19 @@ checkValidTyCon tc
                 fty2 = dataConFieldType con2 label
     check_fields [] = panic "checkValidTyCon/check_fields []"
 
-checkValidClosedCoAxiom :: CoAxiom Branched -> TcM ()
+checkValidClosedCoAxiom :: CoAxiom Branched -> Maybe [Bool] -> TcM ()
 checkValidClosedCoAxiom (CoAxiom { co_ax_branches = branches, co_ax_tc = tc })
+                        injectivity
  = tcAddClosedTypeFamilyDeclCtxt tc $
    do { brListFoldlM_ check_accessibility [] branches
+      ; case injectivity of
+           Nothing  -> return ()
+           Just inj -> brListFoldlM_ (check_injectivity inj) [] branches
       ; void $ brListMapM (checkValidTyFamInst Nothing tc) branches }
    where
-     check_accessibility :: [CoAxBranch]       -- prev branches (in reverse order)
-                         -> CoAxBranch         -- cur branch
-                         -> TcM [CoAxBranch]   -- cur : prev
+     check_accessibility :: [CoAxBranch]     -- prev branches (in reverse order)
+                         -> CoAxBranch       -- cur branch
+                         -> TcM [CoAxBranch] -- cur : prev
                -- Check whether the branch is dominated by earlier
                -- ones and hence is inaccessible
      check_accessibility prev_branches cur_branch
@@ -1527,6 +1542,36 @@ checkValidClosedCoAxiom (CoAxiom { co_ax_branches = branches, co_ax_tc = tc })
               addWarnAt (coAxBranchSpan cur_branch) $
               inaccessibleCoAxBranch tc cur_branch
             ; return (cur_branch : prev_branches) }
+
+     -- Check whether a new closed type family equation (CoAxBranch) can be
+     -- added to already checked equations without violating injectivity
+     -- annotation supplied by the user. If it can't this function adds errors
+     -- in the TcM monad. Always returns a list of equations where the new
+     -- CoAxBranch is placed in front of already checked branches, so that we
+     -- can check remaining equations in a single fold.
+     -- See Note [Injectivity annotation check] in FamInstEnv
+     check_injectivity :: [Bool]             -- injectivity annotation
+                                             -- INVARIANT: at least one True
+                       -> [CoAxBranch]       -- prev branches (in reverse order)
+                       -> CoAxBranch         -- cur branch
+                       -> TcM [CoAxBranch]   -- cur : prev
+     check_injectivity inj prev_branches cur_branch = do
+       { let conflicts = foldr gather_conflicts [] prev_branches
+             gather_conflicts branch acc
+               | Just (ax1, _)
+                   <- injectiveBranches inj cur_branch branch
+               = if ax1 `isDominatedBy` prev_branches
+                 then acc else branch : acc
+               | otherwise = acc
+             errs = makeInjectivityErrors cur_branch inj
+                      coAxBranchLHS coAxBranchRHS conflicts
+                      (conflictInjInstErr      (makeClosedFamInjErr tc))
+                      (tyfamsUsedInjErr        (makeClosedFamInjErr tc))
+                      (unusedInjectiveVarsErr  (makeClosedFamInjErr tc))
+                      (usedNonInjectiveVarsErr (makeClosedFamInjErr tc))
+         -- add found errors
+       ; mapM_ (\(err, span) -> setSrcSpan span $ addErr err) errs
+       ; return (cur_branch : prev_branches) }
 
 checkFieldCompat :: Name -> DataCon -> DataCon -> TyVarSet
                  -> Type -> Type -> Type -> Type -> TcM ()
@@ -2245,6 +2290,11 @@ inaccessibleCoAxBranch :: TyCon -> CoAxBranch -> SDoc
 inaccessibleCoAxBranch tc fi
   = ptext (sLit "Overlapped type family instance equation:") $$
       (pprCoAxBranch tc fi)
+
+makeClosedFamInjErr :: TyCon -> SDoc -> [CoAxBranch] -> (SDoc, SrcSpan)
+makeClosedFamInjErr tc herald eqns =
+    ( herald $$ vcat (map (pprCoAxBranch tc) eqns)
+    , coAxBranchSpan (head eqns) )
 
 badRoleAnnot :: Name -> Role -> Role -> SDoc
 badRoleAnnot var annot inferred

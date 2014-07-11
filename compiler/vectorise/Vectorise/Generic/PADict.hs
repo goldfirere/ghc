@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 
 module Vectorise.Generic.PADict
   ( buildPADict

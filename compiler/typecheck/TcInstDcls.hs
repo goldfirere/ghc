@@ -77,7 +77,7 @@ two passes over the instance decls.
 
 Note [How instance declarations are translated]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Here is how we translation instance declarations into Core
+Here is how we translate instance declarations into Core
 
 Running example:
         class C a where
@@ -637,8 +637,8 @@ tcTyFamInstDecl mb_clsinfo (L loc decl@(TyFamInstDecl { tfid_eqn = eqn }))
        ; fam_tc <- tcFamInstDeclCombined mb_clsinfo fam_lname
 
          -- (0) Check it's an open type family
-       ; checkTc (isFamilyTyCon fam_tc)        (notFamily fam_tc)
-       ; checkTc (isTypeFamilyTyCon fam_tc)    (wrongKindOfFamily fam_tc)
+       ; checkTc (isFamilyTyCon fam_tc)         (notFamily fam_tc)
+       ; checkTc (isTypeFamilyTyCon fam_tc)     (wrongKindOfFamily fam_tc)
        ; checkTc (isOpenTypeFamilyTyCon fam_tc) (notOpenFamily fam_tc)
 
          -- (1) do the work of verifying the synonym group

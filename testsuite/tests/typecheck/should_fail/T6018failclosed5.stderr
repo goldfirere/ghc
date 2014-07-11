@@ -1,0 +1,7 @@
+
+T6018failclosed5.hs:12:2:
+    Calling type family ‘IdClosed’ is not allowed in injective type family equation:
+      LClosed a = MaybeSynClosed a
+    In the equations for closed type family ‘LClosed’
+    In the type family declaration for ‘LClosed’
+

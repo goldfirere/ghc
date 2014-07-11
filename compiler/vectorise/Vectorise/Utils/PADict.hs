@@ -1,3 +1,5 @@
+{-# LANGUAGE DataKinds #-}
+
 module Vectorise.Utils.PADict (
   paDictArgType,
   paDictOfType,

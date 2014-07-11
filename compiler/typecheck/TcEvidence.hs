@@ -1,6 +1,6 @@
 -- (c) The University of Glasgow 2006
 
-{-# LANGUAGE CPP, DeriveDataTypeable #-}
+{-# LANGUAGE CPP, DeriveDataTypeable, DataKinds #-}
 
 module TcEvidence (
 
@@ -139,8 +139,8 @@ data TcCoercion
   | TcAppCo TcCoercion TcCoercion
   | TcForAllCo TyVar TcCoercion
   | TcCoVarCo EqVar
-  | TcAxiomInstCo (CoAxiom Branched) Int [TcCoercion] -- Int specifies branch number
-                                                      -- See [CoAxiom Index] in Coercion.hs
+  | TcAxiomInstCo (CoAxiom Branched) Int -- Int specifies branch number
+                  [TcCoercion]           -- See [CoAxiom Index] in Coercion.hs
   -- This is number of types and coercions are expected to match to CoAxiomRule
   -- (i.e., the CoAxiomRules are always fully saturated)
   | TcAxiomRuleCo CoAxiomRule [TcType] [TcCoercion]

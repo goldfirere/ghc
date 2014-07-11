@@ -63,7 +63,7 @@ data instance DF2 Bool = DBool
 $(return [])
 
 test :: ()
-test = $(let 
+test = $(let
 	  display :: Name -> Q ()
 	  display q = do { i <- reify q; runIO $ hPutStrLn stderr (pprint i) }
 	in do { display ''T
@@ -84,5 +84,3 @@ test = $(let
 	      ; display ''DF1
 	      ; display ''DF2
 	      ; [| () |] })
-
-

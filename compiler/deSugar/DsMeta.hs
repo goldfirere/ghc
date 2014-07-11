@@ -316,31 +316,66 @@ repSynDecl tc bndrs ty
        ; repTySyn tc bndrs ty1 }
 
 repFamilyDecl :: LFamilyDecl Name -> DsM (SrcSpan, Core TH.DecQ)
-repFamilyDecl (L loc (FamilyDecl { fdInfo    = info,
-                                   fdLName   = tc,
-                                   fdTyVars  = tvs,
-                                   fdKindSig = opt_kind }))
+repFamilyDecl (L loc (FamilyDecl { fdInfo      = info,
+                                   fdLName     = tc,
+                                   fdTyVars    = tvs,
+                                   fdResultSig = L _ resultSig,
+                                   fdInjectivityAnn = injectivity }))
   = do { tc1 <- lookupLOcc tc           -- See note [Binders and occurrences]
+       ; let mkHsQTvs tvs = HsQTvs { hsq_kvs = [], hsq_tvs = tvs }
+             resTyVar = case resultSig of
+                     TyVarSig bndr -> mkHsQTvs [bndr]
+                     _             -> mkHsQTvs []
        ; dec <- addTyClTyVarBinds tvs $ \bndrs ->
-           case (opt_kind, info) of
-                  (Nothing, ClosedTypeFamily eqns) ->
-                    do { eqns1 <- mapM repTyFamEqn eqns
-                       ; eqns2 <- coreList tySynEqnQTyConName eqns1
-                       ; repClosedFamilyNoKind tc1 bndrs eqns2 }
-                  (Just ki, ClosedTypeFamily eqns) ->
-                    do { eqns1 <- mapM repTyFamEqn eqns
-                       ; eqns2 <- coreList tySynEqnQTyConName eqns1
-                       ; ki1 <- repLKind ki
-                       ; repClosedFamilyKind tc1 bndrs ki1 eqns2 }
-                  (Nothing, _) ->
-                    do { info' <- repFamilyInfo info
-                       ; repFamilyNoKind info' tc1 bndrs }
-                  (Just ki, _) ->
-                    do { info' <- repFamilyInfo info
-                       ; ki1 <- repLKind ki
-                       ; repFamilyKind info' tc1 bndrs ki1 }
+                addTyClTyVarBinds resTyVar $ \_ ->
+           case info of
+             ClosedTypeFamily eqns ->
+               do { eqns1  <- mapM repTyFamEqn eqns
+                  ; eqns2  <- coreList tySynEqnQTyConName eqns1
+                  ; result <- repFamilyResultSig resultSig
+                  ; inj    <- repInjectivityAnn injectivity
+                  ; repClosedFamilyD tc1 bndrs result inj eqns2 }
+             OpenTypeFamily ->
+               do { result <- repFamilyResultSig resultSig
+                  ; inj    <- repInjectivityAnn injectivity
+                  ; repOpenFamilyD tc1 bndrs result inj }
+             DataFamily ->
+               do { kind <- repFamilyResultSigToMaybeKind resultSig
+                  ; repDataFamilyD tc1 bndrs kind }
        ; return (loc, dec)
        }
+
+-- | Represent result signature of a type family
+repFamilyResultSig :: FamilyResultSig Name -> DsM (Core TH.FamilyResultSig)
+repFamilyResultSig  NoSig          = repNoSig
+repFamilyResultSig (KindSig ki)    = do { ki' <- repLKind ki
+                                        ; repKindSig ki' }
+repFamilyResultSig (TyVarSig bndr) = do { bndr' <- repTyVarBndr bndr
+                                        ; repTyVarSig bndr' }
+
+-- | Represent result signature using a Maybe Kind. Used with data families,
+-- where the result signature can be either missing or a kind but never a named
+-- result variable.
+repFamilyResultSigToMaybeKind :: FamilyResultSig Name
+                              -> DsM (Core (Maybe TH.Kind))
+repFamilyResultSigToMaybeKind NoSig =
+    do { coreNothing kindTyConName }
+repFamilyResultSigToMaybeKind (KindSig ki) =
+    do { ki' <- repLKind ki
+       ; coreJust kindTyConName ki' }
+repFamilyResultSigToMaybeKind _ = panic "repFamilyResultSigToMaybeKind"
+
+-- | Represent injectivity annotation of a type family
+repInjectivityAnn :: Maybe (LInjectivityAnn Name)
+                  -> DsM (Core (Maybe TH.InjectivityAnn))
+repInjectivityAnn Nothing =
+    do { coreNothing injAnnTyConName }
+repInjectivityAnn (Just (L _ (InjectivityAnn lhs rhs))) =
+    do { lhs'   <- lookupBinder (unLoc lhs)
+       ; rhs1   <- mapM (lookupBinder . unLoc) rhs
+       ; rhs2   <- coreList nameTyConName rhs1
+       ; injAnn <- rep2 injectivityAnnName [unC lhs', unC rhs2]
+       ; coreJust injAnnTyConName injAnn }
 
 repFamilyDecls :: [LFamilyDecl Name] -> DsM [Core TH.DecQ]
 repFamilyDecls fds = liftM de_loc (mapM repFamilyDecl fds)
@@ -384,13 +419,6 @@ repLFunDep (L _ (xs, ys))
    = do xs' <- repList nameTyConName (lookupBinder . unLoc) xs
         ys' <- repList nameTyConName (lookupBinder . unLoc) ys
         repFunDep xs' ys'
-
--- represent family declaration flavours
---
-repFamilyInfo :: FamilyInfo Name -> DsM (Core TH.FamFlavour)
-repFamilyInfo OpenTypeFamily      = rep2 typeFamName []
-repFamilyInfo DataFamily          = rep2 dataFamName []
-repFamilyInfo ClosedTypeFamily {} = panic "repFamilyInfo"
 
 -- Represent instance declarations
 --
@@ -829,6 +857,14 @@ repTyVarBndrWithKind (L _ (UserTyVar _)) nm
 repTyVarBndrWithKind (L _ (KindedTyVar _ ki)) nm
   = repLKind ki >>= repKindedTV nm
 
+-- | Represent a type variable binder
+repTyVarBndr :: LHsTyVarBndr Name -> DsM (Core TH.TyVarBndr)
+repTyVarBndr (L _ (UserTyVar nm)) = do { nm' <- lookupBinder nm
+                                       ; repPlainTV nm' }
+repTyVarBndr (L _ (KindedTyVar (L _ nm) ki)) = do { nm' <- lookupBinder nm
+                                                  ; ki' <- repLKind ki
+                                                  ; repKindedTV nm' ki' }
+
 -- represent a type context
 --
 repLContext :: LHsContext Name -> DsM (Core TH.CxtQ)
@@ -912,7 +948,6 @@ repTy (HsExplicitTupleTy _ tys) = do
 repTy (HsTyLit lit) = do
                         lit' <- repTyLit lit
                         repTLit lit'
-                          
 repTy ty                      = notHandled "Exotic form of type" (ppr ty)
 
 repTyLit :: HsTyLit -> DsM (Core TH.TyLitQ)
@@ -1806,35 +1841,31 @@ repPragRule (MkC nm) (MkC bndrs) (MkC lhs) (MkC rhs) (MkC phases)
 repPragAnn :: Core TH.AnnTarget -> Core TH.ExpQ -> DsM (Core TH.DecQ)
 repPragAnn (MkC targ) (MkC e) = rep2 pragAnnDName [targ, e]
 
-repFamilyNoKind :: Core TH.FamFlavour -> Core TH.Name -> Core [TH.TyVarBndr]
-                -> DsM (Core TH.DecQ)
-repFamilyNoKind (MkC flav) (MkC nm) (MkC tvs)
-    = rep2 familyNoKindDName [flav, nm, tvs]
-
-repFamilyKind :: Core TH.FamFlavour -> Core TH.Name -> Core [TH.TyVarBndr]
-              -> Core TH.Kind
-              -> DsM (Core TH.DecQ)
-repFamilyKind (MkC flav) (MkC nm) (MkC tvs) (MkC ki)
-    = rep2 familyKindDName [flav, nm, tvs, ki]
-
 repTySynInst :: Core TH.Name -> Core TH.TySynEqnQ -> DsM (Core TH.DecQ)
 repTySynInst (MkC nm) (MkC eqn)
     = rep2 tySynInstDName [nm, eqn]
 
-repClosedFamilyNoKind :: Core TH.Name
-                      -> Core [TH.TyVarBndr]
-                      -> Core [TH.TySynEqnQ]
-                      -> DsM (Core TH.DecQ)
-repClosedFamilyNoKind (MkC nm) (MkC tvs) (MkC eqns)
-    = rep2 closedTypeFamilyNoKindDName [nm, tvs, eqns]
+repDataFamilyD :: Core TH.Name -> Core [TH.TyVarBndr]
+               -> Core (Maybe TH.Kind) -> DsM (Core TH.DecQ)
+repDataFamilyD (MkC nm) (MkC tvs) (MkC kind)
+    = rep2 dataFamilyDName [nm, tvs, kind]
 
-repClosedFamilyKind :: Core TH.Name
-                    -> Core [TH.TyVarBndr]
-                    -> Core TH.Kind
-                    -> Core [TH.TySynEqnQ]
-                    -> DsM (Core TH.DecQ)
-repClosedFamilyKind (MkC nm) (MkC tvs) (MkC ki) (MkC eqns)
-    = rep2 closedTypeFamilyKindDName [nm, tvs, ki, eqns]
+repOpenFamilyD :: Core TH.Name
+               -> Core [TH.TyVarBndr]
+               -> Core TH.FamilyResultSig
+               -> Core (Maybe TH.InjectivityAnn)
+               -> DsM (Core TH.DecQ)
+repOpenFamilyD (MkC nm) (MkC tvs) (MkC result) (MkC inj)
+    = rep2 openTypeFamilyDName [nm, tvs, result, inj]
+
+repClosedFamilyD :: Core TH.Name
+                 -> Core [TH.TyVarBndr]
+                 -> Core TH.FamilyResultSig
+                 -> Core (Maybe TH.InjectivityAnn)
+                 -> Core [TH.TySynEqnQ]
+                 -> DsM (Core TH.DecQ)
+repClosedFamilyD (MkC nm) (MkC tvs) (MkC res) (MkC inj) (MkC eqns)
+    = rep2 closedTypeFamilyDName [nm, tvs, res, inj, eqns]
 
 repTySynEqn :: Core [TH.TypeQ] -> Core TH.TypeQ -> DsM (Core TH.TySynEqnQ)
 repTySynEqn (MkC lhs) (MkC rhs)
@@ -1979,6 +2010,18 @@ repKConstraint :: DsM (Core TH.Kind)
 repKConstraint = rep2 constraintKName []
 
 ----------------------------------------------------------
+--       Type family result signature
+
+repNoSig :: DsM (Core TH.FamilyResultSig)
+repNoSig = rep2 noSigName []
+
+repKindSig :: Core TH.Kind -> DsM (Core TH.FamilyResultSig)
+repKindSig (MkC ki) = rep2 kindSigName [ki]
+
+repTyVarSig :: Core TH.TyVarBndr -> DsM (Core TH.FamilyResultSig)
+repTyVarSig (MkC bndr) = rep2 tyVarSigName [bndr]
+
+----------------------------------------------------------
 --              Literals
 
 repLiteral :: HsLit -> DsM (Core TH.Lit)
@@ -2042,7 +2085,7 @@ repSequenceQ :: Type -> Core [TH.Q a] -> DsM (Core (TH.Q [a]))
 repSequenceQ ty_a (MkC list)
   = rep2 sequenceQName [Type ty_a, list]
 
------------- Lists and Tuples -------------------
+------------ Lists -------------------
 -- turn a list of patterns into a single pattern matching a list
 
 repList :: Name -> (a  -> DsM (Core b))
@@ -2068,6 +2111,30 @@ nonEmptyCoreList xs@(MkC x:_) = MkC (mkListExpr (exprType x) (map unC xs))
 
 coreStringLit :: String -> DsM (Core String)
 coreStringLit s = do { z <- mkStringExpr s; return(MkC z) }
+
+------------------- Maybe ------------------
+
+-- | Construct Core expression for Nothing of a given type name
+coreNothing :: Name        -- ^ Name of the TyCon of the element type
+            -> DsM (Core (Maybe a))
+coreNothing tc_name =
+    do { elt_ty <- lookupType tc_name; return (coreNothing' elt_ty) }
+
+-- | Construct Core expression for Nothing of a given type
+coreNothing' :: Type       -- ^ The element type
+             -> Core (Maybe a)
+coreNothing' elt_ty = MkC (mkNothingExpr elt_ty)
+
+-- | Store given Core expression in a Just of a given type name
+coreJust :: Name        -- ^ Name of the TyCon of the element type
+         -> Core a -> DsM (Core (Maybe a))
+coreJust tc_name es
+  = do { elt_ty <- lookupType tc_name; return (coreJust' elt_ty es) }
+
+-- | Store given Core expression in a Just of a given type
+coreJust' :: Type       -- ^ The element type
+          -> Core a -> Core (Maybe a)
+coreJust' elt_ty es = MkC (mkJustExpr elt_ty (unC es))
 
 ------------ Literals & Variables -------------------
 
@@ -2103,7 +2170,7 @@ notHandled what doc = failWithDs msg
 --
 --  1) Allocate a key
 --  2) Make a "Name"
---  3) Add the name to knownKeyNames
+--  3) Add the name to templateHaskellNames
 
 templateHaskellNames :: [Name]
 -- The names that are implicitly mentioned by ``bracket''
@@ -2150,8 +2217,8 @@ templateHaskellNames = [
     classDName, instanceDName, standaloneDerivDName, sigDName, forImpDName,
     pragInlDName, pragSpecDName, pragSpecInlDName, pragSpecInstDName,
     pragRuleDName, pragAnnDName, defaultSigDName,
-    familyNoKindDName, familyKindDName, dataInstDName, newtypeInstDName,
-    tySynInstDName, closedTypeFamilyKindDName, closedTypeFamilyNoKindDName,
+    dataFamilyDName, openTypeFamilyDName, closedTypeFamilyDName,
+    dataInstDName, newtypeInstDName, tySynInstDName,
     infixLDName, infixRDName, infixNDName,
     roleAnnotDName,
     -- Cxt
@@ -2177,6 +2244,10 @@ templateHaskellNames = [
     -- Kind
     varKName, conKName, tupleKName, arrowKName, listKName, appKName,
     starKName, constraintKName,
+    -- FamilyResultSig
+    noSigName, kindSigName, tyVarSigName,
+    -- InjectivityAnn
+    injectivityAnnName,
     -- Callconv
     cCallName, stdCallName, cApiCallName, primCallName, javaScriptCallName,
     -- Safety
@@ -2210,7 +2281,7 @@ templateHaskellNames = [
     typeTyConName, tyVarBndrTyConName, matchTyConName, clauseTyConName,
     patQTyConName, fieldPatQTyConName, fieldExpQTyConName, funDepTyConName,
     predQTyConName, decsQTyConName, ruleBndrQTyConName, tySynEqnQTyConName,
-    roleTyConName, tExpTyConName,
+    roleTyConName, tExpTyConName, injAnnTyConName, kindTyConName,
 
     -- Quasiquoting
     quoteDecName, quoteTypeName, quoteExpName, quotePatName]
@@ -2235,21 +2306,23 @@ qqFun  = mk_known_key_name OccName.varName  qqLib
 qTyConName, nameTyConName, fieldExpTyConName, patTyConName,
     fieldPatTyConName, expTyConName, decTyConName, typeTyConName,
     tyVarBndrTyConName, matchTyConName, clauseTyConName, funDepTyConName,
-    predTyConName, tExpTyConName :: Name
-qTyConName        = thTc (fsLit "Q")            qTyConKey
-nameTyConName     = thTc (fsLit "Name")         nameTyConKey
-fieldExpTyConName = thTc (fsLit "FieldExp")     fieldExpTyConKey
-patTyConName      = thTc (fsLit "Pat")          patTyConKey
-fieldPatTyConName = thTc (fsLit "FieldPat")     fieldPatTyConKey
-expTyConName      = thTc (fsLit "Exp")          expTyConKey
-decTyConName      = thTc (fsLit "Dec")          decTyConKey
-typeTyConName     = thTc (fsLit "Type")         typeTyConKey
-tyVarBndrTyConName= thTc (fsLit "TyVarBndr")    tyVarBndrTyConKey
-matchTyConName    = thTc (fsLit "Match")        matchTyConKey
-clauseTyConName   = thTc (fsLit "Clause")       clauseTyConKey
-funDepTyConName   = thTc (fsLit "FunDep")       funDepTyConKey
-predTyConName     = thTc (fsLit "Pred")         predTyConKey
-tExpTyConName     = thTc (fsLit "TExp")         tExpTyConKey
+    predTyConName, tExpTyConName, injAnnTyConName, kindTyConName :: Name
+qTyConName        = thTc (fsLit "Q")              qTyConKey
+nameTyConName     = thTc (fsLit "Name")           nameTyConKey
+fieldExpTyConName = thTc (fsLit "FieldExp")       fieldExpTyConKey
+patTyConName      = thTc (fsLit "Pat")            patTyConKey
+fieldPatTyConName = thTc (fsLit "FieldPat")       fieldPatTyConKey
+expTyConName      = thTc (fsLit "Exp")            expTyConKey
+decTyConName      = thTc (fsLit "Dec")            decTyConKey
+typeTyConName     = thTc (fsLit "Type")           typeTyConKey
+tyVarBndrTyConName= thTc (fsLit "TyVarBndr")      tyVarBndrTyConKey
+matchTyConName    = thTc (fsLit "Match")          matchTyConKey
+clauseTyConName   = thTc (fsLit "Clause")         clauseTyConKey
+funDepTyConName   = thTc (fsLit "FunDep")         funDepTyConKey
+predTyConName     = thTc (fsLit "Pred")           predTyConKey
+tExpTyConName     = thTc (fsLit "TExp")           tExpTyConKey
+injAnnTyConName   = thTc (fsLit "InjectivityAnn") injAnnTyConKey
+kindTyConName     = thTc (fsLit "Kind")           kindTyConKey
 
 returnQName, bindQName, sequenceQName, newNameName, liftName,
     mkNameName, mkNameG_vName, mkNameG_dName, mkNameG_tcName,
@@ -2376,41 +2449,37 @@ parSName    = libFun (fsLit "parS")    parSIdKey
 funDName, valDName, dataDName, newtypeDName, tySynDName, classDName,
     instanceDName, sigDName, forImpDName, pragInlDName, pragSpecDName,
     pragSpecInlDName, pragSpecInstDName, pragRuleDName, pragAnnDName,
-    familyNoKindDName, standaloneDerivDName, defaultSigDName,
-    familyKindDName, dataInstDName, newtypeInstDName, tySynInstDName,
-    closedTypeFamilyKindDName, closedTypeFamilyNoKindDName,
+    standaloneDerivDName, defaultSigDName,
+    dataInstDName, newtypeInstDName, tySynInstDName,
+    dataFamilyDName, openTypeFamilyDName, closedTypeFamilyDName,
     infixLDName, infixRDName, infixNDName, roleAnnotDName :: Name
-funDName          = libFun (fsLit "funD")          funDIdKey
-valDName          = libFun (fsLit "valD")          valDIdKey
-dataDName         = libFun (fsLit "dataD")         dataDIdKey
-newtypeDName      = libFun (fsLit "newtypeD")      newtypeDIdKey
-tySynDName        = libFun (fsLit "tySynD")        tySynDIdKey
-classDName        = libFun (fsLit "classD")        classDIdKey
-instanceDName     = libFun (fsLit "instanceD")     instanceDIdKey
-standaloneDerivDName
-                  = libFun (fsLit "standaloneDerivD") standaloneDerivDIdKey
-sigDName          = libFun (fsLit "sigD")          sigDIdKey
-defaultSigDName   = libFun (fsLit "defaultSigD")   defaultSigDIdKey
-forImpDName       = libFun (fsLit "forImpD")       forImpDIdKey
-pragInlDName      = libFun (fsLit "pragInlD")      pragInlDIdKey
-pragSpecDName     = libFun (fsLit "pragSpecD")     pragSpecDIdKey
-pragSpecInlDName  = libFun (fsLit "pragSpecInlD")  pragSpecInlDIdKey
-pragSpecInstDName = libFun (fsLit "pragSpecInstD") pragSpecInstDIdKey
-pragRuleDName     = libFun (fsLit "pragRuleD")     pragRuleDIdKey
-pragAnnDName      = libFun (fsLit "pragAnnD")      pragAnnDIdKey
-familyNoKindDName = libFun (fsLit "familyNoKindD") familyNoKindDIdKey
-familyKindDName   = libFun (fsLit "familyKindD")   familyKindDIdKey
-dataInstDName     = libFun (fsLit "dataInstD")     dataInstDIdKey
-newtypeInstDName  = libFun (fsLit "newtypeInstD")  newtypeInstDIdKey
-tySynInstDName    = libFun (fsLit "tySynInstD")    tySynInstDIdKey
-closedTypeFamilyKindDName
-                  = libFun (fsLit "closedTypeFamilyKindD") closedTypeFamilyKindDIdKey
-closedTypeFamilyNoKindDName
-                  = libFun (fsLit "closedTypeFamilyNoKindD") closedTypeFamilyNoKindDIdKey
-infixLDName       = libFun (fsLit "infixLD")       infixLDIdKey
-infixRDName       = libFun (fsLit "infixRD")       infixRDIdKey
-infixNDName       = libFun (fsLit "infixND")       infixNDIdKey
-roleAnnotDName    = libFun (fsLit "roleAnnotD")    roleAnnotDIdKey
+funDName             = libFun (fsLit "funD")              funDIdKey
+valDName             = libFun (fsLit "valD")              valDIdKey
+dataDName            = libFun (fsLit "dataD")             dataDIdKey
+newtypeDName         = libFun (fsLit "newtypeD")          newtypeDIdKey
+tySynDName           = libFun (fsLit "tySynD")            tySynDIdKey
+classDName           = libFun (fsLit "classD")            classDIdKey
+instanceDName        = libFun (fsLit "instanceD")         instanceDIdKey
+standaloneDerivDName = libFun (fsLit "standaloneDerivD")  standaloneDerivDIdKey
+sigDName             = libFun (fsLit "sigD")              sigDIdKey
+defaultSigDName      = libFun (fsLit "defaultSigD")       defaultSigDIdKey
+forImpDName          = libFun (fsLit "forImpD")           forImpDIdKey
+pragInlDName         = libFun (fsLit "pragInlD")          pragInlDIdKey
+pragSpecDName        = libFun (fsLit "pragSpecD")         pragSpecDIdKey
+pragSpecInlDName     = libFun (fsLit "pragSpecInlD")      pragSpecInlDIdKey
+pragSpecInstDName    = libFun (fsLit "pragSpecInstD")     pragSpecInstDIdKey
+pragRuleDName        = libFun (fsLit "pragRuleD")         pragRuleDIdKey
+pragAnnDName         = libFun (fsLit "pragAnnD")          pragAnnDIdKey
+dataInstDName        = libFun (fsLit "dataInstD")         dataInstDIdKey
+newtypeInstDName     = libFun (fsLit "newtypeInstD")      newtypeInstDIdKey
+tySynInstDName       = libFun (fsLit "tySynInstD")        tySynInstDIdKey
+openTypeFamilyDName  = libFun (fsLit "openTypeFamilyD")   openTypeFamilyDIdKey
+closedTypeFamilyDName= libFun (fsLit "closedTypeFamilyD") closedTypeFamilyDIdKey
+dataFamilyDName      = libFun (fsLit "dataFamilyD")       dataFamilyDIdKey
+infixLDName          = libFun (fsLit "infixLD")           infixLDIdKey
+infixRDName          = libFun (fsLit "infixRD")           infixRDIdKey
+infixNDName          = libFun (fsLit "infixND")           infixNDIdKey
+roleAnnotDName       = libFun (fsLit "roleAnnotD")        roleAnnotDIdKey
 
 -- type Ctxt = ...
 cxtName :: Name
@@ -2486,6 +2555,16 @@ listKName       = libFun (fsLit "listK")        listKIdKey
 appKName        = libFun (fsLit "appK")         appKIdKey
 starKName       = libFun (fsLit "starK")        starKIdKey
 constraintKName = libFun (fsLit "constraintK")  constraintKIdKey
+
+-- data FamilyResultSig = ...
+noSigName, kindSigName, tyVarSigName :: Name
+noSigName       = libFun (fsLit "noSig")        noSigIdKey
+kindSigName     = libFun (fsLit "kindSig")      kindSigIdKey
+tyVarSigName    = libFun (fsLit "tyVarSig")     tyVarSigIdKey
+
+-- data InjectivityAnn = ...
+injectivityAnnName :: Name
+injectivityAnnName = libFun (fsLit "injectivityAnn") injectivityAnnIdKey
 
 -- data Callconv = ...
 cCallName, stdCallName, cApiCallName, primCallName, javaScriptCallName :: Name
@@ -2586,7 +2665,7 @@ expTyConKey, matchTyConKey, clauseTyConKey, qTyConKey, expQTyConKey,
     fieldExpTyConKey, fieldPatTyConKey, nameTyConKey, patQTyConKey,
     fieldPatQTyConKey, fieldExpQTyConKey, funDepTyConKey, predTyConKey,
     predQTyConKey, decsQTyConKey, ruleBndrQTyConKey, tySynEqnQTyConKey,
-    roleTyConKey, tExpTyConKey :: Unique
+    roleTyConKey, tExpTyConKey, injAnnTyConKey, kindTyConKey :: Unique
 expTyConKey             = mkPreludeTyConUnique 200
 matchTyConKey           = mkPreludeTyConUnique 201
 clauseTyConKey          = mkPreludeTyConUnique 202
@@ -2618,6 +2697,8 @@ ruleBndrQTyConKey       = mkPreludeTyConUnique 227
 tySynEqnQTyConKey       = mkPreludeTyConUnique 228
 roleTyConKey            = mkPreludeTyConUnique 229
 tExpTyConKey            = mkPreludeTyConUnique 230
+injAnnTyConKey          = mkPreludeTyConUnique 231
+kindTyConKey            = mkPreludeTyConUnique 232
 
 -- IdUniques available: 200-499
 -- If you want to change this, make sure you check in PrelNames
@@ -2746,38 +2827,37 @@ parSIdKey        = mkPreludeMiscIdUnique 323
 funDIdKey, valDIdKey, dataDIdKey, newtypeDIdKey, tySynDIdKey,
     classDIdKey, instanceDIdKey, sigDIdKey, forImpDIdKey, pragInlDIdKey,
     pragSpecDIdKey, pragSpecInlDIdKey, pragSpecInstDIdKey, pragRuleDIdKey,
-    pragAnnDIdKey, familyNoKindDIdKey, familyKindDIdKey, defaultSigDIdKey,
-    dataInstDIdKey, newtypeInstDIdKey, tySynInstDIdKey, standaloneDerivDIdKey,
-    closedTypeFamilyKindDIdKey, closedTypeFamilyNoKindDIdKey,
-    infixLDIdKey, infixRDIdKey, infixNDIdKey, roleAnnotDIdKey :: Unique
-funDIdKey                    = mkPreludeMiscIdUnique 330
-valDIdKey                    = mkPreludeMiscIdUnique 331
-dataDIdKey                   = mkPreludeMiscIdUnique 332
-newtypeDIdKey                = mkPreludeMiscIdUnique 333
-tySynDIdKey                  = mkPreludeMiscIdUnique 334
-classDIdKey                  = mkPreludeMiscIdUnique 335
-instanceDIdKey               = mkPreludeMiscIdUnique 336
-sigDIdKey                    = mkPreludeMiscIdUnique 337
-forImpDIdKey                 = mkPreludeMiscIdUnique 338
-pragInlDIdKey                = mkPreludeMiscIdUnique 339
-pragSpecDIdKey               = mkPreludeMiscIdUnique 340
-pragSpecInlDIdKey            = mkPreludeMiscIdUnique 341
-pragSpecInstDIdKey           = mkPreludeMiscIdUnique 342
-pragRuleDIdKey               = mkPreludeMiscIdUnique 343
-pragAnnDIdKey                = mkPreludeMiscIdUnique 344
-familyNoKindDIdKey           = mkPreludeMiscIdUnique 345
-familyKindDIdKey             = mkPreludeMiscIdUnique 346
-dataInstDIdKey               = mkPreludeMiscIdUnique 347
-newtypeInstDIdKey            = mkPreludeMiscIdUnique 348
-tySynInstDIdKey              = mkPreludeMiscIdUnique 349
-closedTypeFamilyKindDIdKey   = mkPreludeMiscIdUnique 350
-closedTypeFamilyNoKindDIdKey = mkPreludeMiscIdUnique 351
-infixLDIdKey                 = mkPreludeMiscIdUnique 352
-infixRDIdKey                 = mkPreludeMiscIdUnique 353
-infixNDIdKey                 = mkPreludeMiscIdUnique 354
-roleAnnotDIdKey              = mkPreludeMiscIdUnique 355
-standaloneDerivDIdKey        = mkPreludeMiscIdUnique 356
-defaultSigDIdKey             = mkPreludeMiscIdUnique 357
+    pragAnnDIdKey, defaultSigDIdKey, dataFamilyDIdKey, openTypeFamilyDIdKey,
+    closedTypeFamilyDIdKey, dataInstDIdKey, newtypeInstDIdKey, tySynInstDIdKey,
+    standaloneDerivDIdKey, infixLDIdKey, infixRDIdKey, infixNDIdKey,
+    roleAnnotDIdKey :: Unique
+funDIdKey              = mkPreludeMiscIdUnique 330
+valDIdKey              = mkPreludeMiscIdUnique 331
+dataDIdKey             = mkPreludeMiscIdUnique 332
+newtypeDIdKey          = mkPreludeMiscIdUnique 333
+tySynDIdKey            = mkPreludeMiscIdUnique 334
+classDIdKey            = mkPreludeMiscIdUnique 335
+instanceDIdKey         = mkPreludeMiscIdUnique 336
+sigDIdKey              = mkPreludeMiscIdUnique 337
+forImpDIdKey           = mkPreludeMiscIdUnique 338
+pragInlDIdKey          = mkPreludeMiscIdUnique 339
+pragSpecDIdKey         = mkPreludeMiscIdUnique 340
+pragSpecInlDIdKey      = mkPreludeMiscIdUnique 341
+pragSpecInstDIdKey     = mkPreludeMiscIdUnique 342
+pragRuleDIdKey         = mkPreludeMiscIdUnique 343
+pragAnnDIdKey          = mkPreludeMiscIdUnique 344
+dataFamilyDIdKey        =mkPreludeMiscIdUnique 345
+openTypeFamilyDIdKey   = mkPreludeMiscIdUnique 346
+dataInstDIdKey         = mkPreludeMiscIdUnique 347
+newtypeInstDIdKey      = mkPreludeMiscIdUnique 348
+tySynInstDIdKey        = mkPreludeMiscIdUnique 349
+closedTypeFamilyDIdKey = mkPreludeMiscIdUnique 350
+infixLDIdKey           = mkPreludeMiscIdUnique 352
+infixRDIdKey           = mkPreludeMiscIdUnique 353
+infixNDIdKey           = mkPreludeMiscIdUnique 354
+roleAnnotDIdKey        = mkPreludeMiscIdUnique 355
+standaloneDerivDIdKey  = mkPreludeMiscIdUnique 356
+defaultSigDIdKey       = mkPreludeMiscIdUnique 357
 
 -- type Cxt = ...
 cxtIdKey :: Unique
@@ -2853,6 +2933,16 @@ listKIdKey        = mkPreludeMiscIdUnique 408
 appKIdKey         = mkPreludeMiscIdUnique 409
 starKIdKey        = mkPreludeMiscIdUnique 410
 constraintKIdKey  = mkPreludeMiscIdUnique 411
+
+-- data FamilyResultSig = ...
+noSigIdKey, kindSigIdKey, tyVarSigIdKey :: Unique
+noSigIdKey        = mkPreludeMiscIdUnique 412
+kindSigIdKey      = mkPreludeMiscIdUnique 413
+tyVarSigIdKey     = mkPreludeMiscIdUnique 414
+
+-- data InjectivityAnn = ...
+injectivityAnnIdKey :: Unique
+injectivityAnnIdKey = mkPreludeMiscIdUnique 415
 
 -- data Callconv = ...
 cCallIdKey, stdCallIdKey, cApiCallIdKey, primCallIdKey,
