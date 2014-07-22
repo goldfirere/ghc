@@ -161,15 +161,12 @@ vectDataCon dc
   | not . null $ ex_tvs
   = do dflags <- getDynFlags
        cantVectorise dflags "Can't vectorise constructor with existential type variables yet" (ppr dc)
-  | not . null $ eq_spec
-  = do dflags <- getDynFlags
-       cantVectorise dflags "Can't vectorise constructor with equality context yet" (ppr dc)
   | not . null $ dataConFieldLabels dc
   = do dflags <- getDynFlags
        cantVectorise dflags "Can't vectorise constructor with labelled fields yet" (ppr dc)
   | not . null $ theta
   = do dflags <- getDynFlags
-       cantVectorise dflags "Can't vectorise constructor with constraint context yet" (ppr dc)
+       cantVectorise dflags "Can't vectorise constrained constructor yet" (ppr dc)
   | otherwise
   = do { name'   <- mkLocalisedName mkVectDataConOcc name
        ; tycon'  <- vectTyCon tycon
@@ -193,4 +190,4 @@ vectDataCon dc
     name        = dataConName dc
     rep_arg_tys = dataConRepArgTys dc
     tycon       = dataConTyCon dc
-    (univ_tvs, ex_tvs, eq_spec, theta, _arg_tys, _res_ty) = dataConFullSig dc
+    (univ_tvs, ex_tvs, theta, _arg_tys, _res_ty) = dataConFullSig dc

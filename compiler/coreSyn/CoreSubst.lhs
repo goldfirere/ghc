@@ -1207,7 +1207,7 @@ dealWithCoercion :: Coercion -> DataCon -> [CoreExpr]
                  -> Maybe (DataCon, [Type], [CoreExpr])
 dealWithCoercion co dc dc_args
   | isReflCo co 
-  , let (univ_ty_args, rest_args) = splitAtList (dataConUnivTyVars dc) dc_args
+  , let (univ_ty_args, rest_args) = splitAtList dc_univ_tyvars dc_args
   = Just (dc, stripTyCoArgs univ_ty_args, rest_args)
 
   | Pair _from_ty to_ty <- coercionKind co

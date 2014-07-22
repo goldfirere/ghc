@@ -1933,3 +1933,16 @@ In turn that means you can't write
 
 Reason: the back end falls over with panic "primRepHint:VoidRep";
         and there is no compelling reason to permit it
+
+%************************************************************************
+%*                                                                      *
+        DataCon utilities
+%*                                                                      *
+%************************************************************************
+
+These functions munge DataCon types, but they use other functions that
+aren't available to the DataCon module.
+
+\begin{code}
+
+\end{code}

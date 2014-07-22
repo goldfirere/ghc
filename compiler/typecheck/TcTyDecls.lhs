@@ -685,10 +685,10 @@ irClass tc_name cls
 irDataCon :: Name -> DataCon -> RoleM ()
 irDataCon tc_name datacon
   = addRoleInferenceInfo tc_name univ_tvs $
-    mapM_ (irType ex_var_set) (eqSpecPreds eq_spec ++ theta ++ arg_tys)
+    mapM_ (irType ex_var_set) (theta ++ arg_tys)
       -- See Note [Role-checking data constructor arguments] 
   where
-    (univ_tvs, ex_tvs, eq_spec, theta, arg_tys, _res_ty) = dataConFullSig datacon
+    (univ_tvs, ex_tvs, theta, arg_tys, _res_ty) = dataConFullSig datacon
     ex_var_set = mkVarSet ex_tvs
 
 irType :: VarSet -> Type -> RoleM ()

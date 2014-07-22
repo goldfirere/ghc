@@ -778,6 +778,7 @@ tcDataDefn rec_info tc_name tvs tycon_kind res_kind
   = do { extra_tvs <- tcDataKindSig res_kind
        ; let final_tvs  = tvs `chkAppend` extra_tvs
              roles      = rti_roles rec_info tc_name
+       ; pprTrace "RAE2" (ppr (zip final_tvs (map tyVarKind final_tvs))) $ return ()
        ; stupid_theta <- tcHsContext ctxt
        ; kind_signatures <- xoptM Opt_KindSignatures
        ; is_boot         <- tcIsHsBoot  -- Are we compiling an hs-boot file?
@@ -1135,7 +1136,8 @@ tcConDecl new_or_data rep_tycon tmpl_tvs res_tmpl        -- Data types
                    , con_qvars = hs_tvs, con_cxt = hs_ctxt
                    , con_details = hs_details, con_res = hs_res_ty })
   = addErrCtxt (dataConCtxt name) $
-    do { traceTc "tcConDecl 1" (ppr name)
+    do { pprTrace "RAE3" (ppr (zip tmpl_tvs (map tyVarKind tmpl_tvs))) $
+         traceTc "tcConDecl 1" (ppr name)
        ; (ctxt, arg_tys, res_ty, is_infix, field_lbls, stricts)
            <- tcHsTyVarBndrs hs_tvs $ \ _ ->
               do { ctxt    <- tcHsContext hs_ctxt
@@ -1168,7 +1170,7 @@ tcConDecl new_or_data rep_tycon tmpl_tvs res_tmpl        -- Data types
        ; fam_envs <- tcGetFamInstEnvs
        ; buildDataCon fam_envs (unLoc name) is_infix
                       stricts field_lbls
-                      univ_tvs ex_tvs eq_preds ctxt arg_tys
+                      (pprTrace "RAE4" (ppr (zip univ_tvs (map tyVarKind univ_tvs))) $ univ_tvs) ex_tvs eq_preds ctxt arg_tys
                       res_ty' rep_tycon
                 -- NB:  we put data_tc, the type constructor gotten from the
                 --      constructor type signature into the data constructor;
@@ -1266,7 +1268,13 @@ rejigConRes tmpl_tvs res_tmpl dc_tvs (ResTyGADT res_ty)
         --          z
         -- Existentials are the leftover type vars: [x,y]
         -- So we return ([a,b,z], [x,y], [a~(x,y),b~z], T [(x,y)] z z)
-  = (univ_tvs, ex_tvs, eq_spec, res_ty)
+  = (pprTrace "RAE5" (ppr (zip tmpl_tvs (map tyVarKind tmpl_tvs)) $$
+                      ppr res_tmpl $$
+                      ppr (zip dc_tvs (map tyVarKind dc_tvs)) $$
+                      ppr res_ty $$
+                      ppr (zip univ_tvs (map tyVarKind univ_tvs)) $$
+                      ppr eq_spec) $
+     univ_tvs, ex_tvs, eq_spec, res_ty)
   where
     Just subst = tcMatchTy (mkVarSet tmpl_tvs) res_tmpl res_ty
                 -- This 'Just' pattern is sure to match, because if not
@@ -1569,12 +1577,8 @@ checkNewDataCon con
   = do  { checkTc (isSingleton arg_tys) (newtypeFieldErr con (length arg_tys))
                 -- One argument
 
-        ; check_con (null eq_spec) $
-          ptext (sLit "A newtype constructor must have a return type of form T a1 ... an")
-                -- Return type is (T a b c)
-
         ; check_con (null theta) $
-          ptext (sLit "A newtype constructor cannot have a context in its type")
+          ptext (sLit "A newtype constructor cannot constrain its result type")
 
         ; check_con (null ex_tvs) $
           ptext (sLit "A newtype constructor cannot have existential type variables")
@@ -1585,7 +1589,7 @@ checkNewDataCon con
                 -- No strictness
     }
   where
-    (_univ_tvs, ex_tvs, eq_spec, theta, arg_tys, _res_ty) = dataConFullSig con
+    (_univ_tvs, ex_tvs, theta, arg_tys, _res_ty) = dataConFullSig con
     check_con what msg 
        = checkTc what (msg $$ ppr con <+> dcolon <+> ppr (dataConUserType con))
 
@@ -1743,13 +1747,13 @@ checkValidRoles tc
     check_dc_roles datacon
       = do { traceTc "check_dc_roles" (ppr datacon <+> ppr (tyConRoles tc))
            ; mapM_ (check_ty_roles role_env Representational) $
-                    eqSpecPreds eq_spec ++ theta ++ arg_tys }
+                    theta ++ arg_tys }
                     -- See Note [Role-checking data constructor arguments] in TcTyDecls
       where
-        (univ_tvs, ex_tvs, eq_spec, theta, arg_tys, _res_ty) = dataConFullSig datacon
+        (univ_tvs, ex_tvs, theta, arg_tys, _res_ty) = dataConFullSig datacon
         univ_roles = zipVarEnv univ_tvs (tyConRoles tc)
               -- zipVarEnv uses zipEqual, but we don't want that for ex_tvs
-        ex_roles   = mkVarEnv (zip ex_tvs (repeat Nominal))
+        ex_roles   = mkVarEnv (ex_tvs `zip` (repeat Nominal))
         role_env   = univ_roles `plusVarEnv` ex_roles
 
     check_ty_roles env role (TyVarTy tv)
@@ -1894,22 +1898,9 @@ mkRecSelBind (tycon, sel_name)
     -- Add catch-all default case unless the case is exhaustive
     -- We do this explicitly so that we get a nice error message that
     -- mentions this particular record selector
-    deflt | all dealt_with all_cons = []
-          | otherwise = [mkSimpleMatch [L loc (WildPat placeHolderType)]
-                            (mkHsApp (L loc (HsVar (getName rEC_SEL_ERROR_ID)))
-                                     (L loc (HsLit msg_lit)))]
-
-        -- Do not add a default case unless there are unmatched
-        -- constructors.  We must take account of GADTs, else we
-        -- get overlap warning messages from the pattern-match checker
-        -- NB: we need to pass type args for the *representation* TyCon
-        --     to dataConCannotMatch, hence the calculation of inst_tys
-        --     This matters in data families
-        --              data instance T Int a where
-        --                 A :: { fld :: Int } -> T Int Bool
-        --                 B :: { fld :: Int } -> T Int Char
-    dealt_with con = con `elem` cons_w_field || dataConCannotMatch inst_tys con
-    inst_tys = substTyCoVars (mkTopTCvSubst (dataConEqSpec con1)) (dataConUnivTyVars con1)
+    deflt = [mkSimpleMatch [L loc (WildPat placeHolderType)]
+                           (mkHsApp (L loc (HsVar (getName rEC_SEL_ERROR_ID)))
+                                    (L loc (HsLit msg_lit)))]
 
     unit_rhs = mkLHsTupleExpr []
     msg_lit = HsStringPrim $ unsafeMkByteString $

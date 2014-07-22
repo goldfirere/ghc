@@ -521,19 +521,20 @@ mkDataConRep dflags fam_envs wrap_name data_con
                      , dcr_boxer   = mk_boxer boxers
                      , dcr_arg_tys = rep_tys
                      , dcr_stricts = rep_strs
-                     , dcr_bangs   = dropList ev_tys wrap_bangs }) }
+                     , dcr_bangs   = dropList theta wrap_bangs }) }
 
   where
-    (univ_tvs, ex_tvs, eq_spec, theta, orig_arg_tys, _) = dataConFullSig data_con
-    res_ty_args  = substTyCoVars (mkTopTCvSubst eq_spec) univ_tvs
-    tycon        = dataConTyCon data_con       -- The representation TyCon (not family)
-    wrap_ty      = dataConUserType data_con
-    ev_tys       = eqSpecPreds eq_spec ++ theta
-    all_arg_tys  = ev_tys                         ++ orig_arg_tys
-    orig_bangs   = map mk_pred_strict_mark ev_tys ++ dataConStrictMarks data_con
+    (univ_tvs, ex_tvs, theta, orig_arg_tys, res_ty) = dataConFullSig data_con
+    res_ty_args     = tyConAppArgs res_ty
+    tycon           = dataConTyCon data_con       -- The representation TyCon (not family)
+    wrap_ty         = dataConUserType data_con
+    (wrap_bndrs, _) = splitForAllTys wrap_ty
+      -- RAE was here!
+    all_arg_tys     = theta                         ++ orig_arg_tys
+    orig_bangs      = map mk_pred_strict_mark theta ++ dataConStrictMarks data_con
 
-    wrap_arg_tys = theta ++ orig_arg_tys
-    wrap_arity   = count isId ex_tvs + length wrap_arg_tys
+    wrap_arg_tys    = theta ++ orig_arg_tys
+    wrap_arity      = count isId ex_tvs + length wrap_arg_tys
     	     -- The wrap_args are the arguments *other than* the eq_spec
     	     -- Because we are going to apply the eq_spec args manually in the
     	     -- wrapper
@@ -545,7 +546,7 @@ mkDataConRep dflags fam_envs wrap_name data_con
 
     wrapper_reqd = not (isNewTyCon tycon)  -- Newtypes have only a worker
                 && (any isBanged orig_bangs   -- Some forcing/unboxing
-                                              -- (includes eq_spec)
+                                              -- (includes GADT equalities)
                     || isFamInstTyCon tycon)  -- Cast result
 
     initial_wrap_app = Var (dataConWorkId data_con)

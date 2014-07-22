@@ -663,7 +663,7 @@ tcConPat penv (L con_span con_name) pat_ty arg_pats thing_inside
   = do	{ data_con <- tcLookupDataCon con_name
 	; let tycon = dataConTyCon data_con
          	  -- For data families this is the representation tycon
-	      (univ_tvs, ex_tvs, eq_spec, theta, arg_tys, _)
+	      (univ_tvs, ex_tvs, theta, arg_tys, _)
                 = dataConFullSig data_con
 
 	  -- Instantiate the constructor type variables [a->ty]
@@ -686,7 +686,7 @@ tcConPat penv (L con_span con_name) pat_ty arg_pats thing_inside
 	      arg_tys' = substTys tenv arg_tys
 
         ; traceTc "tcConPat" (ppr con_name $$ ppr ex_tvs' $$ ppr pat_ty' $$ ppr arg_tys')
-	; if null ex_tvs && null eq_spec && null theta
+	; if null ex_tvs && null theta
 	  then do { -- The common case; no class bindings etc 
                     -- (see Note [Arrows and patterns])
 		    (arg_pats', res) <- tcConArgs data_con arg_tys' 
@@ -701,7 +701,7 @@ tcConPat penv (L con_span con_name) pat_ty arg_pats thing_inside
 
 	  else do   -- The general case, with existential, 
                     -- and local equality constraints
-	{ let theta'   = substTheta tenv (eqSpecPreds eq_spec ++ theta)
+	{ let theta'   = substTheta tenv theta
                            -- order is *important* as we generate the list of
                            -- dictionary binders from theta'
 	      no_equalities = not (any isEqPred theta')

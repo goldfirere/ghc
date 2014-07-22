@@ -512,8 +512,8 @@ dsExpr expr@(RecordUpd record_expr (HsRecFields { rec_flds = fields })
     out_ty    = mkFamilyTyConApp tycon out_inst_tys
 
     mk_alt upd_fld_env con
-      = do { let (univ_tvs, ex_tvs, eq_spec, 
-                  theta, arg_tys, _) = dataConFullSig con
+      = do { let (univ_tvs, ex_tvs, theta, arg_tys, _) = dataConFullSig con
+                 wrapper_univ_tvs = mkVarSet $ dataConOrigUnivTyVars con
                  subst = mkTopTCvSubst (univ_tvs `zip` in_inst_tys)
 
                 -- I'm not bothering to clone the ex_tvs
@@ -529,8 +529,13 @@ dsExpr expr@(RecordUpd record_expr (HsRecFields { rec_flds = fields })
                  wrap = mkWpEvVarApps theta_vars            <.>
                         mkWpTyApps    (mkTyCoVarTys ex_tvs) <.>
                         mkWpTyApps [ty | (tv, ty) <- univ_tvs `zip` out_inst_tys
-                                       , not (tv `elemVarEnv` wrap_subst) ]
+                                       , tv `elemVarSet` wrapper_univ_tvs ]
                  rhs = foldl (\a b -> nlHsApp a b) inst_con val_args
+{- TODO (RAE): Restore correct behavior. See Note [Update for GADTs].
+   This is annoying because we don't have an eqSpec anymore, because
+   eqSpecs are ill-scoped in Dependent Haskell. Solution(?): include
+   a field in DataCon of type `(stuff) -> Coercion` that can generate
+   the needed coercion here.
 
                         -- Tediously wrap the application in a cast
                         -- Note [Update for GADTs]
@@ -541,14 +546,14 @@ dsExpr expr@(RecordUpd record_expr (HsRecFields { rec_flds = fields })
                                         Nothing  -> mkTcReflCo Nominal ty
                  wrap_subst = mkVarEnv [ (tv, mkTcSymCo (mkTcCoVarCo eq_var))
                                        | ((tv,_),eq_var) <- eq_spec `zip` eqs_vars ]
-
+-}
                  pat = noLoc $ ConPatOut { pat_con = noLoc con, pat_tvs = ex_tvs
-                                         , pat_dicts = eqs_vars ++ theta_vars
+                                         , pat_dicts = theta_vars
                                          , pat_binds = emptyTcEvBinds
                                          , pat_args = PrefixCon $ map nlVarPat arg_ids
                                          , pat_ty = in_ty }
-           ; let wrapped_rhs | null eq_spec = rhs
-                             | otherwise    = mkLHsWrap (mkWpCast (mkTcSubCo wrap_co)) rhs
+           ; let wrapped_rhs {-- | null eq_spec = -} rhs
+-- -                             | otherwise    = mkLHsWrap (mkWpCast (mkTcSubCo wrap_co)) rhs
            ; return (mkSimpleMatch [pat] wrapped_rhs) }
 
 \end{code}

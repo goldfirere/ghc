@@ -122,7 +122,7 @@ make_cdef dflags dcon =  C.Constr dcon_name existentials tys
   where
     dcon_name    = make_qid dflags False False (dataConName dcon)
     existentials = map make_tbind ex_tyvars
-    ex_tyvars    = dataConExTyCoVars dcon
+    ex_tyvars    = undefined
     tys          = map (make_ty dflags) (dataConRepArgTys dcon)
 
 make_tbind :: TyVar -> C.Tbind

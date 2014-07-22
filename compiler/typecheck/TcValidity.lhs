@@ -1153,8 +1153,7 @@ checkValidFamPats fam_tc tvs ty_pats
          --     type family F a :: * -> *
          --     type instance F Int y = y
          -- because then the type (F Int) would be like (\y.y)
-         traceTc "RAE1 checkValidFamPats" (ppr fam_tc $$ ppr tvs $$ ppr ty_pats $$ ppr fam_arity $$ ppr fam_bndrs)
-       ; checkTc (length ty_pats == fam_arity) $
+         checkTc (length ty_pats == fam_arity) $
            wrongNumberOfParmsErr (fam_arity - count isInvisibleBinder fam_bndrs)
              -- report only explicit arguments
            

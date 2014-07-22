@@ -38,7 +38,7 @@ module Type (
         mkNamedForAllTy,
         splitForAllTy_maybe, splitForAllTys, splitForAllTy,
         splitNamedForAllTys, splitNamedForAllTysB,
-        mkPiType, mkPiTypes, mkPiTypesNoTv, mkPiTypesPreferFunTy,
+        mkPiType, mkPiTypes, mkPiTypesPreferFunTy,
         piResultTy, piResultTys,
         applyTy, applyTys, applyTysD, isForAllTy, dropForAlls,
 
@@ -880,19 +880,6 @@ mkPiTypesPreferFunTy vars inner_ty = fst $ go vars inner_ty
       where
         (qty, fvs) = go vs ty
         kind_vars  = tyCoVarsOfType $ tyVarKind v
-
--- | Given a list of kinds, makes either FunTys or ForAllTys (quantified
--- over a wild card) as appropriate. (A ForAllTy is used only when the type
--- is a coercion type.) An invariant on @Type@ forbids using anonymous
--- binders over coercions.
-mkPiTypesNoTv :: [Type] -> Type -> Type
-mkPiTypesNoTv [] ty = ty
-mkPiTypesNoTv (k:ks) ty
-  = let binder
-          | isCoercionType k = Named (mkCoVar wildCardName k) Invisible
-          | otherwise        = Anon k
-        result = mkPiTypesNoTv ks ty in
-    mkForAllTy binder result
 
 -- | Take a ForAllTy apart, returning the list of binders and the result type.
 -- This always succeeds, even if it returns only an empty list. Note that the

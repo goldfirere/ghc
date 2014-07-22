@@ -57,10 +57,7 @@ mkDataTyConRhs cons
 		  -- See Note [Enumeration types] in TyCon
     }
   where
-    is_enum_con con
-       | (_tvs, theta, arg_tys, _res) <- dataConSig con
-       = null theta && null arg_tys
-
+    is_enum_con con = isVanillaDataCon con && null (dataConOrigArgTys con)
 
 mkNewTyConRhs :: Name -> TyCon -> DataCon -> TcRnIf m n AlgTyConRhs
 -- ^ Monadic because it makes a Name for the coercion TyCon

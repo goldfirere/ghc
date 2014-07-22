@@ -656,7 +656,7 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
 
                 -- Take apart a representative constructor
               con1 = ASSERT( not (null relevant_cons) ) head relevant_cons
-              (con1_tvs, _, _, _, con1_arg_tys, _) = dataConFullSig con1
+              (con1_tvs, _, _, con1_arg_tys, _) = dataConFullSig con1
               con1_flds = dataConFieldLabels con1
               con1_res_ty = mkFamilyTyConApp tycon (mkTyCoVarTys con1_tvs)
 
@@ -734,7 +734,10 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
     -- These tyvars must not change across the updates
     getFixedTyCoVars tvs1 cons
       = mkVarSet [tv1 | con <- cons
-                      , let (tvs, theta, arg_tys, _) = dataConSig con
+                      , let tvs = dataConUnivTyVars con
+                            theta = dataConRepTheta con
+                                -- use *orig* arg tys, to match with field names!
+                            arg_tys = dataConOrigArgTys con
                             flds = dataConFieldLabels con
                             fixed_tvs = exactTyCoVarsOfTypes fixed_tys
                                     -- fixed_tys: See Note [Type of a record update]
