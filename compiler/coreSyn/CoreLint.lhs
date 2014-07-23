@@ -938,7 +938,7 @@ lintCoercion (ForAllCo (TyHomo tv) co)
 
 lintCoercion g@(ForAllCo (TyHetero h tv1 tv2 cv) co)
   = do { (k3, k4, t1, t2, r) <- addInScopeVars [tv1, tv2, cv] $ lintCoercion co
-       ; (k1, k2) <- lintStarCoercion r h
+       ; (k1, k2) <- lintStarCoercion Representational h
        ; lintL (not (k1 `eqType` k2)) (mkBadHeteroCoMsg h g)
        ; ensureEqTys k1 (tyVarKind tv1) (mkBadHeteroVarMsg CLeft k1 tv1 g)
        ; ensureEqTys k2 (tyVarKind tv2) (mkBadHeteroVarMsg CRight k2 tv2 g)
@@ -967,7 +967,7 @@ lintCoercion g@(ForAllCo (CoHetero h cv1 cv2) co)
   = do { lintL (cv1 `freeInCoercion` co) (mkFreshnessViolationMsg cv1 co)
        ; lintL (cv2 `freeInCoercion` co) (mkFreshnessViolationMsg cv2 co)
        ; (k1, k2, t1, t2, r) <- addInScopeVars [cv1, cv2] $ lintCoercion co
-       ; (phi1, phi2) <- lintStarCoercion r h
+       ; (phi1, phi2) <- lintStarCoercion (coVarRole cv1) h
        ; lintL (not (phi1 `eqType` phi2)) (mkBadHeteroCoMsg h g)
        ; ensureEqTys phi1 (coVarKind cv1) (mkBadHeteroVarMsg CLeft phi1 cv1 g)
        ; ensureEqTys phi2 (coVarKind cv2) (mkBadHeteroVarMsg CRight phi2 cv2 g)
@@ -1011,7 +1011,7 @@ lintCoercion the_co@(NthCo n co)
        ; case (splitForAllTy_maybe s, splitForAllTy_maybe t) of
          { (Just (bndr_s, _ty_s), Just (bndr_t, _ty_t))
              |  n == 0
-             -> return (ks, kt, ts, tt, r)
+             -> return (ks, kt, ts, tt, Representational)
              where
                ts = binderType bndr_s
                tt = binderType bndr_t

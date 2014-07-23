@@ -523,9 +523,9 @@ data Coercion
 -- See Note [GHC Formalism] in coreSyn/CoreLint.lhs
 data ForAllCoBndr
   = TyHomo TyVar
-  | TyHetero Coercion TyVar TyVar CoVar   -- the Coercion & CoVar must have the same role
+  | TyHetero Coercion TyVar TyVar CoVar   -- the Coercion is R; the CoVar is N
   | CoHomo CoVar
-  | CoHetero Coercion CoVar CoVar   -- The cobndr's role derives from the coercion's
+  | CoHetero Coercion CoVar CoVar   -- the coercion's role matches the covars'
   deriving (Data.Data, Data.Typeable)
 
 -- returns the variable bound in a ForAllCoBndr

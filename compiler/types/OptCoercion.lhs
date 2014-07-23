@@ -233,8 +233,10 @@ opt_co env sym mrole (NthCo n co)
   = Refl Nominal (varType v)
   
   | ForAllCo cobndr _ <- co'
-  , Just (h, _, _) <- splitHeteroCoBndr_maybe cobndr
-  = h
+  , Just (h, v1, _) <- splitHeteroCoBndr_maybe cobndr
+  = if isCoVar v1 && coVarRole v1 == Nominal
+    then mkSubCo h
+    else h
 
   | otherwise
   = wrap_role $ NthCo n co'
@@ -390,14 +392,16 @@ opt_univ env role oty1 oty2
              ty2' = optType env2 ty2 in
          mkForAllCo (mkHomoCoBndr tv')
                     (opt_univ (zapTCvSubstEnv2 env1 env2) role ty1' ty2') }
-    else let eta = opt_univ env role k1 k2
-             cobndr
+    else let eta = opt_univ env eta_role k1 k2
+             (cobndr, eta_role)
                | isTyVar tv1 = let c = mkFreshCoVar (getTCvInScope env)
                                                     role
                                                     (mkOnlyTyVarTy tv1)
                                                     (mkOnlyTyVarTy tv2) in
-                               mkTyHeteroCoBndr eta tv1 tv2 c
-               | otherwise   = mkCoHeteroCoBndr eta tv1 tv2
+                               ( mkTyHeteroCoBndr eta tv1 tv2 c
+                               , Representational )
+               | otherwise   = ( mkCoHeteroCoBndr eta tv1 tv2
+                               , coVarRole tv1 )
          in
          mkForAllCo cobndr (opt_univ env role ty1 ty2)
 
@@ -559,12 +563,12 @@ opt_trans_rule is co1 co2
       -- See Note [Hetero case for opt_trans_rule]
       -- kinds of tvl2 and tvr1 must be equal
       (TyHetero col tvl1 tvl2 cvl, TyHetero cor tvr1 tvr2 cvr) ->
-        let cv       = mkFreshCoVar is (coVarRole cvl)
+        let cv       = mkFreshCoVar is Nominal
                                     (mkOnlyTyVarTy tvl1) (mkOnlyTyVarTy tvr2)
-            new_tvl2 = mkCastTy (mkOnlyTyVarTy tvr2) (to_rep $ mkSymCo cor)
+            new_tvl2 = mkCastTy (mkOnlyTyVarTy tvr2) (mkSymCo cor)
             new_cvl  = mkCoherenceRightCo (mkCoVarCo cv) (mkSymCo cor)
-            new_tvr1 = mkCastTy (mkOnlyTyVarTy tvl1) (to_rep col)
-            new_cvr  = mkCoherenceLeftCo  (mkCoVarCo cv) (col)
+            new_tvr1 = mkCastTy (mkOnlyTyVarTy tvl1) col
+            new_cvr  = mkCoherenceLeftCo (mkCoVarCo cv) col
             empty    = mkEmptyTCvSubst is'
             subst_r1 = extendTCvSubstList empty [tvl2, cvl] [new_tvl2, mkCoercionTy new_cvl]
             subst_r2 = extendTCvSubstList empty [tvr1, cvr] [new_tvr1, mkCoercionTy new_cvr]
@@ -629,7 +633,6 @@ opt_trans_rule is co1 co2
 
       _ -> Nothing
     where role   = coercionRole r1  -- must be the same as r2
-          to_rep = maybeSubCo2 Representational role
 
 -- Push transitivity inside axioms
 opt_trans_rule is co1 co2

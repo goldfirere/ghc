@@ -417,6 +417,8 @@ formula :: 'formula_' ::=
   | Just ( t1 , t2 ) = coaxrProves mu </ si // i /> </ ( s'j , s''j ) // j />
                                        ::   :: coaxrProves
   | mu1 = mu2                          ::   :: mu_rewrite
+  | R is the role of phi1 and phi2     ::   :: roles_match
+    {{ tex [[R]] \text{ is the role of } [[phi1]] \text{ and } [[phi2]] }}
                           
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%  Subrules and Parsing  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

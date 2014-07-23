@@ -205,7 +205,7 @@ G |-ty forall alpha_k.t2 : k2
 --------------------------------------------------------------------------- :: ForAllCo_TyHomo
 G |-co forall alpha_k. g : (forall alpha_k. t1) k1~R k2 (forall alpha_k. t2)
 
-G |-co h : k1 *~R * k2
+G |-co h : k1 *~Rep * k2
 G, alpha1_k1, alpha2_k2, c_(alpha1$ k1~#k2 alpha2$) |-co g : t1 k3~R k4 t2
 G |-ty forall alpha1_k1.t1 : k3
 G |-ty forall alpha2_k2.t2 : k4
@@ -221,7 +221,8 @@ G |-co forall c_phi. g : (forall c_phi.t1) k1~R k2 (forall c_phi.t2)
 
 c1 # |g|
 c2 # |g|
-G |-co h : phi1 *~R * phi2
+R' is the role of phi1 and phi2
+G |-co h : phi1 *~R' * phi2
 phi1 /= phi2
 G, c1_phi1, c2_phi2 |-co g : t1 k1~R k2 t2
 G |-ty forall c1_phi1.t1 : k1
@@ -239,10 +240,10 @@ phi = t1 k1 ~Rep# k2 t2
 --------------------- :: CoVarCoRepr
 G |-co z_phi : t1 k1 ~Rep k2 t2
 
-G |-ty t1 : k1
-G |-ty t2 : k2
+G |-ty t1 : k
+G |-ty t2 : k
 ----------------------------- :: UnivCo
-G |-co t1 ==>!_R t2 : t1 k1~R k2 t2
+G |-co t1 ==>!_R t2 : t1 k~R k t2
 
 G |-co g : t1 k1~R k2 t2
 ------------------------- :: SymCo
@@ -266,7 +267,7 @@ G |-co nth i g : si k2~R' k2' ti
 
 G |-co g : (forall z1_k1.t1) k3~R k4 (forall z2_k2.t2)
 --------------------------- :: NthCoForAll
-G |-co nth 0 g : k1 *~R * k2
+G |-co nth 0 g : k1 *~Rep * k2
 
 G |-co g : (s1 s2) k~Nom k' (t1 t2)
 G |-ty s1 : k1

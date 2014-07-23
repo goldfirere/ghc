@@ -1021,10 +1021,12 @@ promoteCoercion g@(AppCo co arg)
   | otherwise
   = mkKindCo g
 promoteCoercion (ForAllCo _ g)
-  = ASSERT( False ) mkReflCo (coercionRole g) liftedTypeKind
+  = ASSERT( False ) mkReflCo Representational liftedTypeKind
 promoteCoercion g@(CoVarCo {})     = mkKindCo g
 promoteCoercion g@(AxiomInstCo {}) = mkKindCo g
-promoteCoercion (UnivCo r ty1 ty2) = mkUnivCo r (typeKind ty1) (typeKind ty2)
+promoteCoercion (UnivCo r ty1 ty2) = ASSERT( False )
+                                     ASSERT( typeKind ty1 `eqType` typeKind ty2 )
+                                     mkReflCo Representational (typeKind ty1)
 promoteCoercion (SymCo co)         = mkSymCo (promoteCoercion co)
 promoteCoercion (TransCo co1 co2)  = mkTransCo (promoteCoercion co1)
                                                (promoteCoercion co2)
@@ -1565,7 +1567,7 @@ liftCoSubstVarBndrCallback :: (LiftingContext -> Role -> Type -> Coercion)
 liftCoSubstVarBndrCallback fun homo r lc@(LC in_scope cenv) old_var
   = (LC (in_scope `extendInScopeSetList` coBndrVars cobndr) new_cenv, cobndr)
   where
-    eta     = fun lc r (tyVarKind old_var)
+    eta     = fun lc Representational (tyVarKind old_var)
     Pair k1 k2 = coercionKind eta
     new_var = uniqAway in_scope (setVarType old_var k1)
 
