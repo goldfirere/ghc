@@ -264,6 +264,25 @@ Similarly consider
 When doing kind inference on {S,T} we don't want *skolems* for k1,k2,
 because they end up unifying; we want those SigTvs again.
 
+Note [TauTv sometimes gets sigma-types]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Despite the name TauTv, a TauTv metavariable can be *unified* with a
+sigma-type -- it's just that the solver will never make this choice.
+This is because sigma-types sometimes have implicit parameters (type
+parameters & dictionaries). We need to know up front where these
+implicit parameters occur, so that we can instantiate for them. If,
+say, unification didn't expose that a meta-variable was really a forall,
+and the solver did discover this, we'd be in trouble, because the forall-type's
+implicit parameters wouldn't be instantiated. Indeed, this is the whole
+point of having TauTvs at all.
+
+But, it's OK if the unifier discovers that a TauTv should be a sigma-type.
+That's because the unifier is run while we're walking through the expression,
+so when it's time to instantiate, we can zonk away any known meta-variables,
+expose the sigma-type, and instantiate away.
+
+This is all implemented in checkTauTvUpdate in TcUnify.
+
 \begin{code}
 -- A TyVarDetails is inside a TyVar
 data TcTyVarDetails
@@ -303,8 +322,9 @@ instance Outputable MetaDetails where
 
 data MetaInfo
    = TauTv         -- This MetaTv is an ordinary unification variable
-                   -- A TauTv is always filled in with a tau-type, which
-                   -- never contains any ForAlls
+                   -- A TauTv is usually filled with a tau-type, which
+                   -- cannot have any foralls. But not always; see
+                   -- Note [TauTv sometimes gets sigma-types]
 
    | PolyTv        -- Like TauTv, but can unify with a sigma-type
 

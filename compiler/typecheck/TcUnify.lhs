@@ -899,6 +899,7 @@ checkTauTvUpdate dflags tv ty
     -- Checks for (a) occurrence of tv
     --            (b) type family applications
     -- See Note [Conservative unification check]
+    -- and Note [TauTv sometimes gets sigma-types] in TcType
     defer_me (LitTy {})        = False
     defer_me (TyVarTy tv')     = tv == tv'
     defer_me (TyConApp tc tys) = isSynFamilyTyCon tc || any defer_me tys
