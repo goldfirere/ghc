@@ -613,7 +613,7 @@ unifyList subst orig_xs orig_ys
     go subst []     []     = return subst
     go subst (x:xs) (y:ys) = do { subst' <- unify subst x y
 				; go subst' xs ys }
-    go _ _ _ = maybeApart  -- See Note [Lists of different lengths are MaybeApart]
+    go subst _ _ = maybeApart subst  -- See Note [Lists of different lengths are MaybeApart]
 
 ---------------------------------
 uVar :: TvSubstEnv	-- An existing substitution to extend
