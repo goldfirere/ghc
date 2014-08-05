@@ -1,7 +1,6 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE OverlappingInstances #-}
 
 module T9371 where
 
@@ -11,7 +10,7 @@ class C x where
     data D x :: *
     makeD :: D x
 
-instance Monoid x => C x where
+instance {-# OVERLAPPABLE #-} Monoid x => C x where
     data D x = D1 (Either x ())
     makeD = D1 (Left mempty)
 
