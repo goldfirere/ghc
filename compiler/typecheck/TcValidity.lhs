@@ -59,6 +59,17 @@ import Data.List        ( (\\) )
 %*                                                                      *
 %************************************************************************
 
+Note [No ambiguity check with errors]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We must avoid doing the ambiguity check when there are already errors accumulated.
+This is because one of the errors may be a superclass cycle, and superclass cycles
+cause canonicalization to loop. Here is a representative example:
+
+  class D a => C a where
+    meth :: D a => ()
+  class C a => D a
+
+This fixes Trac #9415.
 
 \begin{code}
 checkAmbiguity :: UserTypeCtxt -> Type -> TcM ()
@@ -72,7 +83,8 @@ checkAmbiguity ctxt ty
   = return () 
 
   | otherwise
-  = do { traceTc "Ambiguity check for" (ppr ty)
+  = ifErrsM (return ()) $ -- See Note [No ambiguity check with errors]
+    do { traceTc "Ambiguity check for" (ppr ty)
        ; let free_tkvs = varSetElemsKvsFirst (closeOverKinds (tyVarsOfType ty))
        ; (subst, _tvs) <- tcInstSkolTyVars free_tkvs
        ; let ty' = substTy subst ty
