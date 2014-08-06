@@ -1,6 +1,8 @@
-{-# LANGUAGE PolyKinds, MultiParamTypeClasses #-}
+{-# LANGUAGE PolyKinds, MultiParamTypeClasses, FlexibleContexts #-}
 
 module T9200 where
 
-class D a => C (f :: k) (a :: k2)
+class C (f :: k) (a :: k2) where
+  c_meth :: D a => ()
+  
 class C () a => D a
