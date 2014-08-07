@@ -541,7 +541,7 @@ isPromotableType rec_tcs con_arg_ty
 type RoleAnnots = NameEnv (LRoleAnnotDecl Name)
 
 extractRoleAnnots :: TyClGroup Name -> RoleAnnots
-extractRoleAnnots (TyClGroup { group_roles = roles })
+extractRoleAnnots (RenamedTCG { group_roles = roles })
   = mkNameEnv [ (tycon, role_annot)
               | role_annot@(L _ (RoleAnnotDecl (L _ tycon) _)) <- roles ]
 

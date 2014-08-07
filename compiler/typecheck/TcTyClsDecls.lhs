@@ -139,7 +139,7 @@ tcTyClGroup boot_details tyclds
             -- Step 2: type-check all groups together, returning
             -- the final TyCons and Classes
        ; let role_annots = extractRoleAnnots tyclds
-             decls = group_tyclds tyclds
+             decls = tyClGroupGetDecls tyclds
        ; tyclss <- fixM $ \ rec_tyclss -> do
            { is_boot <- tcIsHsBoot
            ; let rec_flags = calcRecFlags boot_details is_boot
@@ -269,72 +269,78 @@ kcTyClGroup :: TyClGroup Name -> TcM [(Name,Kind)]
 -- Kind check this group, kind generalize, and return the resulting local env
 -- This bindds the TyCons and Classes of the group, but not the DataCons
 -- See Note [Kind checking for type and class decls]
-kcTyClGroup (TyClGroup { group_tyclds = decls })
+kcTyClGroup grp@(RenamedTCG { group_cusk_decls   = cusk_decls
+                            , group_syn_decls    = syn_decls
+                            , group_other_declss = other_declss })
   = do  { mod <- getModule
-        ; traceTc "kcTyClGroup" (ptext (sLit "module") <+> ppr mod $$ vcat (map ppr decls))
+        ; traceTc "kcTyClGroup" (ptext (sLit "module") <+> ppr mod $$ ppr grp)
 
           -- Kind checking;
-          --    1. Bind kind variables for non-synonyms
-          --    2. Kind-check synonyms, and bind kinds of those synonyms
-          --    3. Kind-check non-synonyms
-          --    4. Generalise the inferred kinds
+          --    1. Bind kind variables for non-synonyms and synonyms with
+          --       complete, user-supplied, kind signatures (CUSKs)
+          --    2. Kind-check other synonyms, and bind kinds of those synonyms
+          --    3. Kind-check non-CUSK types, in dependency order, generalising
+          --       between SCCs
+          --    4. Kind-check CUSK types, generalising at the end.
           -- See Note [Kind checking for type and class decls]
 
           -- Step 1: Bind kind variables for non-synonyms
-        ; let (syn_decls, non_syn_decls) = partition (isSynDecl . unLoc) decls
-        ; initial_kinds <- getInitialKinds non_syn_decls
+        ; initial_kinds <- getInitialKinds (cusk_decls ++ concat other_declss)
         ; traceTc "kcTyClGroup: initial kinds" (ppr initial_kinds)
 
         -- Step 2: Set initial envt, kind-check the synonyms
         ; lcl_env <- tcExtendKindEnv2 initial_kinds $
-                     kcSynDecls (calcSynCycles syn_decls)
+                     kcSynDecls syn_decls
 
-        -- Step 3: Set extended envt, kind-check the non-synonyms
+        -- Step 3: Kind-check non-CUSK types, building up a lcl_env
+        ; lcl_env <- setLclEnv lcl_env $
+                     kcTyClDeclssNoCusk other_declss
+                     
+        -- Step 4: Set extended envt, kind-check the CUSK types
         ; setLclEnv lcl_env $
-          mapM_ kcLTyClDecl non_syn_decls
+          mapM_ kcLTyClDecl cusk_decls
 
-             -- Step 4: generalisation
+             -- Step 4b: generalisation
              -- Kind checking done for this group
              -- Now we have to kind generalize the flexis
-        ; res <- concatMapM (generaliseTCD (tcl_env lcl_env)) decls
+        ; res <- concatMapM (generaliseTCD (tcl_env lcl_env)) cusk_decls
 
         ; traceTc "kcTyClGroup result" (ppr res)
         ; return res }
 
-  where
-    generalise :: TcTypeEnv -> Name -> TcM (Name, Kind)
-    -- For polymorphic things this is a no-op
-    generalise kind_env name
-      = do { let kc_kind = case lookupNameEnv kind_env name of
-                               Just (AThing k) -> k
-                               _ -> pprPanic "kcTyClGroup" (ppr name $$ ppr kind_env)
-           ; kvs <- kindGeneralize (tyVarsOfType kc_kind)
-           ; kc_kind' <- zonkTcKind kc_kind    -- Make sure kc_kind' has the final,
-                                               -- skolemised kind variables
-           ; traceTc "Generalise kind" (vcat [ ppr name, ppr kc_kind, ppr kvs, ppr kc_kind' ])
-           ; return (name, mkForAllTys kvs kc_kind') }
+generalise :: TcTypeEnv -> Name -> TcM (Name, Kind)
+-- For polymorphic things this is a no-op
+generalise kind_env name
+  = do { let kc_kind = case lookupNameEnv kind_env name of
+                           Just (AThing k) -> k
+                           _ -> pprPanic "kcTyClGroup" (ppr name $$ ppr kind_env)
+       ; kvs <- kindGeneralize (tyVarsOfType kc_kind)
+       ; kc_kind' <- zonkTcKind kc_kind    -- Make sure kc_kind' has the final,
+                                           -- skolemised kind variables
+       ; traceTc "Generalise kind" (vcat [ ppr name, ppr kc_kind, ppr kvs, ppr kc_kind' ])
+       ; return (name, mkForAllTys kvs kc_kind') }
 
-    generaliseTCD :: TcTypeEnv -> LTyClDecl Name -> TcM [(Name, Kind)]
-    generaliseTCD kind_env (L _ decl)
-      | ClassDecl { tcdLName = (L _ name), tcdATs = ats } <- decl
-      = do { first <- generalise kind_env name
-           ; rest <- mapM ((generaliseFamDecl kind_env) . unLoc) ats
-           ; return (first : rest) }
+generaliseTCD :: TcTypeEnv -> LTyClDecl Name -> TcM [(Name, Kind)]
+generaliseTCD kind_env (L _ decl)
+  | ClassDecl { tcdLName = (L _ name), tcdATs = ats } <- decl
+  = do { first <- generalise kind_env name
+       ; rest <- mapM ((generaliseFamDecl kind_env) . unLoc) ats
+       ; return (first : rest) }
 
-      | FamDecl { tcdFam = fam } <- decl
-      = do { res <- generaliseFamDecl kind_env fam
-           ; return [res] }
+  | FamDecl { tcdFam = fam } <- decl
+  = do { res <- generaliseFamDecl kind_env fam
+       ; return [res] }
 
-      | ForeignType {} <- decl
-      = pprPanic "generaliseTCD" (ppr decl)
+  | ForeignType {} <- decl
+  = pprPanic "generaliseTCD" (ppr decl)
 
-      | otherwise
-      = do { res <- generalise kind_env (tcdName decl)
-           ; return [res] }
+  | otherwise
+  = do { res <- generalise kind_env (tcdName decl)
+       ; return [res] }
 
-    generaliseFamDecl :: TcTypeEnv -> FamilyDecl Name -> TcM (Name, Kind)
-    generaliseFamDecl kind_env (FamilyDecl { fdLName = L _ name })
-      = generalise kind_env name
+generaliseFamDecl :: TcTypeEnv -> FamilyDecl Name -> TcM (Name, Kind)
+generaliseFamDecl kind_env (FamilyDecl { fdLName = L _ name })
+  = generalise kind_env name
 
 mk_thing_env :: [LTyClDecl Name] -> [(Name, TcTyThing)]
 mk_thing_env [] = []
@@ -430,20 +436,13 @@ getFamDeclInitialKind decl@(FamilyDecl { fdLName = L _ name
     defaultResToStar = (kcStrategyFamDecl decl == FullKindSignature)
 
 ----------------
-kcSynDecls :: [SCC (LTyClDecl Name)]
+kcSynDecls :: [LTyClDecl Name]
            -> TcM TcLclEnv -- Kind bindings
 kcSynDecls [] = getLclEnv
-kcSynDecls (group : groups)
-  = do  { (n,k) <- kcSynDecl1 group
-        ; lcl_env <- tcExtendKindEnv [(n,k)] (kcSynDecls groups)
+kcSynDecls (L _ decl : decls)
+  = do  { (n,k) <- kcSynDecl decl
+        ; lcl_env <- tcExtendKindEnv [(n,k)] (kcSynDecls decls)
         ; return lcl_env }
-
-kcSynDecl1 :: SCC (LTyClDecl Name)
-           -> TcM (Name,TcKind) -- Kind bindings
-kcSynDecl1 (AcyclicSCC (L _ decl)) = kcSynDecl decl
-kcSynDecl1 (CyclicSCC decls)       = do { recSynErr decls; failM }
-                                     -- Fail here to avoid error cascade
-                                     -- of out-of-scope tycons
 
 kcSynDecl :: TyClDecl Name -> TcM (Name, TcKind)
 kcSynDecl decl@(SynDecl { tcdTyVars = hs_tvs, tcdLName = L _ name
@@ -458,6 +457,19 @@ kcSynDecl decl@(SynDecl { tcdTyVars = hs_tvs, tcdLName = L _ name
               ; return (rhs_kind, ()) }
        ; return (name, syn_kind) }
 kcSynDecl decl = pprPanic "kcSynDecl" (ppr decl)
+
+--------------------------------------
+-- | Check mutually recursive groups of non-CUSK decls. The local
+-- environment has "initial kinds" for all the decls. Returns an extended
+-- local environment.
+kcTyClDeclssNoCusk :: [[LTyClDecl Name]] -> TcM TcLclEnv
+kcTyClDeclssNoCusk [] = getLclEnv
+kcTyClDeclssNoCusk (decls : declss)
+  = do { mapM_ kcTyClDecl decls
+       ; tc_env <- getLclTypeEnv
+       ; n_k_pairs <- concatMapM (generaliseTCD tc_env) decls
+       ; tcExtendKindEnv n_k_pairs $
+         kcTyClDeclssNoCusk declss }
 
 ------------------------------------------------------------------------
 kcLTyClDecl :: LTyClDecl Name -> TcM ()
@@ -2097,15 +2109,6 @@ noClassTyVarErr clas what
   = sep [ptext (sLit "The") <+> what,
          ptext (sLit "mentions none of the type or kind variables of the class") <+>
                 quotes (ppr clas <+> hsep (map ppr (classTyVars clas)))]
-
-recSynErr :: [LTyClDecl Name] -> TcRn ()
-recSynErr syn_decls
-  = setSrcSpan (getLoc (head sorted_decls)) $
-    addErr (sep [ptext (sLit "Cycle in type synonym declarations:"),
-                 nest 2 (vcat (map ppr_decl sorted_decls))])
-  where
-    sorted_decls = sortLocated syn_decls
-    ppr_decl (L loc decl) = ppr loc <> colon <+> ppr decl
 
 recClsErr :: [TyCon] -> TcRn ()
 recClsErr cycles

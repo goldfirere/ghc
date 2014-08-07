@@ -5,7 +5,7 @@
 
 \begin{code}
 {-# LANGUAGE DeriveDataTypeable, DeriveFunctor, DeriveFoldable,
-             DeriveTraversable #-}
+             DeriveTraversable, GADTs #-}
 
 -- | Abstract syntax of global declarations.
 --
@@ -16,13 +16,14 @@ module HsDecls (
   HsDecl(..), LHsDecl, HsDataDefn(..),
   -- ** Class or type declarations
   TyClDecl(..), LTyClDecl,
-  TyClGroup(..), tyClGroupConcat, mkTyClGroup,
+  TyClGroup(..), tyClGroupConcat, tyClGroupGetDecls,
   isClassDecl, isDataDecl, isSynDecl, tcdName,
   isFamilyDecl, isTypeFamilyDecl, isDataFamilyDecl,
   isOpenTypeFamilyInfo, isClosedTypeFamilyInfo,
   tyFamInstDeclName, tyFamInstDeclLName,
   countTyClDecls, pprTyClDeclFlavour,
   tyClDeclLName, tyClDeclTyVars,
+  hsDeclHasCusk, famDeclHasCusk,
   FamilyDecl(..), LFamilyDecl,
 
   -- ** Instance declarations
@@ -479,21 +480,54 @@ data TyClDecl name
     
   deriving (Data, Typeable)
 
- -- This is used in TcTyClsDecls to represent
- -- strongly connected components of decls
- -- No familiy instances in here
- -- The role annotations must be grouped with their decls for the
- -- type-checker to infer roles correctly
-data TyClGroup name
-  = TyClGroup { group_tyclds :: [LTyClDecl name]
-              , group_roles  :: [LRoleAnnotDecl name] }
-    deriving (Data, Typeable)
+\end{code}
+
+Note [TyClGroup]
+~~~~~~~~~~~~~~~~
+
+We need a somewhat structured datatype to represent a mutually-recursive group
+of TyClDecls. Before the renamer, this group (stored in the hs_tyclds field of
+HsGroup) will contain all declarations in the whole file. Though the restructuring
+is solely for the benefit of the typechecker, it is much more convenient to do
+dependency analysis, etc., in the renamer. So, the output of the renamer has the
+extra structure.
+
+This structure separates out declarations with a CUSK (complete, user-specified
+type signature) and also separates out synonym declarations from others. Both
+group_syn_decls and group_other_decl_sccs contain only declarations *without* CUSKs.
+
+The renamer also identifies the role annotations that go with the type/class
+declarations and puts them in the same group, because the type-checker needs to
+process the role annotations along with the other parts of the declaration. It
+is convenient in the plumbing to also have role annotations in this structure
+in the middle of the renamer (in the result of RnSource.findSplice, which builds
+an HsGroup), so the group_roles field is present in ParsedTCG as well.
+
+See also Note [Kind checking for type and class decls] in TcTyClsDecls.
+
+\begin{code}
+
+-- See Note [TyClGroup]
+data TyClGroup name where
+  ParsedTCG  :: { group_tyclds :: [LTyClDecl RdrName]
+                , group_roles  :: [LRoleAnnotDecl RdrName]
+                } -> TyClGroup RdrName
+  RenamedTCG :: { group_cusk_decls   :: [LTyClDecl Name]
+                , group_syn_decls    :: [LTyClDecl Name]  -- in dependency order
+                , group_other_declss :: [[LTyClDecl Name]] -- mut. recursive groups
+                , group_roles        :: [LRoleAnnotDecl Name]
+                } -> TyClGroup Name
+  deriving (Data, Typeable)
 
 tyClGroupConcat :: [TyClGroup name] -> [LTyClDecl name]
-tyClGroupConcat = concatMap group_tyclds
+tyClGroupConcat = concatMap tyClGroupGetDecls
 
-mkTyClGroup :: [LTyClDecl name] -> TyClGroup name
-mkTyClGroup decls = TyClGroup { group_tyclds = decls, group_roles = [] }
+tyClGroupGetDecls :: TyClGroup name -> [LTyClDecl name]
+tyClGroupGetDecls (ParsedTCG { group_tyclds = decls }) = decls
+tyClGroupGetDecls (RenamedTCG { group_cusk_decls   = decls1
+                              , group_syn_decls    = decls2
+                              , group_other_declss = declss3 })
+  = decls1 ++ decls2 ++ concat declss3
 
 type LFamilyDecl name = Located (FamilyDecl name)
 data FamilyDecl name = FamilyDecl
@@ -604,6 +638,29 @@ countTyClDecls decls
    
    isNewTy DataDecl{ tcdDataDefn = HsDataDefn { dd_ND = NewType } } = True
    isNewTy _                                                      = False
+
+-- | Does this declaration have a complete, user-supplied kind signature?
+-- See https://ghc.haskell.org/trac/ghc/wiki/GhcKinds/KindInference#Proposednewstrategy
+hsDeclHasCusk :: HsDecl name -> Bool
+hsDeclHasCusk (ForeignType {}) = True
+hsDeclHasCusk (FamDecl { tcdFam = fam_decl }) = famDeclHasCusk fam_decl
+hsDeclHasCusk (SynDecl { tcdTyVars = tyvars, tcdRhs = rhs })
+  = hsTvbAllKinded tyvars && rhs_annotated rhs
+  where
+    rhs_annotated (L _ ty) = case ty of
+      HsParTy lty  -> rhs_annotated lty
+      HsKindSig {} -> True
+      _            -> False
+hsDeclHasCusk (DataDecl { tcdTyVars = tyvars })  = hsTvbAllKinded tyvars
+hsDeclHasCusk (ClassDecl { tcdTyVars = tyvars }) = hsTvbAllKinded tyvars
+
+-- | Does this family declaration have a complete, user-supplied kind signature?
+famDeclHasCusk :: FamilyDecl name -> Bool
+famDeclHasCusk (FamilyDecl { fdInfo = ClosedTypeFamily _
+                           , fdTyVars = tyvars
+                           , fdKindSig = m_sig })
+  = hsTvbAllKinded tyvars && isJust m_sig
+famDeclHasCusk _ = True  -- all open families have CUSKs!
 \end{code}
 
 \begin{code}
@@ -639,10 +696,21 @@ instance OutputableBndr name
                      <+> pp_vanilla_decl_head lclas tyvars (unLoc context)
                      <+> pprFundeps (map unLoc fds)
 
-instance OutputableBndr name => Outputable (TyClGroup name) where
-  ppr (TyClGroup { group_tyclds = tyclds, group_roles = roles })
-    = ppr tyclds $$
-      ppr roles
+instance Outputable (TyClGroup name) where
+  ppr (ParsedTCG { group_tyclds = tyclds }) = ppr tyclds
+  ppr (RenamedTCG { group_cusk_decls = cusk_decls
+                  , group_syn_decls  = syn_decls
+                  , group_other_decl_sccs = other_sccs
+                  , group_roles })
+    = vcat [ hang (text "CUSK decls:")
+                2 (vcat $ map ppr cusk_decls)
+           , hang (text "Syn decls:")
+                2 (vcat $ map ppr syn_decls)
+           , hang (text "Other decls:")
+                2 (vcat $ map ppr other_sccs)
+           , hang (text "Role annotations:")
+                2 (vcat $ map ppr group_roles)
+           ]
 
 instance (OutputableBndr name) => Outputable (FamilyDecl name) where
   ppr (FamilyDecl { fdInfo = info, fdLName = ltycon, 

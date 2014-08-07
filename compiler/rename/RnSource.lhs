@@ -907,27 +907,71 @@ rnTyClDecls extra_deps tycl_ds
 
              ds_w_fvs' = mapSnd add_boot_deps ds_w_fvs
 
-             sccs :: [SCC (LTyClDecl Name)]
+             sccs :: [SCC (LTyClDecl Name, FreeVars)]
              sccs = depAnalTyClDecls ds_w_fvs'
 
              all_fvs = foldr (plusFV . snd) emptyFVs ds_w_fvs'
 
              raw_groups = map flattenSCC sccs
              -- See Note [Role annotations in the renamer]
-             (groups, orphan_roles)
-               = foldr (\group (groups_acc, orphans_acc) ->
-                         let names = map (tcdName . unLoc) group
-                             roles = mapMaybe (lookupNameEnv orphans_acc) names
-                             orphans' = delListFromNameEnv orphans_acc names
-                              -- there doesn't seem to be an interface to
-                              -- do the above more efficiently
-                         in ( TyClGroup { group_tyclds = group
-                                        , group_roles  = roles } : groups_acc
-                            , orphans' )
-                       )
-                       ([], role_annot_env)
-                       raw_groups
+             (groups, orphan_roles, cyclic_syn_errs)
+               = foldr build_group ([], role_annot_env, []) raw_groups
+
+             build_group :: [(LTyClDecl Name, FreeVars)]  -- one SCC of decls
+                         -> ( [TyClGroup Name]            -- accumulator of groups
+                            , [NameEnv (LRoleAnnotDecl Name)]
+                                -- keys are the set of orphaned role annotations
+                            , [(SrcSpan, SDoc)]
+                                -- cyclic synonym errors, which are convenient
+                                -- to collect here
+                            )
+                         -> ([TyClGroup Name], [NameEnv (LRoleAnnotDecl Name)], [SDoc])
+             build_group group (groups_acc, orphans_acc, errs_acc)
+               = ( RenamedTCG
+                        { group_cusk_decls      = cusk_decls
+                        , group_syn_decls       = sorted_syn_decls
+                        , group_other_decl_sccs = non_cusk_non_syn_sccs
+                        , group_roles           = roles
+                        } : groups_acc
+                    , orphans'
+                    , errs_acc ++ cyclic_syn_errors )
+               where
+                 -- sort out role stuff
+                 names    = map (tcdName . unLoc . fst) group
+                 roles    = mapMaybe (lookupNameEnv orphans_acc) names
+                 orphans' = delListFromNameEnv orphans_acc names
+                          -- there doesn't seem to be an interface to
+                          -- do the above more efficiently
+
+                 -- structure the group, according to Note [TyClGroup]
+                 -- in HsDecls
+                 (cusk_decls, non_cusk_decls)
+                   = partition (hsDeclHasCusk . unLoc . fst) group
+                 (non_cusk_syn_decls, non_cusk_non_syn_decls)
+                   = partition (isSynDecl . unLoc . fst) non_cusk_decls
+
+                 -- re-do dependency analysis, this time ignoring CUSK decls
+                 -- See Note [Kind checking for type and class decls]
+                 -- in TcTyClsDecls
+                 non_cusk_syn_sccs     = fmap fst $
+                                         depAnalTyClDecls non_cusk_syn_decls
+                 non_cusk_non_syn_sccs = fmap fst $
+                                         depAnalTyClDecls non_cusk_non_syn_decls
+
+                 (cyclic_syn_errors, sorted_syn_decls)
+                   = partitionWith acyclic_or_bust non_cusk_syn_decls
+
+                   -- synonyms can't be recursive!
+                 acyclic_or_bust (AcyclicSCC (syn_decl, _fvs)) = Right syn_decl
+                 acyclic_or_bust (CyclicSCC decls)
+                   = Left (loc1, sep [text "Cycle in type synonym declarations:",
+                                      nest 2 (vcat (map ppr_decl sorted_decls))])
+                   where
+                     sorted_decls = sortLocated (map fst decls)
+                     ppr_decl (L loc decl) = ppr loc <> colon <+> ppr decl
+                     loc1 = getLoc $ fst $ head decls
                  
+       ; addErrs cyclic_syn_errs
        ; mapM_ orphanRoleAnnotErr (nameEnvElts orphan_roles)
        ; traceRn (text "rnTycl"  <+> (ppr ds_w_fvs $$ ppr sccs))
        ; return (groups, all_fvs) }
@@ -1174,12 +1218,12 @@ are no data constructors we allow h98_style = True
 
 
 \begin{code}
-depAnalTyClDecls :: [(LTyClDecl Name, FreeVars)] -> [SCC (LTyClDecl Name)]
+depAnalTyClDecls :: [(LTyClDecl Name, FreeVars)] -> [SCC (LTyClDecl Name, FreeVars)]
 -- See Note [Dependency analysis of type and class decls]
 depAnalTyClDecls ds_w_fvs
   = stronglyConnCompFromEdgedVertices edges
   where
-    edges = [ (d, tcdName (unLoc d), map get_parent (nameSetToList fvs))
+    edges = [ ((d, fvs), tcdName (unLoc d), map get_parent (nameSetToList fvs))
             | (d, fvs) <- ds_w_fvs ]
 
     -- We also need to consider data constructor names since
@@ -1526,14 +1570,16 @@ add gp@(HsGroup {hs_vects  = ts}) l (VectD d) ds
 add gp l (DocD d) ds
   = addl (gp { hs_docs = (L l d) : (hs_docs gp) })  ds
 
-add_tycld :: LTyClDecl a -> [TyClGroup a] -> [TyClGroup a]
-add_tycld d []       = [TyClGroup { group_tyclds = [d], group_roles = [] }]
-add_tycld d (ds@(TyClGroup { group_tyclds = tyclds }):dss)
+add_tycld :: LTyClDecl RdrName -> [TyClGroup RdrName] -> [TyClGroup RdrName]
+add_tycld d []       = [ParsedTCG { group_tyclds = [d], group_roles = [] }]
+add_tycld d (ds@(ParsedTCG { group_tyclds = tyclds }):dss)
   = ds { group_tyclds = d : tyclds } : dss
 
-add_role_annot :: LRoleAnnotDecl a -> [TyClGroup a] -> [TyClGroup a]
-add_role_annot d [] = [TyClGroup { group_tyclds = [], group_roles = [d] }]
-add_role_annot d (tycls@(TyClGroup { group_roles = roles }) : rest)
+add_role_annot :: LRoleAnnotDecl RdrName
+               -> [TyClGroup RdrName]
+               -> [TyClGroup RdrName]
+add_role_annot d [] = [ParsedTCG { group_tyclds = [], group_roles = [d] }]
+add_role_annot d (tycls@(ParsedTCG { group_roles = roles }) : rest)
   = tycls { group_roles = d : roles } : rest
 
 add_bind :: LHsBind a -> HsValBinds a -> HsValBinds a

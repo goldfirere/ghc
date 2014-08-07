@@ -1067,21 +1067,27 @@ kcStrategy :: TyClDecl Name -> KindCheckingStrategy
 kcStrategy d@(ForeignType {}) = pprPanic "kcStrategy" (ppr d)
 kcStrategy (FamDecl fam_decl)
   = kcStrategyFamDecl fam_decl
-kcStrategy (SynDecl {})       = ParametricKinds
-kcStrategy decl@(DataDecl {})  = kcStrategyAlgDecl decl
-kcStrategy decl@(ClassDecl {}) = kcStrategyAlgDecl decl
-
-kcStrategyAlgDecl :: TyClDecl Name -> KindCheckingStrategy
-kcStrategyAlgDecl decl
-  | all (isHsKindedTyVar . unLoc) (hsQTvBndrs $ tcdTyVars decl)
-  = FullKindSignature
-  | otherwise
-  = ParametricKinds
+kcStrategy (SynDecl { tcdTyVars = tyvars, tcdRhs = rhs })
+  = fullKindSigTest (all_tyvars_annotated tyvars && rhs_annotated rhs)
+  where
+    rhs_annotated (L _ ty) = case ty of
+      HsParTy lty  -> rhs_annotated lty
+      HsKindSig {} -> True
+      _            -> False
+kcStrategy (DataDecl { tcdTyVars = tyvars })
+  = fullKindSigTest $ all_tyvars_annotated tyvars
+kcStrategy (ClassDecl { tcdTyVars = tyvars })
+  = fullKindSigTest $ all_tyvars_annotated tyvars
 
 -- if the ClosedTypeFamily has no equations, do the defaulting to *, etc.
 kcStrategyFamDecl :: FamilyDecl Name -> KindCheckingStrategy
 kcStrategyFamDecl (FamilyDecl { fdInfo = ClosedTypeFamily (_:_) }) = NonParametricKinds
 kcStrategyFamDecl _                                                = FullKindSignature
+
+-- | Returns FullKindSignature if given 'True', or 'ParametricKinds' otherwise
+fullKindSigTest :: Bool -> KindCheckingStrategy
+fullKindSigTest True  = FullKindSignature
+fullKindSigTest False = ParametricKinds
 
 mkKindSigVar :: Name -> TcM KindVar
 -- Use the specified name; don't clone it

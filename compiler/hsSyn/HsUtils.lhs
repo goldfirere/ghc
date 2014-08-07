@@ -701,7 +701,7 @@ hsTyClDeclsBinders :: [TyClGroup Name] -> [Located (InstDecl Name)] -> [Name]
 -- We need to look at instance declarations too, 
 -- because their associated types may bind data constructors
 hsTyClDeclsBinders tycl_decls inst_decls
-  = map unLoc (concatMap (concatMap hsLTyClDeclBinders . group_tyclds) tycl_decls ++
+  = map unLoc (concatMap (concatMap hsLTyClDeclBinders . tyClGroupGetDecls) tycl_decls ++
                concatMap (hsInstDeclBinders . unLoc) inst_decls)
 
 -------------------
