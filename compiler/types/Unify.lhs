@@ -229,10 +229,10 @@ match_ty menv tsubst csubst (TyVarTy tv1) ty2
     else Nothing        -- ty2 doesn't match
 
   | tv1' `elemVarSet` me_tmpls menv
-  = if any (inRnEnvR rn_env) (varSetElems (tyCoVarsOfType ty2))
+  = if any (inRnEnvR rn_env) (varSetElems (closeOverKinds (tyCoVarsOfType ty2)))
     then Nothing        -- Occurs check
     else do { (tsubst1, csubst1)
-                <- match_kind menv tsubst csubst (tyVarKind tv1') (typeKind ty2)
+                <- match_ty menv tsubst csubst (tyVarKind tv1') (typeKind ty2)
             ; return (extendVarEnv tsubst1 tv1' ty2, csubst1) }
 
    | otherwise  -- tv1 is not a template tyvar
@@ -243,17 +243,15 @@ match_ty menv tsubst csubst (TyVarTy tv1) ty2
     rn_env = me_env menv
     tv1' = rnOccL rn_env tv1
 
-match_ty menv tsubst csubst (ForAllTy (Named tv1 _) ty1) (ForAllTy (Named tv2 _) ty2) 
-  = do { (tsubst', csubst') <- match_kind menv tsubst csubst (tyVarKind tv1) (tyVarKind tv2)
+match_ty menv tsubst csubst (PiTy bndr1 ty1) (PiTy bndr2 ty2) 
+  = do { guard (compatibleBinder bndr1 bndr2)
+       ; (tsubst', csubst') <- match_ty menv tsubst csubst (binderType bndr1) (binderType bndr2)
        ; match_ty menv' tsubst' csubst' ty1 ty2 }
   where         -- Use the magic of rnBndr2 to go under the binders
-    menv' = menv { me_env = rnBndr2 (me_env menv) tv1 tv2 }
+    menv' = menv { me_env = rnBinder2 (me_env menv) bndr1 bndr2 }
 
 match_ty menv tsubst csubst (TyConApp tc1 tys1) (TyConApp tc2 tys2) 
   | tc1 == tc2 = match_list menv tsubst csubst tys1 tys2
-match_ty menv tsubst csubst (ForAllTy (Anon ty1a) ty1b) (ForAllTy (Anon ty2a) ty2b) 
-  = do { (tsubst', csubst') <- match_ty menv tsubst csubst ty1a ty2a
-       ; match_ty menv tsubst' csubst' ty1b ty2b }
 match_ty menv tsubst csubst (AppTy ty1a ty1b) ty2
   | Just (ty2a, ty2b) <- repSplitAppTy_maybe ty2
         -- 'repSplit' used because the tcView stuff is done above
@@ -271,18 +269,6 @@ match_ty menv tsubst csubst (CoercionTy co1) (CoercionTy co2)
 
 match_ty _ _ _ _ _
   = Nothing
-
-
-
---------------
-match_kind :: MatchEnv -> TvSubstEnv -> CvSubstEnv -> Kind -> Kind -> Maybe (TvSubstEnv, CvSubstEnv)
--- Match the kind of the template tyvar with the kind of Type
-match_kind menv tsubst csubst k1 k2
-  | k2 `eqType` k1
-  = return (tsubst, csubst)
-
-  | otherwise
-  = match menv tsubst csubst k1 k2
 
 \end{code}
 
@@ -353,7 +339,7 @@ match_co menv tsubst csubst (CoVarCo cv1) co2
     else Nothing -- co2 doesn't match
 
   | cv1' `elemVarSet` me_tmpls menv
-  = if any (inRnEnvR rn_env) (varSetElems (tyCoVarsOfCo co2))
+  = if any (inRnEnvR rn_env) (varSetElems (closeOverKinds (tyCoVarsOfCo co2)))
     then Nothing -- occurs check
     else do { (tsubst1, csubst1) <- match_ty menv tsubst csubst (coVarKind cv1')
                                                                 (coercionType co2)
@@ -376,72 +362,92 @@ match_co menv tsubst csubst (AppCo co1 arg1) co2
   = do { (tsubst', csubst') <- match_co menv tsubst csubst co1 co2
        ; match_co_arg menv tsubst' csubst' arg1 arg2 }
 
-match_co menv tsubst csubst (ForAllCo cobndr1 co1) (ForAllCo cobndr2 co2)
-  | TyHomo tv1 <- cobndr1
-  , TyHomo tv2 <- cobndr2
-  = do { (tsubst', csubst') <- match_kind menv tsubst csubst (tyVarKind tv1)
-                                                             (tyVarKind tv2)
-       ; let menv' = menv { me_env = rnBndr2 (me_env menv) tv1 tv2 }
+match_co menv tsubst csubst (PiCo cobndr1 co1) (PiCo cobndr2 co2)
+  | TyHomo bndr1 <- cobndr1
+  , TyHomo bndr2 <- cobndr2
+  = do { guard (compatibleBinder bndr1 bndr2)
+       ; (tsubst', csubst') <- match_ty menv tsubst csubst (binderType bndr1)
+                                                           (binderType bndr2)
+       ; let menv' = menv { me_env = rnBinder2 (me_env menv) bndr1 bndr2 }
        ; match_co menv' tsubst' csubst' co1 co2 }
   
-  | TyHetero eta1 tvl1 tvr1 cv1 <- cobndr1
-  , TyHomo tv2 <- cobndr2
+  | TyHetero eta1 pbndr1 m_cv1 <- cobndr1
+  , TyHomo bndr2 <- cobndr2
   = do { let eta_role = coercionRole eta1  -- TODO (RAE): This seems inefficient.
        ; (tsubst1, csubst1) <- match_co menv tsubst csubst 
-                                        eta1 (mkReflCo eta_role (tyVarKind tv2))
-       ; (tsubst2, csubst2) <- match_kind menv tsubst1 csubst1 (tyVarKind tvl1)
-                                                               (tyVarKind tvr1)
+                                        eta1 (mkReflCo eta_role (binderType bndr2))
+       ; let Pair bv1a bv1b = binderPayload pbndr1
+       ; (tsubst2, csubst2) <- match_ty menv tsubst1 csubst1 (binderVarType bv1a)
+                                                             (binderVarType bv1b)
        ; let rn_env = me_env menv
              in_scope = rnInScopeSet rn_env
-             homogenized = substCoWithIS in_scope
-                                         [tvr1,               cv1]
-                                         [mkOnlyTyVarTy tvl1, mkCoercionTy $
-                                                              mkReflCo Nominal (mkOnlyTyVarTy tvl1)]
-                                         co1
-             menv' = menv { me_env = rnBndr2 rn_env tvl1 tv2 }
+             (homo_subst, m_tv) = homogenizeCoBndr in_scope cobndr1
+             homogenized = substCo homo_subst co1
+             menv' = case m_tv of
+                       Just tv -> menv { me_env = rnBndr2 rn_env tv tv2 }
+                       Nothing -> menv { me_env = fst $ rnBndrR rn_env tv2 }
        ; match_co menv' tsubst2 csubst2 homogenized co2 }
 
-  | TyHetero eta1 tvl1 tvr1 cv1 <- cobndr1
-  , TyHetero eta2 tvl2 tvr2 cv2 <- cobndr2
+  | TyHetero eta1 pbndr1 m_cv1 <- cobndr1
+  , TyHetero eta2 pbndr2 m_cv2 <- cobndr2
   = do { (tsubst1, csubst1) <- match_co menv tsubst csubst eta1 eta2
-       ; (tsubst2, csubst2) <- match_kind menv tsubst1 csubst1 (tyVarKind tvl1)
-                                                               (tyVarKind tvl2)
-       ; (tsubst3, csubst3) <- match_kind menv tsubst2 csubst2 (tyVarKind tvr1)
-                                                               (tyVarKind tvr2)
-       ; let menv' = menv { me_env = rnBndrs2 (me_env menv) [tvl1, tvr1, cv1]
-                                                            [tvl2, tvr2, cv2] }
+       ; let Pair bvl1 bvr1 = binderPayload pbndr1
+             Pair bvl2 bvr2 = binderPayload pbndr2
+       ; (tsubst2, csubst2) <- match_ty menv tsubst1 csubst1 (binderVarType bvl1)
+                                                             (binderVarType bvl2)
+       ; (tsubst3, csubst3) <- match_ty menv tsubst2 csubst2 (binderVarType bvr1)
+                                                             (binderVarType bvr2)
+       ; let rn_env0 = me_env menv
+             rn_env1 = rnBinderVar2 rn_env0 bvl1 bvl2
+             rn_env2 = rnBinderVar2 rn_env1 bvr1 bvr2
+             rn_env3 = case (m_cv1, m_cv2) of
+               (Just cv1, Just cv2) -> rnBndr2 rn_env2 cv1 cv2
+               (Just cv1, Nothing ) -> fst $ rnBndrL rn_env2 cv1
+               (Nothing , Just cv2) -> fst $ rnBndrR rn_env2 cv2
+               (Nothing , Nothing ) -> rn_env2
+       ; let menv' = menv { me_env = rn_env3 }
        ; match_co menv' tsubst3 csubst3 co1 co2 }
 
   | CoHomo cv1 <- cobndr1
   , CoHomo cv2 <- cobndr2
-  = do { (tsubst', csubst') <- match_ty menv tsubst csubst (coVarKind cv1)
-                                                           (coVarKind cv2)
-       ; let menv' = menv { me_env = rnBndr2 (me_env menv) cv1 cv2 }
+  = do { (tsubst', csubst') <- match_ty menv tsubst csubst (binderType cv1)
+                                                           (binderType cv2)
+       ; let menv' = menv { me_env = rnBinder2 (me_env menv) cv1 cv2 }
        ; match_co menv' tsubst' csubst' co1 co2 }
 
-  | CoHetero eta1 cvl1 cvr1 <- cobndr1
+  | CoHetero eta1 pbndr <- cobndr1
   , CoHomo cv2 <- cobndr2
   = do { let role = coercionRole eta1  -- TODO (RAE): This seems inefficient.
+             Pair cvl1 cvr1 = binderPayload pbndr
        ; (tsubst1, csubst1) <- match_co menv tsubst csubst
-                                        eta1 (mkReflCo role (coVarKind cv2))
-       ; (tsubst2, csubst2) <- match_ty menv tsubst1 csubst1 (coVarKind cvl1)
-                                                             (coVarKind cvr1)
+                                        eta1 (mkReflCo role (binderType cv2))
+       ; (tsubst2, csubst2) <- match_ty menv tsubst1 csubst1 (binderVarType cvl1)
+                                                             (binderVarType cvr1)
        ; let rn_env = me_env menv
              in_scope = rnInScopeSet rn_env
-             homogenized = substCoWithIS in_scope
-                                         [cvr1] [mkCoercionTy $ mkCoVarCo cvl1] co1
-             menv' = menv { me_env = rnBndr2 rn_env cvl1 cv2 }
+             (homo_subst, m_cv) = homogenizeCoBndr in_scope cobndr1
+             homogenized = substCo homo_subst co1
+             menv' = case m_cv of
+               Just cv -> menv { me_env =
+                           rnBinderVar2 rn_env (mkBinderVar cv)
+                                               (binderPayload cv2) }
+               Nothing -> case binderVar_maybe cv2 of
+                            Just v  -> menv { me_env = fst $ rnBndrR rn_env v }
+                            Nothing -> menv
        ; match_co menv' tsubst2 csubst2 homogenized co2 }
 
-  | CoHetero eta1 cvl1 cvr1 <- cobndr1
-  , CoHetero eta2 cvl2 cvr2 <- cobndr2
-  = do { (tsubst1, csubst1) <- match_co menv tsubst csubst eta1 eta2
-       ; (tsubst2, csubst2) <- match_ty menv tsubst1 csubst1 (coVarKind cvl1)
-                                                             (coVarKind cvl2)
-       ; (tsubst3, csubst3) <- match_ty menv tsubst2 csubst2 (coVarKind cvr1)
-                                                             (coVarKind cvr2)
-       ; let menv' = menv { me_env = rnBndrs2 (me_env menv) [cvl1, cvr1]
-                                                            [cvl2, cvr2] }
+  | CoHetero eta1 pbndr1 <- cobndr1
+  , CoHetero eta2 pbndr2 <- cobndr2
+  = do { let Pair cvl1 cvr1 = binderPayload pbndr1
+             Pair cvl2 cvr2 = binderPayload pbndr2
+       ; (tsubst1, csubst1) <- match_co menv tsubst csubst eta1 eta2
+       ; (tsubst2, csubst2) <- match_ty menv tsubst1 csubst1 (binderVarType cvl1)
+                                                             (binderVarType cvl2)
+       ; (tsubst3, csubst3) <- match_ty menv tsubst2 csubst2 (binderVarType cvr1)
+                                                             (binderVarType cvr2)
+       ; let menv' = menv { me_env = rnBinderVar2
+                                      (rnBinderVar2 (me_env menv) cvl1 cvl2)
+                                      cvr1 cvr2 }
        ; match_co menv' tsubst3 csubst3 co1 co2 }
 
   -- TyHomo can't match with TyHetero, and same for Co
@@ -656,15 +662,19 @@ typesCantMatch prs = any (\(s,t) -> cant_match s t) prs
         | Just t1' <- coreView t1 = cant_match t1' t2
         | Just t2' <- coreView t2 = cant_match t1 t2'
 
-    cant_match (ForAllTy (Anon a1) r1) (ForAllTy (Anon a2) r2)
-        = cant_match a1 a2 || cant_match r1 r2
+    cant_match (PiTy b1 r1) (PiTy b2 r2)
+      | not (isDependentBinder b1)
+      , not (isDependentBinder b2)
+        = cant_match (binderType b1) (binderType b2) || cant_match r1 r2
 
     cant_match (TyConApp tc1 tys1) (TyConApp tc2 tys2)
         | isDistinctTyCon tc1 && isDistinctTyCon tc2
         = tc1 /= tc2 || typesCantMatch (zipEqual "typesCantMatch" tys1 tys2)
 
-    cant_match (ForAllTy (Anon _) _) (TyConApp tc _) = isDistinctTyCon tc
-    cant_match (TyConApp tc _) (ForAllTy (Anon _) _) = isDistinctTyCon tc
+    cant_match (PiTy b _) (TyConApp tc _)
+      = isDependentBinder b || isDistinctTyCon tc
+    cant_match (TyConApp tc _) (PiTy b _)
+      = isDependentBinder b || isDistinctTyCon tc
         -- tc can't be FunTyCon by invariant
 
     cant_match (AppTy f1 a1) ty2
@@ -969,9 +979,10 @@ unify_ty (TyConApp tyc1 tys1) (TyConApp tyc2 tys2)
   | tyc1 == tyc2                                   
   = unify_tys tys1 tys2
 
-unify_ty (ForAllTy (Anon ty1a) ty1b) (ForAllTy (Anon ty2a) ty2b) 
-  = do  { unify_ty ty1a ty2a
-        ; unify_ty ty1b ty2b }
+unify_ty (PiTy bndr1 ty1) (PiTy bndr2 ty2)
+  = do { guard (compatibleBinder bndr1 bndr2)
+       ; unify_ty (binderType bndr1) (binderType bndr2)
+       ; umRnBinder2 bndr1 bndr2 $ unify_ty ty1 ty2 }
 
         -- Applications need a bit of care!
         -- They can match FunTy and TyConApp, so use splitAppTy_maybe
@@ -988,10 +999,6 @@ unify_ty ty1 (AppTy ty2a ty2b)
         ; unify_ty ty1b ty2b }
 
 unify_ty (LitTy x) (LitTy y) | x == y = return ()
-
-unify_ty (ForAllTy (Named tv1 _) ty1) (ForAllTy (Named tv2 _) ty2)
-  = do { unify_ty (tyVarKind tv1) (tyVarKind tv2)
-       ; umRnBndr2 tv1 tv2 $ unify_ty ty1 ty2 }
 
 unify_ty (CoercionTy co1) (CoercionTy co2)
   = unify_co co1 co2
@@ -1029,57 +1036,45 @@ unify_co' co1 (CoVarCo cv2) = umSwapRn $ uVar cv2 co1
 unify_co' (TyConAppCo _ tc1 args1) (TyConAppCo _ tc2 args2)
  | tc1 == tc2 = unifyList args1 args2
 
-unify_co' g1@(ForAllCo cobndr1 co1) g2@(ForAllCo cobndr2 co2)
- | Just v1 <- getHomoVar_maybe cobndr1
- , Just v2 <- getHomoVar_maybe cobndr2
- = do { unify_ty (varType v1) (varType v2)
-      ; umRnBndr2 v1 v2 $ unify_co co1 co2 }
+unify_co' g1@(PiCo cobndr1 co1) g2@(PiCo cobndr2 co2)
+ | Just v1 <- getHomoBinder_maybe cobndr1
+ , Just v2 <- getHomoBinder_maybe cobndr2
+ = do { unify_ty (binderType v1) (binderType v2)
+      ; umRnBinder2 v1 v2 $ unify_co co1 co2 }
 
  | Just (eta1, lv1, rv1) <- splitHeteroCoBndr_maybe cobndr1
  , Just (eta2, lv2, rv2) <- splitHeteroCoBndr_maybe cobndr2
  = do { unify_co eta1 eta2
-      ; unify_ty (varType lv1) (varType lv2)
-      ; unify_ty (varType rv1) (varType rv2)
+      ; unify_ty (binderVarType lv1) (binderVarType lv2)
+      ; unify_ty (binderVarType rv1) (binderVarType rv2)
       ; let rnCoVar :: UM () -> UM ()
             rnCoVar
               = case cobndr1 of
-                { TyHetero _ _ _ cv1 -> case cobndr2 of
-                  { TyHetero _ _ _ cv2 -> umRnBndr2 cv1 cv2
+                { TyHetero _ _ m_cv1 -> case cobndr2 of
+                  { TyHetero _ _ m_cv2 -> umRnMaybeBndr2 m_cv1 m_cv2
                   ; _                  -> \_ -> maybeApart } -- one is Ty, one is Co
                 ; _                  -> id }
-      ; umRnBndr2 lv1 lv2 $
-        umRnBndr2 rv1 rv2 $
+      ; umRnBinderVar2 lv1 lv2 $
+        umRnBinderVar2 rv1 rv2 $
         rnCoVar $
         unify_co co1 co2 }
 
   -- mixed Homo/Hetero case. Ugh. Only handle where 1 is hetero and 2 is homo;
   -- otherwise, flip 1 and 2
-  | Just _ <- getHomoVar_maybe cobndr1
+  | Just _ <- getHomoBinder_maybe cobndr1
   , Just _ <- splitHeteroCoBndr_maybe cobndr2
   = umSwapRn $ unify_co' g2 g1
 
   | Just (eta1, lv1, rv1) <- splitHeteroCoBndr_maybe cobndr1
-  , Just v2               <- getHomoVar_maybe cobndr2
-  = do { let eta_role = coercionRole eta1
-       ; unify_co eta1 (mkReflCo eta_role (varType v2))
-       ; unify_ty (varType lv1) (varType rv1)
-       ; homogenize $ \co1' ->
-         umRnBndr2 lv1 v2 $
+  , Just bndr2            <- getHomoBinder_maybe cobndr2
+  = do { let eta_role = coercionRole eta1  -- TODO (RAE): Inefficient?
+       ; unify_co eta1 (mkReflCo eta_role (binderType bndr2))
+       ; unify_ty (binderVarType lv1) (binderVarType rv1)
+       ; in_scope <- getInScope
+       ; let (homo_subst, m_var) = homogenizeCoBndr in_scope cobndr1
+             co1' = substCo homo_subst co1
+       ; umRnMaybeBndr2 m_var (binderVar_maybe bndr2) $
          unify_co co1' co2 }
-  where
-    homogenize :: (Coercion -> UM a) -> UM a
-    homogenize thing
-      = do { in_scope <- getInScope
-           ; let co1' = case cobndr1 of
-                        { TyHetero _ ltv1 rtv1 cv1
-                            -> let lty = mkOnlyTyVarTy ltv1 in
-                               substCoWithIS in_scope [rtv1, cv1]
-                                                      [lty,  mkCoercionTy $ mkReflCo Nominal lty] co1
-                        ; CoHetero _ lcv1 rcv1
-                            -> let lco = mkCoVarCo lcv1 in
-                               substCoWithIS in_scope [rcv1] [mkCoercionTy lco] co1
-                        ; _ -> pprPanic "unify_co'#homogenize" (ppr g1) }
-           ; thing co1' }
 
 unify_co' (AxiomInstCo ax1 ind1 args1) (AxiomInstCo ax2 ind2 args2)
   | ax1 == ax2
@@ -1400,6 +1395,32 @@ umRnBndr2 v1 v2 thing = UM $ \tv_fn rn_env locals tsubst csubst ->
       locals'       = extendVarSetList locals [v1, v2, v3]
   in unUM thing tv_fn rn_env' locals' tsubst csubst
 
+umRnBinderVar2 :: BinderVar -> BinderVar -> UM a -> UM a
+umRnBinderVar2 bv1 bv2 thing = UM $ \tv_fn rn_env locals tsubst csubst ->
+  let (rn_env', v3) = rnBinderVar2_var rn_env bv1 bv2
+      locals'       = extendVarSetList locals
+                        (catMaybes (v3 : map getBinderVar_maybe [bv1, bv2])
+  in unUM thing tv_fn rn_env' locals' tsubst csubst
+
+umRnBinder2 :: Binder -> Binder -> UM a -> UM a
+umRnBinder2 b1 b2 = umRnBinderVar2 (binderPayload b1) (binderPayload b2)
+
+umRnMaybeBndr2 :: Maybe Var -> Maybe Var -> UM a -> UM a
+umRnMaybeBndr2 m_v1 m_v2 thing = UM $ \tv_fn rn_env locals tsubst csubst ->
+  let (rn_env1, new_locals) = case (m_v1, m_v2) of
+        (Just v1, Just v2) ->
+          let (rn_env', v3) = rnBndr2_var rn_env v1 v2 in
+          (rn_env', [v1, v2, v3])
+        (Just v1, Nothing) ->
+          let (rn_env', v3) = rnBndrL rn_env v1 in
+          (rn_env', [v1, v3])
+        (Nothing, Just v2) ->
+          let (rn_env', v3) = rnBndrR rn_env v2 in
+          (rn_env', [v2, v3])
+        (Nothing, Nothing) -> (rn_env, [])
+      locals' = extendVarSetList locals new_locals
+  in unUM thing tv_fn rn_env' locals' tsubst csubst
+
 checkRnEnv :: TyOrCo tyco => (RnEnv2 -> Var -> Bool) -> tyco -> UM ()
 checkRnEnv inRnEnv tyco = UM $ \_ rn_env _ tsubst csubst ->
   let varset = tyCoVarsOf tyco in
@@ -1617,7 +1638,7 @@ ty_co_match menv subst (TyVarTy tv1) co
     else Nothing       -- no match since tv1 matches two different coercions
 
   | tv1' `elemVarSet` me_tmpls menv           -- tv1' is a template var
-  = if any (inRnEnvR rn_env) (varSetElems (tyCoVarsOfCo co))
+  = if any (inRnEnvR rn_env) (varSetElems (closeOverKinds (tyCoVarsOfCo co)))
     then Nothing      -- occurs check failed
     else do { subst1 <- ty_co_match menv subst (tyVarKind tv1') (promoteCoercion co)
             ; return (extendVarEnv subst1 tv1' (TyCoArg co)) }
@@ -1641,54 +1662,93 @@ ty_co_match menv subst (AppTy ty1 ty2) co
 ty_co_match menv subst (TyConApp tc1 tys) (TyConAppCo _ tc2 cos)
   | tc1 == tc2 = ty_co_match_args menv subst tys cos
 
-ty_co_match menv subst (ForAllTy (Anon ty1) ty2) (TyConAppCo _ tc cos)
-  | tc == funTyCon = ty_co_match_args menv subst [ty1, ty2] cos
-
-ty_co_match menv subst (ForAllTy (Named tv _) ty) (ForAllCo cobndr co)
-  | TyHomo tv2 <- cobndr
-  = ASSERT( isTyVar tv )
-    do { subst1 <- ty_co_match menv subst (tyVarKind tv)
-                                          (mkReflCo Nominal $ tyVarKind tv2)
-       ; let menv1 = menv { me_env = rnBndr2 (me_env menv) tv tv2 }
+ty_co_match menv subst (PiTy bndr1 ty) (PiCo cobndr co)
+  | TyHomo bndr2 <- cobndr
+  = do { subst1 <- ty_co_match menv subst (binderType bndr1)
+                                          (mkReflCo role $ binderType bndr2)
+       ; let menv1 = menv { me_env = rnBinder2 (me_env menv) bndr1 bndr2 }
        ; ty_co_match menv1 subst1 ty co }
 
-  | TyHetero co1 tvl tvr cv <- cobndr
-  = ASSERT( isTyVar tv )
-    do { subst1 <- ty_co_match menv subst (tyVarKind tv) co1
+  | TyHetero co1 pbndr m_cv <- cobndr
+  = do { subst1 <- ty_co_match menv subst (binderType bndr1) co1
          -- See Note [Heterogeneous type matching]
-       ; let rn_env0 = me_env menv
-             (rn_env1, tv')  = rnBndrL rn_env0 tv
-             (rn_env2, _)    = rnBndrR rn_env1 tvl
-             (rn_env3, _)    = rnBndrR rn_env2 tvr
-             (rn_env4, cv')  = rnBndrR rn_env3 cv
+       ; let Pair bvl2 bvr2 = binderPayload pbndr
+             rn_env0 = me_env menv
+             (rn_env1, bv1') = rnb_bv    rnBndrL rn_env0 (binderPayload bndr1)
+             (rn_env2, _)    = rnb_bv    rnBndrR rn_env1 bvl2
+             (rn_env3, _)    = rnb_bv    rnBndrR rn_env2 bvr2
+             (rn_env4, cv')  = rnb_maybe rnBndrR rn_env3 m_cv
              menv' = menv { me_env = rn_env4 }
-             subst2 = extendVarEnv subst1 tv' (TyCoArg (mkCoVarCo cv'))
+       ; subst2 <- case (getBinderVar_maybe bv1', cv') of
+           (Just tv1', Just cv) ->
+             return $ extendVarEnv subst1 tv1' (TyCoArg (mkCoVarCo cv))
+           (Just tv1', Nothing) ->
+                 -- Yuck. The type has a named binder, but the coercion doesn't.
+                 -- This will only work out if the binder is never mentioned.
+             do { guard (not (tv1' `elemVarSet` tyCoVarsOfType ty))
+                ; return subst1 }
+           _ -> return subst1
        ; subst3 <- ty_co_match menv' subst2 ty co
-       ; return $ delVarEnv subst3 tv' }
+       ; case getBinderVar_maybe bv1' of
+           Just tv1' -> return $ delVarEnv subst3 tv'
+           Nothing   -> return subst3 }
 
-  | CoHomo cv <- cobndr
-  = ASSERT( isCoVar tv )
-    do { subst1 <- ty_co_match menv subst (coVarKind tv)
-                                          (mkReflCo Nominal $ coVarKind cv)
+  | CoHomo bndr2 <- cobndr
+  = do { subst1 <- ty_co_match menv subst (binderType bndr1)
+                                          (mkReflCo role $ binderType bndr2)
        ; let rn_env0 = me_env menv
-             (rn_env1, tv') = rnBndrL rn_env0 tv
-             (rn_env2, cv') = rnBndrR rn_env1 cv
+             (rn_env1, bndr1') = rnb_bv rnBndrL rn_env0 (binderPayload bndr1)
+             (rn_env2, bndr2') = rnb_bv rnBndrR rn_env1 (binderPayload bndr2)
              menv' = menv { me_env = rn_env2 }
-             subst2 = extendVarEnv subst1 tv' (mkCoArgForVar cv')
-       ; subst3 <- ty_co_match menv' subst2 ty co
-       ; return $ delVarEnv subst3 tv' }
+       ; case (getBinderVar_maybe bndr1', getBinderVar_maybe bndr2') of
+           (Just cv1, Just cv2) ->
+             do { let subst2 = extendVarEnv subst1 cv1 (mkCoArgForVar cv2)
+                ; subst3 <- ty_co_match menv' subst2 ty co
+                ; return $ delVarEnv subst3 cv1 }
+           (Just cv1, Nothing) ->
+             -- There is no name in the coercion we're matching against. This
+             -- can only work if the name in the type is unused.
+             do { guard (not (cv1 `elemVarSet` tyCoVarsOfType ty))
+                ; ty_co_match menv' subst1 ty co }
+             
+           _ -> ty_co_match menv' subst1 ty co }
 
-  | CoHetero co1 cvl cvr <- cobndr
-  = ASSERT( isCoVar tv )
-    do { subst1 <- ty_co_match menv subst (coVarKind tv) co1
-       ; let rn_env0 = me_env menv
-             (rn_env1, tv')  = rnBndrL rn_env0 tv
-             (rn_env2, cvl') = rnBndrR rn_env1 cvl
-             (rn_env3, cvr') = rnBndrR rn_env2 cvr
+  | CoHetero co1 pbndr <- cobndr
+  = do { subst1 <- ty_co_match menv subst (binderType bndr1) co1
+       ; let Pair cvl cvr = binderPayload pbndr
+             rn_env0 = me_env menv
+             (rn_env1, bv')  = rnb_bv rnBndrL rn_env0 (binderPayload bndr1)
+             (rn_env2, cvl') = rnb_bv rnBndrR rn_env1 cvl
+             (rn_env3, cvr') = rnb_bv rnBndrR rn_env2 cvr
              menv' = menv { me_env = rn_env3 }
-             subst2 = extendVarEnv subst1 tv' (CoCoArg Nominal (mkCoVarCo cvl') (mkCoVarCo cvr'))
-       ; subst3 <- ty_co_match menv' subst2 ty co
-       ; return $ delVarEnv subst3 tv' }
+       ; case map getBinderVar_maybe [bv', cvl', cvr'] of
+           [Just v, Just vl, Just vr] ->
+             do { let subst2 = extendVarEnv subst1 v
+                                 (CoCoArg role (mkCoVarCo vl)
+                                               (mkCoVarCo vr))
+                ; subst3 <- ty_co_match menv' subst2 ty co
+                ; return $ delVarEnv subst3 v }
+           [Just v, _, _] -> -- Like previous cases, need v to be unused
+             do { guard (not (v `elemVarSet` tyCoVarsOfType ty))
+                ; ty_co_match menv' subst1 ty co }
+             
+           _ -> ty_co_match menv' subst1 ty co }
+
+  where
+    role = coercionRole co -- TODO (RAE): This seems inefficient.
+
+    rnb_bv :: (RnEnv2 -> Var -> (RnEnv2, Var)) -> RnEnv2 -> BinderVar
+           -> (RnEnv2, BinderVar)
+    rnb_bv rn_fun env bv
+      = let (env', m_v') = rnb_maybe rn_fun env (getBinderVar_maybe bv) in
+        case m_v' of
+          Just v' -> (env', mkBinderVar v')
+          Nothing -> (env', bv)
+
+    rnb_maybe :: (RnEnv2 -> Var -> (RnEnv2, Var)) -> RnEnv2 -> Maybe Var
+              -> (RnEnv2, Maybe Var)
+    rnb_maybe rn_fun env (Just v) = second Just $ rn_fun v
+    rnb_maybe rn_fun env Nothing  = (env, Nothing)
 
 ty_co_match menv subst (CastTy ty1 co1) co
   | Pair (CastTy _ col) (CastTy _ cor) <- coercionKind co
@@ -1753,9 +1813,12 @@ pushRefl (Refl r (ForAllTy (Anon ty1) ty2))
   = Just (TyConAppCo r funTyCon [liftSimply r ty1, liftSimply r ty2])
 pushRefl (Refl r (TyConApp tc tys))
   = Just (TyConAppCo r tc (zipWith liftSimply (tyConRolesX r tc) tys))
-pushRefl (Refl r (ForAllTy (Named tv _) ty))
-  | isTyVar tv                    = Just (ForAllCo (TyHomo tv) (Refl r ty))
-  | otherwise                     = Just (ForAllCo (CoHomo tv) (Refl r ty))
+pushRefl t@(Refl r (PiTy bndr ty))
+  | isCoercionType (binderType bndr)
+  = Just (PiCo (CoHomo bndr) (Refl r ty))
+  | otherwise
+  = Just (PiCo (TyHomo bndr) (Refl r ty))
+
 pushRefl (Refl r (CastTy ty co))  = Just (castCoercionKind (Refl r ty) co co)
 pushRefl _                        = Nothing
 \end{code}

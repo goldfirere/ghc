@@ -232,7 +232,7 @@ calcClassCycles cls
     expandType _    _    (TyVarTy {})     = id
     expandType _    _    (LitTy {})       = id
     expandType seen path (AppTy t1 t2)    = expandType seen path t1 . expandType seen path t2
-    expandType seen path (ForAllTy b t)   = expandType seen path (binderType b) . expandType seen path t
+    expandType seen path (PiTy b t)       = expandType seen path (binderType b) . expandType seen path t
     expandType seen path (CastTy ty _co)  = expandType seen path ty
     expandType _    _    (CoercionTy {})  = id
 
@@ -704,12 +704,11 @@ irType = go
     go lcls (AppTy t1 t2)      = go lcls t1 >> mark_nominal lcls t2
     go lcls (TyConApp tc tys)  = do { roles <- lookupRolesX tc
                                     ; zipWithM_ (go_app lcls) roles tys }
-    go lcls (ForAllTy bndr ty)
+    go lcls (PiTy bndr ty)
       = let lcls'
               | Just v <- binderVar_maybe bndr = extendVarSet lcls v
               | otherwise                      = lcls
         in
-           -- TODO (RAE): Is this right in the Named case??
         go lcls (binderType bndr) >> go lcls' ty
     go _    (LitTy {})         = return ()
       -- See Note [Coercions in role inference]
@@ -729,9 +728,9 @@ irType = go
     get_ty_vars (TyVarTy tv)     = unitVarSet tv
     get_ty_vars (AppTy t1 t2)    = get_ty_vars t1 `unionVarSet` get_ty_vars t2
     get_ty_vars (TyConApp _ tys) = foldr (unionVarSet . get_ty_vars) emptyVarSet tys
-    get_ty_vars (ForAllTy bndr ty)
+    get_ty_vars (PiTy bndr ty)
       = get_ty_vars ty `delBinderVar` bndr
-        `unionVarSet` (tyCoVarsOfType $ binderType bndr)
+        `unionVarSet` (get_ty_vars $ binderType bndr)
     get_ty_vars (LitTy {})       = emptyVarSet
     get_ty_vars (CastTy ty _)    = get_ty_vars ty
     get_ty_vars (CoercionTy _)   = emptyVarSet   

@@ -29,19 +29,19 @@ module TyCoRep (
         VisibilityFlag(..),
 
         -- Coercions
-        Coercion(..), CoercionArg(..), LeftOrRight(..), ForAllCoBndr(..),
+        Coercion(..), CoercionArg(..), LeftOrRight(..), PiCoBndr(..),
 
         -- Functions over types
         mkTyConTy, mkOnlyTyVarTy, mkOnlyTyVarTys,
         mkTyCoVarTy, mkTyCoVarTys, mkFunTy,
         isLiftedTypeKind, isUnliftedTypeKind,
-        isCoercionType, isLevityTy, isLevityVar,
+        coercionSig_maybe, isCoercionType, isLevityTy, isLevityVar,
 
         -- Functions over binders
         binderType, delBinderVar, isInvisibleBinder, isVisibleBinder,
 
         -- Functions over coercions
-        setCoBndrEta, eqCoBndrSort, pickLR, coBndrVars, coBndrVarsKinds,
+        setCoBndrEta, pickLR, coBndrVars, coBndrVarsKinds,
 
         -- Pretty-printing
         pprType, pprParendType, pprTypeApp, pprTCvBndr, pprTCvBndrs,
@@ -62,13 +62,15 @@ module TyCoRep (
 
         -- Substitutions
         TCvSubst(..), TvSubstEnv, CvSubstEnv,
-        emptyTvSubstEnv, emptyCvSubstEnv, composeTCvSubstEnv, emptyTCvSubst,
+        emptyTvSubstEnv, emptyCvSubstEnv, composeTCvSubstEnv, composeTCvSubst,
+        emptyTCvSubst,
         mkEmptyTCvSubst, isEmptyTCvSubst, mkTCvSubst, getTvSubstEnv,
         getCvSubstEnv, getTCvInScope, isInScope, notElemTCvSubst,
         setTvSubstEnv, setCvSubstEnv, zapTCvSubst,
         extendTCvInScope, extendTCvInScopeList,
         extendTCvSubst, extendTCvSubstAndInScope, extendTCvSubstList,
-        extendTCvSubstBinder,
+        extendTCvSubstBinder, extendTCvSubstBinders,
+        extendTCvSubstMaybe, extendTCvSubstMaybes,
         unionTCvSubst, zipTyCoEnv, mkTyCoInScopeSet,
         mkOpenTCvSubst, zipOpenTCvSubst, mkTopTCvSubst, zipTopTCvSubst,
 
@@ -78,10 +80,10 @@ module TyCoRep (
         lookupTyVar, lookupVar, substTyVarBndr,
         substCo, substCos, substCoVar, substCoVars, lookupCoVar,
         substTyCoVarBndr, substCoVarBndr, cloneTyVarBndr,
-        substCoWithIS, substCoWith, substTyVar, substTyVars,
-        substForAllCoBndr,
-        substTyVarBndrCallback, substForAllCoBndrCallback,
-        substCoVarBndrCallback,
+        substCoWith, substTyVar, substTyVars,
+        substPiCoBndr,
+        substTyVarBndrCallback, substPiCoBndrCallback,
+        substCoVarBndrCallback, substCoBinderCallback,
 
         -- * Tidying type related things up for printing
         tidyType,      tidyTypes,
@@ -166,13 +168,9 @@ data Type
                         --    Even type synonyms are not necessarily saturated;
                         --    for example unsaturated type synonyms
                         --    can appear as the right hand side of a type synonym.
-
-  | ForAllTy            
-        Binder          
-        Type            -- ^ A Π type.
-                        -- See Note [Equality-constrained types]
-                        -- This includes arrow types, constructed with
-                        -- @ForAllTy (Anon ...)@.
+        
+  | PiTy Binder          
+         Type           -- ^ A Π type.
 
   | LitTy TyLit     -- ^ Type literals are similar to type constructors.
 
@@ -195,15 +193,33 @@ data TyLit
   | StrTyLit FastString
   deriving (Eq, Ord, Data.Data, Data.Typeable)
 
--- | A 'Binder' represents an argument to a function. Binders can be dependent
--- ('Named') or nondependent ('Anon'). They may also be visible or not.
-data Binder
-  = Named Var VisibilityFlag
-  | Anon Type   -- visibility is determined by the type (Constraint vs. *)
+-- | A 'Binder' represents an argument to a function. It is used in lambdas
+-- and pi-types. In general, (Lam bndr ...) has a type (PiTy bndr ...).
+-- See also Note [Binders]. 'GenBinder' is parameterized by its payload type,
+-- because 'PiCoBndr' needs a pair of 'BinderVar's instead of the usual
+-- single 'BinderVar'.
+data GenBinder ty
+  = Binder { binder_payload    :: ty
+           , binder_dependence :: DependenceFlag
+           , binder_visibility :: VisibilityFlag
+           , binder_relevance  :: RelevanceFlag }
     deriving (Data.Typeable, Data.Data)
 
--- | TODO (RAE): Add comment
+-- | The type of Binders in almost every place
+type Binder = GenBinder BinderVar
+
+-- | informative type synonym for Binders over Coercions
+type CoBinder = Binder
+
+-- | The type of Binders used in heterogeneous forall-coercions.
+type PairBinder = GenBinder (Pair BinderVar)
+
+-- | Is this binder visible in source Haskell?
 data VisibilityFlag = Visible | Invisible
+  deriving (Eq, Data.Typeable, Data.Data)
+
+-- | Can this binder be used in a relevant context?
+data RelevanceFlag = Relevant | Irrelevant
   deriving (Eq, Data.Typeable, Data.Data)
 
 instance Binary VisibilityFlag where
@@ -216,6 +232,16 @@ instance Binary VisibilityFlag where
       0 -> return Visible
       _ -> return Invisible
 
+instance Binary RelevanceFlag where
+  put_ bh Relevant   = putByte bh 0
+  put_ bh Irrelevant = putByte bh 1
+
+  get bh = do
+    h <- getByte bh
+    case h of
+      0 -> return Relevant
+      _ -> return Irrelevant
+
 type KindOrType = Type -- See Note [Arguments to type constructors]
 
 -- | The key type representing kinds in the compiler.
@@ -223,11 +249,47 @@ type Kind = Type
 
 \end{code}
 
+Note [Binders]
+~~~~~~~~~~~~~~
+Core supports a wide variety of binding constructs. There are four choices
+made in a binder:
+
+* The payload of a typical binder is a BinderVar, which either contains a
+  Var or just a type. The latter case is if the binder is meant to be
+  anonymous.
+
+* A binder may or may not be dependent. A dependent binder binds its variable
+  in a type.
+
+* A binder may or may not be relevant. A relevant binder binds its variable
+  in an expression.
+
+* A binder may or may not be visible. A visible binder is required to be
+  explicitly instantiated when calling a function. Invisible binders are
+  inferred in source Haskell. Recall that all arguments are always explicit
+  in Core.
+
+A dependent, relevant binder represents a proper dependent Π-type.
+
+A non-dependent, relevant binder represents an ordinary (->) type.
+
+A dependent, irrelevant binder represents a forall-type.
+
+Non-dependent, irrelevant binders don't exist.
+
+All coercion binders are dependent and relevant.
+
+All irrelevant binders that bind variables (i.e., not anonymous) must bind
+TyVars, never Ids.
+
+All dependent binders that bind Ids must bind "dependent" Ids -- Ids that
+are available at compile time.
+
 Note [The kind invariant]
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 The kinds
    #          UnliftedTypeKind
-   OpenKind   super-kind of *, #
+   TYPE v
 
 can never appear under an arrow or type constructor in a kind; they
 can only be at the top level of a kind.  It follows that primitive TyCons,
@@ -279,29 +341,6 @@ But where, really, can these covars appear? In precisely these locations:
 That's it. In particular, coercion variables MAY NOT appear in the quantified
 tyvars of a TyCon (other than a promoted data constructor), of a class, of a
 type synonym (regular or family).
-
-Note [Equality-constrained types]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The type   forall ab. (a ~ [b]) => blah
-is encoded like this:
-
-   ForAllTy (a:*) $ ForAllTy (b:*) $
-   ForAllTy (Anon (TyConApp (~) [*, a, [b]])) $
-   blah
-
-Note that there are two equality types, boxed (~) and unboxed (~#).
-'Coercion's have a type built with (~#). 'TcCoercion's have a type built with
-(~). Only 'Coercion's can be quantified over in a ForAllTy, never
-'TcCoercion's. To simplify equality among types, we then forbid having
-a type constructed with (~#) on the left of a anonymous ForAllTy.
-Instead, use a Named ForAllTy with a wildcard variable.
-
-So, to summarize:
-
-       Named|  Anon
-----------------+-------
-(~)  |   no     |   yes
-(~#) |  yes     |   no
 
 -------------------------------------
                 Note [PredTy]
@@ -375,33 +414,37 @@ mkTyCoVarTys = map mkTyCoVarTy
 infixr 3 `mkFunTy`      -- Associates to the right
 -- | Make an arrow type
 mkFunTy :: Type -> Type -> Type
-mkFunTy arg res = ForAllTy (Anon arg) res
+mkFunTy arg res = PiTy (mkFunBinder arg) res
+
+-- | If the type provided classifies a coercion, breaks it apart.
+coercionSig_maybe :: Type -> Maybe (Kind, Kind, Type, Type, Role)
+coercionSig_maybe (TyConApp tc [k1, k2, ty1, ty2])
+  | tc `hasKey` eqPrimTyConKey
+  = Just (k1, k2, ty1, ty2, Nominal)
+  | tc `hasKey` eqReprPrimTyConKey
+  = Just (k1, k2, ty1, ty2, Representational)
+coercionSig_maybe _ = Nothing
 
 isCoercionType :: Type -> Bool
-isCoercionType (TyConApp tc tys)
-  | (tc `hasKey` eqPrimTyConKey) || (tc `hasKey` eqReprPrimTyConKey)
-  , length tys == 4
-  = True
-isCoercionType _ = False
+isCoercionType = isJust . coercionKindsTypesRole_maybe
 
+-- | Get the type of a 'Binder'
 binderType :: Binder -> Type
-binderType (Named v _) = varType v
-binderType (Anon ty)   = ty
+binderType = binderVarType . binder_payload
 
 -- | Remove the binder's variable from the set, if the binder has
 -- a variable.
 delBinderVar :: VarSet -> Binder -> VarSet
-delBinderVar vars (Named tv _) = vars `delVarSet` tv
-delBinderVar vars (Anon {})    = vars
+delBinderVar vars (Binder { binder_payload = Named tv }) = vars `delVarSet` tv
+delBinderVar vars _                                      = vars
 
 -- | Does this binder bind an invisible argument?
 isInvisibleBinder :: Binder -> Bool
-isInvisibleBinder (Named _ Invisible) = True
-isInvisibleBinder _                   = False
+isInvisibleBinder = (== Invisible) . binder_visibility
 
 -- | Does this binder bind a visible argument?
 isVisibleBinder :: Binder -> Bool
-isVisibleBinder = not . isInvisibleBinder
+isVisibleBinder = (== Visible) . binder_visibility
 
 -- | Create the plain type constructor type which has been applied to no type arguments at all.
 mkTyConTy :: TyCon -> Type
@@ -485,8 +528,8 @@ data Coercion
           -- AppCo :: e -> N -> e
 
   -- See Note [Forall coercions]
-  | ForAllCo ForAllCoBndr Coercion
-         -- ForAllCo :: "e" -> e -> e
+  | PiCo PiCoBndr Coercion
+         -- PiCo :: "e" -> e -> e
 
   -- These are special
   | CoVarCo CoVar      -- :: _ -> (N or R)
@@ -540,51 +583,45 @@ data Coercion
 
   deriving (Data.Data, Data.Typeable)
 
--- | A 'ForAllCoBndr' is a binding form for a quantified coercion. It is
+-- | A 'PiCoBndr' is a binding form for a quantified coercion. It is
 -- necessary when lifting quantified types into coercions.  See Note
 -- [Forall coercions].
 
 -- If you edit this type, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.lhs
-data ForAllCoBndr
-  = TyHomo TyVar
+data PiCoBndr
+  = TyHomo Binder
 
     -- | 'TyHetero's role is derived from its 'Coercion' argument. This role
-    -- must match the role used in the payload of the 'ForAllCo'. The 'CoVar's
-    -- role must be N.
-  | TyHetero Coercion TyVar TyVar CoVar
-  | CoHomo CoVar
+    -- must match the role used in the payload of the 'PiCo'. The 'CoVar's
+    -- role must be N. The CoVar won't be there if either BinderVar in the
+    -- PairBinder is anonymous. (Even if both BinderVars are defined, the
+    -- CoVar might me missing anyway.)
+  | TyHetero Coercion PairBinder (Maybe CoVar)
+  | CoHomo Binder
 
-    -- | 'CoHetero's Coercion's role must match the role of the 'ForAllCo'
+    -- | 'CoHetero's Coercion's role must match the role of the 'PiCo'
     -- payload. The two covars must have the same role as each other.
-  | CoHetero Coercion CoVar CoVar
+  | CoHetero Coercion PairBinder
   deriving (Data.Data, Data.Typeable)
 
--- returns the variable bound in a ForAllCoBndr
-coBndrVars :: ForAllCoBndr -> [TyCoVar]
+-- returns the variable bound in a PiCoBndr
+coBndrVars :: PiCoBndr -> [TyCoVar]
 coBndrVars (TyHomo tv)             = [tv]
 coBndrVars (TyHetero _ tv1 tv2 cv) = [tv1, tv2, cv]
 coBndrVars (CoHomo cv)             = [cv]
 coBndrVars (CoHetero _ cv1 cv2)    = [cv1, cv2]
 
 -- returns the variables with their types
-coBndrVarsKinds :: ForAllCoBndr -> ([TyCoVar], [Type])
+coBndrVarsKinds :: PiCoBndr -> ([TyCoVar], [Type])
 coBndrVarsKinds bndr = (vars, map varType vars)
   where vars = coBndrVars bndr
 
 -- changes the "eta" coercion in a hetero CoBndr
-setCoBndrEta :: ForAllCoBndr -> Coercion -> ForAllCoBndr
-setCoBndrEta (TyHetero _ tv1 tv2 cv) h = mkTyHeteroCoBndr h tv1 tv2 cv
-setCoBndrEta (CoHetero _ cv1 cv2)    h = mkCoHeteroCoBndr h cv1 cv2
+setCoBndrEta :: PiCoBndr -> Coercion -> PiCoBndr
+setCoBndrEta (TyHetero _ pbndr cv) h = mkTyHeteroCoBndr h pbndr cv
+setCoBndrEta (CoHetero _ pbndr)    h = mkCoHeteroCoBndr h pbndr
 setCoBndrEta cobndr                  _ = pprPanic "setCoBndrEta" (ppr cobndr)
-
--- are two ForAllCoBndrs the same sort of binder?
-eqCoBndrSort :: ForAllCoBndr -> ForAllCoBndr -> Bool
-eqCoBndrSort (TyHomo {})   (TyHomo {})   = True
-eqCoBndrSort (TyHetero {}) (TyHetero {}) = True
-eqCoBndrSort (CoHomo {})   (CoHomo {})   = True
-eqCoBndrSort (CoHetero {}) (CoHetero {}) = True
-eqCoBndrSort _             _             = False
 
 -- | A CoercionArg is an argument to a coercion. It may be a coercion (lifted from
 -- a type) or a pair of coercions (lifted from a coercion). See
@@ -719,18 +756,19 @@ of the chosen branch.
 
 Note [Forall coercions]
 ~~~~~~~~~~~~~~~~~~~~~~~
-Constructing coercions between forall-types can be a bit tricky.
+Constructing coercions between pi-types can be a bit tricky.
 Currently, the situation is as follows:
 
-  1) ForAllCo (TyHetero Coercion TyVar TyVar CoVar) Coercion
-  2) ForAllCo (CoHetero Coercion CoVar CoVar)       Coercion
-  3) ForAllCo (TyHomo TyVar)                        Coercion
-  4) ForAllCo (CoHomo CoVar)                        Coercion
+  1) PiCo (TyHetero Coercion PairBinder CoVar) Coercion
+  2) PiCo (CoHetero Coercion PairBinder)       Coercion
+  3) PiCo (TyHomo Binder)                      Coercion
+  4) PiCo (CoHomo Binder)                      Coercion
 
 We'll take these one at a time.
 
-1) This form represents a coercion between two forall-types-over-types,
-say (forall v1:k1.t1) and (forall v2:k2.t2). The difficulty comes about
+1) This form represents a coercion between two pi-types-over-types,
+say (forall v1:k1.t1) and (forall v2:k2.t2), or even (t1 -> t2) and
+(s1 -> s2). The difficulty comes about
 because k1 might not be the same as k2. So, we will need three variables:
 one of kind k1, one of kind k2, and one representing the coercion between
 a1 and a2, which will be bound to the coercion stored in the TyHetero.
@@ -739,7 +777,12 @@ The typing rule is thus:
 
      h : k1 ~ k2  a1 : k1    a2 : k2    c : a1 ~ a2    g : t1 ~ t2
   -------------------------------------------------------------------
-  ForAllCo (TyHetero h a1 a2 c) g : (all a1:k1.t1) ~ (all v2:k2.t2)
+  PiCo (TyHetero h a1 a2 c) g : (all a1:k1.t1) ~ (all v2:k2.t2)
+
+The tyvars are stored in a PairBinder, which is just like a Binder but holds a
+Pair BinderVar instead of a single BinderVar. If at least one of the
+BinderVars is anonymous, then the CoVar doesn't exist in the TyHetero --
+it's kind couldn't be written.
 
 2) This form represents a coercion between two forall-types-over-coercions,
 say (forall c1:phi1.t1) and (forall c2:phi2.t2). Because phi1 might not
@@ -751,7 +794,7 @@ The typing rule is thus:
 
       h : phi1 ~ phi2   c1 : phi1     c2 : phi2     g : t1 ~ t2
   -----------------------------------------------------------------
-  ForAllCo (CoHetero h c1 c2) g : (all c1:phi1.t1) ~ (all c2:phi2.t2)
+  PiCo (CoHetero h c1 c2) g : (all c1:phi1.t1) ~ (all c2:phi2.t2)
 
 3) This form is a simplification when the two kinds of the types in a
 TyHetero are actually the same. The coercion variable would not normally
@@ -759,14 +802,14 @@ appear in the coercion. The typing rule is:
 
       a : k     g : t1 ~ t2
   ---------------------------------------------------
-  ForAllCo (TyHomo a) g : (all a:k.t1) ~ (all a:k.t2)
+  PiCo (TyHomo a) g : (all a:k.t1) ~ (all a:k.t2)
 
 4) Similarly, the CoHomo form is for homogeneous coercion quantification.
 The typing rule is:
 
       c : phi        g : t1 ~ t2
   -------------------------------------------------------
-  ForAllCo (CoHomo c) g : (all c:phi.t1) ~ (all c:phi.t2)
+  PiCo (CoHomo c) g : (all c:phi.t1) ~ (all c:phi.t2)
 
 Note that is is an *invariant* that the kinds of the variables in a "Hetero"
 construction are different.
@@ -1021,7 +1064,7 @@ tyVarsOnlyOfType (TyVarTy v)         = unitVarSet v
 tyVarsOnlyOfType (TyConApp _ tys)    = tyVarsOnlyOfTypes tys
 tyVarsOnlyOfType (LitTy {})          = emptyVarSet
 tyVarsOnlyOfType (AppTy fun arg)     = tyVarsOnlyOfType fun `unionVarSet` tyVarsOnlyOfType arg
-tyVarsOnlyOfType (ForAllTy bndr ty)
+tyVarsOnlyOfType (PiTy bndr ty)
   = tyVarsOnlyOfType ty `delBinderVar` bndr
     `unionVarSet` tyVarsOnlyOfType (binderType bndr)
 tyVarsOnlyOfType (CastTy ty co)      = tyVarsOnlyOfType ty `unionVarSet` tyVarsOnlyOfCo co
@@ -1035,7 +1078,7 @@ tyVarsOnlyOfCo :: Coercion -> TyCoVarSet
 tyVarsOnlyOfCo (Refl _ ty)         = tyVarsOnlyOfType ty
 tyVarsOnlyOfCo (TyConAppCo _ _ args) = tyVarsOnlyOfCoArgs args
 tyVarsOnlyOfCo (AppCo co arg)      = tyVarsOnlyOfCo co `unionVarSet` tyVarsOnlyOfCoArg arg
-tyVarsOnlyOfCo (ForAllCo cobndr co)
+tyVarsOnlyOfCo (PiCo cobndr co)
   = let (vars, kinds) = coBndrVarsKinds cobndr in
     tyVarsOnlyOfCo co `delVarSetList` vars `unionVarSet` tyVarsOnlyOfTypes kinds
 tyVarsOnlyOfCo (CoVarCo _)         = emptyVarSet
@@ -1071,7 +1114,7 @@ tyCoVarsOfType (TyVarTy v)         = unitVarSet v
 tyCoVarsOfType (TyConApp _ tys)    = tyCoVarsOfTypes tys
 tyCoVarsOfType (LitTy {})          = emptyVarSet
 tyCoVarsOfType (AppTy fun arg)     = tyCoVarsOfType fun `unionVarSet` tyCoVarsOfType arg
-tyCoVarsOfType (ForAllTy bndr ty)
+tyCoVarsOfType (PiTy bndr ty)
   = tyCoVarsOfType ty `delBinderVar` bndr
     `unionVarSet` tyCoVarsOfType (binderType bndr)
 tyCoVarsOfType (CastTy ty co)      = tyCoVarsOfType ty `unionVarSet` tyCoVarsOfCo co
@@ -1085,7 +1128,7 @@ tyCoVarsOfCo :: Coercion -> TyCoVarSet
 tyCoVarsOfCo (Refl _ ty)         = tyCoVarsOfType ty
 tyCoVarsOfCo (TyConAppCo _ _ args) = tyCoVarsOfCoArgs args
 tyCoVarsOfCo (AppCo co arg)      = tyCoVarsOfCo co `unionVarSet` tyCoVarsOfCoArg arg
-tyCoVarsOfCo (ForAllCo cobndr co)
+tyCoVarsOfCo (PiCo cobndr co)
   = let (vars, kinds) = coBndrVarsKinds cobndr in
     tyCoVarsOfCo co `delVarSetList` vars `unionVarSet` tyCoVarsOfTypes kinds
 tyCoVarsOfCo (CoVarCo v)         = unitVarSet v
@@ -1118,7 +1161,7 @@ coVarsOfType (TyVarTy _)         = emptyVarSet
 coVarsOfType (TyConApp _ tys)    = coVarsOfTypes tys
 coVarsOfType (LitTy {})          = emptyVarSet
 coVarsOfType (AppTy fun arg)     = coVarsOfType fun `unionVarSet` coVarsOfType arg
-coVarsOfType (ForAllTy bndr ty)
+coVarsOfType (PiTy bndr ty)
   = coVarsOfType ty `delBinderVar` bndr
     `unionVarSet` coVarsOfType (binderType bndr)
 coVarsOfType (CastTy ty co)      = coVarsOfType ty `unionVarSet` coVarsOfCo co
@@ -1132,7 +1175,7 @@ coVarsOfCo :: Coercion -> CoVarSet
 coVarsOfCo (Refl _ ty)         = coVarsOfType ty
 coVarsOfCo (TyConAppCo _ _ args) = coVarsOfCoArgs args
 coVarsOfCo (AppCo co arg)      = coVarsOfCo co `unionVarSet` coVarsOfCoArg arg
-coVarsOfCo (ForAllCo cobndr co)
+coVarsOfCo (PiCo cobndr co)
   = let (vars, kinds) = coBndrVarsKinds cobndr in
     coVarsOfCo co `delVarSetList` vars `unionVarSet` coVarsOfTypes kinds
 coVarsOfCo (CoVarCo v)         = unitVarSet v
@@ -1346,6 +1389,15 @@ composeTCvSubstEnv in_scope (tenv1, cenv1) (tenv2, cenv2)
   where
     subst1 = TCvSubst in_scope tenv1 cenv1
 
+-- | Composes two substitutions, applying the second one provided first,
+-- like in function composition.
+composeTCvSubst :: TCvSubst -> TCvSubst -> TCvSubst
+composeTCvSubst (TCvSubst is1 tenv1 cenv1) (TCvSubst is2 tenv2 cenv2)
+  = TCvSubst is3 tenv3 cenv3
+  where
+    is3 = is1 `unionInScope` is2
+    (tenv3, cenv3) = composeTCvSubstEnv is3 (tenv1, cenv1) (tenv2, cenv2)
+
 emptyTCvSubst :: TCvSubst
 emptyTCvSubst = TCvSubst emptyInScopeSet emptyTvSubstEnv emptyCvSubstEnv
 
@@ -1423,8 +1475,22 @@ extendTCvSubstList subst tvs tys
   = foldl2 extendTCvSubst subst tvs tys
 
 extendTCvSubstBinder :: TCvSubst -> Binder -> Type -> TCvSubst
-extendTCvSubstBinder env (Anon {})    _  = env
-extendTCvSubstBinder env (Named tv _) ty = extendTCvSubst env tv ty
+extendTCvSubstBinder env bndr
+  | Just tv <- binderVar_maybe bndr = extendTCvSubst env tv ty
+  | otherwise                       = env
+
+extendTCvSubstBinders :: TCvSubst -> [Binder] -> [Type] -> TCvSubst
+extendTCvSubstBinders subst bndrs tys
+  = foldl2 extendTCvSubstBinder subst bndrs tys
+
+extendTCvSubstMaybes :: TCvSubst -> [Maybe (Var, Type)] -> TCvSubst
+extendTCvSubstMaybes subst pairs
+  = let (tvs, tys) = unzip $ catMaybes pairs in
+    extendTCvSubstList subst tvs tys
+
+extendTCvSubstMaybe :: TCvSubst -> Maybe Var -> Type -> TCvSubst
+extendTCvSubstMaybe subst Nothing  _  = subst
+extendTCvSubstMaybe subst (Just v) ty = extendTCvSubst subst v ty
 
 unionTCvSubst :: TCvSubst -> TCvSubst -> TCvSubst
 -- Works when the ranges are disjoint
@@ -1482,7 +1548,10 @@ zipOpenTCvSubstBinders bndrs tys
   = TCvSubst is tenv cenv
   where
     is = mkInScopeSet (tyCoVarsOfTypes tys)
-    (tvs, tys') = unzip [ (tv, ty) | (Named tv _, ty) <- zip bndrs tys ]
+    (tvs, tys') = unzip [ (tv, ty)
+                        | (Binder { binder_payload = Named tv }, ty)
+                            <- zip bndrs tys
+                        ]
     (tenv, cenv) = zipTyCoEnv tvs tys'
 
 -- | Called when doing top-level substitutions. Here we expect that the
@@ -1545,27 +1614,28 @@ instance Outputable TCvSubst where
 %*                                                                      *
 %************************************************************************
 
-Note [Sym and ForAllCo]
+Note [Sym and PiCo]
 ~~~~~~~~~~~~~~~~~~~~~~~
 In OptCoercion, we try to push "sym" out to the leaves of a coercion. But,
-how do we push sym into a ForAllCo? It's a little ugly. Let's consider the
+how do we push sym into a PiCo? It's a little ugly. Let's consider the
 heterogeneous cases first, as it's easier to understand the homogeneous
 cases as a specialization.
 
-Here is the typing rule for TyHetero:
+Here is the typing rule for TyHetero (ignoring the auxiliary information
+stored in Binders):
 
 h : k1 ~# k2
 tv1 : k1              tv2 : k2
 cv : tv1 ~# tv2
 tv1, tv2, cv |- g : ty1 ~# ty2
-ForAllTy tv1 ty1 : *
-ForAllTy tv2 ty2 : *
+PiTy tv1 ty1 : *
+PiTy tv2 ty2 : *
 -----------------------------------------------------------------------------
-ForAllCo (TyHetero h tv1 tv2 cv) g : (ForAllTy tv1 ty1) ~# (ForAllTy tv2 ty2)
+PiCo (TyHetero h (Pair tv1 tv2) cv) g : (PiTy tv1 ty1) ~# (PiTy tv2 ty2)
 
 Here is what we want:
 
-ForAllCo (TyHetero h' tv1' tv2' cv') g' : (ForAllTy tv2 ty2) ~# (ForAllTy tv1 ty1)
+PiCo (TyHetero h' (Pair tv1' tv2') cv') g' : (PiTy tv2 ty2) ~# (PiTy tv1 ty1)
 
 Because the kinds of the type variables to the right of the colon are the kinds
 coerced by h', we know (h' : k2 ~# k1). Thus, (h' = sym h).
@@ -1585,13 +1655,13 @@ Lastly, to get ty1 and ty2 to work out, we must apply sym to g.
 
 Putting it all together, we get this:
 
-sym (ForAllCo (TyHetero h tv1 tv2 cv) g)
+sym (PiCo (TyHetero h (Pair tv1 tv2) cv) g)
 ==>
-ForAllCo (TyHetero (sym h) tv2 tv1 (cv' : tv2 ~# tv1)) (sym (g[cv |-> sym cv']))
+PiCo (TyHetero (sym h) (Pair tv2 tv1) (cv' : tv2 ~# tv1))
+     (sym (g[cv |-> sym cv']))
 
-This is done in opt_co (in OptCoercion), supported by substForAllCoBndrCallback
+This is done in opt_co (in OptCoercion), supported by substPiCoBndrCallback
 and substCoVarBndrCallback.
-
 
 The rule for CoHetero is similar, but there is no coercion variable analogous
 to cv, so it's much simpler. Similarly, the TyHomo and CoHomo cases are
@@ -1648,8 +1718,8 @@ subst_ty :: TCvSubst -> Type -> Type
 --
 -- Note that the in_scope set is poked only if we hit a forall
 -- so it may often never be fully computed
-subst_ty subst ty
-   = go ty
+subst_ty subst
+   = go
   where
     go (TyVarTy tv)      = substTyCoVar subst tv
     go (AppTy fun arg)   = mkAppTy (go fun) $! (go arg)
@@ -1658,13 +1728,9 @@ subst_ty subst ty
                 -- by [Int], represented with TyConApp
     go (TyConApp tc tys) = let args = map go tys
                            in  args `seqList` TyConApp tc args
-    go (ForAllTy (Anon arg) res)
-                         = (ForAllTy $! (Anon $! go arg)) $! go res
-    go (ForAllTy (Named tv vis) ty)
-                         = case substTyCoVarBndr subst tv of
-                             (subst', tv') ->
-                               (ForAllTy $! ((Named $! tv') vis)) $!
-                                            (subst_ty subst' ty)
+    go (PiTy bndr ty)    = case substBinder subst bndr of
+                             (subst', bndr') ->
+                               (PiTy $! bndr') $! (subst_ty subst' ty)
     go (LitTy n)         = LitTy $! n
     go (CastTy ty co)    = (CastTy $! (go ty)) $! (subst_co subst co)
     go (CoercionTy co)   = CoercionTy $! (subst_co subst co)
@@ -1729,14 +1795,6 @@ substCoWith :: [TyCoVar] -> [Type] -> Coercion -> Coercion
 substCoWith tvs tys = ASSERT( length tvs == length tys )
                       substCo (zipOpenTCvSubst tvs tys)
 
--- | Substitute within a Coercion, with respect to a given InScopeSet and
--- TyCoVar/Type pairs.
-substCoWithIS :: InScopeSet -> [TyCoVar] -> [Type] -> Coercion -> Coercion
-substCoWithIS in_scope tvs tys
-  = let (tsubst, csubst) = zipTyCoEnv tvs tys
-        in_scope' = in_scope `unionInScope` (mkInScopeSet (tyCoVarsOfTypes tys)) in
-    subst_co (TCvSubst in_scope' tsubst csubst)
-
 subst_co :: TCvSubst -> Coercion -> Coercion
 subst_co subst co
   = go co
@@ -1749,9 +1807,9 @@ subst_co subst co
     go (TyConAppCo r tc args)= let args' = map go_arg args
                                in  args' `seqList` mkTyConAppCo r tc args'
     go (AppCo co arg)        = mkAppCo (go co) $! go_arg arg
-    go (ForAllCo cobndr co)
-      = case substForAllCoBndr subst cobndr of { (subst', cobndr') ->
-          (mkForAllCo $! cobndr') $! subst_co subst' co }
+    go (PiCo cobndr co)
+      = case substPiCoBndr subst cobndr of { (subst', cobndr') ->
+          (mkPiCo $! cobndr') $! subst_co subst' co }
     go (CoVarCo cv)          = substCoVar subst cv
     go (AxiomInstCo con ind cos) = mkAxiomInstCo con ind $! map go_arg cos
     go (PhantomCo h t1 t2)   = ((mkPhantomCo $! (go h)) $! (go_ty t1)) $! (go_ty t2)
@@ -1773,44 +1831,73 @@ subst_co subst co
     go_arg (TyCoArg co)        = TyCoArg $! go co
     go_arg (CoCoArg r co1 co2) = (CoCoArg r $! go co1) $! go co2
 
-substForAllCoBndr :: TCvSubst -> ForAllCoBndr -> (TCvSubst, ForAllCoBndr)
-substForAllCoBndr = substForAllCoBndrCallback False substTy (const substCo)
+substPiCoBndr :: TCvSubst -> PiCoBndr -> (TCvSubst, PiCoBndr)
+substPiCoBndr = substPiCoBndrCallback False substTy (const substCo)
 
--- See Note [Sym and ForAllCo]
-substForAllCoBndrCallback :: Bool -- apply "sym" to the binder?
-                          -> (TCvSubst -> Type -> Type)
-                          -> (Bool -> TCvSubst -> Coercion -> Coercion)
-                          -> TCvSubst -> ForAllCoBndr -> (TCvSubst, ForAllCoBndr)
-substForAllCoBndrCallback _ sty _ subst (TyHomo tv)
-  = case substTyVarBndrCallback sty subst tv of
+-- See Note [Sym and PiCo]
+substPiCoBndrCallback :: Bool -- apply "sym" to the binder?
+                      -> (TCvSubst -> Type -> Type)
+                      -> (Bool -> TCvSubst -> Coercion -> Coercion)
+                      -> TCvSubst -> PiCoBndr -> (TCvSubst, PiCoBndr)
+substPiCoBndrCallback _ sty _ subst (TyHomo tv)
+  = case substBinderCallback sty subst tv of
       (subst', tv') -> (subst', TyHomo tv')
-substForAllCoBndrCallback sym sty sco subst (TyHetero h tv1 tv2 cv)
-  = case substTyVarBndrCallback     sty subst  tv1 of { (subst1, tv1') ->
-    case substTyVarBndrCallback     sty subst1 tv2 of { (subst2, tv2') ->
-    case substCoVarBndrCallback sym sty subst2 cv  of { (subst3, cv') ->
-    let h' = sco sym subst h in -- just subst, not any of the others
-    if isReflCo h'
-    then let subst4 = extendTCvSubstList subst1   -- yes, subst1!
-                        [tv2,                cv]
-                        [mkOnlyTyVarTy tv1', CoercionTy $
-                                             mkReflCo Nominal (tyVarKind tv1')] in
-         (subst4, TyHomo tv1')
-    else if sym
-         then (subst3, (TyHetero $! h') tv2' tv1' cv')
-         else (subst3, (TyHetero $! h') tv1' tv2' cv') }}}
-substForAllCoBndrCallback _ sty _ subst (CoHomo cv)
-  = case substCoVarBndrCallback False sty subst cv of
+substPiCoBndrCallback sym sty sco subst (TyHetero h pbndr m_cv)
+  = let Pair bndr1 bndr2 = splitPairBinder pbndr
+    case substBinderCallback        sty subst  bndr1 of { (subst1, bndr1') ->
+    case substBinderCallback        sty subst1 bndr2 of { (subst2, bndr2') ->
+    let (subst3, m_cv') = case m_cv of
+          { Just cv -> second Just $ substCoVarBndrCallback sym sty subst2 cv
+          ; Nothing -> (subst2, Nothing) }
+        h' = sco sym subst h in -- just subst, not any of the others
+    case isReflCo_maybe h' of
+    { Just ki ->
+         let cobndr'             = TyHetero h' (mkPairBinder bndr1' bndr2') m_cv'
+             in_scope            = getTCvInScope subst3
+             (homo_subst, m_var) = homogenizeCoBndr in_scope cobndr'
+             subst4              = composeTCvSubst homo_subst subst3
+             bndr_var            = case m_var of
+               Just var -> mkBinderVar var
+               Nothing  -> mkAnonBinderVar ki
+             bndr                = setBinderPayload pbndr bndr_var
+          in (subst4, TyHomo bndr)
+    ; Nothing ->
+         if sym
+         then let (m_rev_cv', subst4) = reverse_cv_maybe subst3 m_cv'
+              (subst4, (TyHetero $! h') (mkPairBinder bndr2' bndr1') m_rev_cv')
+         else (subst3, (TyHetero $! h') (mkPairBinder bndr1' bndr2') cv') }}}
+  where
+    reverse_cv_maybe Nothing   env = (Nothing, env)
+    reverse_cv_maybe (Just cv) env
+      = let in_scope            = getTCvInScope env
+            (k1, k2, t1, t2, r) = coVarKindsTypesRole cv
+            cv_sym_ty           = mkHeteroCoercionType k2 k1 t2 t1 r
+            cv1                 = mkCoVar (varName cv) cv_sym_ty
+            cv2                 = uniqAway in_scope cv1
+        in
+        (Just cv2, extendTCvSubst env cv (mkCoercionTy $
+                                          mkSymCo $
+                                          mkCoVarCo cv2))
+
+substPiCoBndrCallback _ sty _ subst (CoHomo cv)
+  = case substCoBinderCallback False sty subst cv of
       (subst', cv') -> (subst', CoHomo cv')
-substForAllCoBndrCallback sym sty sco subst (CoHetero h cv1 cv2)
-  = case substCoVarBndrCallback False sty subst  cv1 of { (subst1, cv1') ->
-    case substCoVarBndrCallback False sty subst1 cv2 of { (subst2, cv2') ->
+substPiCoBndrCallback sym sty sco subst (CoHetero h pbndr)
+  = let Pair bndr1 bndr2 = splitPairBinder pbndr in
+    case substCoBinderCallback False sty subst  bndr1 of { (subst1, bndr1') ->
+    case substCoBinderCallback False sty subst1 bndr2 of { (subst2, bndr2') ->
     let h' = sco sym subst h in
     if isReflCo h'
-    then let subst3 = extendTCvSubst subst2 cv2 (mkTyCoVarTy cv1') in
-         (subst3, CoHomo cv1')
+    then case (binderVar_maybe bndr1', binderVar_maybe bndr2') of
+           (Just cv1, Just cv2) ->
+             let subst3 = extendTCvSubst subst2 cv2 (mkTyCoVarTy cv1) in
+             (subst3, CoHomo cv1)
+           (Just cv1, Nothing)  -> (subst2, CoHomo bndr1)
+           (Nothing,  Just cv2) -> (subst2, CoHomo bndr2)
+           (Nothing,  Nothing)  -> (subst2, CoHomo bndr1)
     else if sym
-         then (subst2, (CoHetero $! h') cv2' cv1')
-         else (subst2, (CoHetero $! h') cv1' cv2') }}
+         then (subst2, (CoHetero $! h') (mkPairBinder bndr2' bndr1'))
+         else (subst2, (CoHetero $! h') (mkPairBinder bndr1' bndr2')) }}
 
 substCoVar :: TCvSubst -> CoVar -> Coercion
 substCoVar (TCvSubst _ _ cenv) cv
@@ -1892,6 +1979,17 @@ substCoVarBndrCallback sym subst_fun subst@(TCvSubst in_scope tenv cenv) old_var
     new_var_type = uncurry (mkCoercionType role) (if sym then (t2', t1') else (t1', t2'))
                   -- It's important to do the substitution for coercions,
                   -- because they can have free type variables
+
+substCoBinderCallback :: Bool -- apply "sym"?
+                      -> (TCvSubst -> Type -> Type)  -- tysubst function
+                      -> TCvSubst -> Binder -> (TCvSubst, Binder)
+substCoBinderCallback sym subst_fun subst old_bndr
+  = ASSERT( isCoercionType (binderType old_bndr) )
+    caseBinder old_bndr
+      (\cv -> let (new_subst, new_cv)
+                    = substCoVarBndrCallback sym subst_fun subst cv in
+              (new_subst, setBinderPayload old_bndr (mkBinderVar new_cv)))
+      (\ty -> (subst, setBinderType old_bndr (subst_fun subst ty)))
 
 cloneTyVarBndr :: TCvSubst -> TyVar -> Unique -> (TCvSubst, TyVar)
 cloneTyVarBndr (TCvSubst in_scope tv_env cv_env) tv uniq
@@ -2010,7 +2108,7 @@ ppr_type _ (TyVarTy tv)       = ppr_tvar tv
 
 ppr_type p (TyConApp tc tys)  = pprTyTcApp p tc tys
 ppr_type p (LitTy l)          = ppr_tylit p l
-ppr_type p ty@(ForAllTy {})   = ppr_forall_type p ty
+ppr_type p ty@(PiTy {})       = ppr_pi_type p ty
 
 ppr_type p (AppTy t1 t2) = maybeParen p TyConPrec $
                            ppr_type FunPrec t1 <+> ppr_type TyConPrec t2
@@ -2050,15 +2148,21 @@ ppr_sigma_type show_foralls_unconditionally ty
     (bndrs, rho) = split1 [] ty
     (ctxt, tau)  = split2 [] rho
 
-    split1 bndrs (ForAllTy bndr@(Named {}) ty) = split1 (bndr:bndrs) ty
-    split1 bndrs ty                            = (reverse bndrs, ty)
+    split1 bndrs (PiTy bndr ty)
+      | isDependentBinder bndr = split1 (bndr:bndrs) ty
+    split1 bndrs ty            = (reverse bndrs, ty)
 
-    split2 ps (ForAllTy (Anon ty1) ty2) | isPredTy ty1 = split2 (ty1:ps) ty2
+    split2 ps (PiTy bndr1 ty2)
+      | not (isDependentBinder bndr1)
+      , let ty1 = binderType bndr1
+      , isPredTy ty1 = split2 (ty1:ps) ty2
     split2 ps ty                                       = (reverse ps, ty)
 
     -- We don't want to lose synonyms, so we mustn't use splitFunTys here.
-    ppr_fun_tail (ForAllTy (Anon ty1) ty2)
-      | not (isPredTy ty1) = ppr_type FunPrec ty1 : ppr_fun_tail ty2
+    ppr_fun_tail (PiTy bndr1 ty2)
+      | not (isDependentBinder bndr1)
+      , let ty1 = binderType bndr1
+      , not (isPredTy ty1) = ppr_type FunPrec ty1 : ppr_fun_tail ty2
     ppr_fun_tail other_ty = [ppr_type TopPrec other_ty]
 
 pprSigmaType :: Type -> SDoc
@@ -2129,7 +2233,7 @@ instance Outputable VisibilityFlag where
 -----------------
 instance Outputable Coercion where -- defined here to avoid orphans
   ppr = pprCo
-instance Outputable ForAllCoBndr where
+instance Outputable PiCoBndr where
   ppr = pprCoBndr
 instance Outputable CoercionArg where
   ppr = pprCoArg
@@ -2262,7 +2366,7 @@ suppressImplicits dflags kind xs
   | gopt Opt_PrintExplicitKinds dflags = xs
   | otherwise                          = suppress kind xs
   where
-    suppress (ForAllTy bndr kind) (x : xs)
+    suppress (PiTy bndr kind) (x : xs)
       | isInvisibleBinder bndr = suppress kind xs
       | otherwise              = x : suppress kind xs
     suppress _                          xs       = xs
@@ -2385,12 +2489,8 @@ tidyType env (TyVarTy tv)         = TyVarTy (tidyTyVarOcc env tv)
 tidyType env (TyConApp tycon tys) = let args = tidyTypes env tys
                                     in args `seqList` TyConApp tycon args
 tidyType env (AppTy fun arg)      = (AppTy $! (tidyType env fun)) $! (tidyType env arg)
-tidyType env (ForAllTy (Anon fun) arg)
-  = (ForAllTy $! (Anon $! (tidyType env fun))) $! (tidyType env arg)
-tidyType env (ForAllTy (Named tv vis) ty)
-  = (ForAllTy $! ((Named $! tvp) $! vis)) $! (tidyType envp ty)
-  where
-    (envp, tvp) = tidyTyCoVarBndr env tv
+tidyType env (PiTy bndr ty)       = let (env', bndr') = tidyBinder env bndr in
+                                    (PiTy $! bndr') $! tidyType env' ty
 tidyType env (CastTy ty co)       = (CastTy $! tidyType env ty) $! (tidyCo env co)
 tidyType env (CoercionTy co)      = CoercionTy $! (tidyCo env co)
 
@@ -2432,7 +2532,7 @@ tidyCo env@(_, subst) co
     go (TyConAppCo r tc cos) = let args = map go_arg cos
                                in args `seqList` TyConAppCo r tc args
     go (AppCo co1 co2)       = (AppCo $! go co1) $! go_arg co2
-    go (ForAllCo cobndr co)  = ForAllCo cobndrp $! (tidyCo envp co)
+    go (PiCo cobndr co)      = PiCo cobndrp $! (tidyCo envp co)
                                where
                                  (envp, cobndrp) = go_bndr cobndr
     go (CoVarCo cv)          = case lookupVarEnv subst cv of
@@ -2459,17 +2559,26 @@ tidyCo env@(_, subst) co
     go_arg (CoCoArg r co1 co2) = (CoCoArg r $! go co1) $! go co2
 
     go_bndr cobndr
-      | Just v <- getHomoVar_maybe cobndr
-      = let (envp, vp) = tidyTyCoVarBndr env v in
+      | Just v <- getHomoBinder_maybe cobndr
+      = let (envp, vp) = tidyBinder env v in
         (envp, mkHomoCoBndr vp)
-      | TyHetero h tv1 tv2 cv <- cobndr
+      | TyHetero h pbndr m_cv <- cobndr
       = let h' = go h
-            (envp, [tv1', tv2', cv']) = tidyTyCoVarBndrs env [tv1, tv2, cv] in
-        (envp, mkTyHeteroCoBndr h' tv1' tv2' cv')
-      | CoHetero h cv1 cv2 <- cobndr
-      = let h' = go h
-            (envp, [cv1', cv2']) = tidyTyCoVarBndrs env [cv1, cv2] in
-        (envp, mkCoHeteroCoBndr h' cv1' cv2')
+            Pair bndr1 bndr2 = splitPairBinder pbndr
+            (env1, bndr1') = tidyBinder env  bndr1
+            (env2, bndr2') = tidyBinder env1 bndr2
+            (env3, m_cv')  = case m_cv of
+                               Just cv -> second Just $ tidyTyCoVarBndr env2 cv
+                               Nothing -> (env2, Nothing)
+        in
+        (env3, mkTyHeteroCoBndr h' (mkPairBinder bndr1' bndr2') m_cv')
+      | CoHetero h pbndr <- cobndr
+      = let Pair bndr1 bndr2 = splitPairBinder pbndr
+            h' = go h
+            (env1, bndr1') = tidyBinder env bndr1
+            (env2, bndr2') = tidyBinder env bndr2
+        in
+        (env2, mkCoHeteroCoBndr h' (mkPairBinder bndr1' bndr2'))
 
       | otherwise
       = pprPanic "tidyCo#go_bndr" (ppr cobndr)

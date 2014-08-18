@@ -287,8 +287,9 @@ check_type ctxt rank ty
    
 check_type _ _ (TyVarTy _) = return ()
 
-check_type ctxt rank (ForAllTy (Anon arg_ty) res_ty)
-  = do  { check_type ctxt arg_rank arg_ty
+check_type ctxt rank (PiTy bndr res_ty)
+  = ASSERT( not (isDependentBinder bndr) )
+    do  { check_type ctxt arg_rank (binderType bndr)
         ; check_type ctxt res_rank res_ty }
   where
     (arg_rank, res_rank) = funArgResRank rank
@@ -1245,7 +1246,7 @@ fvType (TyVarTy tv)          = [tv]
 fvType (TyConApp _ tys)      = fvTypes tys
 fvType (LitTy {})            = []
 fvType (AppTy fun arg)       = fvType fun ++ fvType arg
-fvType (ForAllTy bndr ty)
+fvType (PiTy bndr ty)
   = fvType (binderType bndr) ++
     caseBinder bndr (\tv -> filter (/= tv)) (const id) (fvType ty)
 fvType (CastTy ty co)        = fvType ty ++ fvCo co
@@ -1258,7 +1259,7 @@ fvCo :: Coercion -> [TyCoVar]
 fvCo (Refl _ ty)            = fvType ty
 fvCo (TyConAppCo _ _ args)  = concatMap fvCoArg args
 fvCo (AppCo co arg)         = fvCo co ++ fvCoArg arg
-fvCo (ForAllCo cobndr co)   = (fvCo co \\ coBndrVars cobndr)
+fvCo (PiCo cobndr co)       = (fvCo co \\ coBndrVars cobndr)
                               ++ case splitHeteroCoBndr_maybe cobndr of
                                    Just (h, _, _) -> fvCo h
                                    Nothing        -> []
@@ -1288,10 +1289,8 @@ sizeType (TyVarTy {})      = 1
 sizeType (TyConApp tc tys) = sizeTypes (filterInvisibles tc tys) + 1
 sizeType (LitTy {})        = 1
 sizeType (AppTy fun arg)   = sizeType fun + sizeType arg
-sizeType (ForAllTy (Anon arg) res)
-                           = sizeType arg + sizeType res + 1
-sizeType (ForAllTy (Named {}) ty)
-                           = sizeType ty
+sizeType (PiTy bndr res)   = (if isRelevantBinder bndr
+                              then sizeType arg + 1 else 0) + sizeType res
 sizeType (CastTy ty _)     = sizeType ty
 sizeType (CoercionTy _)    = 1
 

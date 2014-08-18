@@ -91,6 +91,45 @@ variables:
 
 We sometimes omit the type/kind annotation to a variable when it is obvious from context.
 
+\subsection{Binders}
+
+A binder is the form used in a lambda or Pi-type, used to bind a variable. The
+bound variable may be named or anonymous, and every binder comes with relevance,
+dependence, and visibility information:
+
+\begin{description}
+\item[Relevance] says whether or not a binder can be used in a ``relevant''
+context. Practically speaking, a relevant lambda-bound variable (which must
+be in an expression---there is no type-level lambda!) can be used in an
+expression. An irrelevant one cannot; it can be used only (perhaps) in types.
+Relevance in expressions corresponds exactly with non-erasure: relevant variables
+are not erased. Irrelevant variables are erased. Accordingly, coercion
+variables are considered \emph{relevant}, as they are not, technically, erased
+in GHC: they are just represented with 0 bits. A relevant named binder will
+always be represted by an \ctor{Id}, never a \ctor{TyVar}.
+
+\item[Dependence] says whether or not a binder can be used in a type.
+Ordinary function arguments are, generally, not dependent. Type arguments,
+generally, are dependent.
+
+\item[Visibility] indicates whether or not the programmer must supply an
+explicit argument when trying to bind a value to the binder. As all arguments
+in Core are always written, visibility does not matter in Core, and is omitted
+from this formalism.
+\end{description}
+
+\gram{
+\ottbv\ottinterrule
+\ottbinder\ottinterrule
+\ottdep\ottinterrule
+\ottrel
+}
+
+We see in the definition of $[[bv]]$ above that binders can be anonymous
+or named. In the rules that follow, we assume all binders are in fact named;
+anonymous binders are accepted everywhere named ones are, but naturally no
+variable is added to the context in these cases.
+
 \subsection{Expressions}
 
 The datatype that represents expressions:
@@ -137,9 +176,10 @@ A program is just a list of bindings:
 
 \gram{\ottt}
 
-\ctor{ForAllTy}s are represented in two different ways, depending on whether
-the \ctor{ForAllTy} is anonymous (written $[[t1 -> t2]]$) or
-named (written $[[forall n . t]]$).
+We use the syntactic sugar $[[t1 -> t2]]$ to represent 
+$[[pi (Nondep, Rel) z:t1 . t2]]$ for some name $[[z]]$. Because
+the binder is non-dependent, we know $[[z]]$ will not be mentioned
+in $[[t2]]$.
 
 There are some invariants on types:
 \begin{itemize}
@@ -150,17 +190,16 @@ $[[T]]$. It should be another application or a type variable.
 does \emph{not} need to be saturated.
 \item A saturated application of $[[(->) t1 t2]]$ should be represented as 
 $[[t1 -> t2]]$. This is a different point in the grammar, not just pretty-printing.
-The constructor for a saturated $[[(->)]]$ is \texttt{FunTy}.
 \item A type-level literal is represented in GHC with a different datatype than
 a term-level literal, but we are ignoring this distinction here.
 \item A coercion used as a type should appear only in the right-hand side of
   an application.
 \end{itemize}
 
-Note that the use of the $[[T </ ti // i />]]$ form and the $[[t1 -> t2]]$ form
-are purely representational. The metatheory would remain the same if these forms
-were removed in favor of $[[t1 t2]]$. Nevertheless, we keep all three forms in
-this documentation to accurately reflect the implementation.
+Note that the use of the $[[T </ ti // i />]]$ form is purely
+representational. The metatheory would remain the same if this forms were
+removed in favor of $[[t1 t2]]$. Nevertheless, we keep the ``\ctor{TyConApp}''
+form in this documentation to accurately reflect the implementation.
 
 We use the notation $[[t1 k1~#k2 t2]]$ to stand for $[[(~#) k1 k2 t1 t2]]$.
 

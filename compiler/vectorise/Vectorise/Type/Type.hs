@@ -33,14 +33,15 @@ vectTyCon tc = maybe tc id <$> lookupTyCon tc
 vectAndLiftType :: Type -> VM (Type, Type)
 vectAndLiftType ty | Just ty' <- coreView ty = vectAndLiftType ty'
 vectAndLiftType ty
-  = do { padicts  <- liftM catMaybes $ mapM paDictArgType tyvars
+  = do { checkNoDependentProducts bndrs
+       ; padicts  <- liftM catMaybes $ mapM paDictArgType bndrs
        ; vmono_ty <- vectType mono_ty
        ; lmono_ty <- mkPDataType vmono_ty
-       ; return (abstractType tyvars (padicts ++ theta) vmono_ty,
-                 abstractType tyvars (padicts ++ theta) lmono_ty)
+       ; return (abstractType bndrs (padicts ++ theta) vmono_ty,
+                 abstractType bndrs (padicts ++ theta) lmono_ty)
        }
   where
-    (tyvars, phiTy)  = splitNamedForAllTys ty
+    (bndrs, phiTy)   = splitDepPiTys ty
     (theta, mono_ty) = tcSplitPhiTy phiTy 
 
 -- |Vectorise a type.
@@ -57,23 +58,26 @@ vectType (TyVarTy tv)      = return $ TyVarTy tv
 vectType (LitTy l)         = return $ LitTy l
 vectType (AppTy ty1 ty2)   = AppTy <$> vectType ty1 <*> vectType ty2
 vectType (TyConApp tc tys) = TyConApp <$> vectTyCon tc <*> mapM vectType tys
-vectType (ForAllTy (Anon ty1) ty2)   
-  | isPredTy ty1
-  = mkFunTy <$> vectType ty1 <*> vectType ty2   -- don't build a closure for dictionary abstraction
-  | otherwise
-  = TyConApp <$> builtin closureTyCon <*> mapM vectType [ty1, ty2]
-vectType ty@(ForAllTy {})
- = do {   -- strip off consecutive foralls
-      ; let (tyvars, tyBody) = splitNamedForAllTys ty
+vectType ty@(PiTy b1 ty2)
+  | Just ty1 <- nonDependentType_maybe b1
+  = if isPredTy ty1
+    then mkFunTy <$> vectType ty1 <*> vectType ty2   -- don't build a closure for dictionary abstraction
+    else TyConApp <$> builtin closureTyCon <*> mapM vectType [ty1, ty2]
+
+  | not (isRelevantBinder b1)
+  = do {   -- strip off consecutive foralls
+      ; let (bndrs, tyBody) = splitDepPiTys ty
+
+      ; checkDependentProducts bndrs
 
           -- vectorise the body
       ; vtyBody <- vectType tyBody
 
           -- make a PA dictionary for each of the type variables
-      ; dictsPA <- liftM catMaybes $ mapM paDictArgType tyvars
+      ; dictsPA <- liftM catMaybes $ mapM paDictArgType bndrs
 
           -- add the PA dictionaries after the foralls
-      ; return $ abstractType tyvars dictsPA vtyBody
+      ; return $ abstractType bndrs dictsPA vtyBody
       }
 vectType ty@(CastTy {})
   = pprSorry "Vectorise.Type.Type.vectType: CastTy" (ppr ty)
@@ -82,5 +86,11 @@ vectType ty@(CoercionTy {})
 
 -- |Add quantified vars and dictionary parameters to the front of a type.
 --
-abstractType :: [TyCoVar] -> [Type] -> Type -> Type
-abstractType tyvars dicts = mkInvForAllTys tyvars . mkFunTys dicts
+abstractType :: [Binder] -> [Type] -> Type -> Type
+abstractType bndrs dicts = mkPiTys bndrs . mkFunTys dicts
+
+-- | Fail if any of the binders is relevant
+checkDependentProducts :: [Binder] -> VM ()
+checkDependentProducts bndrs
+  = when (any isRelevantBinder bndrs) $
+    noV $ "Cannot vectorise dependent types."

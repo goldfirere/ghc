@@ -1671,10 +1671,30 @@ functorLikeTraverse var (FT { ft_triv = caseTrivial,     ft_var = caseVar
 
     go co ty | Just ty' <- coreView ty = go co ty'
     go co (TyVarTy    v) | v == var = (if co then caseCoVar else caseVar,True)
-    go co (ForAllTy (Anon x) y)  | isPredTy x = go co y
-                                 | xc || yc   = (caseFun xr yr,True)
+    go co (PiTy bndr y)
+      | not (isDependentBinder bndr)
+      , isPredTy (binderType bndr) = go co y
+
+      | not (isDependentBinder bndr)
+      , xc || yc                  s = (caseFun xr yr,True)
+
+      | isDependentBinder bndr
+      , isInvisibleBinder bndr
+      , case binderVar_maybe bndr of
+          Just v  -> v /= var
+          Nothing -> True
+      , yc
+      = (caseForAll v yr,True)
         where (xr,xc) = go (not co) x
               (yr,yc) = go co       y
+
+          -- TODO (RAE): Fix
+      | isDependentBinder bndr
+      , isVisibleBinder bndr
+      = pprPanic "functorLikeTraverse: unexpected visible binder" (ppr bndr)
+
+        -- TODO (RAE): Other cases???
+
     go co (AppTy    x y) | xc = (caseWrongArg,   True)
                          | yc = (caseTyApp x yr, True)
         where (_, xc) = go co x
@@ -1690,10 +1710,6 @@ functorLikeTraverse var (FT { ft_triv = caseTrivial,     ft_var = caseVar
                               Just (fun_ty, _) -> (caseTyApp fun_ty (last xrs), True)
        where
          (xrs,xcs) = unzip (map (go co) args)
-    go co (ForAllTy (Named v Invisible) x) | v /= var && xc = (caseForAll v xr,True)
-        where (xr,xc) = go co x
-              -- TODO (RAE): Fix.
-    go _ (ForAllTy (Named _ Visible) _) = panic "unexpected visible binder"
     go _ _ = (caseTrivial,False)
 
 -- Return all syntactic subterms of ty that contain var somewhere

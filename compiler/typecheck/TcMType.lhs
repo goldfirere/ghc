@@ -1005,9 +1005,7 @@ zonkId id
   = do { ty' <- zonkTcType (idType id)
        ; return (Id.setIdType id ty') }
 
--- For unbound, mutable tyvars, zonkType uses the function given to it
--- For tyvars bound at a for-all, zonkType zonks them to an immutable
---	type variable and zonks the kind too
+-- | Squeeze out any metavariables around. 
 zonkTcType :: TcType -> TcM TcType
 zonkTcType ty
   = go ty
@@ -1019,11 +1017,6 @@ zonkTcType ty
                 -- See Note [Zonking inside the knot] in TcHsType
 
     go (LitTy n)         = return (LitTy n)
-
-    go (ForAllTy (Anon arg) res)
-                         = do arg' <- go arg
-                              res' <- go res
-                              return (mkFunTy arg' res')
 
     go (AppTy fun arg)   = do fun' <- go fun
                               arg' <- go arg
@@ -1042,10 +1035,10 @@ zonkTcType ty
 		       | otherwise	 = TyVarTy <$> updateTyVarKindM go tyvar
 		-- Ordinary (non Tc) tyvars occur inside quantified types
 
-    go (ForAllTy (Named tv vis) ty)
-                            = do { tv' <- zonkTcTyCoVarBndr tv
-                                 ; ty' <- go ty
-                                 ; return (ForAllTy (Named tv' vis) ty') }
+    go (PiTy bndr ty)
+                         = do { bndr' <- zonkTcBinder bndr
+                              ; ty' <- go ty
+                              ; return (PiTy bndr' ty') }
 
     go_co (Refl r ty)               = Refl r <$> go ty
     go_co (TyConAppCo r tc args)    = TyConAppCo r tc <$> mapM go_arg args
@@ -1064,29 +1057,43 @@ zonkTcType ty
     go_co (SubCo co)                = SubCo <$> go_co co
     go_co (AxiomRuleCo ax ts cs)    = AxiomRuleCo ax <$> mapM go ts <*> mapM go_co cs
 
-    go_co (ForAllCo cobndr co)
-      | Just v <- getHomoVar_maybe cobndr
-      = do { v' <- zonkTcTyCoVarBndr v
+    go_co (PiCo cobndr co)
+      | Just v <- getHomoBinder_maybe cobndr
+      = do { v' <- zonkTcBinder v
            ; co' <- go_co co
-           ; return (ForAllCo (mkHomoCoBndr v') co') }
+           ; return (PiCo (mkHomoCoBndr v') co') }
 
-      | TyHetero h tv1 tv2 cv <- cobndr
+      | TyHetero h pbndr m_cv <- cobndr
       = do { h' <- go_co h
-           ; tv1' <- zonkTcTyCoVarBndr tv1
-           ; tv2' <- zonkTcTyCoVarBndr tv2
-           ; cv' <- zonkTcTyCoVarBndr cv
+           ; pbndr' <- zonk_pbndr pbndr
+           ; m_cv' <- zonk_maybe m_cv
            ; co' <- go_co co
-           ; return (mkForAllCo (TyHetero h' tv1' tv2' cv') co') }
+           ; return (mkPiCo (TyHetero h' pbndr' m_cv') co') }
 
-      | CoHetero h cv1 cv2 <- cobndr
+      | CoHetero h pbndr <- cobndr
       = do { h' <- go_co h
-           ; cv1' <- zonkTcTyCoVarBndr cv1
-           ; cv2' <- zonkTcTyCoVarBndr cv2
+           ; pbndr' <- zonk_pbndr pbndr
            ; co' <- go_co co
-           ; return (mkForAllCo (CoHetero h' cv1' cv2') co') }
+           ; return (mkPiCo (CoHetero h' pbndr') co') }
 
       | otherwise
       = pprPanic "zonkTcType" (ppr cobndr)
+
+      where
+        zonk_pbndr pbndr
+          = do { let Pair bv1 bv2 = binderPayload pbndr
+               ; bv1' <- zonk_bv bv1
+               ; bv2' <- zonk_bv bv2
+               ; return $ setBinderPayload pbndr (Pair bv1' bv2') }
+
+        zonk_bv bv
+          = case getBinderVar_maybe bv of
+              Just v  -> mkBinderVar `liftM` zonkTcTyCoVarBndr v
+              Nothing -> mkAnonBinderVar `liftM` go (binderVarType bv)
+
+        zonk_maybe (Just cv) = Just `liftM` zonkTcTyCoVarBndr cv
+        zonk_maybe Nothing   = return Nothing
+                 
 
     go_arg (TyCoArg co)        = TyCoArg <$> go_co co
     go_arg (CoCoArg r co1 co2) = CoCoArg r <$> go_co co1 <*> go_co co2
@@ -1100,6 +1107,11 @@ zonkTcTyCoVarBndr tyvar
     -- can't use isCoVar, because it looks at a TyCon. Argh.
   = ASSERT2( isImmutableTyVar tyvar || (not $ isTyVar tyvar), ppr tyvar ) do
     updateTyVarKindM zonkTcType tyvar
+
+-- | Zonk the kind of a binder
+zonkTcBinder :: TcBinder -> TcM TcBinder
+zonkTcBinder binder
+  = updateBinderTypeM zonkTcType binder
 
 zonkTcTyCoVar :: TcTyCoVar -> TcM TcType
 -- Simply look through all Flexis

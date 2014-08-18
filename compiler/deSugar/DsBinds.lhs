@@ -897,8 +897,8 @@ ds_tc_coercion subst tc_co
                                   mkAppCoFlexible leftCo rightRole (go_arg co2)
     go (TcForAllCo tv co)     = mkForAllCo cobndr' (ds_tc_coercion subst' co)
                               where
-                                cobndr = mkHomoCoBndr tv
-                                (subst', cobndr') = substForAllCoBndr subst cobndr
+                                cobndr = mkHomoCoBndr tv -- TODO (RAE): WRONG
+                                (subst', cobndr') = substPiCoBndr subst cobndr
     go (TcAxiomInstCo ax ind cos)
                                 = mkAxiomInstCo ax ind (map go_arg cos)
     go (TcPhantomCo ty1 ty2)    = mkHomoPhantomCo ty1 ty2

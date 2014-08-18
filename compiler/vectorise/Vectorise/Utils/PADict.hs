@@ -30,8 +30,11 @@ import Control.Monad
 --
 -- > forall (a :: * -> *). (forall (b :: *). PA b -> PA (a b)) -> PA (v a)
 --
-paDictArgType :: TyCoVar -> VM (Maybe Type)
-paDictArgType tv = go (mkTyCoVarTy tv) (tyVarKind tv)
+paDictArgType :: Binder -> VM (Maybe Type)
+paDictArgType bndr
+  = case binderVar_maybe bndr of
+      Just tv -> go (mkTyCoVarTy tv) (tyVarKind tv)
+      Nothing -> pprPanic "Anonymous variable in paDictArgType"
   where
     go ty (ForAllTy (Anon k1) k2)
       = do

@@ -159,8 +159,8 @@ mkTcReflCo = TcRefl
 mkTcNomReflCo :: TcType -> TcCoercion
 mkTcNomReflCo = TcRefl Nominal
 
-mkTcFunCo :: Role -> TcCoercion -> TcCoercion -> TcCoercion
-mkTcFunCo role co1 co2 = mkTcTyConAppCo role funTyCon [co1, co2]
+mkTcFunCo :: TcCoercion -> TcCoercion -> TcCoercion
+mkTcFunCo co1 co2 = -- TODO (RAE): Write me!
 
 mkTcTyConAppCo :: Role -> TyCon -> [TcCoercion] -> TcCoercion
 mkTcTyConAppCo role tc cos -- No need to expand type synonyms
@@ -379,9 +379,6 @@ pprParendTcCo co = ppr_co TyConPrec co
 ppr_co :: TyPrec -> TcCoercion -> SDoc
 ppr_co _ (TcRefl r ty) = angleBrackets (ppr ty) <> ppr_role r
 
-ppr_co p co@(TcTyConAppCo _ tc [_,_])
-  | tc `hasKey` funTyConKey = ppr_fun_co p co
-
 ppr_co p (TcTyConAppCo r tc cos) = pprTcApp   p ppr_co tc cos <> ppr_role r
 ppr_co p (TcLetCo bs co)         = maybeParen p TopPrec $
                                    sep [ptext (sLit "let") <+> braces (ppr bs), ppr co]
@@ -435,6 +432,7 @@ ppr_role r = underscore <> pp_role
 ppr_fun_co :: TyPrec -> TcCoercion -> SDoc
 ppr_fun_co p co = pprArrowChain p (split co)
   where
+    WRONG
     split :: TcCoercion -> [SDoc]
     split (TcTyConAppCo _ f [arg,res])
       | f `hasKey` funTyConKey
@@ -484,7 +482,7 @@ Note [Wrapping coercions embedded in types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 When instantiating quantified type variables in tcInstTyCoVars (and friends),
 there is the possibility of hitting a quantified coercion variable, now that
-ForAllTy can quantify over coercions along with types. tcInstTyCoVars makes
+PiTy can quantify over coercions along with types. tcInstTyCoVars makes
 a new meta type variable for type variables. What to do for coercions? We make
 an evidence variable (an Id) and emit a wanted constraint to solve for an
 appropriate coercion to supply for the evidence. But, the type that is being

@@ -192,6 +192,8 @@ rnHsTyKi isType doc (HsFunTy ty1 ty2)
         -- when we find return :: forall m. Monad m -> forall a. a -> m a
 
         -- Check for fixity rearrangements
+        -- TODO (RAE): This is smelly and probably needs to be fixed.
+        -- But only after the parser is properly fixed.
        ; res_ty <- if isType
                    then mkHsOpTyRn HsFunTy funTyConName funTyFixity ty1' ty2'
                    else return (HsFunTy ty1' ty2')

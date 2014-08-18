@@ -1350,14 +1350,19 @@ reifyFamilyInstance (FamInst { fi_flavor = flavor
 ------------------------------
 reifyType :: TyCoRep.Type -> TcM TH.Type
 -- Monadic only because of failure
-reifyType ty@(ForAllTy (Named _ _) _)        = reify_for_all ty
 reifyType (LitTy t)         = do { r <- reifyTyLit t; return (TH.LitT r) }
 reifyType (TyVarTy tv)      = return (TH.VarT (reifyName tv))
 reifyType (TyConApp tc tys) = reify_tc_app tc tys   -- Do not expand type synonyms here
 reifyType (AppTy t1 t2)     = do { [r1,r2] <- reifyTypes [t1,t2] ; return (r1 `TH.AppT` r2) }
-reifyType ty@(ForAllTy (Anon t1) t2)
-  | isPredTy t1 = reify_for_all ty  -- Types like ((?x::Int) => Char -> Char)
-  | otherwise   = do { [r1,r2] <- reifyTypes [t1,t2] ; return (TH.ArrowT `TH.AppT` r1 `TH.AppT` r2) }
+reifyType ty@(PiTy bndr t2)
+  | not (isDependentBinder bndr)
+  , let t1 = binderType bndr
+  , not (isPredTy t1)
+  = do { [r1,r2] <- reifyTypes [t1,t2]
+       ; return (TH.ArrowT `TH.AppT` r1 `TH.AppT` r2) }
+
+  | otherwise
+  = reify_for_all ty
 reifyType ty@(CastTy {})    = noTH (sLit "kind casts") (ppr ty)
 reifyType ty@(CoercionTy {})= noTH (sLit "coercions in types") (ppr ty)
 
@@ -1388,7 +1393,7 @@ reifyKind  ki
     reifyNonArrowKind k | isLiftedTypeKind k = return TH.StarT
                         | isConstraintKind k = return TH.ConstraintT
     reifyNonArrowKind (TyVarTy v)            = return (TH.VarT (reifyName v))
-    reifyNonArrowKind (ForAllTy _ k)         = reifyKind k
+    reifyNonArrowKind (PiTy _ k)             = reifyKind k
     reifyNonArrowKind (TyConApp kc kis)      = reify_kc_app kc kis
     reifyNonArrowKind (AppTy k1 k2)          = do { k1' <- reifyKind k1
                                                   ; k2' <- reifyKind k2

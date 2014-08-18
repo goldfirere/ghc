@@ -1620,13 +1620,13 @@ But the simplifier pushes those casts outwards, so we don't
 need to address that here.
 
 \begin{code}
-tryEtaReduce :: [Var] -> CoreExpr -> Maybe CoreExpr
+tryEtaReduce :: [Binder] -> CoreExpr -> Maybe CoreExpr
 tryEtaReduce bndrs body
   = go (reverse bndrs) body (mkReflCo Representational (exprType body))
   where
-    incoming_arity = count isId bndrs
+    incoming_arity = count isRelevantBinder bndrs
 
-    go :: [Var]            -- Binders, innermost first, types [a3,a2,a1]
+    go :: [Binder]         -- Binders, innermost first, types [a3,a2,a1]
        -> CoreExpr         -- Of type tr
        -> Coercion         -- Of type tr ~ ts
        -> Maybe CoreExpr   -- Of type a1 -> a2 -> a3 -> ts
@@ -1667,29 +1667,34 @@ tryEtaReduce bndrs body
          arity = idArity fun
 
     ---------------
-    ok_lam v = isTyVar v || isEvVar v
+    ok_lam v = not (isRelevantBinder v) || isCoercionType (binderType v)
 
     ---------------
-    ok_arg :: Var              -- Of type bndr_t
+    ok_arg :: Binder           -- Of type bndr_t
            -> CoreExpr         -- Of type arg_t
            -> Coercion         -- Of kind (t1~t2)
            -> Maybe Coercion   -- Of type (arg_t -> t1 ~  bndr_t -> t2)
                                --   (and similarly for tyvars, coercion args)
     -- See Note [Eta reduction with casted arguments]
-    ok_arg bndr (Type ty) co
+    ok_arg bndr expr co
+      | Just var <- binderVar_maybe bndr
+      = ok_arg' bndr var expr co
+      | otherwise
+      = Nothing
+    
+    ok_arg' bndr v (Type ty) co
        | Just tv <- getTyVar_maybe ty
-       , bndr == tv  = Just (mkForAllCo_TyHomo tv co)
-    ok_arg bndr (Coercion co1) co2
+       , tv == v  = Just (mkPiCo_TyHomo bndr co)
+    ok_arg' bndr v (Coercion co1) co2
        | Just cv <- getCoVar_maybe co1
-       , bndr == cv  = Just (mkForAllCo_CoHomo cv co2)
-    ok_arg bndr (Var v) co
-       | bndr == v   = Just (mkFunCo Representational
-                                     (mkReflCo Representational (idType bndr)) co)
-    ok_arg bndr (Cast (Var v) co_arg) co
-       | bndr == v  = Just (mkFunCo Representational (mkSymCo co_arg) co)
+       , cv == v  = Just (mkPiCo_CoHomo bndr co2)
+    ok_arg bndr v (Var v') co
+       | v' == v   = Just (mkFunCo (mkReflCo Representational (binderType bndr)) co)
+    ok_arg _ v (Cast (Var v') co_arg) co
+       | v' == v  = Just (mkFunCo (mkSymCo co_arg) co)
        -- The simplifier combines multiple casts into one,
        -- so we can have a simple-minded pattern match here
-    ok_arg _ _ _ = Nothing
+    ok_arg _ _ _ _ = Nothing
 \end{code}
 
 Note [Eta reduction of an eval'd function]

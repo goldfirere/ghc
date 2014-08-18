@@ -354,7 +354,7 @@ toIfaceTcArgs tc ty_args
     in_scope = mkInScopeSet (tyCoVarsOfTypes ty_args)
     
     go _   _                   []     = ITC_Nil
-    go env (ForAllTy bndr res) (t:ts)
+    go env (PiTy bndr res) (t:ts)
       | isVisibleBinder bndr = ITC_Vis   t' ts'
       | otherwise            = ITC_Invis t' ts'
       where
@@ -1138,8 +1138,8 @@ toIfaceContext = toIfaceTypes
 toIfaceCoercion :: Coercion -> IfaceCoercion
 toIfaceCoercion (Refl r ty)         = IfaceReflCo r (toIfaceType ty)
 toIfaceCoercion (TyConAppCo r tc cos)
-  | tc `hasKey` funTyConKey
-  , [arg,res] <- cos                = IfaceFunCo r (argToIfaceCoercion arg) (argToIfaceCoercion res)
+  | tc `hasKey` funTyConKey   -- <-- TODO (RAE): Fix this funTyConKey!
+  , [arg,res] <- cos                = IfaceFunCoBROKEN r (argToIfaceCoercion arg) (argToIfaceCoercion res)
   | otherwise                       = IfaceTyConAppCo r (toIfaceTyCon tc)
                                                         (map argToIfaceCoercion cos)
 toIfaceCoercion (AppCo co1 co2)     = IfaceAppCo  (toIfaceCoercion co1)

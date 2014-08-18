@@ -532,20 +532,23 @@ flatten f ctxt (TyConApp tc tys)
                   )
          }
 
-flatten f ctxt (ForAllTy (Anon ty1) ty2)
-  = do { (xi1,co1) <- flatten f ctxt ty1
+flatten f ctxt (PiTy bndr ty2)
+  | not (isDependentBinder bndr)
+  = do { let ty1 = binderType bndr
+       ; (xi1,co1) <- flatten f ctxt ty1
        ; (xi2,co2) <- flatten f ctxt ty2
-       ; return (mkFunTy xi1 xi2, mkTcFunCo Nominal co1 co2) }
+       ; return (mkFunTy xi1 xi2, mkTcFunCo co1 co2) }
 
-flatten _f ctxt ty@(ForAllTy (Named {}) _)
+-- TODO (RAE): This seems woefully inadequate. Shouldn't it recur into binder
+-- types?
+flatten _f ctxt ty@(PiTy {})
 -- We allow for-alls when, but only when, no type function
 -- applications inside the forall involve the bound type variables.
-  = do { let (bndrs, rho) = splitNamedForAllTysB ty
-             tvs          = map (binderVar "flatten") bndrs
+  = do { let (bndrs, rho) = splitDepForAllTysB ty
        ; (rho', co) <- flatten FMSubstOnly ctxt rho
                          -- Substitute only under a forall
                          -- See Note [Flattening under a forall]
-       ; return (mkForAllTys bndrs rho', foldr mkTcForAllCo co tvs) }
+       ; return (mkPiTys bndrs rho', foldr mkTcForAllCo co bndrs) }
 
 flatten f ctxt (CastTy ty g)
   = do { (xi, co) <- flatten f ctxt ty
@@ -817,26 +820,34 @@ can_eq_nc' ev (TyConApp tc1 tys1) _ (TyConApp tc2 tys2) _
   , isDecomposableTyCon tc2
   = canDecomposableTyConApp ev tc1 tys1 tc2 tys2
 
-can_eq_nc' ev (TyConApp tc1 _) ps_ty1 (ForAllTy (Anon _) _) ps_ty2
-  | isDecomposableTyCon tc1 
+can_eq_nc' ev (TyConApp tc1 _) ps_ty1 (PiTy bndr _) ps_ty2
+  | not (isDependentBinder bndr)
+  , isDecomposableTyCon tc1 
       -- The guard is important
       -- e.g.  (x -> y) ~ (F x y) where F has arity 1
       --       should not fail, but get the app/app case
   = canEqFailure ev ps_ty1 ps_ty2
 
-can_eq_nc' ev (ForAllTy (Anon s1) t1) _ (ForAllTy (Anon s2) t2) _
+can_eq_nc' ev (PiTy bndr1 t1) _ (PiTy bndr2 t2) _
+  | not (isDependentBinder bndr1)
+  , not (isDependentBinder bndr2)
   = canDecomposableTyConAppOK ev funTyCon [s1,t1] [s2,t2]
+  where s1 = binderType bndr1
+        s2 = binderType bndr2
 
-can_eq_nc' ev (ForAllTy (Anon _) _) ps_ty1 (TyConApp tc2 _) ps_ty2
-  | isDecomposableTyCon tc2 
+can_eq_nc' ev (PiTy bndr _) ps_ty1 (TyConApp tc2 _) ps_ty2
+  | not (isDependentBinder bndr)
+  , isDecomposableTyCon tc2 
   = canEqFailure ev ps_ty1 ps_ty2
 
-can_eq_nc' ev s1@(ForAllTy (Named {}) _) _ s2@(ForAllTy (Named {}) _) _
+-- TODO (RAE): This also seems woefully inadequate.
+can_eq_nc' ev s1@(PiTy bndr1 _) _ s2@(PiTy bndr2 _) _
  | CtWanted { ctev_loc = loc, ctev_evar = orig_ev } <- ev
- = do { let (bndrs1,body1) = tcSplitNamedForAllTysB s1
-            (bndrs2,body2) = tcSplitNamedForAllTysB s2
-      ; if not (equalLength bndrs1 bndrs2)
-           || not (map binderVisibility bndrs1 == map binderVisibility bndrs2)
+ , isDependentBinder bndr1
+ , isDependentBinder bndr2
+ = do { let (bndrs1,body1) = tcSplitDepPiTysB s1
+            (bndrs2,body2) = tcSplitDepPiTysB s2
+      ; if not (compatibleBinders bndrs1 bndrs2)
         then canEqFailure ev s1 s2
         else
           do { traceTcS "Creating implication for polytype equality" $ ppr ev

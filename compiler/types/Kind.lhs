@@ -84,7 +84,7 @@ isConstraintKind _               = False
 -- | Does the given type "end" in the given tycon? For example @k -> [a] -> *@
 -- ends in @*@ and @Maybe a -> [a]@ ends in @[]@.
 returnsTyCon :: TyCon -> Type -> Bool
-returnsTyCon tc (ForAllTy _ ty)  = returnsTyCon tc ty
+returnsTyCon tc (PiTy _ ty)      = returnsTyCon tc ty
 returnsTyCon tc (TyConApp tc' _) = tc == tc'
 returnsTyCon _  _                = False
 

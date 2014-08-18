@@ -173,14 +173,20 @@ normaliseFfiType' env ty0 = go initRecTc ty0
           nt_rhs = newTyConInstRhs tc tys
           nothing = return (Refl Representational ty, ty, emptyBag)
 
-    go rec_nts (ForAllTy (Anon ty1) ty2)
-      = do (coi1,nty1,gres1) <- go rec_nts ty1
+    go rec_nts ty@(PiTy bndr ty2)
+      | not (isDependentBinder bndr)
+      = do let ty1 = binderType bndr
+           (coi1,nty1,gres1) <- go rec_nts ty1
            (coi2,nty2,gres2) <- go rec_nts ty2
-           return (mkFunCo Representational coi1 coi2, mkFunTy nty1 nty2, gres1 `unionBags` gres2)
+           return (mkFunCo coi1 coi2, mkFunTy nty1 nty2, gres1 `unionBags` gres2)
 
-    go rec_nts (ForAllTy bndr@(Named tyvar _) ty1)
-      = do (coi,nty1,gres1) <- go rec_nts ty1
-           return (mkForAllCo_TyHomo tyvar coi, mkForAllTy bndr nty1, gres1)
+      | not (isRelevantBinder bndr)
+      = do (coi,nty1,gres1) <- go rec_nts ty2
+           return (mkPiCo_TyHomo bndr coi, mkPiTy bndr nty2, gres1)
+
+        -- TODO (RAE): Fix.
+      | otherwise -- dependent and relevant!
+      = pprPanic "Dependent, relevant Π-type seen in normaliseFfiType'" (ppr ty)
 
     go rec_nts (CastTy ty1 co)
       = do (coi,nty1,gres1) <- go rec_nts ty1

@@ -424,13 +424,13 @@ toHsType ty
     to_hs_type (TyConApp tc args) = nlHsTyConApp (getRdrName tc) (map toHsType args')
        where
          args' = filterInvisibles tc args
-
          -- Source-language types have _invisible_ kind arguments,
          -- so we must remove them here (Trac #8563)
-    to_hs_type (ForAllTy (Anon arg) res)
-                               = ASSERT( not (isConstraintKind (typeKind arg)) )
-                                 nlHsFunTy (toHsType arg) (toHsType res)
-    to_hs_type t@(ForAllTy {}) = pprPanic "toHsType" (ppr t)
+         
+    to_hs_type (PiTy bndr res)
+      = ASSERT( not (isDependentBinder bndr) )
+        ASSERT( not (isConstraintKind (typeKind (binderType bndr))) )
+        nlHsFunTy (toHsType (binderType bndr)) (toHsType res)
     to_hs_type (LitTy (NumTyLit n)) = noLoc $ HsTyLit (HsNumTy n)
     to_hs_type (LitTy (StrTyLit s)) = noLoc $ HsTyLit (HsStrTy s)
     to_hs_type (CastTy ty _)   = to_hs_type ty

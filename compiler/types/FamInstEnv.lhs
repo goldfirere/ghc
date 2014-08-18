@@ -924,7 +924,7 @@ normaliseType must be *homogeneous*, so the substitution type-checks. When
 liftCoSubstVarBndr discovers that the kind of the (type variable) binder
 (we'll call the type variable alpha) has changed (let's call the one with the
 new kind beta and the coercion between the kinds eta), it uses a TyHetero
-ForAllCoBndr, necessary to build a coercion between two ForAllTys whose (type)
+PiCoBndr, necessary to build a coercion between two PiTys whose (type)
 binders have different kinds. The last component of a TyHetero is a coercion
 variable (call it zeta) that witnesses the (heterogeneous) equality between
 the two type variables in question (i.e., zeta :: alpha ~# beta). In a lifting
@@ -1093,15 +1093,11 @@ normalise_type env lc
       = let (co,  nty1) = go r ty1
             (arg, nty2) = normalise_ty_arg env lc Nominal ty2
         in (mkAppCo co arg, mkAppTy nty1 nty2)
-    go r (ForAllTy (Anon ty1) ty2)
-      = let (co1, nty1) = go r ty1
-            (co2, nty2) = go r ty2
-        in (mkFunCo r co1 co2, mkFunTy nty1 nty2)
-    go r (ForAllTy (Named tyvar vis) ty)
-      = let (lc', cobndr) = normalise_tycovar_bndr env lc r tyvar
+    go r (PiTy bndr ty)
+      = let (lc', cobndr) = normalise_binder env lc r bndr
             (co, nty)     = normalise_type env lc' r ty
-            (_, tyvar')   = coBndrBoundVars cobndr
-        in (mkForAllCo cobndr co, mkNamedForAllTy tyvar' vis nty)
+            (_, bndr')    = coBndrBinders cobndr
+        in (mkPiCo cobndr co, mkPiTy bndr' nty)
     go r (TyVarTy tv)    = normalise_tyvar lc r tv
     go r (CastTy ty co)  =
       let (nco, nty) = go r ty
@@ -1128,7 +1124,7 @@ normalise_tyvar lc r tv
       bad_news          -> pprPanic "normaliseTyVar" (ppr bad_news)
 
 normalise_tycovar_bndr :: FamInstEnvs -> LiftingContext -> Role -> TyCoVar
-                       -> (LiftingContext, ForAllCoBndr)
+                       -> (LiftingContext, PiCoBndr)
 normalise_tycovar_bndr env lc1 r1
   = liftCoSubstVarBndrCallback (\lc r ty -> fst $ normalise_type env lc r ty) True
     r1 lc1
@@ -1226,14 +1222,10 @@ coreFlattenTy = go
       = let (env', tys') = coreFlattenTys env tys in
         (env', mkTyConApp tc tys')
 
-    go env (ForAllTy (Anon ty1) ty2) = let (env1, ty1') = go env  ty1
-                                           (env2, ty2') = go env1 ty2 in
-                                       (env2, mkFunTy ty1' ty2')
-
-    go env (ForAllTy (Named tv vis) ty)
-      = let (env1, tv') = coreFlattenVarBndr env tv
-            (env2, ty') = go env1 ty in
-        (env2, mkNamedForAllTy tv' vis ty')
+    go env (PiTy bndr ty)
+      = let (env1, bndr') = coreFlattenBinder env bndr
+            (env2, ty')   = go env1 ty in
+        (env2, mkPiTy bndr' ty')
 
     go env ty@(LitTy {}) = (env, ty)
 
@@ -1308,7 +1300,7 @@ allTyVarsInTy = go
     go (TyVarTy tv)      = unitVarSet tv
     go (AppTy ty1 ty2)   = (go ty1) `unionVarSet` (go ty2)
     go (TyConApp _ tys)  = allTyVarsInTys tys
-    go (ForAllTy bndr ty) =
+    go (PiTy bndr ty) =
       caseBinder bndr (\tv -> unitVarSet tv) (const emptyVarSet)
       `unionVarSet` go (binderType bndr) `unionVarSet` go ty
         -- don't remove the tv from the set!
@@ -1319,7 +1311,7 @@ allTyVarsInTy = go
     go_co (Refl _ ty)           = go ty
     go_co (TyConAppCo _ _ args) = go_args args
     go_co (AppCo co arg)        = go_co co `unionVarSet` go_arg arg
-    go_co (ForAllCo cobndr co)  = mkVarSet (coBndrVars cobndr) `unionVarSet` go_co co
+    go_co (PiCo cobndr co)      = mkVarSet (coBndrVars cobndr) `unionVarSet` go_co co
     go_co (CoVarCo cv)          = unitVarSet cv
     go_co (AxiomInstCo _ _ cos) = go_args cos
     go_co (PhantomCo h t1 t2)   = go_co h `unionVarSet` go t1 `unionVarSet` go t2

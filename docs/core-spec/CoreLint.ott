@@ -51,7 +51,6 @@ defn G  |- tm e : t ::  :: lintCoreExpr :: 'Tm_'
 by
 
 x_t elt G
-not (t is_a_coercion_type)
 ------------------ :: Var
 G |-tm x_t : t
 
@@ -78,12 +77,14 @@ G |-tm let alpha_k = s in e : t
 
 G |-sbind x_s <- u
 G |-ty s : k
+G |-k k ok
 G, x_s |-tm e : t
 ------------------------- :: LetNonRec
 G |-tm let x_s = u in e : t
 
 </ G'i $ // i /> = inits(</ zi_si // i />)
 </ G, G'i |-ty si : ki // i />
+</ G, G'i |-k ki ok // i />
 no_duplicates </ zi // i />
 G' = G, </ zi_si // i />
 </ G' |-sbind zi_si <- ui // i />
@@ -104,26 +105,16 @@ G |-tm e2 : t1
 ---------------- :: AppExpr
 G |-tm e1 e2 : t2
 
-not (k is_a_coercion_type)
 G |-ty t : k
-G, x_t |-tm e : s
------------------ :: LamId
-G |-tm \x_t.e : t -> s
-
-G |-ki k ok
-G,alpha_k |-tm e : t
---------------------------- :: LamTy
-G |-tm \alpha_k.e : forall alpha_k. t
-
-phi = s1 k1~#k2 s2
-G |-ki phi ok
-G,c_phi |-tm e : t
--------------------------------- :: LamCo
-G |-tm \c_phi.e : forall c_phi.t
+G, z_t |-tm e : s
+------------------------------------------------- :: Lam
+G |-tm \ (dep, rel) z:t. e : pi (dep, rel) z:t. s
 
 G |-tm e : s
 G |-ty s : k1
+G |-k k1 ok
 G |-ty t : k2
+G |-k k2 ok
 </ G, z_s; s |-altern alti : t // i />
 ---------------------------------------------------- :: Case
 G |-tm case e as z_s return t of </ alti // i /> : t
@@ -142,6 +133,7 @@ defn G  |- name n ok ::  :: lintSingleBinding_lintBinder :: 'Name_'
 by
 
 G |-ty t : k
+G |-k k ok
 ----------------- :: Id
 G |-name x_t ok
 
@@ -437,6 +429,7 @@ R <= Ph
 ------- :: Refl
 R <= R 
 
+% TODO (RAE): this is now lintTypeWithValues.
 defn G |- ki k ok ::  :: lintKind :: 'K_'
   {{ com Kind validity, \coderef{coreSyn/CoreLint.lhs}{lintKind} }}
   {{ tex [[G]] \labeledjudge{k} [[k]] [[ok]] }}

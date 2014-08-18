@@ -901,16 +901,17 @@ getTyDescription ty
       TyVarTy _              -> "*"
       AppTy fun _            -> getTyDescription fun
       TyConApp tycon _       -> getOccString tycon
-        -- TODO (RAE): Should this use isIdLikeBinder?
-      ForAllTy (Anon _) res  -> '-' : '>' : fun_result res
-      ForAllTy (Named {}) ty -> getTyDescription ty
+      PiTy bndr res
+        | isRelevantBinder bndr -> '-' : '>' : fun_result res
+        | otherwise             -> getTyDescription res
       LitTy n                -> getTyLitDescription n
       CastTy ty _            -> getTyDescription ty
       CoercionTy co          -> pprPanic "getTyDescription" (ppr co)
     }
   where
-    fun_result (ForAllTy (Anon _) res) = '>' : fun_result res
-    fun_result other                   = getTyDescription other
+    fun_result (PiTy bndr res)
+      | isRelevantBinder bndr = '>' : fun_result res
+    fun_result other          = getTyDescription other
 
 getTyLitDescription :: TyLit -> String
 getTyLitDescription l =

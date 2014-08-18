@@ -272,28 +272,14 @@ funTyConName = mkPrimTyConName (fsLit "(->)") funTyConKey funTyCon
 funTyCon :: TyCon
 funTyCon = mkFunTyCon funTyConName $ 
            mkArrowKinds [liftedTypeKind, liftedTypeKind] liftedTypeKind
-        -- You might think that (->) should have type (?? -> ? -> *), and you'd be right
-	-- But if we do that we get kind errors when saying
-	--	instance Control.Arrow (->)
-	-- because the expected kind is (*->*->*).  The trouble is that the
-	-- expected/actual stuff in the unifier does not go contra-variant, whereas
-	-- the kind sub-typing does.  Sigh.  It really only matters if you use (->) in
-	-- a prefix way, thus:  (->) Int# Int#.  And this is unusual.
-        -- because they are never in scope in the source
-
--- One step to remove subkinding.
--- (->) :: * -> * -> *
--- but we should have (and want) the following typing rule for fully applied arrows
---      Gamma |- tau   :: k1    k1 in {*, #}
---      Gamma |- sigma :: k2    k2 in {*, #, (#)}
---      -----------------------------------------
---      Gamma |- tau -> sigma :: *
--- Currently we have the following rule which achieves more or less the same effect
---      Gamma |- tau   :: ??
---      Gamma |- sigma :: ?
---      --------------------------
---      Gamma |- tau -> sigma :: *
--- In the end we don't want subkinding at all.
+-- You might think that (->) should have a kind
+-- (->) :: forall (v1 :: Levity) (v2 :: Levity). TYPE v1 -> TYPE v2 -> *
+-- and that's basically correct. BUT, it causes problems with declarations
+-- like
+-- instance Control.Arrow (->) where ...
+--
+-- So, we say (->) :: * -> * -> *, but use a special typing rule for
+-- saturated (->).
 \end{code}
 
 
@@ -342,7 +328,7 @@ liftedTypeKindTyConName,
 
 constraintKindTyCon   = mkKindTyCon constraintKindTyConName   liftedTypeKind []
 tYPETyCon = mkKindTyCon tYPETyConName
-                        (ForAllTy (Anon levityTy) liftedTypeKind)
+                        (PiTy (mkFunBinder levityTy) liftedTypeKind)
                         [Nominal]
 
    -- See Note [TYPE]
@@ -525,7 +511,7 @@ mkProxyPrimTy k ty = TyConApp proxyPrimTyCon [k, ty]
 
 proxyPrimTyCon :: TyCon
 proxyPrimTyCon = mkPrimTyCon proxyPrimTyConName kind [Nominal,Nominal] VoidRep
-  where kind = ForAllTy (Named kv Invisible) $
+  where kind = PiTy (mkForAllBinder kv) $
                mkArrowKind k unliftedTypeKind
         kv   = kKiVar
         k    = mkOnlyTyVarTy kv
@@ -533,8 +519,8 @@ proxyPrimTyCon = mkPrimTyCon proxyPrimTyConName kind [Nominal,Nominal] VoidRep
 eqPrimTyCon :: TyCon  -- The representation type for equality predicates
 		      -- See Note [The ~# TyCon]
 eqPrimTyCon  = mkPrimTyCon eqPrimTyConName kind roles VoidRep
-  where kind = ForAllTy (Named kv1 Invisible) $
-               ForAllTy (Named kv2 Invisible) $
+  where kind = PiTy (mkForAllBinder kv1) $
+               PiTy (mkForAllBinder kv2) $
                mkArrowKinds [k1, k2] unliftedTypeKind
         kVars = tyVarList liftedTypeKind
         kv1 : kv2 : _ = kVars
@@ -549,8 +535,8 @@ eqReprPrimTyCon :: TyCon
 eqReprPrimTyCon = mkPrimTyCon eqReprPrimTyConName kind
                               (replicate 4 Representational)
                               VoidRep
-  where kind = ForAllTy (Named kv1 Invisible) $
-               ForAllTy (Named kv2 Invisible) $
+  where kind = PiTy (mkForAllBinder kv1) $
+               PiTy (mkForAllBinder kv2) $
                mkArrowKinds [k1, k2] unliftedTypeKind
         kVars         = tyVarList liftedTypeKind
         kv1 : kv2 : _ = kVars
@@ -799,7 +785,7 @@ anyTyCon = mkSynTyCon anyTyConName kind [kKiVar] [Nominal]
                       syn_rhs
                       NoParentTyCon
   where 
-    kind = ForAllTy (Named kKiVar Invisible) (mkOnlyTyVarTy kKiVar)
+    kind = PiTy (mkForAllBinder kKiVar) (mkOnlyTyVarTy kKiVar)
     syn_rhs = AbstractClosedSynFamilyTyCon
 
 anyTypeOfKind :: Kind -> Type

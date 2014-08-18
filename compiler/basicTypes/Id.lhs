@@ -253,7 +253,7 @@ mkLocalIdWithInfo name ty info = Var.mkLocalVar details name ty info
   where
       -- TODO (RAE): Is this a good place to make this check?
       -- It's not particularly cheap.
-    details = if isCoercionType ty
+    details = if isJust $ isCoercionType ty
               then CoVarId
               else VanillaId
         -- Note [Free type variables]

@@ -41,11 +41,15 @@
 module Var (
         -- * The main data type and synonyms
         Var, CoVar, Id, DictId, DFunId, EvVar, EqVar, EvId, IpId,
-        TyVar, TypeVar, KindVar, TKVar, TyCoVar,
+        TyVar, TypeVar, KindVar, TKVar, TyCoVar, BinderVar,
+        DependenceFlag(..),
 
 	-- ** Taking 'Var's apart
 	varName, varUnique, varType, 
 
+        -- ** Taking 'BinderVar's apart
+        getBinderVar_maybe, binderVarType,
+        
 	-- ** Modifying 'Var's
 	setVarName, setVarUnique, setVarType,
 
@@ -54,6 +58,9 @@ module Var (
 	idInfo, idDetails,
 	lazySetIdInfo, setIdDetails, globaliseId,
 	setIdExported, setIdNotExported,
+
+        -- ** Constructing 'BinderVar's
+        mkBinderVar, mkAnonBinderVar,
 
         -- ** Predicates
         isId, isTKVar, isTyVar, isTcTyVar, isTcTyCoVar,
@@ -184,6 +191,7 @@ data Var
 	realUnique :: FastInt,
    	varType    :: Type,
 	idScope    :: IdScope,
+        dependent  :: DependenceFlag,   -- Is the Id available at compile time?
 	id_details :: IdDetails,	-- Stable, doesn't change
 	id_info    :: IdInfo }		-- Unstable, updated by simplifier
     deriving Typeable
@@ -195,6 +203,16 @@ data IdScope	-- See Note [GlobalId/LocalId]
 data ExportFlag 
   = NotExported	-- ^ Not exported: may be discarded as dead code.
   | Exported	-- ^ Exported: kept alive
+
+-- | Can this Id be used in a dependent context? That is, is it available
+-- at compile time?
+data DependenceFlag = Dependent | Nondependent
+  deriving (Eq, Data.Typeable, Data.Data)
+
+-- | A var as used in a 'Binder'. It either has a name (and is a proper 'Var')
+-- or is anonymous and has only a type.
+data BinderVar = Named Var | Anon Type
+  deriving (Data, Typeable)
 
 \end{code}
 
@@ -226,7 +244,8 @@ instance Outputable Var where
 ppr_debug :: Var -> SDoc
 ppr_debug (TyVar {})           = ptext (sLit "tv")
 ppr_debug (TcTyVar {tc_tv_details = d}) = pprTcTyVarDetails d
-ppr_debug (Id { idScope = s, id_details = d }) = ppr_id_scope s <> pprIdDetails d
+ppr_debug (Id { idScope = s, dependent = dep, id_details = d })
+  = ppr_id_scope s <+> ppr dep <> pprIdDetails d
 
 ppr_id_scope :: IdScope -> SDoc
 ppr_id_scope GlobalId              = ptext (sLit "gid")
@@ -255,6 +274,24 @@ instance Data Var where
   gunfold _ _  = error "gunfold"
   dataTypeOf _ = mkNoRepType "Var"
 
+instance Outputable BinderVar where
+  ppr (Named v) = ppr v
+  ppr (Anon ty) = parens (char '_' <+> dcolon <+> ppr ty)
+
+instance Binary DependenceFlag where
+  put_ bh Dependent    = putByte bh 0
+  put_ bh Nondependent = putByte bh 1
+
+  get bh = do
+    h <- getByte bh
+    case h of
+      0 -> return Dependent
+      _ -> return Nondependent
+
+instance Outputable DependenceFlag where
+  ppr Dependent = text "dep"
+  ppr Nondependent = text "nondep"
+
 \end{code}
 
 
@@ -274,6 +311,16 @@ setVarName var new_name
 
 setVarType :: Id -> Type -> Id
 setVarType id ty = id { varType = ty }
+
+-- | Extract the 'Var' out of a named 'BinderVar'
+getBinderVar_maybe :: BinderVar -> Maybe Var
+getBinderVar_maybe (Named v) = Just v
+getBinderVar_maybe (Anon _)  = Nothing
+
+-- | Get the type of a 'BinderVar'
+binderVarType :: BinderVar -> Type
+binderVarType (Named v) = varType v
+binderVarType (Anon ty) = ty
 \end{code}
 
 
@@ -457,3 +504,19 @@ isExportedId (Id { idScope = GlobalId })        = True
 isExportedId (Id { idScope = LocalId Exported}) = True
 isExportedId _ = False
 \end{code}
+
+%************************************************************************
+%*									*
+\subsection{BinderVars}
+%*									*
+%************************************************************************
+
+\begin{code}
+
+-- | Make a named 'BinderVar'
+mkBinderVar :: Var -> BinderVar
+mkBinderVar = Named
+
+-- | Make an anonymous 'BinderVar'
+mkAnonBinderVar :: Type -> BinderVar
+mkAnonBinderVar = Anon

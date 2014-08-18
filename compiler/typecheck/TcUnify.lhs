@@ -112,7 +112,9 @@ expected type, because it expects that to have been done already
 matchExpectedFunTys :: SDoc 	-- See Note [Herald for matchExpectedFunTys]
             	    -> Arity
             	    -> TcRhoType 
-                    -> TcM (TcCoercion, [TcSigmaType], TcRhoType)
+                    -> TcM ( TcCoercion
+                           , [(DependenceFlag, TcSigmaType)]
+                           , TcRhoType)
 
 -- If    matchExpectFunTys n ty = (co, [t1,..,tn], ty_r)
 -- then  co : ty ~ (t1 -> ... -> tn -> ty_r)
@@ -136,10 +138,14 @@ matchExpectedFunTys herald arity orig_ty
     go n_req ty
       | Just ty' <- tcView ty = go n_req ty'
 
-    go n_req (ForAllTy (Anon arg_ty) res_ty)
-      | not (isPredTy arg_ty)
+    go n_req (PiTy bndr res_ty)
+      | isRelevantBinder bndr
+      , let arg_ty = binderType bndr
+      , not (isPredTy arg_ty)
       = do { (co, tys, ty_r) <- go (n_req-1) res_ty
-           ; return (mkTcFunCo Nominal (mkTcNomReflCo arg_ty) co, arg_ty:tys, ty_r) }
+           ; return ( mkTcPiCo bndr co
+                    , (binderDependence bndr, arg_ty) : tys
+                    , ty_r ) }
 
     go n_req ty@(TyVarTy tv)
       | ASSERT( isTcTyVar tv) isMetaTyVar tv
@@ -161,7 +167,7 @@ matchExpectedFunTys herald arity orig_ty
                         -- See Note [Foralls to left of arrow]
            ; res_ty  <- newOpenFlexiTyVarTy
            ; co   <- unifyType fun_ty (mkFunTys arg_tys res_ty)
-           ; return (co, arg_tys, res_ty) }
+           ; return (co, zip (repeat Nondependent) arg_tys, res_ty) }
 
     ------------
     mk_ctxt :: TidyEnv -> TcM (TidyEnv, MsgDoc)
@@ -600,10 +606,15 @@ uType origin orig_ty1 orig_ty2
       | Just ty2' <- tcView ty2 = go ty1  ty2'
       	     
         -- Functions (or predicate functions) just check the two parts
-    go (ForAllTy (Anon fun1) arg1) (ForAllTy (Anon fun2) arg2)
-      = do { co_l <- uType origin fun1 fun2
+    go ty1@(PiTy bndr1 arg1) ty2@(PiTy bndr2 arg2)
+      | not (isDependentBinder bndr1)
+      , not (isDependentBinder bndr2)
+      = do { co_l <- uType origin (binderType bndr1) (binderType bndr2)
            ; co_r <- uType origin arg1 arg2
-           ; return $ mkTcFunCo Nominal co_l co_r }
+           ; return $ mkTcFunCo co_l co_r }
+
+      | otherwise
+      = unifySigmaTy origin ty1 ty2
 
         -- Always defer if a type synonym family (type function)
       	-- is involved.  (Data families behave rigidly.)
@@ -643,10 +654,6 @@ uType origin orig_ty1 orig_ty2
       | coercionType co1 `eqType` coercionType co2
       = do { co_tys <- go t1 t2
            ; return (mkTcCoherenceCo co_tys co1) }
-
-    go ty1 ty2
-      | tcIsNamedForAllTy ty1 || tcIsNamedForAllTy ty2 
-      = unifySigmaTy origin ty1 ty2
 
         -- Anything else fails
     go ty1 ty2 = uType_defer origin ty1 ty2 -- failWithMisMatch origin
@@ -899,8 +906,8 @@ checkTauTvUpdate dflags tv ty
     defer_me (LitTy {})        = False
     defer_me (TyVarTy tv')     = tv == tv'
     defer_me (TyConApp tc tys) = isSynFamilyTyCon tc || any defer_me tys
-    defer_me (ForAllTy bndr t) = defer_me (binderType bndr) || defer_me t
-                                 || (isNamedBinder bndr && not impredicative)
+    defer_me (PiTy bndr t)     = defer_me (binderType bndr) || defer_me t
+                              || (isDependentBinder bndr && not impredicative)
     defer_me (AppTy fun arg)   = defer_me fun || defer_me arg
     defer_me (CastTy ty co)    = defer_me ty || defer_me_co co
     defer_me (CoercionTy co)   = defer_me_co co
@@ -909,8 +916,8 @@ checkTauTvUpdate dflags tv ty
     defer_me_co (TyConAppCo _ tc args)= isSynFamilyTyCon tc
                                        || any defer_me_arg args
     defer_me_co (AppCo co arg)       = defer_me_co co || defer_me_arg arg
-    defer_me_co (ForAllCo _ co)      = not impredicative || defer_me_co co
-    defer_me_co (CoVarCo _)          = False
+    defer_me_co (PiCo cobndr co)     = defer_me_cobndr cobndr || defer_me_co co
+    defer_me_co (CoVarCo cv)         = defer_me (varType cv)
     defer_me_co (AxiomInstCo _ _ as) = any defer_me_arg as
     defer_me_co (PhantomCo h t1 t2)  = defer_me_co h || defer_me t1 || defer_me t2
     defer_me_co (UnsafeCo _ ty1 ty2) = defer_me ty1 || defer_me ty2
@@ -926,6 +933,19 @@ checkTauTvUpdate dflags tv ty
 
     defer_me_arg (TyCoArg co)        = defer_me_co co
     defer_me_arg (CoCoArg _ co1 co2) = defer_me_co co1 || defer_me_co co2
+
+    defer_me_cobndr (TyHomo bndr)    = defer_me (binderType bndr)
+    defer_me_cobndr (TyHetero h pbndr _)
+      = let Pair bv1 bv2 = binderPayload pbndr in
+         defer_me_co h
+         || defer_me (binderVarType bv1)
+         || defer_me (binderVarType bv2)
+    defer_me_cobndr (CoHomo cv)      = defer_me (binderType cv)
+    defer_me_cobndr (CoHetero h pbndr)
+      = let Pair bv1 bv2 = binderPayload pbndr in
+        defer_me_co h
+        || defer_me (binderVarType bv1)
+        || defer_me (binderVarType bv2)
 \end{code}
 
 Note [Conservative unification check]
@@ -1183,8 +1203,10 @@ unifyKind k1 k2       -- See Note [Expanding synonyms during unification]
 unifyKind (TyVarTy kv1) k2 = uKVar kv1 k2
 unifyKind k1 (TyVarTy kv2) = uKVar kv2 k1
 
-unifyKind (ForAllTy (Anon a1) r1) (ForAllTy (Anon a2) r2)
-  = do { b1 <- unifyKind a1 a2
+unifyKind (PiTy bndr1 r1) (PiTy bndr2 r2)
+  | not (isDependentBinder bndr1)
+  , not (isDependentBinder bndr2)
+  = do { b1 <- unifyKind (binderType bndr1) (binderType bndr2)
        ; b2 <- unifyKind r1 r2
        ; return (b1 && b2) }
 

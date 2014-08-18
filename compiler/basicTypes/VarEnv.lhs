@@ -112,6 +112,9 @@ extendInScopeSetSet :: InScopeSet -> VarEnv Var -> InScopeSet
 extendInScopeSetSet (InScope in_scope n) vs
    = InScope (in_scope `plusVarEnv` vs) (n +# iUnbox (sizeUFM vs))
 
+extendInScopeSetMaybes :: InScopeSet -> [Maybe Var] -> InScopeSet
+extendInScopeSetMaybes is maybes = extendInScopeSetList is (catMaybes maybes)
+
 delInScopeSet :: InScopeSet -> Var -> InScopeSet
 delInScopeSet (InScope in_scope n) v = InScope (in_scope `delVarEnv` v) n
 
@@ -271,6 +274,19 @@ rnBndrR (RV2 { envL = envL, envR = envR, in_scope = in_scope }) bR
          , in_scope = extendInScopeSet in_scope new_b }, new_b)
   where
     new_b = uniqAway in_scope bR
+
+-- | Like 'rnBndr2', but takes 'BinderVar's
+rnBinderVar2 :: RnEnv2 -> BinderVar -> BinderVar -> RnEnv2
+rnBinderVar2 env bv1 bv2 = fst $ rnBinderVar2_var env bv1 bv2
+
+-- | Like 'rnBndr2_var', but takes 'BinderVar's
+rnBinderVar2_var :: RnEnv2 -> BinderVar -> BinderVar -> (RnEnv2, Maybe Var)
+rnBinderVar2_var env bv1 bv2
+  = case (getBinderVar_maybe bv1, getBinderVar_maybe bv2) of
+      (Just v1, Just v2) -> second Just $ rnBndr2_var env v1 v2
+      (Just v1, Nothing) -> second Just $ rnBndrL v1
+      (Nothing, Just v2) -> second Just $ rnBndrR v2
+      (Nothing, Nothing) -> (env, Nothing)
 
 rnEtaL :: RnEnv2 -> Var -> (RnEnv2, Var)
 -- ^ Similar to 'rnBndrL' but used for eta expansion

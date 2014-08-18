@@ -225,10 +225,11 @@ type TcTyVar = TyVar    -- Used only during type inference
 type TcCoVar = CoVar    -- Used only during type inference
 type TcType = Type      -- A TcType can have mutable type variables
 type TcTyCoVar = Var    -- Either a TcTyVar or a CoVar
-        -- Invariant on ForAllTy in TcTypes:
+        -- Invariant on TcTypes:
         --      forall a. T
         -- a cannot occur inside a MutTyVar in T; that is,
         -- T is "flattened" before quantifying over a
+type TcBinder = Binder
 
 -- These types do not have boxy type variables in them
 type TcPredType     = PredType
@@ -525,7 +526,7 @@ tcTyFamInsts (TyConApp tc tys)
   | isSynFamilyTyCon tc         = [(tc, tys)]
   | otherwise                   = concat (map tcTyFamInsts tys)
 tcTyFamInsts (LitTy {})         = []
-tcTyFamInsts (ForAllTy bndr ty) = tcTyFamInsts (binderType bndr)
+tcTyFamInsts (PiTy bndr ty)     = tcTyFamInsts (binderType bndr)
                                   ++ tcTyFamInsts ty
 tcTyFamInsts (AppTy ty1 ty2)    = tcTyFamInsts ty1 ++ tcTyFamInsts ty2
 tcTyFamInsts (CastTy ty co)     = tcTyFamInsts ty ++ tcTyFamInstsCo co
@@ -543,7 +544,7 @@ tcTyFamInstsCo = go
                                [(tc, tysl), (tc, tysr)]
       | otherwise            = concatMap go_arg args
     go (AppCo co arg)        = go co ++ go_arg arg
-    go (ForAllCo cobndr co)
+    go (PiCo cobndr co)
       | Just (h, _, _) <- splitHeteroCoBndr_maybe cobndr
                              = go h ++ go co
       | otherwise            = go co
@@ -612,14 +613,14 @@ exactTyCoVarsOfType ty
     go (TyConApp _ tys)     = exactTyCoVarsOfTypes tys
     go (LitTy {})           = emptyVarSet
     go (AppTy fun arg)      = go fun `unionVarSet` go arg
-    go (ForAllTy bndr ty)   = delBinderVar (go ty) bndr `unionVarSet` go (binderType bndr)
+    go (PiTy bndr ty)       = delBinderVar (go ty) bndr `unionVarSet` go (binderType bndr)
     go (CastTy ty co)       = go ty `unionVarSet` goCo co
     go (CoercionTy co)      = goCo co
 
     goCo (Refl _ ty)        = go ty
     goCo (TyConAppCo _ _ args)= goCoArgs args
     goCo (AppCo co arg)     = goCo co `unionVarSet` goCoArg arg
-    goCo (ForAllCo bndr co)
+    goCo (PiCo bndr co)
       = let (vars, kinds) = coBndrVarsKinds bndr in
         goCo co `delVarSetList` vars `unionVarSet` exactTyCoVarsOfTypes kinds
     goCo (CoVarCo v)         = unitVarSet v
@@ -839,8 +840,9 @@ isTauTy (TyVarTy _)           = True
 isTauTy (LitTy {})            = True
 isTauTy (TyConApp tc tys)     = all isTauTy tys && isTauTyCon tc
 isTauTy (AppTy a b)           = isTauTy a && isTauTy b
-isTauTy (ForAllTy (Anon a) b) = isTauTy a && isTauTy b
-isTauTy (ForAllTy {})         = False
+isTauTy (PiTy bndr b)
+  | not (isDependentBinder bndr) = isTauTy (binderType bndr) && isTauTy b
+  | otherwise                    = False
 isTauTy (CastTy _ _)          = False
 isTauTy (CoercionTy _)        = False
 
@@ -858,8 +860,9 @@ getDFunTyKey (TyVarTy tv)            = getOccName tv
 getDFunTyKey (TyConApp tc _)         = getOccName tc
 getDFunTyKey (LitTy x)               = getDFunTyLitKey x
 getDFunTyKey (AppTy fun _)           = getDFunTyKey fun
-getDFunTyKey (ForAllTy (Anon _) _)   = getOccName funTyCon
-getDFunTyKey (ForAllTy (Named {}) t) = getDFunTyKey t
+getDFunTyKey (PiTy bndr ty)
+  | not (isDependentBinder bndr)     = getOccName funTyCon
+  | otherwise                        = getDFunTyKey ty
 getDFunTyKey (CastTy ty _)           = getDFunTyKey ty
 getDFunTyKey t@(CoercionTy _)        = pprPanic "getDFunTyKey" (ppr t)
 
@@ -896,23 +899,26 @@ tcSplitNamedForAllTys = splitNamedForAllTys
 tcSplitNamedForAllTysB :: Type -> ([Binder], Type)
 tcSplitNamedForAllTysB = splitNamedForAllTysB
 
-tcIsForAllTy :: Type -> Bool
-tcIsForAllTy ty | Just ty' <- tcView ty = tcIsForAllTy ty'
-tcIsForAllTy (ForAllTy {}) = True
-tcIsForAllTy _             = False
+tcIsPiTy :: Type -> Bool
+tcIsPiTy ty | Just ty' <- tcView ty = tcIsPiTy ty'
+tcIsPiTy (PiTy {}) = True
+tcIsPiTy _         = False
 
--- | Is this a ForAllTy with a named binder?
-tcIsNamedForAllTy :: Type -> Bool
-tcIsNamedForAllTy ty | Just ty' <- tcView ty = tcIsNamedForAllTy ty'
-tcIsNamedForAllTy (ForAllTy (Named {}) _) = True
-tcIsNamedForAllTy _                       = False
+-- | Is this a dependent PiTy?
+tcIsDepPiTy :: Type -> Bool
+tcIsDepPiTy ty | Just ty' <- tcView ty = tcIsNamedForAllTy ty'
+tcIsDepPiTy (PiTy bndr _) = isDependentBinder bndr
+tcIsDepPiTy _             = False
 
 tcSplitPredFunTy_maybe :: Type -> Maybe (PredType, Type)
 -- Split off the first predicate argument from a type
 tcSplitPredFunTy_maybe ty
   | Just ty' <- tcView ty = tcSplitPredFunTy_maybe ty'
-tcSplitPredFunTy_maybe (ForAllTy (Anon arg) res)
-  | isPredTy arg = Just (arg, res)
+tcSplitPredFunTy_maybe (PiTy bndr res)
+  | not (isDependentBinder bndr)
+  , let arg = binderType bndr
+  , isPredTy arg
+  = Just (arg, res)
 tcSplitPredFunTy_maybe _
   = Nothing
 
@@ -967,7 +973,9 @@ tcSplitTyConApp ty = case tcSplitTyConApp_maybe ty of
 tcSplitTyConApp_maybe :: Type -> Maybe (TyCon, [Type])
 tcSplitTyConApp_maybe ty | Just ty' <- tcView ty = tcSplitTyConApp_maybe ty'
 tcSplitTyConApp_maybe (TyConApp tc tys)          = Just (tc, tys)
-tcSplitTyConApp_maybe (ForAllTy (Anon arg) res)  = Just (funTyCon, [arg,res])
+tcSplitTyConApp_maybe (PiTy bndr res)
+  | not (isDependentBinder bndr)
+  = Just (funTyCon, [binderType bndr, res])
         -- Newtypes are opaque, so they may be split
         -- However, predicates are not treated
         -- as tycon applications by the type checker
@@ -983,8 +991,11 @@ tcSplitFunTys ty = case tcSplitFunTy_maybe ty of
 
 tcSplitFunTy_maybe :: Type -> Maybe (Type, Type)
 tcSplitFunTy_maybe ty | Just ty' <- tcView ty           = tcSplitFunTy_maybe ty'
-tcSplitFunTy_maybe (ForAllTy (Anon arg) res)
-                                   | not (isPredTy arg) = Just (arg, res)
+tcSplitFunTy_maybe (PiTy bndr res)
+  | not (isDependentBinder bndr)
+  , let arg = binderType bndr
+  , not (isPredTy arg)
+  = Just (arg, res)
 tcSplitFunTy_maybe _                                    = Nothing
         -- Note the typeKind guard
         -- Consider     (?x::Int) => Bool
@@ -1092,7 +1103,8 @@ tcInstHeadTyAppAllTyVars ty
   | otherwise
   = case ty of
         TyConApp tc tys         -> ok (filterInvisibles tc tys)  -- avoid kinds
-        ForAllTy (Anon arg) res -> ok [arg, res]
+        PiTy bndr res | not (isDependentBinder bndr)
+                                -> ok [binderType bndr, res]
         _                       -> False
   where
         -- Check that all the types are type variables,
@@ -1112,10 +1124,9 @@ tcEqKind = tcEqType
 tcEqType :: TcType -> TcType -> Bool
 -- tcEqType is a proper, sensible type-equality function, that does
 -- just what you'd expect The function Type.eqType (currently) has a
--- grotesque hack that makes OpenKind = *, and that is NOT what we
--- want in the type checker!  Otherwise, for example, TcCanonical.reOrient
--- thinks the LHS and RHS have the same kinds, when they don't, and
--- fails to re-orient.  That in turn caused Trac #8553.
+-- grotesque hack that makes Constraint = *, and that is NOT what we
+-- want in the type checker! 
+-- See also Trac #8553.
 
 tcEqType ty1 ty2
   = go init_env ty1 ty2
@@ -1125,18 +1136,11 @@ tcEqType ty1 ty2
                  | Just t2' <- tcView t2 = go env t1 t2'
     go env (TyVarTy tv1)       (TyVarTy tv2)     = rnOccL env tv1 == rnOccR env tv2
     go _   (LitTy lit1)        (LitTy lit2)      = lit1 == lit2
-    go env (ForAllTy bndr1 t1) (ForAllTy bndr2 t2)
+    go env (PiTy bndr1 t1)     (PiTy bndr2 t2)
       =  go env (binderType bndr1) (binderType bndr2)
-      && let env'
-               | Just tv1 <- binderVar_maybe bndr1
-               , Just tv2 <- binderVar_maybe bndr2
-               = rnBndr2 env tv1 tv2
-
-               | otherwise
-               = env
+      && let env' = rnBinderVar2 env (binderPayload bndr1) (binderPayload bndr2)
          in go env' t1 t2
-      && binderVisibility bndr1 == binderVisibility bndr2
-      && isNamedBinder bndr1    == isNamedBinder bndr2
+      && compatibleBinder bndr1 bndr2
     go env (AppTy s1 t1)       (AppTy s2 t2)     = go env s1 s2 && go env t1 t2
     go env (TyConApp tc1 ts1) (TyConApp tc2 ts2) = (tc1 == tc2) && gos env ts1 ts2
     go env (CastTy t1 c1)      (CastTy t2 c2)    = go env t1 t2 && go_co env c1 c2
@@ -1152,7 +1156,7 @@ tcEqType ty1 ty2
       = r1 == r2 && tc1 == tc2 && go_args env args1 args2
     go_co env (AppCo col1 cor1)         (AppCo col2 cor2)
       = go_co env col1 col2 && go_arg env cor1 cor2
-    go_co env (ForAllCo cobndr1 co1)    (ForAllCo cobndr2 co2)
+    go_co env (PiCo cobndr1 co1)        (PiCo cobndr2 co2)
       =  go_cobndr env cobndr1 cobndr2
       && go_co (rnCoBndr2 env cobndr1 cobndr2) co1 co2
     go_co env (CoVarCo cv1)             (CoVarCo cv2)
@@ -1194,15 +1198,22 @@ tcEqType ty1 ty2
     go_args _   _        _        = False
 
     go_cobndr env (TyHomo tv1)               (TyHomo tv2)
-      = go env (tyVarKind tv1) (tyVarKind tv2)
-    go_cobndr env (TyHetero co1 tvl1 tvr1 _) (TyHetero co2 tvl2 tvr2 _)
-      = go_co env co1 co2 && go env (tyVarKind tvl1) (tyVarKind tvl2)
-                          && go env (tyVarKind tvr1) (tyVarKind tvr2)
+      = compatibleBinder tv1 tv2 && go env (binderType tv1) (binderType tv2)
+    go_cobndr env (TyHetero co1 pbndr1 _) (TyHetero co2 pbndr2 _)
+      = let Pair tvl1 tvr1 = binderPayload pbndr1
+            Pair tvl2 tvr2 = binderPayload pbndr2
+        in
+        compatibleBinder pbndr1 pbndr2 &&
+        go_co env co1 co2 && go env (binderVarType tvl1) (binderVarType tvl2)
+                          && go env (binderVarType tvr1) (binderVarType tvr2)
     go_cobndr env (CoHomo cv1)               (CoHomo cv2)
-      = go env (tyVarKind cv1) (tyVarKind cv2)
-    go_cobndr env (CoHetero co1 cvl1 cvr1)   (CoHetero co2 cvl2 cvr2)
-      = go_co env co1 co2 && go env (tyVarKind cvl1) (tyVarKind cvl2)
-                          && go env (tyVarKind cvr1) (tyVarKind cvr2)
+      = go env (binderType cv1) (binderType cv2)
+    go_cobndr env (CoHetero co1 pbndr1)   (CoHetero co2 pbndr2)
+      = let Pair cvl1 cvr1 = binderPayload pbndr1
+            Pair cvl2 cvr2 = binderPAyload pbndr2
+        in
+        go_co env co1 co2 && go env (binderVarType cvl1) (binderVarType cvl2)
+                          && go env (binderVarType cvr1) (binderVarType cvr2)
     go_cobndr _ _ _ = False
 
 pickyEqType :: TcType -> TcType -> Bool
@@ -1214,19 +1225,11 @@ pickyEqType ty1 ty2
     init_env = mkRnEnv2 (mkInScopeSet (tyCoVarsOfType ty1 `unionVarSet` tyCoVarsOfType ty2))
     go env (TyVarTy tv1)       (TyVarTy tv2)     = rnOccL env tv1 == rnOccR env tv2
     go _   (LitTy lit1)        (LitTy lit2)      = lit1 == lit2
-    go env (ForAllTy bndr1 t1) (ForAllTy bndr2 t2)
+    go env (PiTy bndr1 t1)     (PiTy bndr2 t2)
       =  go env (binderType bndr1) (binderType bndr2)
-      && let env'
-               | Just tv1 <- binderVar_maybe bndr1
-               , Just tv2 <- binderVar_maybe bndr2
-               = rnBndr2 env tv1 tv2
-
-               | otherwise
-               = env
+      && let env' = rnBinderVar2 env (binderPayload bndr1) (binderPayload bndr2)
          in go env' t1 t2
-      && binderVisibility bndr1 == binderVisibility bndr2
-      && isNamedBinder bndr1    == isNamedBinder bndr2
-
+      && compatibleBinder bndr1 bndr2
     go env (AppTy s1 t1)       (AppTy s2 t2)     = go env s1 s2 && go env t1 t2
     go env (TyConApp tc1 ts1) (TyConApp tc2 ts2) = (tc1 == tc2) && gos env ts1 ts2
     go env (CastTy ty1 co1)    (CastTy ty2 co2)  = go env ty1 ty2 && go_co env co1 co2
@@ -1240,8 +1243,8 @@ pickyEqType ty1 ty2
     go_co env (Refl r1 ty1)    (Refl r2 ty2)    = r1 == r2 && go env ty1 ty2
     go_co env (TyConAppCo r1 tc1 args1) (TyConAppCo r2 tc2 args2) = (r1 == r2) && (tc1 == tc2) && go_args env args1 args2
     go_co env (AppCo co1 arg1) (AppCo co2 arg2) = go_co env co1 co2 && go_arg env arg1 arg2
-    go_co env (ForAllCo cobndr1 co1) (ForAllCo cobndr2 co2)
-      = cobndr1 `eqCoBndrSort` cobndr2 &&
+    go_co env (PiCo cobndr1 co1) (PiCo cobndr2 co2)
+      = go_cobndr env cobndr1 cobndr2 &&
         go_co (rnBndrs2 env (coBndrVars cobndr1) (coBndrVars cobndr2)) co1 co2
     go_co env (CoVarCo cv1)    (CoVarCo cv2)    = rnOccL env cv1 == rnOccR env cv2
     go_co env (AxiomInstCo ax1 ind1 args1) (AxiomInstCo ax2 ind2 args2)
@@ -1272,6 +1275,26 @@ pickyEqType ty1 ty2
     go_args _   []             []              = True
     go_args env (a1:args1)     (a2:args2)      = go_arg env a1 a2 && go_args env args1 args2
     go_args _   _              _               = False
+
+    go_cobndr env (TyHomo tv1)               (TyHomo tv2)
+      = compatibleBinder tv1 tv2 && go env (binderType tv1) (binderType tv2)
+    go_cobndr env (TyHetero co1 pbndr1 _) (TyHetero co2 pbndr2 _)
+      = let Pair tvl1 tvr1 = binderPayload pbndr1
+            Pair tvl2 tvr2 = binderPayload pbndr2
+        in
+        compatibleBinder pbndr1 pbndr2 &&
+        go_co env co1 co2 && go env (binderVarType tvl1) (binderVarType tvl2)
+                          && go env (binderVarType tvr1) (binderVarType tvr2)
+    go_cobndr env (CoHomo cv1)               (CoHomo cv2)
+      = go env (binderType cv1) (binderType cv2)
+    go_cobndr env (CoHetero co1 pbndr1)   (CoHetero co2 pbndr2)
+      = let Pair cvl1 cvr1 = binderPayload pbndr1
+            Pair cvl2 cvr2 = binderPAyload pbndr2
+        in
+        go_co env co1 co2 && go env (binderVarType cvl1) (binderVarType cvl2)
+                          && go env (binderVarType cvr1) (binderVarType cvr2)
+    go_cobndr _ _ _ = False
+    
 \end{code}
 
 Note [Occurs check expansion]
@@ -1358,24 +1381,27 @@ occurCheckExpand dflags tv ty
     fast_check (LitTy {})          = True
     fast_check (TyVarTy tv')       = tv /= tv'
     fast_check (TyConApp _ tys)    = all fast_check tys
-    fast_check (ForAllTy (Anon a) r) = fast_check a && fast_check r
+    fast_check (PiTy b r)
+      | not (isDependentBinder b)  = fast_check (binderType b) && fast_check r
+      | otherwise                  = impredicative
+                                   && fast_check (binderType b)
+                                   && (binder_matches || fast_check r)
+      where binder_matches
+              | Just tv' <- binderVar_maybe b = tv' == tv
+              | otherwise                     = False
     fast_check (AppTy fun arg)     = fast_check fun && fast_check arg
-    fast_check (ForAllTy (Named tv' _) ty)
-                                   = impredicative
-                                   && fast_check (tyVarKind tv')
-                                   && (tv == tv' || fast_check ty)
     fast_check (CastTy ty co)      = fast_check ty && fast_check_co co
     fast_check (CoercionTy co)     = fast_check_co co
 
     fast_check_co (Refl _ ty)            = fast_check ty
     fast_check_co (TyConAppCo _ _ args)  = all fast_check_co_arg args
     fast_check_co (AppCo co arg)         = fast_check_co co && fast_check_co_arg arg
-    fast_check_co (ForAllCo cobndr co)
-      | Just v <- getHomoVar_maybe cobndr
-      = impredicative && fast_check (varType v) && (tv == v || fast_check_co co)
-      | Just (h, v1, v2) <- splitHeteroCoBndr_maybe cobndr
-      = impredicative && fast_check_co h && fast_check (varType v1)
-                      && fast_check (varType v2) && (tv == v1 || tv == v2 || fast_check_co co)
+    fast_check_co (PiCo cobndr co)
+      | Just v <- getHomoBinder_maybe cobndr
+      = impredicative && fast_check (binderType v) && (tv `isBoundBy` v || fast_check_co co)
+      | Just (h, bv1, bv2) <- splitHeteroCoBndr_maybe cobndr
+      = impredicative && fast_check_co h && fast_check (binderVarType v1)
+                      && fast_check (binderVarType v2) && (tv `isBoundByBV` v1 || tv `isBoundByBV` v2 || fast_check_co co)
       | otherwise
       = pprPanic "fast_check_co" (ppr cobndr)
     fast_check_co (CoVarCo _)            = True
@@ -1397,101 +1423,117 @@ occurCheckExpand dflags tv ty
     fast_check_co_arg (TyCoArg co)         = fast_check_co co
     fast_check_co_arg (CoCoArg _ co1 co2)  = fast_check_co co1 && fast_check_co co2
 
-    go t@(TyVarTy tv') | tv == tv' = OC_Occurs
-                       | otherwise = return t
-    go ty@(LitTy {}) = return ty
-    go (AppTy ty1 ty2) = do { ty1' <- go ty1
-                            ; ty2' <- go ty2
-                            ; return (mkAppTy ty1' ty2') }
-    go (ForAllTy (Anon ty1) ty2)
-                       = do { ty1' <- go ty1
-                            ; ty2' <- go ty2
+      -- Invariant: the env *does not map* tv, the tyvar of interest
+    go env (TyVarTy tv') | tv == tv' = OC_Occurs
+                         | otherwise = return (substTyVar env tv')
+    go _   ty@(LitTy {}) = return ty
+    go env (AppTy ty1 ty2) = do { ty1' <- go env ty1
+                                ; ty2' <- go env ty2
+                                ; return (mkAppTy ty1' ty2') }
+    go env (PiTy bndr1 ty2)
+      | not (isDependentBinder bndr1)
+                       = do { ty1' <- go env (binderType bndr1)
+                            ; ty2' <- go env ty2 
                             ; return (mkFunTy ty1' ty2') }
-    go ty@(ForAllTy (Named tv' vis) body_ty)
-       | not impredicative                = OC_Forall
-       | not (fast_check (tyVarKind tv')) = OC_Occurs
-           -- Can't expand away the kinds unless we create
-           -- fresh variables which we don't want to do at this point.
-           -- In principle fast_check might fail because of a for-all
-           -- but we don't yet have poly-kinded tyvars so I'm not
-           -- going to worry about that now
-       | tv == tv' = return ty
-       | otherwise = do { body' <- go body_ty
-                        ; return (ForAllTy (Named tv' vis) body') }
+      | not impredicative = OC_Forall
+      | otherwise
+      = do { let bndr_ty = binderType bndr1
+           ; bndr_ty' <- occurCheckExpand dflags tv (substTy env bndr_ty)
+           ; let bndr1' = setBinderType bndr1 bndr_ty'
+                 env' | bndr_ty' `eqType` bndr_ty
+                      = env
+                      | otherwise
+                      = extendTCvSubstBinder env bndr1
+                          (mkOnlyTyVarTy $
+                           setTyVarKind (binderVar bndr1) bndr_ty')
+                          -- the binderVar will fail on anon. binders,
+                          -- but that's OK because extendTCvSubstBinder
+                          -- won't look in that case!
+
+           ; case binderVar_maybe bndr of
+             { Just tv' | tv' == tv -> -- the local tv' shadows tv
+                 in return $ PiTy bndr1' (substTy env' ty2)
+             ; _ -> -- no shadowing
+        do { 
+      | otherwise = do { ty2' <- go env' ty2
+                       ; return (PiTy bndr1' ty2') }
 
     -- For a type constructor application, first try expanding away the
     -- offending variable from the arguments.  If that doesn't work, next
     -- see if the type constructor is a type synonym, and if so, expand
     -- it and try again.
-    go ty@(TyConApp tc tys)
-      = case do { tys <- mapM go tys; return (mkTyConApp tc tys) } of
+    go env ty@(TyConApp tc tys)
+      = case do { tys <- mapM (go env) tys; return (mkTyConApp tc tys) } of
           OC_OK ty -> return ty  -- First try to eliminate the tyvar from the args
-          bad | Just ty' <- tcView ty -> go ty'
+          bad | Just ty' <- tcView ty -> go env ty'
               | otherwise             -> bad
                       -- Failing that, try to expand a synonym
 
-    go (CastTy ty co) =  do { ty' <- go ty
-                            ; co' <- go_co co
-                            ; return (mkCastTy ty' co') }
-    go (CoercionTy co) = do { co' <- go_co co
-                            ; return (mkCoercionTy co') }
+    go env (CastTy ty co) =  do { ty' <- go env ty
+                                ; co' <- go_co env co
+                                ; return (mkCastTy ty' co') }
+    go env (CoercionTy co) = do { co' <- go_co env co
+                                ; return (mkCoercionTy co') }
 
-    go_co (Refl r ty)               = do { ty' <- go ty
+    go_co env (Refl r ty)           = do { ty' <- go env ty
                                          ; return (mkReflCo r ty') }
       -- Note: Coercions do not contain type synonyms
-    go_co (TyConAppCo r tc args)    = do { args' <- mapM go_arg args
+    go_co env (TyConAppCo r tc args)= do { args' <- mapM (go_arg env) args
                                          ; return (mkTyConAppCo r tc args') }
-    go_co (AppCo co arg)            = do { co' <- go_co co
-                                         ; arg' <- go_arg arg
+    go_co env (AppCo co arg)        = do { co' <- go_co env co
+                                         ; arg' <- go_arg env arg
                                          ; return (mkAppCo co' arg') }
-    go_co (ForAllCo cobndr co)
-      | not impredicative           = OC_Forall
+      -- TODO (RAE): This is broken. Either make like PiTy above (where
+      -- we recur properly into kinds) or expand all type synonyms in
+      -- PiCoBndr kinds upon creation
+    go_co env (PiCo cobndr co)
       | not (all fast_check (map varType (coBndrVars cobndr)))
                                     = OC_Occurs
-      | tv `elem` coBndrVars cobndr = return co
+      | tv `elem` coBndrVars cobndr = return (substCo env co)
       | otherwise = do { cobndr' <- case splitHeteroCoBndr_maybe cobndr of
-                                      Just (h, _, _) -> do { h' <- go_co h
+                                      Just (h, _, _) -> do { h' <- go_co env h
                                                       ; return (setCoBndrEta cobndr h') }
                                       _              -> return cobndr
-                       ; co' <- go_co co
-                       ; return (mkForAllCo cobndr' co') }
-    go_co co@(CoVarCo {})           = return co
-    go_co (AxiomInstCo ax ind args) = do { args' <- mapM go_arg args
+                       ; co' <- go_co env co
+                       ; return (mkPiCo cobndr' co') }
+    go_co env co@(CoVarCo {})       = return (substCo env co)
+    go_co env (AxiomInstCo ax ind args)
+                                    = do { args' <- mapM (go_arg env) args
                                          ; return (mkAxiomInstCo ax ind args') }
-    go_co (PhantomCo h ty1 ty2)     = do { h' <- go_co h
-                                         ; ty1' <- go ty1
-                                         ; ty2' <- go ty2
+    go_co env (PhantomCo h ty1 ty2) = do { h' <- go_co env h
+                                         ; ty1' <- go env ty1
+                                         ; ty2' <- go env ty2
                                          ; return (mkPhantomCo h' ty1' ty2') }
-    go_co (UnsafeCo r ty1 ty2)      = do { ty1' <- go ty1
-                                         ; ty2' <- go ty2
+    go_co env (UnsafeCo r ty1 ty2)  = do { ty1' <- go env ty1
+                                         ; ty2' <- go env ty2
                                          ; return (mkUnsafeCo r ty1' ty2') }
-    go_co (SymCo co)                = do { co' <- go_co co
+    go_co env (SymCo co)            = do { co' <- go_co env co
                                          ; return (mkSymCo co') }
-    go_co (TransCo co1 co2)         = do { co1' <- go_co co1
-                                         ; co2' <- go_co co2
+    go_co env (TransCo co1 co2)     = do { co1' <- go_co env co1
+                                         ; co2' <- go_co env co2
                                          ; return (mkTransCo co1' co2') }
-    go_co (NthCo n co)              = do { co' <- go_co co
+    go_co env (NthCo n co)          = do { co' <- go_co env co
                                          ; return (mkNthCo n co') }
-    go_co (LRCo lr co)              = do { co' <- go_co co
+    go_co env (LRCo lr co)          = do { co' <- go_co env co
                                          ; return (mkLRCo lr co') }
-    go_co (InstCo co arg)           = do { co' <- go_co co
-                                         ; arg' <- go_arg arg
+    go_co env (InstCo co arg)       = do { co' <- go_co env co
+                                         ; arg' <- go_arg env arg
                                          ; return (mkInstCo co' arg') }
-    go_co (CoherenceCo co1 co2)     = do { co1' <- go_co co1
-                                         ; co2' <- go_co co2
+    go_co env (CoherenceCo co1 co2) = do { co1' <- go_co env co1
+                                         ; co2' <- go_co env co2
                                          ; return (mkCoherenceCo co1' co2') }
-    go_co (KindCo co)               = do { co' <- go_co co
+    go_co env (KindCo co)           = do { co' <- go_co env co
                                          ; return (mkKindCo co') }
-    go_co (SubCo co)                = do { co' <- go_co co
+    go_co env (SubCo co)            = do { co' <- go_co env co
                                          ; return (mkSubCo co') }
-    go_co (AxiomRuleCo ax ts cs)    = do { ts' <- mapM go ts
-                                         ; cs' <- mapM go_co cs
+    go_co env (AxiomRuleCo ax ts cs)= do { ts' <- mapM (go env) ts
+                                         ; cs' <- mapM (go_co env) cs
                                          ; return (AxiomRuleCo ax ts' cs') }
 
-    go_arg (TyCoArg co)             = do { co' <- go_co co
+    go_arg env (TyCoArg co)         = do { co' <- go_co env co
                                          ; return (TyCoArg co') }
-    go_arg (CoCoArg r co1 co2)      = do { co1' <- go_co co1
-                                         ; co2' <- go_co co2
+    go_arg env (CoCoArg r co1 co2)  = do { co1' <- go_co env co1
+                                         ; co2' <- go_co env co2
                                          ; return (CoCoArg r co1' co2') }
 \end{code}
 
@@ -1573,16 +1615,18 @@ any foralls.  E.g.
 \begin{code}
 isSigmaTy :: Type -> Bool
 isSigmaTy ty | Just ty' <- tcView ty = isSigmaTy ty'
-isSigmaTy (ForAllTy (Named {}) _) = True
-isSigmaTy (ForAllTy (Anon a) _)   = isPredTy a
-isSigmaTy _                       = False
+isSigmaTy (PiTy bndr _) = isDependentBinder bndr || isPredTy (binderType bndr)
+isSigmaTy _             = False
 
 isOverloadedTy :: Type -> Bool
 -- Yes for a type of a function that might require evidence-passing
 -- Used only by bindLocalMethods
 isOverloadedTy ty | Just ty' <- tcView ty = isOverloadedTy ty'
-isOverloadedTy (ForAllTy (Named {}) ty) = isOverloadedTy ty
-isOverloadedTy (ForAllTy (Anon a) _)    = isPredTy a
+-- TODO (RAE): This might be subtler. See commented-out original below.
+isOverloadedTy (PiTy bndr ty) = isPredTy (binderType bndr)
+                             || (isDependentBinder binder && isOverloadedTy ty)
+-- isOverloadedTy (ForAllTy (Named {}) ty) = isOverloadedTy ty
+-- isOverloadedTy (ForAllTy (Anon a) _)    = isPredTy a
 isOverloadedTy _                        = False
 \end{code}
 
@@ -1652,9 +1696,11 @@ orphNamesOfType (TyVarTy _)          = emptyNameSet
 orphNamesOfType (LitTy {})           = emptyNameSet
 orphNamesOfType (TyConApp tycon tys) = orphNamesOfTyCon tycon
                                        `unionNameSets` orphNamesOfTypes tys
-orphNamesOfType (ForAllTy bndr res)  = orphNamesOfTyCon funTyCon   -- NB!  See Trac #8535
-                                       `unionNameSets` orphNamesOfType (binderType bndr)
-                                       `unionNameSets` orphNamesOfType res
+orphNamesOfType (PiTy bndr res)
+  = (if isDependentBinder bndr then emptyNameSet else orphNamesOfTyCon funTyCon)
+      -- NB!  See Trac #8535
+    `unionNameSets` orphNamesOfType (binderType bndr)
+    `unionNameSets` orphNamesOfType res
 orphNamesOfType (AppTy fun arg)      = orphNamesOfType fun `unionNameSets` orphNamesOfType arg
 orphNamesOfType (CastTy ty co)       = orphNamesOfType ty `unionNameSets` orphNamesOfCo co
 orphNamesOfType (CoercionTy co)      = orphNamesOfCo co
@@ -1680,7 +1726,7 @@ orphNamesOfCo :: Coercion -> NameSet
 orphNamesOfCo (Refl _ ty)           = orphNamesOfType ty
 orphNamesOfCo (TyConAppCo _ tc cos) = unitNameSet (getName tc) `unionNameSets` orphNamesOfCoArgs cos
 orphNamesOfCo (AppCo co1 co2)       = orphNamesOfCo co1 `unionNameSets` orphNamesOfCoArg co2
-orphNamesOfCo (ForAllCo cobndr co)
+orphNamesOfCo (PiCo cobndr co)
   | Just (h, _, _) <- splitHeteroCoBndr_maybe cobndr
   = orphNamesOfCo h `unionNameSets` orphNamesOfCo co
   | otherwise

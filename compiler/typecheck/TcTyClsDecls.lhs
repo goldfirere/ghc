@@ -57,7 +57,6 @@ import Name
 import NameSet
 import NameEnv
 import Outputable
-import UniqSupply
 import Maybes
 import Unify
 import Util
@@ -1295,75 +1294,8 @@ rejigConRes us tmpl_tvs res_tmpl dc_tvs (ResTyGADT res_ty)
 
                 -- /Lazily/ figure out the univ_tvs etc
                 -- Each univ_tv is either a dc_tv or a tmpl_tv
-    
-    (univ_tvs, raw_eq_cvs, kind_subst)
-      = initUs_ us $
-        choose [] [] empty_subst empty_subst empty_lc tmpl_tvs
-    in_scope = mkInScopeSet (mkVarSet tmpl_tvs `unionVarSet` mkVarSet dc_tvs)
-    empty_subst = mkEmptyTCvSubst in_scope
-    empty_lc    = emptyLiftingContext in_scope
-                                          
-    choose :: [TyVar]           -- accumulator of univ tvs, reversed
-           -> [CoVar]           -- accumulator of GADT equality covars, reversed
-           -> TCvSubst          -- template substutition
-                                -- Note [Substitution in template variables kinds]
-           -> TCvSubst          -- res. substitution
-           -> LiftingContext    -- mapping from un-substed kinds to coercions
-                                -- Note [Substitution in template variables kinds]
-                                -- TODO (RAE): Rewrite Note.
-           -> [TyVar]           -- template tvs (the univ tvs passed in)
-           -> UniqSM ( [TyVar]  -- the univ_tvs
-                     , [CoVar]  -- the covars witnessing GADT equalities
-                     , TCvSubst )  -- a substitution to fix kinds in ex_tvs
-           
-    choose univs eqs _     r_sub _  []
-      = return (reverse univs, reverse eqs, r_sub)
-    choose univs eqs t_sub r_sub lc (t_tv:t_tvs)
-      | Just r_ty <- lookupVar subst t_tv
-      = case tcGetTyVar_maybe r_ty of
-          Just r_tv
-            |  not (r_tv `elem` univs)
-            -> -- simple variable substitution. we should continue to subst.
-               choose (r_tv':univs) eqs
-                      (extendTCvSubst t_sub t_tv r_ty')
-                      (extendTCvSubst r_sub r_tv (fix_kind r_ty'))
-                      lc t_tvs
-            where
-              -- See Note [Substitution in template variables kinds]
-              r_tv' = setTyVarKind r_tv (substTy t_sub (tyVarKind t_tv))
-              r_ty' = mkOnlyTyVarTy r_tv'
-              fix_kind ty = mkCastTy ty $
-                            liftCoSubst Representational lc (typeKind ty)
-
-               -- not a simple substitution. make an equality predicate
-               -- and extend the lifting context
-               -- See Note [Substitution in template variables kinds]
-                            -- TODO (RAE): Update note!
-          _ -> do { cv <- fresh_co_var (mkOnlyTyVarTy t_tv') casted_r_ty
-                  ; let lc1  = extendLiftingContextIS lc  cv
-                        lc2  = extendLiftingContext   lc1 t_tv' (mkCoVarCo cv)
-                        t_sub' = extendTCvInScope t_sub cv
-                        r_sub' = extendTCvInScope r_sub cv
-                  ; choose (t_tv':univs) (cv:eqs)
-                           (extendTCvSubst t_sub' t_tv (mkOnlyTyVarTy t_tv'))
-                           r_sub' lc2 t_tvs }
-            where t_tv' = updateTyVarKind (substTy t_sub) t_tv
-                  casted_r_ty = mkCastTy r_ty $
-                                mkSymCo $
-                                liftCoSubst Representational lc (tyVarKind t_tv')
-
-      | otherwise
-      = pprPanic "rejigConRes" (ppr res_ty)
-
-      -- creates a fresh gadt covar, with a Nominal role
-    fresh_co_var :: Type -> Type -> UniqSM CoVar
-    fresh_co_var t1 t2
-      = do { u <- getUniqueM
-           ; let name = mkSystemVarName u (fsLit "gadt")
-           ; return $ mkCoVar name (mkCoercionType Nominal t1 t2) }
-
+    (univ_tvs, raw_eq_cvs, kind_subst) = mkGADTVars tmpl_tvs dc_tvs subst
     raw_ex_tvs = dc_tvs `minusList` univ_tvs
-      -- See Note [Substitution in template variables kinds]
     (_, substed_ex_tvs) = mapAccumL substTyVarBndr kind_subst raw_ex_tvs
 
     sorted_tcvs = varSetElemsWellScoped $ mkVarSet (substed_ex_tvs ++ raw_eq_cvs)
@@ -1392,51 +1324,6 @@ rejigConRes us tmpl_tvs res_tmpl dc_tvs (ResTyGADT res_ty)
 -}
 
 \end{code}
-
-Note [Substitution in template variables kinds]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-data G (a :: Maybe k) where
-  MkG :: G Nothing
-
-With explicit kind variables
-
-data G k (a :: Maybe k) where
-  MkG :: G k1 (Nothing k1)
-
-Note how k1 is distinct from k. So, when we match the template
-`G k a` against `G k1 (Nothing k1)`, we get a subst
-[ k |-> k1, a |-> Nothing k1 ]. Even though this subst has two
-mappings, we surely don't want to add (k, k1) to the list of
-GADT equalities -- that would be overly complex and would create
-more untouchable variables than we need. So, when figuring out
-which tyvars are GADT-like and which aren't (the fundamental
-job of `choose`), we want to treat `k` as *not* GADT-like.
-Instead, we wish to substitute in `a`'s kind, to get (a :: Maybe k1)
-instead of (a :: Maybe k). This is the reason for dealing
-with a substitution in here.
-
-However, we do not *always* want to substitute. Consider
-
-data H (a :: k) where
-  MkH :: H Int
-
-With explicit kind variables:
-
-data H k (a :: k) where
-  MkH :: H * Int
-
-Here, we have a kind-indexed GADT. The subst in question is
-[ k |-> *, a |-> Int ]. Now, we *don't* want to substitute in `a`'s
-kind, because that would give a constructor with the type
-
-MkH :: forall (k :: *) (a :: *). (k ~ *) -> (a ~ Int) -> H k a
-
-The problem here is that a's kind is wrong -- it needs to be k, not *!
-So, if the matching for a variable is anything but another bare variable,
-we drop the mapping from the substitution before proceeding. This
-was not an issue before kind-indexed GADTs because this case could
-never happen.
 
 %************************************************************************
 %*                                                                      *
@@ -1878,13 +1765,12 @@ checkValidRoles tc
       =  check_ty_roles env role    ty1
       >> check_ty_roles env Nominal ty2
 
-    check_ty_roles env role (ForAllTy (Anon ty1) ty2)
-      =  check_ty_roles env role ty1
-      >> check_ty_roles env role ty2
-
-      -- TODO (RAE): Is this right??
-    check_ty_roles env role (ForAllTy (Named tv _) ty)
-      = check_ty_roles (extendVarEnv env tv Nominal) role ty
+    check_ty_roles env role (PiTy bndr ty)
+      =  check_ty_roles env  role (binderType bndr)
+      >> check_ty_roles env' role ty
+      where
+        env' | Just tv <- binderVar_maybe bndr = extendVarEnv env tv Nominal
+             | otherwise                       = env
 
     check_ty_roles _   _    (LitTy {}) = return ()
 

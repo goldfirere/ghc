@@ -341,7 +341,7 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
 
        ; let op' = L loc (HsWrap (mkWpTyApps [getLevity "tcExpr ($)" res_ty, a_ty, res_ty]) (HsVar op_id))
        ; return $
-         OpApp (mkLHsWrapCo (mkTcFunCo Nominal co_a co_b) $
+         OpApp (mkLHsWrapCo (mkTcFunCo co_a co_b) $
                 mkLHsWrapCo co_arg1 arg1')
                op' fix
                (mkLHsWrapCo co_a arg2') }

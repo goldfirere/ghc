@@ -751,7 +751,7 @@ So we must be careful not to use "smart constructors" for types that
 look at the TyCon or Class involved.  
 
   * Hence the use of mkNakedXXX functions. These do *not* enforce 
-    the invariants (for example that we use (ForAllTy (Anon s) t) rather 
+    the invariants (for example that we use (PiTy (mkFunBinder s) t) rather 
     than (TyConApp (->) [s,t])).  
 
   * Ditto in zonkTcType (which may be applied more than once, eg to
@@ -798,10 +798,10 @@ zonkSigType ty
 
     go (LitTy n)         = return (LitTy n)
 
-    go (ForAllTy (Anon arg) res)
-                         = do arg' <- go arg
-                              res' <- go res
-                              return (mkFunTy arg' res')
+    go (PiTy bndr ty)
+                         = do { bndr' <- zonkTcBinder bndr
+                              ; ty' <- go ty
+                              ; return (mkPiTy bndr' ty') }
 
     go (AppTy fun arg)   = do fun' <- go fun
                               arg' <- go arg
@@ -814,11 +814,6 @@ zonkSigType ty
     go (TyVarTy tyvar) | isTcTyVar tyvar = zonkTcTyCoVar tyvar
 		       | otherwise	 = TyVarTy <$> updateTyVarKindM go tyvar
 		-- Ordinary (non Tc) tyvars occur inside quantified types
-
-    go (ForAllTy (Named tv vis) ty)
-                            = do { tv' <- zonkTcTyCoVarBndr tv
-                                 ; ty' <- go ty
-                                 ; return (mkNamedForAllTy tv' vis ty') }
 
     go (CastTy ty co) = do { ty' <- go ty
                            ; co' <- zonkCoToCo emptyZonkEnv co  -- TODO (RAE): This is wrong.
@@ -1164,10 +1159,10 @@ kcHsTyVarBndrs strat (HsQTvs { hsq_implicit = kv_ns, hsq_explicit = hs_tvs }) th
 
       -- there may be dependency between the explicit "ty" vars. So, we have
       -- to handle them one at a time. We also need to build up a full kind
-      -- here, because this is the place we know whether to use a FunTy or a
-      -- ForAllTy. We prefer using an anonymous binder over a trivial named
-      -- binder. If a user wants a trivial named one, use an explicit kind
-      -- signature.
+      -- here, because this is the place we know whether to use dependent or
+      -- non-dependent binders. We prefer using an non-dependent binder over a
+      -- trivial depdendent one. If a user wants a trivial dependent one, use
+      -- an explicit kind signature.
     bind_telescope :: [LHsTyVarBndr Name] -> TcM (Kind, r) -> TcM (Kind, VarSet, r)
     bind_telescope [] thing
       = do { (res_kind, stuff) <- thing

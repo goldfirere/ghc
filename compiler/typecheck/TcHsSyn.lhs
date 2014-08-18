@@ -292,6 +292,18 @@ zonkTyCoBndrX env tv
               return (extendTyZonkEnv1 env tv', tv')
          else let tv' = setVarType tv ki in
               return (extendIdZonkEnv1 env tv', tv') }
+
+-- | Zonk a binder's TcType into a Type, extending the env't.
+zonkBinderX :: ZonkEnv -> Binder -> TcM (ZonkEnv, Binder)
+zonkBinderX env bndr
+  = do { ty' <- zonkTcTypeToType env (binderType bndr)
+       ; return $ case binderVar_maybe bndr of
+            Just v -> let v' = setVarType v ty'
+                          bndr' = setBinderVar bndr v'
+                          env' | isTyVar v = extendTyZonkEnv1 env v'
+                               | otherwise = extendIdZonkEnv1 env v'
+                      in (env', bndr')
+            Nothing -> (env, setBinderType bndr ty') }
 \end{code}
 
 
@@ -1387,23 +1399,18 @@ zonkTcTypeToType env ty
                 -- Establish Type invariants
                 -- See Note [Zonking inside the knot] in TcHsType
 
-    go (LitTy n)         = return (LitTy n)
+    go (LitTy n)       = return (LitTy n)
 
-    go (ForAllTy (Anon arg) res)
-                         = do arg' <- go arg
-                              res' <- go res
-                              return (mkFunTy arg' res')
-
-    go (AppTy fun arg)   = do fun' <- go fun
-                              arg' <- go arg
-                              return (mkAppTy fun' arg')
+    go (AppTy fun arg) = do fun' <- go fun
+                            arg' <- go arg
+                            return (mkAppTy fun' arg')
                 -- NB the mkAppTy; we might have instantiated a
                 -- type variable to a type constructor, so we need
                 -- to pull the TyConApp to the top.
 
-    go (CastTy ty co) = do ty' <- go ty
-                           co' <- zonkCoToCo env co
-                           return (mkCastTy ty' co')
+    go (CastTy ty co)  = do ty' <- go ty
+                            co' <- zonkCoToCo env co
+                            return (mkCastTy ty' co')
 
     go (CoercionTy co) = do co' <- zonkCoToCo env co
                             return (mkCoercionTy co')
@@ -1411,11 +1418,10 @@ zonkTcTypeToType env ty
         -- The two interesting cases!
     go (TyVarTy tv) = zonkTyVarOcc env tv
 
-    go (ForAllTy (Named tv vis) ty)
-                        = ASSERT( isImmutableTyVar tv )
-                          do { (env', tv') <- zonkTyCoBndrX env tv
-                             ; ty' <- zonkTcTypeToType env' ty
-                             ; return (mkNamedForAllTy tv' vis ty') }
+    go (PiTy bndr res) = do (env', bndr') <- zonkBinderX env bndr
+                            res' <- zonkTcTypeToType env' ty
+                            return $ mkPiTy bndr' res'
+
 
 zonkTcTypeToTypes :: ZonkEnv -> [TcType] -> TcM [Type]
 zonkTcTypeToTypes env tys = mapM (zonkTcTypeToType env) tys
@@ -1449,26 +1455,45 @@ zonkCoToCo env co
 
     -- The two interesting cases!
     go (CoVarCo cv)              = return (mkCoVarCo $ zonkIdOcc env cv)
-    go (ForAllCo cobndr co)
-      | Just v <- getHomoVar_maybe cobndr
-      = do { (env', v') <- zonkTyCoBndrX env v
+    go (PiCo cobndr co)
+      | Just v <- getHomoBinder_maybe cobndr
+      = do { (env', v') <- zonkBinderX env v
            ; co' <- zonkCoToCo env' co
-           ; return (mkForAllCo (mkHomoCoBndr v') co') }
+           ; return (mkPiCo (mkHomoCoBndr v') co') }
       
-      | TyHetero h tv1 tv2 cv <- cobndr
+      | TyHetero h pbndr m_cv <- cobndr
       = do { h' <- go h
-           ; (env', [tv1', tv2', cv']) <- zonkTyCoBndrsX env [tv1, tv2, cv]
-           ; co' <- zonkCoToCo env' co
-           ; return (mkForAllCo (mkTyHeteroCoBndr h' tv1' tv2' cv') co') }
+           ; (env1, pbndr') <- zonk_pbndr env  pbndr
+           ; (env2, m_cv')  <- zonk_maybe env1 m_cv
+           ; co' <- zonkCoToCo env2 co
+           ; return (mkPiCo (mkTyHeteroCoBndr h' pbndr' m_cv') co') }
 
-      | CoHetero h cv1 cv2 <- cobndr
+      | CoHetero h pbndr <- cobndr
       = do { h' <- go h
-           ; (env', [cv1', cv2']) <- zonkTyCoBndrsX env [cv1, cv2]
+           ; (env', pbndr') <- zonk_pbndr env pbndr
            ; co' <- zonkCoToCo env' co
-           ; return (mkForAllCo (mkCoHeteroCoBndr h' cv1' cv2') co') }
+           ; return (mkPiCo (mkCoHeteroCoBndr h' pbndr') co') }
 
       | otherwise
       = pprPanic "zonkCoToCo" (ppr cobndr)
+
+      where
+        zonk_pbndr e pbndr
+          = let Pair bv1 bv2 = binderPayload bndr in
+            do { (e1, bv1') <- zonk_bv e  bv1
+               ; (e2, bv2') <- zonk_bv e1 bv2
+               ; return (e2, setBinderPayload pbndr (Pair bv1' bv2')) }
+
+        zonk_bv e bv
+          = case getBinderVar_maybe bv of
+              Just v  -> do { (e', v') <- zonkTyCoBndrX e v
+                            ; return (e', mkBinderVar v') }
+              Nothing -> do { ty' <- zonkTcTypeToType e (binderVarType bv)
+                            ; return (e, mkAnonBinderVar ty') }
+
+        zonk_maybe e (Just v) = do { (e', v') <- zonkTyCoBndrX e v
+                                   ; return (e', Just v') }
+        zonk_maybe e Nothing  = return (e, Nothing)
 
 zonkCoArgToCoArg :: ZonkEnv -> CoercionArg -> TcM CoercionArg
 zonkCoArgToCoArg env (TyCoArg co)        = TyCoArg <$> zonkCoToCo env co

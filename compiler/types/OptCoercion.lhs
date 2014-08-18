@@ -152,12 +152,9 @@ optType subst = go
     go (AppTy fun arg)      = mkAppTy (go fun) $! (go arg)
     go (TyConApp tc tys)    = let args = map go tys
                               in  args `seqList` TyConApp tc args
-    go (ForAllTy (Anon arg) res)
-                            = (mkFunTy $! (go arg)) $! (go res)
-    go (ForAllTy (Named tv vis) ty)
-                            = case optTyVarBndr subst tv of
-                              (subst', tv') ->
-                                mkNamedForAllTy tv' vis $! (optType subst' ty)
+    go (PiTy bndr ty)       = case optBinder subst bndr of
+                              (subst', bndr') ->
+                                mkPiTy bndr' $! (optType subst' ty)
     go (LitTy n)            = LitTy $! n
     go (CastTy ty co)       = (CastTy $! (go ty)) $! (optCoercion subst co)
     go (CoercionTy co)      = CoercionTy $! (optCoercion subst co)
@@ -288,10 +285,10 @@ opt_co4 env sym rep r g@(TyConAppCo _r tc cos)
 opt_co4 env sym rep r (AppCo co1 co2) = mkAppCo (opt_co4_wrap env sym rep r co1)
                                                 (opt_co_arg4 env sym False Nominal co2)
 
--- See Note [Sym and ForAllCo] in TyCoRep
-opt_co4 env sym rep r (ForAllCo cobndr co)
-  = case optForAllCoBndr env sym cobndr of
-      (env', cobndr') -> mkForAllCo cobndr' (opt_co4_wrap env' sym rep r co)
+-- See Note [Sym and PiCo] in TyCoRep
+opt_co4 env sym rep r (PiCo cobndr co)
+  = case optPiCoBndr env sym cobndr of
+      (env', cobndr') -> mkPiCo cobndr' (opt_co4_wrap env' sym rep r co)
      -- Use the "mk" functions to check for nested Refls
 
 opt_co4 env sym rep r (CoVarCo cv)
@@ -370,18 +367,18 @@ opt_co4 env sym rep r g@(LRCo lr co)
 opt_co4 env sym rep r (InstCo co1 arg)
     -- forall over type...
   | TyCoArg co2 <- arg'
-  , Just (tv1, tv2, cv, co_body) <- splitForAllCo_Ty_maybe co1
+  , Just (tv1, tv2, m_cv, co_body) <- splitPiCo_Ty_maybe co1
   , Pair ty1 ty2 <- coercionKind co2
-  = opt_co4_wrap (extendTCvSubstList env 
-              [tv1, tv2, cv]
-              [ty1, ty2, mkCoercionTy co2])
+  = let env1 = extendTCvSubstBinders env  [tv1, tv2] [ty1, ty2]
+        env2 = extendTCvSubstMaybe   env1 m_cv (mkCoercionTy co2)
               -- See Note [Sym and InstCo]
-            sym rep r co_body
+    in
+    opt_co4_warp evn2 sym rep r co_body
 
     -- forall over coercion...
   | CoCoArg _ co2 co3 <- arg'
-  , Just (cv1, cv2, co_body) <- splitForAllCo_Co_maybe co1
-  = opt_co4_wrap (extendTCvSubstList env [cv1, cv2] (map mkCoercionTy [co2, co3]))
+  , Just (cv1, cv2, co_body) <- splitPiCo_Co_maybe co1
+  = opt_co4_wrap (extendTCvSubstBinders env [cv1, cv2] (map mkCoercionTy [co2, co3]))
             sym rep r co_body
 
     -- See if it is a forall after optimization
@@ -389,17 +386,17 @@ opt_co4 env sym rep r (InstCo co1 arg)
   
     -- forall over type...
   | TyCoArg co2' <- arg'
-  , Just (tv1', tv2', cv', co'_body) <- splitForAllCo_Ty_maybe co1'
+  , Just (tv1', tv2', m_cv', co'_body) <- splitPiCo_Ty_maybe co1'
   , Pair ty1' ty2' <- coercionKind co2'
-  = opt_co4_wrap (extendTCvSubstList (zapTCvSubst env)
-                               [tv1', tv2', cv']
-                               [ty1', ty2', mkCoercionTy co2'])
-            False False r' co'_body
+  = let env1 = extendTCvSubstBinders (zapTCvSubst env) [tv1', tv2'] [ty1', ty2']
+        env2 = extendTCvSubstMaybe   env1              m_cv' (mkCoercionTy co2')
+    in
+    opt_co4_wrap env2 False False r' co'_body
 
  -- forall over coercion...
   | CoCoArg _ co2' co3' <- arg'
-  , Just (cv1', cv2', co'_body) <- splitForAllCo_Co_maybe co1'
-  = opt_co4_wrap (extendTCvSubstList (zapTCvSubst env)
+  , Just (cv1', cv2', co'_body) <- splitPiCo_Co_maybe co1'
+  = opt_co4_wrap (extendTCvSubstBinders (zapTCvSubst env)
                                 [cv1', cv2']
                                 [CoercionTy co2', CoercionTy co3'])
            False False r' co'_body 
@@ -514,28 +511,33 @@ opt_unsafe env role oty1 oty2
        -- role' is to comform to mkAppCo's precondition
     mkAppCo (opt_unsafe env role l1 l2) (opt_unsafe_arg env role' r1 r2)
 
-  | Just (bndr1, ty1) <- splitForAllTy_maybe oty1
-  , Just tv1          <- binderVar_maybe bndr1
-  , Just (bndr2, ty2) <- splitForAllTy_maybe oty2
-  , Just tv2          <- binderVar_maybe bndr2
-  , isTyVar tv1 == isTyVar tv2   -- rule out weird UnsafeCo
-  , let k1 = tyVarKind tv1
-        k2 = tyVarKind tv2
+  | Just (bndr1, ty1) <- splitPiTy_maybe oty1
+  , Just (bndr2, ty2) <- splitPiTy_maybe oty2
+  , let k1 = binderType bndr1
+        k2 = binderType bndr2
+        bndr1_is_coercion = isCoercionType k1
+  , bndr1_is_coercion == isCoercionType k2   -- rule out weird UnsafeCo
   = if k1 `eqType` k2
-    then case substTyCoVarBndr2 env tv1 tv2 of { (env1, env2, tv') ->
+    then case substBinder2 env bndr1 bndr2 of { (env1, env2, bndr') ->
          let ty1' = optType env1 ty1
              ty2' = optType env2 ty2 in
-         mkForAllCo (mkHomoCoBndr tv')
-                    (opt_unsafe (zapTCvSubstEnv2 env1 env2) role ty1' ty2') }
+         mkPiCo (mkHomoCoBndr bdnr')
+                (opt_unsafe (zapTCvSubstEnv2 env1 env2) role ty1' ty2') }
     else let eta = opt_unsafe env role k1 k2
+             pbndr = mkPairBinder bndr1 bndr2
              cobndr
-               | isTyVar tv1 = let c = mkFreshCoVar (getTCvInScope env)
-                                                    (mkOnlyTyVarTy tv1)
-                                                    (mkOnlyTyVarTy tv2) in
-                               mkTyHeteroCoBndr eta tv1 tv2 c
-               | otherwise   = mkCoHeteroCoBndr eta tv1 tv2
+               | bndr1_is_coercion = mkCoHeteroCoBndr eta pbndr
+               | otherwise
+               = let m_c = case ( binderVar_maybe bndr1
+                                , binderVar_maybe bndr2 ) of
+                       (Just tv1, Just tv2 ) ->
+                         Just $ mkFreshCoVar (getTCvInScope env)
+                                             (mkOnlyTyVarTy tv1)
+                                             (mkOnlyTyVarTy tv2)
+                       _ -> Nothing
+                 in mkTyHeteroCoBndr eta pbndr m_c
          in
-         mkForAllCo cobndr (opt_unsafe env role ty1 ty2)
+         mkPiCo cobndr (opt_unsafe env role ty1 ty2)
 
   | otherwise
   = mkUnsafeCo role oty1 oty2
@@ -573,9 +575,9 @@ opt_nth_co env sym rep r = go []
       = Just (Refl r1 (tyVarKind tv))
     push_nth n (TyConAppCo _ _ cos)
       = Just (stripTyCoArg $ cos `getNth` n)
-    push_nth 0 (ForAllCo cobndr co)
-      | Just v <- getHomoVar_maybe cobndr
-      = Just (Refl (coercionRole co) (varType v))
+    push_nth 0 (PiCo cobndr co)
+      | Just v <- getHomoBinder_maybe cobndr
+      = Just (Refl (coercionRole co) (binderType v))
       | Just (h, _, _) <- splitHeteroCoBndr_maybe cobndr
       = Just h
     push_nth _ _ = Nothing
@@ -727,12 +729,12 @@ opt_trans_rule is co1 co2@(AppCo co2a co2b)
 
 -- Push transitivity inside forall
 opt_trans_rule is co1 co2
-  | Just (cobndr1,r1) <- splitForAllCo_maybe co1
-  , Just (cobndr2,r2) <- etaForAllCo_maybe is co2
+  | Just (cobndr1,r1) <- splitPiCo_maybe co1
+  , Just (cobndr2,r2) <- etaPiCo_maybe is co2
   = push_trans cobndr1 r1 cobndr2 r2
 
-  | Just (cobndr2,r2) <- splitForAllCo_maybe co2
-  , Just (cobndr1,r1) <- etaForAllCo_maybe is co1
+  | Just (cobndr2,r2) <- splitPiCo_maybe co2
+  , Just (cobndr1,r1) <- etaPiCo_maybe is co1
   = push_trans cobndr1 r1 cobndr2 r2
 
   where
@@ -746,85 +748,182 @@ opt_trans_rule is co1 co2
     | otherwise =
     case (cobndr1, cobndr2) of
       (TyHomo tv1, TyHomo tv2) -> -- their kinds must be equal
-        let subst = extendTCvSubst (mkEmptyTCvSubst is') tv2 (mkOnlyTyVarTy tv1)
+        let (subst, bndr) = mk_homo_subst is' tv1 tv2
+            r1'   = optCoercion subst r1
             r2'   = optCoercion subst r2
-            is'   = is `extendInScopeSet` tv1 in
+            is'   = is `extendInScopeSetMaybes` (map binderVar_maybe [tv1, tv2])
+        in
         fireTransRule "EtaAllTyHomoHomo" co1 co2 $
-        mkForAllCo_TyHomo tv1 (opt_trans is' r1 r2')
+        mkPiCo_TyHomo bndr (opt_trans is' r1' r2')
 
       -- See Note [Hetero case for opt_trans_rule]
       -- kinds of tvl2 and tvr1 must be equal
-      (TyHetero col tvl1 tvl2 cvl, TyHetero cor tvr1 tvr2 cvr) ->
-        let cv       = mkFreshCoVar is (mkOnlyTyVarTy tvl1) (mkOnlyTyVarTy tvr2)
-            new_tvl2 = mkCastTy (mkOnlyTyVarTy tvr2) (to_rep $ mkSymCo cor)
-            new_cvl  = mkCoherenceRightCo (mkCoVarCo cv) (mkSymCo cor)
-            new_tvr1 = mkCastTy (mkOnlyTyVarTy tvl1) (to_rep col)
-            new_cvr  = mkCoherenceLeftCo  (mkCoVarCo cv) (col)
+      (TyHetero col pbndrl m_cvl, TyHetero cor pbndrr m_cvr) ->
+        let Pair bvl1 bvl2 = binderPayload pbndrl
+            Pair bvr1 bvr2 = binderPayload pbndr2
+            m_cv = case (getBinderVar_maybe bvl1, getBinderVar_maybe bvr2) of
+              (Just tvl1, Just tvr2) ->
+                Just $ mkFreshCoVar is (mkOnlyTyVarTy tvl1) (mkOnlyTyVarTy tvr2)
+              _ -> Nothing
+              
+            lmap1    = maybe_subst (getBinderVar_maybe bvl2) $
+                       mkCastTy (mkOnlyTyVarTy tvr2) (to_rep $ mkSymCo cor)
+            lmap2    = maybe_subst m_cvl $
+                       mkCoercionTy $
+                       mkCoherenceRightCo (mkCoVarCo (fromJust m_cv))
+                                          (mkSymCo (to_rep cor))
+            rmap1    = maybe_subst (getBinderVar_maybe bvr1) $
+                       mkCastTy (mkOnlyTyVarTy tvl1) (to_rep col)
+            rmap2    = maybe_subst m_cvr $
+                       mkCoercionTy $
+                       mkCoherenceLeftCo (mkCoVarCo (fromJust m_cv))
+                                         (to_rep col)
             empty    = mkEmptyTCvSubst is'
-            subst_r1 = extendTCvSubstList empty [tvl2, cvl] [new_tvl2, mkCoercionTy new_cvl]
-            subst_r2 = extendTCvSubstList empty [tvr1, cvr] [new_tvr1, mkCoercionTy new_cvr]
+            subst_r1 = extendTCvSubstMaybes empty [lmap1, lmap2]
+            subst_r2 = extendTCvSubstMaybes empty [rmap1, rmap2]
             r1' = optCoercion subst_r1 r1
             r2' = optCoercion subst_r2 r2
-            is' = is `extendInScopeSetList` [tvl1, tvl2, cvl, tvr1, tvr2, cvr, cv] in
+
+            vars = m_cvl : m_cvr : m_cv :
+                   map getBinderVar_maybe [bvl1, bvl2, bvr1, bvr2] )
+            is' = is `extendInScopeSetMaybes` vars in
         fireTransRule "EtaAllTyHeteroHetero" co1 co2 $
-        mkForAllCo (mkTyHeteroCoBndr (opt_trans2 is col cor) tvl1 tvr2 cv)
-                   (opt_trans is' r1' r2')
+        mkPiCo (mkTyHeteroCoBndr (opt_trans2 is col cor)
+                                 (setBinderPayload pbndrl (Pair bvl1 bvr2))
+                                 m_cv)
+               (opt_trans is' r1' r2')
 
-      (TyHomo tvl, TyHetero _ tvr1 tvr2 cvr) ->
-        let subst = extendTCvSubst (mkEmptyTCvSubst is') tvl (mkOnlyTyVarTy tvr1)
+      (TyHomo tvl, TyHetero eta2 pbndr2 m_cvr2) ->
+        let Pair tvr1 tvr2 = binderPayload pbndr2
+            vars           = m_cvr2 : binderVar_maybe tvl :
+                               map getBinderVar_maybe [tvr1, tvr2])
+            is'            = is `extendInScopeSetMaybes` vars
+            empty_subst    = mkEmptyTCvSubst is'
+            (subst, cobndr)
+              = case (binderVar_maybe tvl, getBinderVar_maybe tvr1) of
+                  (Just vl, Just vr) ->
+                    ( extendTCvSubst empty_subst tvl (mkOnlyTyVarTy tvr1)
+                    , cobndr2 )
+                  (Just vl, Nothing) ->
+                    ( empty_subst
+                    , TyHetero eta2
+                               (setBinderPayload pbndr2
+                                (Pair (mkBinderVar vl) tvr2))
+                               Nothing )
+                  _ -> (empty_subst, cobndr2)
             r1'   = optCoercion subst r1
-            is'   = is `extendInScopeSetList` [tvr1, tvr2, cvr] in
+        in
         fireTransRule "EtaAllTyHomoHetero" co1 co2 $
-        mkForAllCo cobndr2 (opt_trans is' r1' r2)
+        mkPiCo cobndr (opt_trans is' r1' r2)
 
-      (TyHetero _ tvl1 tvl2 cvl, TyHomo tvr) ->
-        let subst = extendTCvSubst (mkEmptyTCvSubst is') tvr (mkOnlyTyVarTy tvl2)
+      (TyHetero eta1 pbndr m_cvl, TyHomo tvr) ->
+        let Pair tvl1 tvl2 = binderPayload pbndr
+            vars           = m_cvl : binderVar_maybe tvr :
+                               map getBinderVar_maybe [tvl1, tvl2])
+            is'            = is `extendInScopeSetMaybes` vars
+            empty_subst    = mkEmptyTCvSubst is'
+            
+            (subst, cobndr)
+              = case (getBinderVar_maybe tvl2, binderVar_maybe tvr) of
+                  (Just vl, Just vr) ->
+                    ( extendTCvSubst empty_subst vr (mkOnlyTyVarTy vl)
+                    , cobndr1 )
+                  (Nothing, Just vr) ->
+                    ( empty_subst
+                    , TyHetero eta1
+                               (setBinderPayload pbndr
+                                 (Pair tvl1 (mkBinderVar vr)))
+                               Nothing )
+                  _ -> (empty_subst, cobndr1)
             r2'   = optCoercion subst r2
-            is'   = is `extendInScopeSetList` [tvl1, tvl2, cvl] in
+        in
         fireTransRule "EtaAllTyHeteroHomo" co1 co2 $
-        mkForAllCo cobndr1 (opt_trans is' r1 r2')
+        mkPiCo cobndr (opt_trans is' r1 r2')
    
       (CoHomo cv1, CoHomo cv2) ->
-        let subst = extendTCvSubst (mkEmptyTCvSubst is') cv2 (mkTyCoVarTy cv1)
+        let (subst, bndr) = mk_homo_subst is' cv1 cv2
+            r1'   = optCoercion subst r1
             r2'   = optCoercion subst r2
-            is'   = is `extendInScopeSet` cv1 in
+            is'   = is `extendInScopeSetMaybes` (map binderVar_maybe [cv1, cv2]) in
          fireTransRule "EtaAllCoHomoHomo" co1 co2 $
-         mkForAllCo_CoHomo cv1 (opt_trans is' r1 r2')
+         mkPiCo_CoHomo bndr (opt_trans is' r1 r2')
 
-      (CoHetero col cvl1 cvl2, CoHetero cor cvr1 cvr2) ->
-        let new_cvl2 = (mkNthCo 2 cor) `mkTransCo`
+      (CoHetero col pbndrl, CoHetero cor pbndrr) ->
+        let Pair cvl1 cvl2 = binderPayload pbndr1
+            Pair cvr1 cvr2 = binderPayload pbndr2
+            lmap     = maybe_subst (getBinderVar_maybe cvl2) $
+                       mkCoercionTy $
+                       (mkNthCo 2 cor) `mkTransCo`
                        (mkCoVarCo cvr2) `mkTransCo`
                        (mkNthCo 3 $ mkSymCo cor)
-            new_cvr1 = (mkNthCo 2 (mkSymCo col)) `mkTransCo`
+            rmap     = maybe_subst (getBinderVar_maybe cvr1) $
+                       mkCoercionTy $
+                       (mkNthCo 2 (mkSymCo col)) `mkTransCo`
                        (mkCoVarCo cvl1) `mkTransCo`
                        (mkNthCo 3 col)
             empty    = mkEmptyTCvSubst is'
-            subst_r1 = extendTCvSubst empty cvl2 (mkCoercionTy new_cvl2)
-            subst_r2 = extendTCvSubst empty cvr1 (mkCoercionTy new_cvr1)
+            subst_r1 = extendTCvSubstMaybes empty [lmap]
+            subst_r2 = extendTCvSubstMaybes empty [rmap]
             r1'      = optCoercion subst_r1 r1
             r2'      = optCoercion subst_r2 r2
-            is'      = is `extendInScopeSetList` [cvl1, cvl2, cvr1, cvr2] in
+            vars     = map getBinderVar_maybe [cvl1, cvl2, cvr1, cvr2] 
+            is'      = is `extendInScopeSetMaybes` vars
+            pbndr'   = setBinderPayload pbndrl (Pair cvl1 cvr2)
+        in
         fireTransRule "EtaAllCoHeteroHetero" co1 co2 $
-        mkForAllCo (mkCoHeteroCoBndr (opt_trans2 is col cor) cvl1 cvr2)
-                   (opt_trans is' r1' r2')
+        mkPiCo (mkCoHeteroCoBndr (opt_trans2 is col cor) pbndr')
+               (opt_trans is' r1' r2')
 
-      (CoHomo cvl, CoHetero _ cvr1 cvr2) ->
-        let subst = extendTCvSubst (mkEmptyTCvSubst is') cvl (mkTyCoVarTy cvr1)
+      (CoHomo cvl, CoHetero h pbndrr) ->
+        let Pair cvr1 cvr2 = binderPayload pbndrr
+            empty = mkEmptyTCvSubst is'
+            (subst, pbndr') = case (binderVar_maybe cvl, getBinderVar_maybe cvr1) of
+              (Just vl, Just vr) -> ( extendTCvSubst empty vl (mkTyCoVarTy vr)
+                                    , pbndrr )
+              (Just vl, Nothing) -> ( empty
+                                    , setBinderPayload pbndrr (Pair (mkBinderVar vl) cvr2) )
+              _                  -> ( empty, pbndrr )
             r1'   = optCoercion subst r1
-            is'   = is `extendInScopeSetList` [cvr1, cvr2] in
+            vars  = binderVar_maybe cvl : map getBinderVar_maybe [cvr1, cvr2]
+            is'   = is `extendInScopeSetMaybes` vars
+        in
         fireTransRule "EtaAllCoHomoHetero" co1 co2 $
-        mkForAllCo cobndr2 (opt_trans is' r1' r2)
+        mkPiCo (CoHetero h pbndr') (opt_trans is' r1' r2)
 
-      (CoHetero _ cvl1 cvl2, CoHomo cvr) ->
-        let subst = extendTCvSubst (mkEmptyTCvSubst is') cvr (mkTyCoVarTy cvl2)
+      (CoHetero h pbndrl, CoHomo cvr) ->
+        let Pair cvl1 cvl2 = binderPayload pbndrl
+            empty = mkEmptyTCvSubst is'
+            (subst, pbndr') = case (getBinderVar_maybe cvl2, binderVar_maybe cvr) of
+              (Just vl, Just vr) -> ( extendTCvSubst empty vr (mkTyCoVarTy vl)
+                                    , pbndrl )
+              (Nothing, Just vr) -> ( empty
+                                    , setBinderPayload pbndrl (Pair cvl1 (mkBinderVar vr)) )
+              _                  -> ( empty, pbndrl )
             r2'   = optCoercion subst r2
-            is'   = is `extendInScopeSetList` [cvl1, cvl2] in
+            vars  = binderVar_maybe cvr : map getBinderVar_maybe [cvl1, cvl2]
+            is'   = is `extendInScopeSetMaybes` vars in
         fireTransRule "EtaAllCoHeteroHomo" co1 co2 $
-        mkForAllCo cobndr1 (opt_trans is' r1 r2')
+        mkPiCo (CoHetero h pbndr') (opt_trans is' r1 r2')
 
       _ -> Nothing
-    where role   = coercionRole r1  -- must be the same as r2
-          to_rep = downgradeRole Representational role
+    where
+      role   = coercionRole r1  -- must be the same as r2
+      to_rep = downgradeRole Representational role
+
+      mk_homo_subst in_scope bndr1 bndr2
+        = let empty_subst = mkEmptyTCvSubst in_scope in
+          case (binderVar_maybe bndr1, binderVar_maybe bndr2) of
+            (Just v1, Just v2) ->
+                (extendTCvSubst empty_subst v2 (mkTyCoVarTy v1), bndr1)
+            (Nothing, Just _)  -> (empty_subst, bndr2)
+            (Just _, Nothing)  -> (empty_subst, bndr1)
+            (Nothing, Nothing) -> (empty_subst, bndr1) -- arbitrary choice;
+                                                       -- bndr1 == bndr2
+
+      maybe_subst :: Maybe Var -> Type -> Maybe (Var, Type)
+      maybe_subst Nothing  _ = Nothing
+      maybe_subst (Just v) t = Just (v, t)
+
 
 -- Push transitivity inside axioms
 opt_trans_rule is co1 co2
@@ -1039,34 +1138,60 @@ compatible_co co1 co2
     Pair x2 _ = coercionKind co2
 
 -------------
-etaForAllCo_maybe :: InScopeSet -> Coercion -> Maybe (ForAllCoBndr, Coercion)
+etaPiCo_maybe :: InScopeSet -> Coercion -> Maybe (PiCoBndr, Coercion)
 -- Try to make the coercion be of form (forall tv. co)
-etaForAllCo_maybe is co
-  | Just (cobndr, r) <- splitForAllCo_maybe co
+etaPiCo_maybe is co
+  | Just (cobndr, r) <- splitPiCo_maybe co
   = Just (cobndr, r)
 
   | Pair ty1 ty2  <- coercionKind co
-  , Just (bndr1, _) <- splitForAllTy_maybe ty1
-  , Just (bndr2, _) <- splitForAllTy_maybe ty2
-  , Just tv1 <- binderVar_maybe bndr1
-  , Just tv2 <- binderVar_maybe bndr2
-  , isTyVar tv1 == isTyVar tv2 -- we want them to be the same sort
-  = if varType tv1 `eqType` varType tv2
+  , Just (bndr1, _) <- splitPiTy_maybe ty1
+  , Just (bndr2, _) <- splitPiTy_maybe ty2
+  , let k1 = binderType bndr1
+        k2 = binderType bndr2
+        bndr1_is_coercion = isCoercionType k1
+  , bndr1_is_coercion == isCoercionType k2 -- we want them to be the same sort
+  , compatibleBinder bndr1 bndr2
+  = if k1 `eqType` k2
 
     -- homogeneous:
-    then Just (mkHomoCoBndr tv1, mkInstCo co $ mkCoArgForVar tv1)
+    then -- we need a variable name, but bndr1 and bndr2 might potentially
+         -- both be anonymous!
+         let (var, _)  = mk_fresh_var is bndr1_is_coercion k1
+             bvar      = mkBinderVar var
+         in
+         Just ( mkHomoCoBndr (setBinderPayload bndr1 bvar)
+              , mkInstCo co $ mkCoArgForVar var )
 
     -- heterogeneous:
-    else if isTyVar tv1
-         then let covar = mkFreshCoVar is (mkOnlyTyVarTy tv1) (mkOnlyTyVarTy tv2)
+    else let (tv1, is1) = mk_fresh_var is  bndr1_is_coercion k1
+             (tv2, is2) = mk_fresh_var is1 bndr1_is_coercion k2
+             bv1 = mkBinderVar tv1
+             bv2 = mkBinderVar tv2
+             pbndr = setBinderPayload bndr1 (Pair bv1 bv2)
+         in
+         if bndr1_is_coercion
+         then Just ( mkCoHeteroCoBndr (mkNthCo 0 co) pbndr
+                   , mkInstCo co (CoCoArg Nominal (mkCoVarCo tv1)
+                                                  (mkCoVarCo tv2)) )
+         else let covar = mkFreshCoVar is2 (mkOnlyTyVarTy tv1)
+                                           (mkOnlyTyVarTy tv2)
               in
-              Just ( mkTyHeteroCoBndr (mkNthCo 0 co) tv1 tv2 covar
+              Just ( mkTyHeteroCoBndr (mkNthCo 0 co) pbndr (Just covar)
                    , mkInstCo co (TyCoArg (mkCoVarCo covar)))
-         else Just ( mkCoHeteroCoBndr (mkNthCo 0 co) tv1 tv2
-                   , mkInstCo co (CoCoArg Nominal (mkCoVarCo tv1) (mkCoVarCo tv2)))
 
   | otherwise
   = Nothing
+
+  where
+    mk_fresh_var in_scope is_coercion ki
+      = let (mk_uniq, mk_name, mk_var)
+              | is_coercion = (mkCoVarUnique, mkSystemVarName, mkCoVar)
+              | otherwise   = (mkAlphaTyVarUnique, mkSysTvName, mkTyVar)
+            uniq = mk_uniq 79  -- arbitrary number
+            name = mk_name uniq (fsLit "opt_eta")
+            var  = uniqAway in_scope $ mk_var name ki
+        in (var, in_scope `extendInScopeSet` var)
 
 etaAppCo_maybe :: Coercion -> Maybe (Coercion,CoercionArg)
 -- If possible, split a coercion
@@ -1141,10 +1266,10 @@ and these two imply
 optTyVarBndr :: TCvSubst -> TyVar -> (TCvSubst, TyVar)
 optTyVarBndr = substTyVarBndrCallback optType
 
-optForAllCoBndr :: TCvSubst -> Bool -> ForAllCoBndr -> (TCvSubst, ForAllCoBndr)
-optForAllCoBndr env sym
-  = substForAllCoBndrCallback sym optType
-                              (\sym' env' -> opt_co1 env' sym') env
+optPiCoBndr :: TCvSubst -> Bool -> PiCoBndr -> (TCvSubst, PiCoBndr)
+optPiCoBndr env sym
+  = substPiCoBndrCallback sym optType
+                          (\sym' env' -> opt_co1 env' sym') env
                               -- TODO (RAE): Could this be optimized?
 
 \end{code}
