@@ -337,6 +337,10 @@ deriving instance Typeable Ratio
 deriving instance Typeable (->)
 deriving instance Typeable IO
 
+deriving instance Typeable *
+-- TODO (RAE): fix: deriving instance Typeable #
+deriving instance Typeable Constraint
+
 deriving instance Typeable Array
 
 deriving instance Typeable ST
