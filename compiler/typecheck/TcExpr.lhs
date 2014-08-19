@@ -77,7 +77,9 @@ import qualified Data.Set as Set
 tcPolyExpr, tcPolyExprNC
          :: LHsExpr Name        -- Expression to type check
          -> TcSigmaType         -- Expected type (could be a polytype)
-         -> TcM (LHsExpr TcId)  -- Generalised expr with expected type
+         -> TcM (LHsExpr TcId, DependenceFlag)
+                                -- Generalised expr with expected type +
+                                -- whether this is available at compile time
 
 -- tcPolyExpr is a convenient place (frequent but not too frequent)
 -- place to add context information.
@@ -91,7 +93,7 @@ tcPolyExpr expr res_ty
 tcPolyExprNC expr res_ty
   = do { traceTc "tcPolyExprNC" (ppr res_ty)
        ; (gen_fn, expr') <- tcGen GenSigCtxt res_ty $ \ _ rho ->
-                            tcMonoExprNC expr rho
+                            tcCheckMonoExprNC expr rho
        ; return (mkLHsWrap gen_fn expr') }
 
 ---------------
@@ -145,7 +147,6 @@ tcHole occ res_ty
       ; emitInsoluble can
       ; tcWrapResult (HsVar ev) ty res_ty }
 \end{code}
-
 
 %************************************************************************
 %*                                                                      *
@@ -226,7 +227,6 @@ tcExpr (ExprWithTySig expr sig_ty) res_ty
             <- tcGen ExprSigCtxt sig_tc_ty $ \ skol_tvs res_ty ->
 
                   -- Remember to extend the lexical type-variable environment
-                  -- See Note [More instantiated than scoped] in TcBinds
                tcExtendTyVarEnv2 
                   [(n,tv) | (Just n, tv) <- findScopedTyVars sig_ty sig_tc_ty skol_tvs] $
 
@@ -335,8 +335,8 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
        ; a_ty <- newPolyFlexiTyVarTy
        ; arg2' <- tcArg op (arg2, arg2_ty, 2)
 
-       ; co_a   <- unifyType arg2_ty   a_ty      -- arg2 ~ a
-       ; co_b   <- unifyType op_res_ty res_ty    -- op_res ~ res
+       ; co_a   <- unifyType (argType arg2_ty) a_ty      -- arg2 ~ a
+       ; co_b   <- unifyType op_res_ty         res_ty    -- op_res ~ res
        ; op_id  <- tcLookupId op_name
 
        ; let op' = L loc (HsWrap (mkWpTyApps [getLevity "tcExpr ($)" res_ty, a_ty, res_ty]) (HsVar op_id))
@@ -1002,7 +1002,7 @@ tcTupArgs args tys
 
 ----------------
 unifyOpFunTysWrap :: LHsExpr Name -> Arity -> TcRhoType
-                  -> TcM (TcCoercion, [TcSigmaType], TcRhoType)
+                  -> TcM (TcCoercion, [TcPhaseSigmaType], TcRhoType)
 -- A wrapper for matchExpectedFunTys
 unifyOpFunTysWrap op arity ty = matchExpectedFunTys herald arity ty
   where

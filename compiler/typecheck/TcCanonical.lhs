@@ -548,7 +548,7 @@ flatten _f ctxt ty@(PiTy {})
        ; (rho', co) <- flatten FMSubstOnly ctxt rho
                          -- Substitute only under a forall
                          -- See Note [Flattening under a forall]
-       ; return (mkPiTys bndrs rho', foldr mkTcForAllCo co bndrs) }
+       ; return (mkPiTys bndrs rho', foldr mkTcPiCo co bndrs) }
 
 flatten f ctxt (CastTy ty g)
   = do { (xi, co) <- flatten f ctxt ty

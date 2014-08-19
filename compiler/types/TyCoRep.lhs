@@ -2186,11 +2186,12 @@ pprForAllImplicit tvs = pprForAll (zipWith Named tvs (repeat Invisible))
 
 -- | Render the "forall ... ." or "forall ... ->" bit of a type.
 -- Do not pass in anonymous binders!
-pprForAll :: [Binder] -> SDoc
+pprForAll :: [GenBinder bv] -> SDoc
 pprForAll [] = empty
-pprForAll bndrs@(Named _ vis : _)
+pprForAll bndrs@(bndr : _)
   = add_separator (forAllLit <+> doc) <+> pprForAll bndrs'
   where
+    vis = binderVisibility bndr
     (bndrs', doc) = ppr_tcv_bndrs bndrs vis
 
     add_separator stuff = case vis of
@@ -2204,13 +2205,14 @@ pprTCvBndrs tvs = sep (map pprTCvBndr tvs)
 -- | Render the ... in @(forall ... .)@ or @(forall ... ->)@.
 -- Returns both the list of not-yet-rendered binders and the doc.
 -- No anonymous binders here!
-ppr_tcv_bndrs :: [Binder]
+ppr_tcv_bndrs :: [GenBinder bv]
               -> VisibilityFlag  -- ^ visibility of the first binder in the list
-              -> ([Binder], SDoc)
-ppr_tcv_bndrs all_bndrs@(Named tv vis : bndrs) vis1
+              -> ([GenBinder bv], SDoc)
+ppr_tcv_bndrs all_bndrs@(bndr : bndrs) vis1
   | vis == vis1 = let (bndrs', doc) = ppr_tcv_bndrs bndrs vis1 in
                   (bndrs', pprTCvBndr tv <+> doc)
   | otherwise   = (all_bndrs, empty)
+  where vis = binderVisibility bndr
 ppr_tcv_bndrs [] _ = ([], empty)
 ppr_tcv_bndrs bndrs _ = pprPanic "ppr_tcv_bndrs: anonymous binder" (ppr bndrs)
 

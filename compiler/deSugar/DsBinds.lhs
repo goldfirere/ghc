@@ -895,10 +895,7 @@ ds_tc_coercion subst tc_co
     go (TcAppCo co1 co2)        = let leftCo    = go co1
                                       rightRole = nextRole leftCo in
                                   mkAppCoFlexible leftCo rightRole (go_arg co2)
-    go (TcForAllCo tv co)     = mkForAllCo cobndr' (ds_tc_coercion subst' co)
-                              where
-                                cobndr = mkHomoCoBndr tv -- TODO (RAE): WRONG
-                                (subst', cobndr') = substPiCoBndr subst cobndr
+    go (TcPiCo arg pbndr res)   = ds_pi_co arg pbndr res
     go (TcAxiomInstCo ax ind cos)
                                 = mkAxiomInstCo ax ind (map go_arg cos)
     go (TcPhantomCo ty1 ty2)    = mkHomoPhantomCo ty1 ty2
@@ -934,6 +931,12 @@ ds_tc_coercion subst tc_co
     ds_ev_id subst v
      | Just co <- lookupCoVar subst v = co
      | otherwise  = pprPanic "ds_tc_coercion" (ppr v $$ ppr tc_co)
+
+    ds_pi_co :: TcCoercion -> PairBinder -> TcCoercion -> Coercion
+    ds_pi_co arg_co pbndr res_co
+      = let (subst', cobndr) = buildPiCoBndr subst (go arg_co) pbndr in
+        mkPiCo cobndr (ds_tc_coercion subst' res_co)
+
 \end{code}
 
 Note [Simple coercions]

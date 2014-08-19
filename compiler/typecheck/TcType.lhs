@@ -48,7 +48,7 @@ module TcType (
   -- These are important because they do not look through newtypes
   tcView,
   tcSplitForAllTys, tcSplitNamedForAllTys, tcSplitNamedForAllTysB,
-  tcIsNamedForAllTy,
+  tcIsDepPiTy,
   tcSplitPhiTy, tcSplitPredFunTy_maybe,
   tcSplitFunTy_maybe, tcSplitFunTys, tcFunArgTy, tcFunResultTy, tcSplitFunTysN,
   tcSplitTyConApp, tcSplitTyConApp_maybe, tcTyConAppTyCon, tcTyConAppArgs,
@@ -65,7 +65,7 @@ module TcType (
   isSigmaTy, isOverloadedTy,
   isDoubleTy, isFloatTy, isIntTy, isWordTy, isStringTy,
   isIntegerTy, isBoolTy, isUnitTy, isCharTy,
-  isTauTy, isTauTyCon, tcIsTyVarTy, tcIsForAllTy,
+  isTauTy, isTauTyCon, tcIsTyVarTy, tcIsPiTy,
   isSynFamilyTyConApp,
   isPredTy, isTyVarClassPred,
 
@@ -240,6 +240,17 @@ type TcTauType      = TcType
 type TcKind         = Kind
 type TcTyVarSet     = TyVarSet
 type TcTyCoVarSet   = TyCoVarSet
+
+-- | A 'TcPhaseType' is a 'DependenceFlag' paired with a 'TcType'
+type TcPhaseType      = (DependenceFlag, TcType)
+type TcPhaseSigmaType = TcPhaseType
+type TcPhaseRhoType   = TcPhaseType
+
+phaseType :: TcDepType -> TcType
+phaseType = snd
+
+phaseDep :: TcDepType -> DependenceFlag
+phaseDep = fst
 \end{code}
 
 
@@ -906,7 +917,7 @@ tcIsPiTy _         = False
 
 -- | Is this a dependent PiTy?
 tcIsDepPiTy :: Type -> Bool
-tcIsDepPiTy ty | Just ty' <- tcView ty = tcIsNamedForAllTy ty'
+tcIsDepPiTy ty | Just ty' <- tcView ty = tcIsDepPiTy ty'
 tcIsDepPiTy (PiTy bndr _) = isDependentBinder bndr
 tcIsDepPiTy _             = False
 
@@ -939,20 +950,25 @@ tcSplitSigmaTy ty = case tcSplitNamedForAllTys ty of
 
 -----------------------
 tcDeepSplitSigmaTy_maybe
-  :: TcSigmaType -> Maybe ([TcType], [TyCoVar], ThetaType, TcSigmaType)
--- Looks for a *non-trivial* quantified type, under zero or more function arrows
--- By "non-trivial" we mean either tyvars or constraints are non-empty
+  :: TcSigmaType
+  -> Maybe ( [TcBinder]       -- visible arguments
+           , [TcBinder]       -- invisible arguments
+           , TcSigmaType)
+-- Looks for a *non-trivial* quantified type (that is, with at least one
+-- invisible argument), under zero or more visible binders
 
 tcDeepSplitSigmaTy_maybe ty
-  | Just (arg_ty, res_ty)           <- tcSplitFunTy_maybe ty
-  , Just (arg_tys, tvs, theta, rho) <- tcDeepSplitSigmaTy_maybe res_ty
-  = Just (arg_ty:arg_tys, tvs, theta, rho)
+  | Just (bndr, res) <- tcSplitPiTy_maybe ty
+  , isVisibleBinder bndr
+  , Just (vis, invis, sigma) <- tcDeepSplitSigmaTy_maybe res
+  = Just (bndr:vis, invis, sigma)
 
-  | (tvs, theta, rho) <- tcSplitSigmaTy ty
-  , not (null tvs && null theta)
-  = Just ([], tvs, theta, rho)
+  | (invis, sigma) <- tcSplitInvisPiTy ty
+  , not (null invis)
+  = Just ([], invis, sigma)
 
-  | otherwise = Nothing
+  | otherwise
+  = Nothing
 
 -----------------------
 tcTyConAppTyCon :: Type -> TyCon

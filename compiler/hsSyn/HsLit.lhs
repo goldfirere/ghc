@@ -41,12 +41,16 @@ type PostTcType = Type		-- Used for slots in the abstract syntax
 				-- where we want to keep slot for a type
 				-- to be added by the type checker...but
 				-- before typechecking it's just bogus
+type PostTcPhaseType = TcPhaseType
 
 placeHolderType :: PostTcType	-- Used before typechecking
 placeHolderType  = panic "Evaluated the place holder for a PostTcType"
 
 placeHolderKind :: PostTcKind	-- Used before typechecking
 placeHolderKind  = panic "Evaluated the place holder for a PostTcKind"
+
+placeHolderPhaseType :: PostTcPhaseType
+placeHolderPhaseType = panic "Evaluated the place holder for a PostTcPhaseType"
 \end{code}
 
 %************************************************************************

@@ -60,7 +60,7 @@ module Var (
 	setIdExported, setIdNotExported,
 
         -- ** Constructing 'BinderVar's
-        mkBinderVar, mkAnonBinderVar,
+        mkBinderVar, mkAnonBinderVar, mkBinderVarFromMaybe,
 
         -- ** Predicates
         isId, isTKVar, isTyVar, isTcTyVar, isTcTyCoVar,
@@ -275,7 +275,10 @@ instance Data Var where
   dataTypeOf _ = mkNoRepType "Var"
 
 instance Outputable BinderVar where
-  ppr (Named v) = ppr v
+  ppr (Named v)
+    | isLiftedTypeKind kind = ppr_tvar v  -- TODO (RAE): ppr_tvar is in TyCoRep. fix.
+    | otherwise             = parens (ppr_tvar tv <+> dcolon <+> ppr kind)
+    where kind = varType v
   ppr (Anon ty) = parens (char '_' <+> dcolon <+> ppr ty)
 
 instance Binary DependenceFlag where
@@ -520,3 +523,8 @@ mkBinderVar = Named
 -- | Make an anonymous 'BinderVar'
 mkAnonBinderVar :: Type -> BinderVar
 mkAnonBinderVar = Anon
+
+-- | Make a 'BinderVar' from a @Maybe Var@
+mkBinderVarFromMaybe :: Maybe Var -> Type -> BinderVar
+mkBinderVarFromMaybe Nothing ty = mkAnonBinderVar ty
+mkBinderVarFromMaybe (Just v) _ = mkBinderVar v

@@ -26,10 +26,10 @@ module Coercion (
         mkReflCo, mkCoVarCo, 
         mkAxInstCo, mkUnbranchedAxInstCo, mkAxInstRHS,
         mkUnbranchedAxInstRHS,
-        mkPiCo, mkPiCos, mkCoCast,
+        mkPiCos, mkCoCast,
         mkSymCo, mkTransCo, mkNthCo, mkNthCoRole, mkLRCo,
         mkInstCo, mkAppCo, mkAppCoFlexible, mkTyConAppCo, mkFunCo,
-        mkForAllCo, mkPiCo_TyHomo, mkPiCo_CoHomo,
+        mkPiCo, mkPiCo_TyHomo, mkPiCo_CoHomo,
         mkPhantomCo, mkHomoPhantomCo,
         mkUnsafeCo, mkUnsafeCoArg, mkSubCo,
         mkNewTypeCo, mkAppCos, mkAxiomInstCo,
@@ -37,7 +37,7 @@ module Coercion (
         mkCoherenceCo, mkCoherenceRightCo, mkCoherenceLeftCo,
         mkKindCo, castCoercionKind,
 
-        mkTyHeteroCoBndr, mkCoHeteroCoBndr, mkHomoCoBndr,
+        mkTyHeteroCoBndr, mkCoHeteroCoBndr, mkHomoCoBndr, mkHeteroCoBndr,
         mkHeteroCoercionType,
 
         mkTyCoArg, mkCoCoArg, mkCoArgForVar,
@@ -682,6 +682,24 @@ mkPiCo_CoHomo cv co
   = ASSERT( isCoercionType (binderType cv) )
     PiCo (CoHomo cv) co
 
+-- | Build a 'PiCoBndr' that satisfies its invariants, especially w.r.t.
+-- using the Homo variants when the kinds are the same. Used in desugaring.
+buildPiCoBndr :: TCvSubst
+              -> Coercion     -- ^ :: k1 ~ k2 (substed already)
+              -> PairBinder   -- ^ (:: k1, :: k2) (not yet substed)
+              -> (TCvSubst, PiCoBndr)
+buildPiCo subst arg_co pbndr
+  | Just ki <- isReflCo_maybe arg_co   -- must homogenize
+  = let (homo_subst, m_var) = homogenizeCoBndr in_scope cobndr' in
+    ( composeTCvSubst homo_subst subst'
+    , mkHomoCoBndr (mkBinderVarFromMaybe m_var ki) )
+  | otherwise
+  = ( subst', cobndr' )
+  where
+    cobndr = mkHeteroCoBndr in_scope pbndr
+    (subst', cobndr') = substPiCoBndr subst cobndr
+    in_scope = getTCvInScope subst'
+
 mkCoVarCo :: CoVar -> Coercion
 -- cv :: s ~# t
 mkCoVarCo cv
@@ -1073,6 +1091,19 @@ mkHomoCoBndr bndr
   | isCoercionType (binderType bndr) = CoHomo bndr
   | otherwise                        = TyHomo bndr
 
+mkHeteroCoBndr :: InScopeSet -> PairBinder -> PiCoBndr
+mkHeteroCoBndr in_scope pbndr
+  | is_coercion = CoHetero pbndr
+  | otherwise   = TyHetero pbndr m_cv
+  where
+    Pair bv1 bv2 = binderPayload pbndr
+    is_coercion  = isCoercionType binderVarType bv1
+
+    m_cv = case (getBinderVar_maybe bv1, getBinderVar_maybe bv2) of
+      (Just tv1, Just tv2) ->
+        Just $ mkFreshCoVar in_scope (mkOnlyTyVarTy tv1) (mkOnlyTyVarTy tv2)
+      _ -> Nothing
+
 getHomoBinder_maybe :: PiCoBndr -> Maybe Binder
 getHomoBinder_maybe (TyHomo bndr) = Just bndr
 getHomoBinder_maybe (CoHomo cv)   = Just cv
@@ -1321,13 +1352,8 @@ mkNewTypeCo name tycon tvs roles rhs_ty
                             , cab_rhs     = rhs_ty
                             , cab_incomps = [] }
 
-mkPiCos :: Role -> [Var] -> Coercion -> Coercion
-mkPiCos r vs co = foldr (mkPiCo r) co vs
-
-mkPiCo  :: Role -> Var -> Coercion -> Coercion
-mkPiCo r v co | isTyVar v = mkForAllCo_TyHomo v co
-              | isCoVar v = mkForAllCo_CoHomo v co
-              | otherwise = mkFunCo (mkReflCo r (varType v)) co
+mkHomoPiCos :: [Binder] -> Coercion -> Coercion
+mkHomoPiCos r vs co = foldr mkPiCo co (map mkHomoCoBndr vs)
 
 -- The second coercion is sometimes lifted (~) and sometimes unlifted (~#).
 -- So, we have to make sure to supply the right parameter to decomposeCo.

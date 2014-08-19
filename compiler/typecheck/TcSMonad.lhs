@@ -1863,7 +1863,8 @@ matchFam tycon args
 \begin{code}
 -- Deferring forall equalities as implications
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
+-- TODO (RAE): Make this work with hetero foralls. Will require update to
+-- TcPiCo. But not actually too hard.
 deferTcSForAllEq :: Role -- Nominal or Representational
                  -> CtLoc  -- Original wanted equality flavor
                  -> ([Binder],TcType)   -- ForAll tvs1 body1
@@ -1872,43 +1873,46 @@ deferTcSForAllEq :: Role -- Nominal or Representational
 -- Some of this functionality is repeated from TcUnify,
 -- consider having a single place where we create fresh implications.
 deferTcSForAllEq role loc (bndrs1,body1) (bndrs2,body2)
- = do { (subst1, skol_tvs) <- wrapTcS $ TcM.tcInstSkolTyCoVars tvs1
-      ; let tys  = mkTyCoVarTys skol_tvs
-            phi1 = Type.substTy subst1 body1
-            phi2 = Type.substTy (zipTopTCvSubst tvs2 tys) body2
-            skol_info = UnifyForAllSkol skol_tvs phi1
+ = do { (subst1, subst2, skol_bndrs)
+          <- wrapTcS $ tcInstSkolBinders2 bndrs1 bndrs2
+      ; let phi1 = Type.substTy subst1 body1
+            phi2 = Type.substTy subst2 body2
+            skol_info = UnifyForAllSkol skol_bndrs phi1
         ; mev <- newWantedEvVar loc $ case role of
                 Nominal ->          mkTcEqPred      phi1 phi2
                 Representational -> mkCoerciblePred phi1 phi2
                 Phantom ->          panic "deferTcSForAllEq Phantom"
         ; coe_inside <- case mev of
             Cached ev_tm -> return (evTermCoercion ev_tm)
-            Fresh ctev   -> do { ev_binds_var <- wrapTcS $ TcM.newTcEvBinds
-                               ; env <- wrapTcS $ TcM.getLclEnv
-                               ; let ev_binds = TcEvBinds ev_binds_var
-                                     new_ct = mkNonCanonical ctev
-                                     new_co = evTermCoercion (ctEvTerm ctev)
-                                     new_untch = pushUntouchables (tcl_untch env)
-                               ; let wc = WC { wc_flat  = singleCt new_ct
-                                             , wc_impl  = emptyBag
-                                             , wc_insol = emptyCts }
-                                     imp = Implic { ic_untch  = new_untch
-                                                  , ic_skols  = skol_tvs
-                                                  , ic_fsks   = []
-                                                  , ic_no_eqs = True
-                                                  , ic_given  = []
-                                                  , ic_wanted = wc
-                                                  , ic_insol  = False
-                                                  , ic_binds  = ev_binds_var
-                                                  , ic_env    = env
-                                                  , ic_info   = skol_info }
-                               ; updTcSImplics (consBag imp)
-                               ; return (TcLetCo ev_binds new_co) }
+            Fresh ctev   ->
+              do { ev_binds_var <- wrapTcS $ TcM.newTcEvBinds
+                 ; env <- wrapTcS $ TcM.getLclEnv
+                 ; let ev_binds = TcEvBinds ev_binds_var
+                       new_ct = mkNonCanonical ctev
+                       new_co = evTermCoercion (ctEvTerm ctev)
+                       new_untch = pushUntouchables (tcl_untch env)
+                 ; let wc = WC { wc_flat  = singleCt new_ct
+                               , wc_impl  = emptyBag
+                               , wc_insol = emptyCts }
+                       skol_tvs = mapMaybe binderVar_maybe skol_bndrs
+                       imp = Implic { ic_untch  = new_untch
+                                    , ic_skols  = skol_tvs
+                                    , ic_fsks   = []
+                                    , ic_no_eqs = True
+                                    , ic_given  = []
+                                    , ic_wanted = wc
+                                    , ic_insol  = False
+                                    , ic_binds  = ev_binds_var
+                                    , ic_env    = env
+                                    , ic_info   = skol_info }
+                 ; updTcSImplics (consBag imp)
+                 ; return (TcLetCo ev_binds new_co) }
 
-        ; return $ EvCoercion (foldr mkTcForAllCo coe_inside skol_tvs)
+        ; return $ EvCoercion (foldr (mkHomoTcPiCo Nominal) coe_inside skol_bndrs)
         }
   where
     tvs1 = map (binderVar "deferTcSForAllEq") bndrs1
     tvs2 = map (binderVar "deferTcSForAllEq") bndrs2
+                          
 \end{code}
 

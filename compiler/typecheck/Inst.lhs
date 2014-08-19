@@ -145,26 +145,27 @@ ToDo: this eta-abstraction plays fast and loose with termination,
 deeplySkolemise
   :: TcSigmaType
   -> TcM ( HsWrapper
-         , [TyCoVar]   -- all skolemised variables, including covars
+         , [TcBinder]  -- all skolemised variables, including covars
          , [EvVar]     -- all "given"s, including dependent covars
                   -- This means that the dependent covars are returned *twice*
          , TcRhoType)
 
 deeplySkolemise ty
-  | Just (arg_tys, tvs, theta, ty') <- tcDeepSplitSigmaTy_maybe ty
-  = do { ids1 <- newSysLocalIds (fsLit "dk") arg_tys
-       ; (subst, tvs1) <- tcInstSkolTyCoVars tvs
-       ; let ev_vars0 = filter isCoVar tvs1
-       ; ev_vars1 <- newEvVars (substTheta subst theta)
-       ; (wrap, tvs2, ev_vars2, rho) <- deeplySkolemise (substTy subst ty')
-       ; return ( mkWpLams ids1
-                   <.> mkWpTyLams tvs1
-                   <.> mkWpLams ev_vars1
+  | Just (vis_bndrs, invis_bndrs, ty') <- tcDeepSplitSigmaTy_maybe ty
+  = do { vars1 <- newSysLocals (fsLit "dk") vis_bndrs
+       ; let vis_bndrs' = zipWith setBinderPayload vis_bndrs
+                                                   (map mkBinderVar vars1)
+       ; (subst, invis_bndrs') <- tcInstSkolBinders invis_bndrs
+       ; let all_vars = vars1 ++ mapMaybe binderVar_maybe invis_bndrs'
+             ev_vars1 = filter (isPredType . varType) all_vars
+       ; (wrap, bndrs2, ev_vars2, rho) <- deeplySkolemise (substTy subst ty')
+       ; return ( mkWpLams vis_bndrs'
+                   <.> mkWpLams invis_bndrs'
                    <.> wrap
-                   <.> mkWpEvVarApps ids1
-                , tvs1     ++ tvs2
-                , ev_vars0 ++ ev_vars1 ++ ev_vars2
-                , mkFunTys arg_tys rho ) }
+                   <.> mkWpApps vars1
+                , vis_bndrs' ++ invis_bndrs' ++ bndrs2
+                , ev_vars1 ++ ev_vars2
+                , mkPiTys vis_bndrs rho ) }
 
   | otherwise
   = return (idHsWrapper, [], [], ty)
@@ -572,12 +573,12 @@ tidySkolemInfo env (InferSkol ids)
        where
          (env', ty') = tidyOpenType env ty
 
-tidySkolemInfo env (UnifyForAllSkol skol_tvs ty) 
-  = (env1, UnifyForAllSkol skol_tvs' ty')
+tidySkolemInfo env (UnifyForAllSkol skol_bndrs ty) 
+  = (env1, UnifyForAllSkol skol_bndrs' ty')
   where
     env1 = tidyFreeTyCoVars env (tyCoVarsOfType ty `delVarSetList` skol_tvs)
-    (env2, skol_tvs') = tidyTyCoVarBndrs env1 skol_tvs
-    ty'               = tidyType env2 ty
+    (env2, skol_bndrs') = tidyBinders env1 skol_bndrs
+    ty'                 = tidyType env2 ty
 
 tidySkolemInfo env info = (env, info)
 \end{code}

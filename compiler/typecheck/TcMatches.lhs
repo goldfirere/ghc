@@ -149,7 +149,7 @@ matchFunTys
   :: SDoc	-- See Note [Herald for matchExpecteFunTys] in TcUnify
   -> Arity
   -> TcRhoType
-  -> ([TcSigmaType] -> TcRhoType -> TcM a)
+  -> ([TcPhaseSigmaType] -> TcRhoType -> TcM a)
   -> TcM (HsWrapper, a)
 
 -- Written in CPS style for historical reasons; 

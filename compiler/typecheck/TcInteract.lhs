@@ -1933,12 +1933,11 @@ getCoercibleInst loc ty1 ty2 = do
                 $ EvCoercion (TcRefl Representational ty1)
 
     -- Coercible (forall a. ty) (forall a. ty')  (see case 2 in [Coercible Instances])
-    | tcIsNamedForAllTy ty1
-    , tcIsNamedForAllTy ty2
-    , let (bndrs1,body1) = tcSplitNamedForAllTysB ty1
-          (bndrs2,body2) = tcSplitNamedForAllTysB ty2
-    , equalLength bndrs1 bndrs2
-    , map binderVisibility bndrs1 == map binderVisibility bndrs2
+    | tcIsDepPiTy ty1
+    , tcIsDepPiTy ty2
+    , let (bndrs1,body1) = tcSplitDepPiTys ty1
+          (bndrs2,body2) = tcSplitDepPiTys ty2
+    , compatibleBinders bndrs1 bndrs2
     = do
        ev_term <- deferTcSForAllEq Representational loc (bndrs1,body1) (bndrs2,body2)
        return $ GenInst [] ev_term

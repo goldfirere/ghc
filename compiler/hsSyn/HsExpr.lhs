@@ -127,7 +127,7 @@ data HsExpr id
 
   | HsLam     (MatchGroup id (LHsExpr id)) -- ^ Lambda abstraction. Currently always a single match
 
-  | HsLamCase PostTcType (MatchGroup id (LHsExpr id)) -- ^ Lambda-case
+  | HsLamCase PostTcPhaseType (MatchGroup id (LHsExpr id)) -- ^ Lambda-case
 
   | HsApp     (LHsExpr id) (LHsExpr id) -- ^ Application
 

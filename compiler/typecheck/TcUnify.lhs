@@ -113,7 +113,7 @@ matchExpectedFunTys :: SDoc 	-- See Note [Herald for matchExpectedFunTys]
             	    -> Arity
             	    -> TcRhoType 
                     -> TcM ( TcCoercion
-                           , [(DependenceFlag, TcSigmaType)]
+                           , [TcPhaseSigmaType]
                            , TcRhoType)
 
 -- If    matchExpectFunTys n ty = (co, [t1,..,tn], ty_r)
@@ -382,11 +382,10 @@ wrapFunResCoercion arg_tys co_fn_res
 %************************************************************************
 
 \begin{code}
-tcGen :: UserTypeCtxt -> TcType
+tcGen :: UserTypeCtxt
+      -> TcType   -- ^ expected type
       -> ([TcTyVar] -> TcRhoType -> TcM result)
-         -- thing_inside is passed only the *type* variables, not
-         -- *coercion* variables. They are only ever used for scoped type
-         -- variables.
+           -- ^ Takes the skolem variables and the skolemised (mono-)type
       -> TcM (HsWrapper, result)
         -- The expression has type: spec_ty -> expected_ty
 
@@ -399,6 +398,7 @@ tcGen ctxt expected_ty thing_inside
         ; when debugIsOn $
               traceTc "tcGen" $ vcat [
                            text "expected_ty" <+> ppr expected_ty,
+                           text "phase" <+> ppr ph,
                            text "inst ty" <+> ppr tvs' <+> ppr rho' ]
 
 	-- Generally we must check that the "forall_tvs" havn't been constrained
@@ -419,7 +419,7 @@ tcGen ctxt expected_ty thing_inside
         ; let skol_info = SigSkol ctxt (mkPiTypes given rho')
 
         ; (ev_binds, result) <- checkConstraints skol_info tvs' given $
-                                thing_inside (filter isTyVar tvs') rho'
+                                thing_inside tvs' rho'
 
         ; return (wrap <.> mkWpLet ev_binds, result) }
 	  -- The ev_binds returned by checkConstraints is very
@@ -664,25 +664,24 @@ uType origin orig_ty1 orig_ty2
            ; co_t <- uType origin t1 t2        
            ; return $ mkTcAppCo co_s co_t }
 
+-- TODO (RAE): Needs to deal with hetero foralls. See also
+-- deferTcSForAllEq.
 unifySigmaTy :: CtOrigin -> TcType -> TcType -> TcM TcCoercion
 unifySigmaTy origin ty1 ty2
-  = do { let (bndrs1, body1) = tcSplitNamedForAllTysB ty1
-             (bndrs2, body2) = tcSplitNamedForAllTysB ty2
+  = do { let (bndrs1, body1) = tcSplitDepPiTys ty1
+             (bndrs2, body2) = tcSplitDepPiTys ty2
 
-       ; defer_or_continue (not (equalLength bndrs1 bndrs2) || not (map binderVisibility bndrs1 == map binderVisibility bndrs2)) $ do {
-         let tvs1 = map (binderVar "unifySigmaTy1") bndrs1
-             tvs2 = map (binderVar "unifySigmaTy2") bndrs2
-       ; (subst1, skol_tvs) <- tcInstSkolTyCoVars tvs1
+       ; defer_or_continue (not (compatibleBinders bndrs1 bndrs2)) $ do {
+       ; (subst1, subst2, skol_bndrs) <- tcInstSkolBinders2 bndrs1 bndrs2
                   -- Get location from monad, not from tvs1
-       ; let tys      = mkTyCoVarTys skol_tvs
-             phi1     = Type.substTy subst1                    body1
-             phi2     = Type.substTy (zipTopTCvSubst tvs2 tys) body2
-	     skol_info = UnifyForAllSkol skol_tvs phi1
-
+       ; let phi1     = Type.substTy subst1 body1
+             phi2     = Type.substTy subst2 body2
+	     skol_info = UnifyForAllSkol skol_bndrs phi1
+             skol_tvs = mapMaybe binderVar_maybe skol_bndrs
        ; (ev_binds, co) <- checkConstraints skol_info skol_tvs [] $
                            uType origin phi1 phi2
 
-       ; return (foldr mkTcForAllCo (TcLetCo ev_binds co) skol_tvs) } }
+       ; return (foldr mkTcPiCo (TcLetCo ev_binds co) skol_bndrs) } }
   where
     defer_or_continue True  _ = uType_defer origin ty1 ty2
     defer_or_continue False m = m

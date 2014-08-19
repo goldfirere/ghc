@@ -428,10 +428,16 @@ newSysName occ
   = do { uniq <- newUnique
        ; return (mkSystemName uniq occ) }
 
-newSysLocalIds :: FastString -> [TcType] -> TcRnIf gbl lcl [TcId]
-newSysLocalIds fs tys
+newSysLocals :: FastString -> [TcBinder] -> TcRnIf gbl lcl [Var]
+newSysLocals fs bndrs
   = do  { us <- newUniqueSupply
-        ; return (zipWith (mkSysLocal fs) (uniqsFromSupply us) tys) }
+        ; return (zipWith mk (uniqsFromSupply us) bndrs) }
+  where
+    mk u bndr
+      | isRelevantBinder bndr = mkSysLocal fs u (binderType bndr)
+      | otherwise             = mkTcTyVar (mkSysTvName u fs)
+                                          (binderType bndr)
+                                          (SkolemTv False)
 
 instance MonadUnique (IOEnv (Env gbl lcl)) where
         getUniqueM = newUnique

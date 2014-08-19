@@ -144,6 +144,12 @@ newEvVar :: TcPredType -> TcRnIf gbl lcl EvVar
 newEvVar ty = do { name <- newSysName (predTypeOccName ty) 
                  ; return (mkLocalId name ty) }
 
+-- | Like 'newEvVar', but takes an 'OccName'
+newEvVarName :: OccName -> TcPredType -> TcRnIf gbl lcl EvVar
+newEvVarName occ ty
+  = do { name <- newSysName occ
+       ; return (mkLocalId name ty) }
+
 newEq :: TcType -> TcType -> TcM EvVar
 newEq ty1 ty2
   = do { name <- newSysName (mkVarOccFS (fsLit "cobox"))
@@ -226,6 +232,28 @@ tcSuperSkolTyCoVar subst tv
     new_tv | isTyVar tv = mkTcTyVar (tyVarName tv) kind superSkolemTv
            | otherwise  = uniqAway (getTCvInScope subst) (setVarType tv kind)
 
+tcInstSkolTyVar :: SrcSpan -> Bool -> TCvSubst -> TyVar
+                -> TcRnIf gbl lcl (TCvSubst, TcTyVar)
+tcInstSkolTyCoVar loc overlappable subst tyvar
+  = do  { uniq <- newUnique
+        ; let new_name = mkInternalName uniq occ loc
+              new_tv   = mkTcTyVar new_name kind (SkolemTv overlappable)
+        ; return (extendTCvSubst subst tyvar (mkOnlyTyVarTy new_tv), new_tv) }
+  where
+    old_name = tyVarName tyvar
+    occ      = nameOccName old_name
+    kind     = substTy subst (tyVarKind tyvar)
+
+tcInstSkolEvVar :: SrcSpan -> TCvSubst -> CoVar
+                -> TcRnIf gbl lcl (TCvSubst, CoVar)
+tcInstSkolEvVar loc subst covar
+  = do  { ev_var <- newEvVarName occ kind
+        ; return (extendTCvSubst subst covar (mkTyCoVarTy ev_var), ev_var) }
+  where
+    old_name = varName covar
+    occ      = nameOccName old_name
+    kind     = substTy subst (varType tyvar)
+
 tcInstSkolTyCoVar :: SrcSpan -> Bool -> TCvSubst -> TyCoVar
                   -> TcRnIf gbl lcl (TCvSubst, TcTyCoVar)
 -- Instantiate the tyvar, using 
@@ -234,18 +262,8 @@ tcInstSkolTyCoVar :: SrcSpan -> Bool -> TCvSubst -> TyCoVar
 --      * the location either from the tyvar (skol_info = SigSkol)
 --                     or from the monad (otherwise)
 tcInstSkolTyCoVar loc overlappable subst tyvar
-  | isTyVar tyvar
-  = do  { uniq <- newUnique
-        ; let new_name = mkInternalName uniq occ loc
-              new_tv   = mkTcTyVar new_name kind (SkolemTv overlappable)
-        ; return (extendTCvSubst subst tyvar (mkOnlyTyVarTy new_tv), new_tv) }
-  | otherwise -- coercion variable
-  = do  { ev_var <- newEvVar kind
-        ; return (extendTCvSubst subst tyvar (mkTyCoVarTy ev_var), ev_var) }
-  where
-    old_name = tyVarName tyvar
-    occ      = nameOccName old_name
-    kind     = substTy subst (tyVarKind tyvar)
+  | isTyVar tyvar = tcInstSkolTyVar loc overlappable subst tyvar
+  | otherwise     = tcInstSkolEvVar loc              subst tyvar
 
 -- Wrappers
 -- we need to be able to do this from outside the TcM monad:
@@ -260,13 +278,68 @@ tcInstSkolTyCoVarsX, tcInstSuperSkolTyCoVarsX
 tcInstSkolTyCoVarsX      subst = tcInstSkolTyCoVars' False subst
 tcInstSuperSkolTyCoVarsX subst = tcInstSkolTyCoVars' True  subst
 
-tcInstSkolTyCoVars' :: Bool -> TCvSubst -> [TyCoVar] -> TcM (TCvSubst, [TcTyCoVar])
+tcInstSkolTyCoVars' :: Bool -> TCvSubst -> [TyCoVar]
+                    -> TcM (TCvSubst, [TcTyCoVar])
 -- Precondition: tyvars should be ordered (kind vars first)
 -- see Note [Kind substitution when instantiating]
 -- Get the location from the monad; this is a complete freshening operation
 tcInstSkolTyCoVars' isSuperSkol subst tvs
   = do { loc <- getSrcSpanM
        ; mapAccumLM (tcInstSkolTyCoVar loc isSuperSkol) subst tvs }
+
+tcInstSkolBinder :: SrcSpan -> TCvSubst -> TcBinder -> TcM (TCvSubst, TcBinder)
+tcInstSkolBinder loc subst bndr
+  | ASSERT( isInvisibleBinder bndr )
+    not (isRelevantBinder bndr)
+  = case binderVar_maybe bndr of
+      Just v  -> do { (subst', v') <- tcInstSkolTyVar loc False subst v
+                    ; return (subst', setBinderPayload bndr (mkBinderVar v')) }
+      Nothing -> -- nothing to do here: irrelevant trivial binder
+                 (subst, bndr)
+
+  -- we know the bndr is relevant
+  | otherwise
+  = case binderVar_maybe bndr of
+      Just v -> do { (subst', v') <- tcInstSkolEvVar loc subst v
+                   ; return (subst', setBinderPayload bndr (mkBinderVar v')) }
+      Nothing -> do { ev_var <- newEvVar (substTy subst ty)
+                    ; return (subst, setBinderPayload bndr (mkBinderVar ev_var)) }
+
+tcInstSkolBinders :: [TcBinder] -> TcM (TCvSubst, [TcBinder])
+tcInstSkolBinders bndrs
+  = do { loc <- getSrcSpanM
+       ; mapAccumLM (tcInstSkolBinder loc) emptyTCvSubst bndrs }
+
+-- | Used when instantiating foralls.
+-- TODO (RAE): Remove when making deferTcSForAllEq work with hetero foralls.
+tcInstSkolBinders2 :: [Binder] -> [Binder]
+                   -> TcM ( TCvSubst  -- subst to apply to the first type
+                          , TCvSubst  -- subst to apply to the second type
+                          , [Binder] )  -- actual skolems created
+tcInstSkolBinders2 bndrs1 bndrs2
+  = do { loc <- getSrcSpanM
+       ; go loc emptyTCvSubst emptyTCvSubst [] bndrs1 bndrs2 }
+where
+  go loc sub1 sub2 acc [] [] = return (sub1, sub2, reverse acc)
+  go loc sub1 sub2 acc (b1:b1s) (b2:b2s)
+    = case (binderVar_maybe b1, binderVar_maybe b2) of
+        (Just v1, Just v2) ->
+          do { (sub1', skol) <- tcInstSkolTyCoVar loc False sub1 v1
+             ; let sub2' = extendTCvSubst sub2 v2 (mkTyCoVarTy skol)
+                   bndr' = setBinderPayload b1 (mkBinderVar skol)
+             ; go loc sub1' sub2' (bndr':acc) b1s b2s }
+        (Just v1, Nothing) ->
+          do { (sub1', skol) <- tcInstSkolTyCoVar loc False sub1 v1
+             ; let bndr' = setBinderPayload b1 (mkBinderVar skol)
+             ; go loc sub1' sub2 (bndr':acc) b1s b2s }
+        (Nothing, Just v2) ->
+          do { (sub2', skol) <- tcInstSkolTyCoVar loc False sub2 v2
+             ; let bndr' = setBinderPayload b2 (mkBinderVar skol)
+             ; go loc sub1 sub2' (bndr':acc) b1s b2s }
+        (Nothing, Nothing) ->
+          do { let bndr' = setBinderType b1 (substTy sub1 (binderType b1))
+             ; go loc sub1 sub2 (bndr':acc) b1s b2s }
+  go _ _ _ _ _ _ = pprPanic "tcInstSkolBinders2" (ppr bndrs1 $$ ppr bndrs2)
 
 tcInstSigTyCoVarsLoc :: SrcSpan -> [TyCoVar]
                      -> TcRnIf gbl lcl (TCvSubst, [TcTyCoVar])

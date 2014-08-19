@@ -1557,8 +1557,13 @@ zonkTcCoToCo env co
     go (TcLRCo lr co)         = do { co' <- go co; return (mkTcLRCo lr co') }
     go (TcTransCo co1 co2)    = do { co1' <- go co1; co2' <- go co2
                                    ; return (mkTcTransCo co1' co2') }
-    go (TcForAllCo tv co)     = ASSERT( isImmutableTyVar tv || isCoVar tv )
-                                do { co' <- go co; return (mkTcForAllCo tv co') }
+    go (TcPiCo co1 pbndr co2) = do { co1' <- go co1
+                                   ; let Pair bndr1 bndr2 = splitPairBinder pbndr
+                                   ; (env1, bndr1') <- zonkBinderX env  bndr1
+                                   ; (env2, bndr2') <- zonkBinderX env1 bndr2
+                                   ; co2' <- zonkTcCoToCo env2 co2
+                                   ; let pbndr' = mkPairBinder bndr1' bndr2'
+                                   ; return (TcPiCo co1' pbndr' co2') }
     go (TcSubCo co)           = do { co' <- go co; return (mkTcSubCo co') }
     go (TcAxiomRuleCo co ts cs) = do { ts' <- zonkTcTypeToTypes env ts
                                      ; cs' <- mapM go cs

@@ -23,7 +23,7 @@ module TcEvidence (
   TcCoercion(..), LeftOrRight(..), pickLR,
   mkTcReflCo, mkTcNomReflCo, 
   mkTcTyConAppCo, mkTcAppCo, mkTcAppCos, mkTcFunCo,
-  mkTcAxInstCo, mkTcUnbranchedAxInstCo, mkTcForAllCo, mkTcForAllCos, 
+  mkTcAxInstCo, mkTcUnbranchedAxInstCo, mkTcPiCo, mkTcPiCos, 
   mkTcSymCo, mkTcTransCo, mkTcNthCo, mkTcLRCo, mkTcSubCo,
   mkTcAxiomRuleCo, mkTcCoherenceCo,
   tcCoercionKind, coVarsOfTcCo, isEqVar, mkTcCoVarCo, 
@@ -117,7 +117,7 @@ data TcCoercion
   = TcRefl Role TcType
   | TcTyConAppCo Role TyCon [TcCoercion]
   | TcAppCo TcCoercion TcCoercion
-  | TcForAllCo TyCoVar TcCoercion 
+  | TcPiCo TcCoercion PairBinder TcCoercion 
   | TcCoVarCo EqVar
   | TcAxiomInstCo (CoAxiom Branched) BranchIndex [TcCoercion]
           -- See Note [TcAxiomInstCo takes TcCoercions]
@@ -160,7 +160,12 @@ mkTcNomReflCo :: TcType -> TcCoercion
 mkTcNomReflCo = TcRefl Nominal
 
 mkTcFunCo :: TcCoercion -> TcCoercion -> TcCoercion
-mkTcFunCo co1 co2 = -- TODO (RAE): Write me!
+mkTcFunCo co1 co2 = TcPiCo co1 pbndr co2
+  where
+    Pair t1 t2 = tcCoercionKind co1  -- TODO (RAE): Inefficient!
+    bndr1 = mkFunBinder t1
+    bndr2 = mkFunBinder t2
+    pbndr = mkPairBinder bndr1 bndr2
 
 mkTcTyConAppCo :: Role -> TyCon -> [TcCoercion] -> TcCoercion
 mkTcTyConAppCo role tc cos -- No need to expand type synonyms
@@ -244,14 +249,16 @@ mkTcLRCo lr co            = TcLRCo lr co
 mkTcAppCos :: TcCoercion -> [TcCoercion] -> TcCoercion
 mkTcAppCos co1 tys = foldl mkTcAppCo co1 tys
 
-mkTcForAllCo :: TyCoVar -> TcCoercion -> TcCoercion
+mkHomoTcPiCo :: Role -> Binder -> TcCoercion -> TcCoercion
 -- note that a TyVar or CoVar should be used here, not a TcTyVar
-mkTcForAllCo tv (TcRefl r ty) = TcRefl r (mkNamedForAllTy tv Invisible ty)  -- TODO (RAE): Check.
-mkTcForAllCo tv  co           = TcForAllCo tv co
+mkHomoTcPiCo r bndr (TcRefl _r ty) = ASSERT( _r == r ) TcRefl r (mkPiTy bndr ty)
+mkHomoTcPiCo r bndr co             = TcPiCo (TcRefl r (binderType bndr))
+                                            (mkPairBinder bndr bndr) co
 
-mkTcForAllCos :: [TyCoVar] -> TcCoercion -> TcCoercion
-mkTcForAllCos tvs (TcRefl r ty) = TcRefl r (mkInvForAllTys tvs ty)  -- TODO (RAE): Check.
-mkTcForAllCos tvs co            = foldr TcForAllCo co tvs
+mkHomoTcPiCos :: Role -> [Binder] -> TcCoercion -> TcCoercion
+mkHomoTcPiCos r bndrs (TcRefl _r ty) = ASSERT( r == _r )
+                                       TcRefl r (mkPiTys bndrs ty)
+mkHomoTcPiCos r bndrs co             = foldr (mkHomoTcPiCo r) co bndrs
 
 mkTcCoVarCo :: EqVar -> TcCoercion
 -- ipv :: s ~ t  (the boxed equality type) or Coercible s t (the boxed representational equality type)
@@ -278,8 +285,7 @@ tcCoercionKind co = go co
     go (TcCoherenceCo co g)   = (`mkCastTy` g) <$> go co
     go (TcTyConAppCo _ tc cos)= mkTyConApp tc <$> (sequenceA $ map go cos)
     go (TcAppCo co1 co2)      = mkAppTy <$> go co1 <*> go co2
-    go (TcForAllCo tv co)     = mkNamedForAllTy tv Invisible <$> go co
-       -- TODO (RAE): Check above.
+    go (TcPiCo co1 pbndr co2) = mkPiTy <$> splitPairBinder pbndr <*> go co2
     go (TcCoVarCo cv)         = eqVarKind cv
     go (TcAxiomInstCo ax ind cos)
       = let branch = coAxiomNthBranch ax ind
@@ -315,7 +321,7 @@ tcCoercionRole = go
     go (TcRefl r _)           = r
     go (TcTyConAppCo r _ _)   = r
     go (TcAppCo co _)         = go co
-    go (TcForAllCo _ co)      = go co
+    go (TcPiCo _ _ co)        = go co
     go (TcCoVarCo cv)         = eqVarRole cv
     go (TcAxiomInstCo ax _ _) = coAxiomRole ax
     go (TcPhantomCo _ _)      = Phantom
@@ -342,7 +348,7 @@ coVarsOfTcCo tc_co
     go (TcAppCo co1 co2)         = go co1 `unionVarSet` go co2
     go (TcCastCo co1 co2)        = go co1 `unionVarSet` go co2
     go (TcCoherenceCo co g)      = go co `unionVarSet` coVarsOfCo g
-    go (TcForAllCo _ co)         = go co
+    go (TcPiCo co1 _ co2)        = go co1 `unionVarSet` go co2
     go (TcCoVarCo v)             = unitVarSet v
     go (TcAxiomInstCo _ _ cos)   = foldr (unionVarSet . go) emptyVarSet cos
     go (TcPhantomCo t1 t2)       = coVarsOfType t1 `unionVarSet` coVarsOfType t2
@@ -389,7 +395,7 @@ ppr_co p (TcCastCo co1 co2)      = maybeParen p FunPrec $
                                    ppr_co FunPrec co1 <+> ptext (sLit "|>") <+> ppr_co FunPrec co2
 ppr_co p (TcCoherenceCo co g)    = maybeParen p FunPrec $
                                    ppr_co FunPrec co <+> text "|>>" <+> ppr g
-ppr_co p co@(TcForAllCo {})      = ppr_forall_co p co
+ppr_co p co@(TcPiCo {})          = ppr_forall_co p co
                      
 ppr_co _ (TcCoVarCo cv)          = parenSymOcc (getOccName cv) (ppr cv)
 
@@ -432,21 +438,21 @@ ppr_role r = underscore <> pp_role
 ppr_fun_co :: TyPrec -> TcCoercion -> SDoc
 ppr_fun_co p co = pprArrowChain p (split co)
   where
-    WRONG
     split :: TcCoercion -> [SDoc]
-    split (TcTyConAppCo _ f [arg,res])
-      | f `hasKey` funTyConKey
-      = ppr_co FunPrec arg : split res
+    split (TcPiCo co1 pbndr co2)
+      | not (isDependentBinder pbndr)
+      = ppr_co FunPrec co1 : split co2
     split co = [ppr_co TopPrec co]
 
 ppr_forall_co :: TyPrec -> TcCoercion -> SDoc
 ppr_forall_co p ty
   = maybeParen p FunPrec $
-    sep [pprForAllImplicit tvs, ppr_co TopPrec rho]
+    sep [pprForAll pbndrs, ppr_fun_co TopPrec rho]
   where
-    (tvs,  rho) = split1 [] ty
-    split1 tvs (TcForAllCo tv ty) = split1 (tv:tvs) ty
-    split1 tvs ty                 = (reverse tvs, ty)
+    (pbndrs, rho) = split1 [] ty
+    split1 pbndrs (TcPiCo _ pbndr ty) 
+      | isDependentBinder pbndr       = split1 (pbndr:pbndrs) ty
+    split1 pbndrs ty                  = (reverse pbndrs, ty)
 \end{code}
 
 Conversion from Coercion to TcCoercion
