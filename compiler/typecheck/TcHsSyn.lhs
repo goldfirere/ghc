@@ -561,7 +561,7 @@ zonkMatch :: ZonkEnv
 zonkMatch env zBody (L loc (Match pats _ grhss))
   = do  { traceTc "RAEe1" (ppr pats)
         ; (env1, new_pats) <- zonkPats env pats
-        ; traceTc "RAEe2" (ppr new_pats)
+        ; traceTc "RAEe2" empty
         ; new_grhss <- zonkGRHSs env1 zBody grhss
         ; traceTc "RAEe3" empty
         ; return (L loc (Match new_pats Nothing new_grhss)) }
@@ -1412,17 +1412,26 @@ to a lot of effort to prove Refl!  (Eg when solving  10+3 = 10+3; cf Trac #5030)
 zonkTyVarOcc :: ZonkEnv -> TyVar -> TcM TcType
 zonkTyVarOcc env@(ZonkEnv zonk_unbound_tyvar tv_env _) tv
   | isTcTyVar tv
-  = case tcTyVarDetails tv of
-         SkolemTv {}    -> lookup_in_env
-         RuntimeUnk {}  -> lookup_in_env
-         FlatSkol ty    -> zonkTcTypeToType env ty
+  = traceTc "RAEn1" (ppr tv) >>
+    case tcTyVarDetails tv of
+         SkolemTv {}    -> traceTc "RAEn2" empty >>
+                           lookup_in_env
+         RuntimeUnk {}  -> traceTc "RAEn3" empty >>
+                           lookup_in_env
+         FlatSkol ty    -> traceTc "RAEn4" (ppr ty) >>
+                           zonkTcTypeToType env ty
          MetaTv { mtv_ref = ref }
-           -> do { cts <- readMutVar ref
+           -> do { traceTc "RAEn5" empty
+                 ; cts <- readMutVar ref
+                 ; traceTc "RAEn13" empty
                  ; case cts of
-                      Flexi -> do { kind <- {-# SCC "zonkKind1" #-}
+                      Flexi -> do { traceTc "RAEn6" empty
+                                  ; kind <- {-# SCC "zonkKind1" #-}
                                             zonkTcTypeToType env (tyVarKind tv)
+                                  ; traceTc "RAEn7" (ppr kind)
                                   ; zonk_unbound_tyvar (setTyVarKind tv kind) }
-                      Indirect ty -> do { zty <- zonkTcTypeToType env ty
+                      Indirect ty -> do { traceTc "RAEn8" empty
+                                        ; zty <- zonkTcTypeToType env ty
                                         -- Small optimisation: shortern-out indirect steps
                                         -- so that the old type may be more easily collected.
                                         ; writeMutVar ref (Indirect zty)
@@ -1432,8 +1441,10 @@ zonkTyVarOcc env@(ZonkEnv zonk_unbound_tyvar tv_env _) tv
   where
     lookup_in_env    -- Look up in the env just as we do for Ids
       = case lookupVarEnv tv_env tv of
-          Nothing  -> return (mkTyCoVarTy tv)
-          Just tv' -> return (mkTyCoVarTy tv')
+          Nothing  -> traceTc "RAEn11" empty >>
+                      return (mkTyCoVarTy tv)
+          Just tv' -> traceTc "RAEn12" (ppr tv') >>
+                      return (mkTyCoVarTy tv')
 
 zonkTcTypeToType :: ZonkEnv -> TcType -> TcM Type
 zonkTcTypeToType env ty
