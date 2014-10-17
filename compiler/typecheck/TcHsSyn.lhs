@@ -315,7 +315,9 @@ zonkTopDecls :: Bag EvBind
                      [LRuleDecl    Id],
                      [LVectDecl    Id])
 zonkTopDecls ev_binds binds sig_ns rules vects imp_specs fords
-  = do  { (env1, ev_binds') <- zonkEvBinds emptyZonkEnv ev_binds
+  = do  { traceTc "RAE1" empty
+        ; (env1, ev_binds') <- zonkEvBinds emptyZonkEnv ev_binds
+        ; traceTc "RAE2" empty
 
          -- Warn about missing signatures
          -- Do this only when we we have a type to offer
@@ -323,12 +325,18 @@ zonkTopDecls ev_binds binds sig_ns rules vects imp_specs fords
         ; let sig_warn | warn_missing_sigs = topSigWarn sig_ns
                        | otherwise         = noSigWarn
 
+        ; traceTc "RAE3" empty
         ; (env2, binds') <- zonkRecMonoBinds env1 sig_warn binds
                         -- Top level is implicitly recursive
+        ; traceTc "RAE4" empty
         ; rules' <- zonkRules env2 rules
+        ; traceTc "RAE5" empty
         ; vects' <- zonkVects env2 vects
+        ; traceTc "RAE6" empty
         ; specs' <- zonkLTcSpecPrags env2 imp_specs
+        ; traceTc "RAE7" empty
         ; fords' <- zonkForeignExports env2 fords
+        ; traceTc "RAE8" empty
         ; return (zonkEnvIds env2, ev_binds', binds', fords', specs', rules', vects') }
 
 ---------------------------------------------
@@ -371,7 +379,9 @@ zonkRecMonoBinds :: ZonkEnv -> SigWarn -> LHsBinds TcId -> TcM (ZonkEnv, LHsBind
 zonkRecMonoBinds env sig_warn binds
  = fixM (\ ~(_, new_binds) -> do
         { let env1 = extendIdZonkEnv env (collectHsBindsBinders new_binds)
+        ; traceTc "RAEa1" empty
         ; binds' <- zonkMonoBinds env1 sig_warn binds
+        ; traceTc "RAEa2" empty
         ; return (env1, binds') })
 
 ---------------------------------------------
@@ -423,7 +433,10 @@ zonkMonoBinds :: ZonkEnv -> SigWarn -> LHsBinds TcId -> TcM (LHsBinds Id)
 zonkMonoBinds env sig_warn binds = mapBagM (zonk_lbind env sig_warn) binds
 
 zonk_lbind :: ZonkEnv -> SigWarn -> LHsBind TcId -> TcM (LHsBind Id)
-zonk_lbind env sig_warn = wrapLocM (zonk_bind env sig_warn)
+zonk_lbind env sig_warn bind = do { traceTc "RAEb1" (ppr bind)
+                                  ; bind' <- wrapLocM (zonk_bind env sig_warn) bind
+                                  ; traceTc "RAEb2" empty
+                                  ; return bind' }
 
 zonk_bind :: ZonkEnv -> SigWarn -> HsBind TcId -> TcM (HsBind Id)
 zonk_bind env sig_warn bind@(PatBind { pat_lhs = pat, pat_rhs = grhss, pat_rhs_ty = ty})
@@ -441,10 +454,15 @@ zonk_bind env sig_warn (VarBind { var_id = var, var_rhs = expr, var_inline = inl
 
 zonk_bind env sig_warn bind@(FunBind { fun_id = L loc var, fun_matches = ms
                                      , fun_co_fn = co_fn })
-  = do { new_var <- zonkIdBndr env var
+  = do { traceTc "RAEc1" (ppr var)
+       ; new_var <- zonkIdBndr env var
+       ; traceTc "RAEc2" (ppr new_var)
        ; sig_warn False [new_var]
+       ; traceTc "RAEc3" (ppr co_fn)
        ; (env1, new_co_fn) <- zonkCoFn env co_fn
+       ; traceTc "RAEc4" (ppr new_co_fn)
        ; new_ms <- zonkMatchGroup env1 zonkLExpr ms
+       ; traceTc "RAEc5" empty
        ; return (bind { fun_id = L loc new_var, fun_matches = new_ms
                       , fun_co_fn = new_co_fn }) }
 
@@ -526,17 +544,24 @@ zonkMatchGroup :: ZonkEnv
                -> (ZonkEnv -> Located (body TcId) -> TcM (Located (body Id)))
                -> MatchGroup TcId (Located (body TcId)) -> TcM (MatchGroup Id (Located (body Id)))
 zonkMatchGroup env zBody (MG { mg_alts = ms, mg_arg_tys = arg_tys, mg_res_ty = res_ty, mg_origin = origin })
-  = do  { ms' <- mapM (zonkMatch env zBody) ms
+  = do  { traceTc "RAEd1" (ppr arg_tys $$ ppr res_ty)
+        ; ms' <- mapM (zonkMatch env zBody) ms
+        ; traceTc "RAEd2" empty
         ; arg_tys' <- zonkTcTypeToTypes env arg_tys
+        ; traceTc "RAEd3" (ppr arg_tys')
         ; res_ty'  <- zonkTcTypeToType env res_ty
+        ; traceTc "RAEd4" (ppr res_ty')
         ; return (MG { mg_alts = ms', mg_arg_tys = arg_tys', mg_res_ty = res_ty', mg_origin = origin }) }
 
 zonkMatch :: ZonkEnv
           -> (ZonkEnv -> Located (body TcId) -> TcM (Located (body Id)))
           -> LMatch TcId (Located (body TcId)) -> TcM (LMatch Id (Located (body Id)))
 zonkMatch env zBody (L loc (Match pats _ grhss))
-  = do  { (env1, new_pats) <- zonkPats env pats
+  = do  { traceTc "RAEe1" (ppr pats)
+        ; (env1, new_pats) <- zonkPats env pats
+        ; traceTc "RAEe2" (ppr new_pats)
         ; new_grhss <- zonkGRHSs env1 zBody grhss
+        ; traceTc "RAEe3" empty
         ; return (L loc (Match new_pats Nothing new_grhss)) }
 
 -------------------------------------------------------------------------
