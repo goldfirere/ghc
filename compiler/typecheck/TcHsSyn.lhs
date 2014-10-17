@@ -1434,7 +1434,9 @@ zonkTyVarOcc env@(ZonkEnv zonk_unbound_tyvar tv_env _) tv
                                         ; zty <- zonkTcTypeToType env ty
                                         -- Small optimisation: shortern-out indirect steps
                                         -- so that the old type may be more easily collected.
-                                        ; writeMutVar ref (Indirect zty)
+                                        ; traceTc "RAEn9" empty
+                                        ; -- writeMutVar ref (Indirect zty)
+                                        ; traceTc "RAEn10" empty
                                         ; return zty } }
   | otherwise
   = lookup_in_env
