@@ -273,9 +273,11 @@ zonkEvBndr :: ZonkEnv -> EvVar -> TcM EvVar
 -- Does not extend the ZonkEnv
 zonkEvBndr env var
   = do { let var_ty = varType var
+       ; traceTc "RAEm1" (ppr var_ty)
        ; ty <-
            {-# SCC "zonkEvBndr_zonkTcTypeToType" #-}
            zonkTcTypeToType env var_ty
+       ; traceTc "RAEm2" empty
        ; return (setVarType var ty) }
 
 zonkEvVarOcc :: ZonkEnv -> EvVar -> EvVar
@@ -315,7 +317,9 @@ zonkTopDecls :: Bag EvBind
                      [LRuleDecl    Id],
                      [LVectDecl    Id])
 zonkTopDecls ev_binds binds sig_ns rules vects imp_specs fords
-  = do  { (env1, ev_binds') <- zonkEvBinds emptyZonkEnv ev_binds
+  = do  { traceTc "RAE1" empty
+        ; (env1, ev_binds') <- zonkEvBinds emptyZonkEnv ev_binds
+        ; traceTc "RAE2" empty
 
          -- Warn about missing signatures
          -- Do this only when we we have a type to offer
@@ -323,12 +327,18 @@ zonkTopDecls ev_binds binds sig_ns rules vects imp_specs fords
         ; let sig_warn | warn_missing_sigs = topSigWarn sig_ns
                        | otherwise         = noSigWarn
 
+        ; traceTc "RAE3" empty
         ; (env2, binds') <- zonkRecMonoBinds env1 sig_warn binds
                         -- Top level is implicitly recursive
+        ; traceTc "RAE4" empty
         ; rules' <- zonkRules env2 rules
+        ; traceTc "RAE5" empty
         ; vects' <- zonkVects env2 vects
+        ; traceTc "RAE6" empty
         ; specs' <- zonkLTcSpecPrags env2 imp_specs
+        ; traceTc "RAE7" empty
         ; fords' <- zonkForeignExports env2 fords
+        ; traceTc "RAE8" empty
         ; return (zonkEnvIds env2, ev_binds', binds', fords', specs', rules', vects') }
 
 ---------------------------------------------
@@ -371,7 +381,9 @@ zonkRecMonoBinds :: ZonkEnv -> SigWarn -> LHsBinds TcId -> TcM (ZonkEnv, LHsBind
 zonkRecMonoBinds env sig_warn binds
  = fixM (\ ~(_, new_binds) -> do
         { let env1 = extendIdZonkEnv env (collectHsBindsBinders new_binds)
+        ; traceTc "RAEa1" empty
         ; binds' <- zonkMonoBinds env1 sig_warn binds
+        ; traceTc "RAEa2" empty
         ; return (env1, binds') })
 
 ---------------------------------------------
@@ -423,7 +435,10 @@ zonkMonoBinds :: ZonkEnv -> SigWarn -> LHsBinds TcId -> TcM (LHsBinds Id)
 zonkMonoBinds env sig_warn binds = mapBagM (zonk_lbind env sig_warn) binds
 
 zonk_lbind :: ZonkEnv -> SigWarn -> LHsBind TcId -> TcM (LHsBind Id)
-zonk_lbind env sig_warn = wrapLocM (zonk_bind env sig_warn)
+zonk_lbind env sig_warn bind = do { traceTc "RAEb1" (ppr bind)
+                                  ; bind' <- wrapLocM (zonk_bind env sig_warn) bind
+                                  ; traceTc "RAEb2" empty
+                                  ; return bind' }
 
 zonk_bind :: ZonkEnv -> SigWarn -> HsBind TcId -> TcM (HsBind Id)
 zonk_bind env sig_warn bind@(PatBind { pat_lhs = pat, pat_rhs = grhss, pat_rhs_ty = ty})
@@ -441,10 +456,15 @@ zonk_bind env sig_warn (VarBind { var_id = var, var_rhs = expr, var_inline = inl
 
 zonk_bind env sig_warn bind@(FunBind { fun_id = L loc var, fun_matches = ms
                                      , fun_co_fn = co_fn })
-  = do { new_var <- zonkIdBndr env var
+  = do { traceTc "RAEc1" (ppr var)
+       ; new_var <- zonkIdBndr env var
+       ; traceTc "RAEc2" (ppr new_var)
        ; sig_warn False [new_var]
+       ; traceTc "RAEc3" (ppr co_fn)
        ; (env1, new_co_fn) <- zonkCoFn env co_fn
+       ; traceTc "RAEc4" (ppr new_co_fn)
        ; new_ms <- zonkMatchGroup env1 zonkLExpr ms
+       ; traceTc "RAEc5" empty
        ; return (bind { fun_id = L loc new_var, fun_matches = new_ms
                       , fun_co_fn = new_co_fn }) }
 
@@ -526,17 +546,24 @@ zonkMatchGroup :: ZonkEnv
                -> (ZonkEnv -> Located (body TcId) -> TcM (Located (body Id)))
                -> MatchGroup TcId (Located (body TcId)) -> TcM (MatchGroup Id (Located (body Id)))
 zonkMatchGroup env zBody (MG { mg_alts = ms, mg_arg_tys = arg_tys, mg_res_ty = res_ty, mg_origin = origin })
-  = do  { ms' <- mapM (zonkMatch env zBody) ms
+  = do  { traceTc "RAEd1" (ppr arg_tys $$ ppr res_ty)
+        ; ms' <- mapM (zonkMatch env zBody) ms
+        ; traceTc "RAEd2" empty
         ; arg_tys' <- zonkTcTypeToTypes env arg_tys
+        ; traceTc "RAEd3" (ppr arg_tys')
         ; res_ty'  <- zonkTcTypeToType env res_ty
+        ; traceTc "RAEd4" (ppr res_ty')
         ; return (MG { mg_alts = ms', mg_arg_tys = arg_tys', mg_res_ty = res_ty', mg_origin = origin }) }
 
 zonkMatch :: ZonkEnv
           -> (ZonkEnv -> Located (body TcId) -> TcM (Located (body Id)))
           -> LMatch TcId (Located (body TcId)) -> TcM (LMatch Id (Located (body Id)))
 zonkMatch env zBody (L loc (Match pats _ grhss))
-  = do  { (env1, new_pats) <- zonkPats env pats
+  = do  { traceTc "RAEe1" (ppr pats)
+        ; (env1, new_pats) <- zonkPats env pats
+        ; traceTc "RAEe2" empty
         ; new_grhss <- zonkGRHSs env1 zBody grhss
+        ; traceTc "RAEe3" empty
         ; return (L loc (Match new_pats Nothing new_grhss)) }
 
 -------------------------------------------------------------------------
@@ -997,7 +1024,10 @@ zonkPat :: ZonkEnv -> OutPat TcId -> TcM (ZonkEnv, OutPat Id)
 -- Extend the environment as we go, because it's possible for one
 -- pattern to bind something that is used in another (inside or
 -- to the right)
-zonkPat env pat = wrapLocSndM (zonk_pat env) pat
+zonkPat env pat = do { traceTc "RAEg1" (ppr pat)
+                     ; pat' <- wrapLocSndM (zonk_pat env) pat
+                     ; traceTc "RAEg2" empty
+                     ; return pat' }
 
 zonk_pat :: ZonkEnv -> Pat TcId -> TcM (ZonkEnv, Pat Id)
 zonk_pat env (ParPat p)
@@ -1057,15 +1087,22 @@ zonk_pat env p@(ConPatOut { pat_arg_tys = tys, pat_tvs = tyvars
                           , pat_dicts = evs, pat_binds = binds
                           , pat_args = args, pat_wrap = wrapper })
   = ASSERT( all isImmutableTyVar tyvars )
-    do  { new_tys <- mapM (zonkTcTypeToType env) tys
+    do  { traceTc "RAEh1" (ppr tys)
+        ; new_tys <- mapM (zonkTcTypeToType env) tys
+        ; traceTc "RAEh2" (ppr new_tys $$ ppr tyvars)
         ; (env0, new_tyvars) <- zonkTyCoBndrsX env tyvars
           -- Must zonk the existential variables, because their
           -- /kind/ need potential zonking.
           -- cf typecheck/should_compile/tc221.hs
+        ; traceTc "RAEh3" (ppr new_tyvars $$ ppr evs)
         ; (env1, new_evs) <- zonkEvBndrsX env0 evs
+        ; traceTc "RAEh4" (ppr new_evs $$ ppr binds)
         ; (env2, new_binds) <- zonkTcEvBinds env1 binds
+        ; traceTc "RAEh5" (ppr wrapper)
         ; (env3, new_wrapper) <- zonkCoFn env2 wrapper
+        ; traceTc "RAEh6" (ppr new_wrapper $$ ppr args)
         ; (env', new_args) <- zonkConStuff env3 args
+        ; traceTc "RAEh7" (ppr new_args)
         ; return (env', p { pat_arg_tys = new_tys,
                             pat_tvs = new_tyvars,
                             pat_dicts = new_evs,
@@ -1124,8 +1161,11 @@ zonkConStuff env (RecCon (HsRecFields rpats dd))
 ---------------------------
 zonkPats :: ZonkEnv -> [OutPat TcId] -> TcM (ZonkEnv, [OutPat Id])
 zonkPats env []         = return (env, [])
-zonkPats env (pat:pats) = do { (env1, pat') <- zonkPat env pat
+zonkPats env (pat:pats) = do { traceTc "RAEf1" (ppr pat)
+                             ; (env1, pat') <- zonkPat env pat
+                             ; traceTc "RAEf2" (ppr pats)
                              ; (env', pats') <- zonkPats env1 pats
+                             ; traceTc "RAEf3" empty
                              ; return (env', pat':pats') }
 \end{code}
 
@@ -1256,9 +1296,13 @@ zonkEvTerm env (EvDelayedError ty msg)
        ; return (EvDelayedError ty' msg) }
 
 zonkTcEvBinds :: ZonkEnv -> TcEvBinds -> TcM (ZonkEnv, TcEvBinds)
-zonkTcEvBinds env (TcEvBinds var) = do { (env', bs') <- zonkEvBindsVar env var
+zonkTcEvBinds env (TcEvBinds var) = do { traceTc "RAEi1" (ppr var)
+                                       ; (env', bs') <- zonkEvBindsVar env var
+                                       ; traceTc "RAEi2" empty
                                        ; return (env', EvBinds bs') }
-zonkTcEvBinds env (EvBinds bs)    = do { (env', bs') <- zonkEvBinds env bs
+zonkTcEvBinds env (EvBinds bs)    = do { traceTc "RAEj1" (ppr bs)
+                                       ; (env', bs') <- zonkEvBinds env bs
+                                       ; traceTc "RAEj2" empty
                                        ; return (env', EvBinds bs') }
 
 zonkEvBindsVar :: ZonkEnv -> EvBindsVar -> TcM (ZonkEnv, Bag EvBind)
@@ -1269,8 +1313,10 @@ zonkEvBinds :: ZonkEnv -> Bag EvBind -> TcM (ZonkEnv, Bag EvBind)
 zonkEvBinds env binds
   = {-# SCC "zonkEvBinds" #-}
     fixM (\ ~( _, new_binds) -> do
-         { let env1 = extendIdZonkEnv env (collect_ev_bndrs new_binds)
+         { traceTc "RAEk1" (ppr binds)
+         ; let env1 = extendIdZonkEnv env (collect_ev_bndrs new_binds)
          ; binds' <- mapBagM (zonkEvBind env1) binds
+         ; traceTc "RAEk2" empty
          ; return (env1, binds') })
   where
     collect_ev_bndrs :: Bag EvBind -> [EvVar]
@@ -1279,7 +1325,9 @@ zonkEvBinds env binds
 
 zonkEvBind :: ZonkEnv -> EvBind -> TcM EvBind
 zonkEvBind env (EvBind var term)
-  = do { var'  <- {-# SCC "zonkEvBndr" #-} zonkEvBndr env var
+  = do { traceTc "RAEl1" (ppr var)
+       ; var'  <- {-# SCC "zonkEvBndr" #-} zonkEvBndr env var
+       ; traceTc "RAEl2" empty
 
          -- Optimise the common case of Refl coercions
          -- See Note [Optimise coercion zonking]
@@ -1287,8 +1335,11 @@ zonkEvBind env (EvBind var term)
        ; let ty' = idType var'
        ; case getEqPredTys_maybe ty' of
            Just (_, r, ty1, ty2) | ty1 `eqType` ty2
-                  -> return (EvBind var' (EvCoercion (mkTcReflCo r ty1)))
-           _other -> do { term' <- zonkEvTerm env term
+                  -> do { traceTc "RAEl3" (ppr ty')
+                        ; return (EvBind var' (EvCoercion (mkTcReflCo r ty1))) }
+           _other -> do { traceTc "RAEl4" (ppr term)
+                        ; term' <- zonkEvTerm env term
+                        ; traceTc "RAEl5" empty
                         ; return (EvBind var' term') } }
 \end{code}
 
@@ -1373,31 +1424,44 @@ and you're safe.
 zonkTyVarOcc :: ZonkEnv -> TyVar -> TcM TcType
 zonkTyVarOcc env@(ZonkEnv zonk_unbound_tyvar tv_env _) tv
   | isTcTyVar tv
-  = case tcTyVarDetails tv of
-         SkolemTv {}    -> lookup_in_env
-         RuntimeUnk {}  -> lookup_in_env
-         FlatSkol ty    -> zonkTcTypeToType env ty
+  = traceTc "RAEn1" (ppr tv) >>
+    case tcTyVarDetails tv of
+         SkolemTv {}    -> traceTc "RAEn2" empty >>
+                           lookup_in_env
+         RuntimeUnk {}  -> traceTc "RAEn3" empty >>
+                           lookup_in_env
+         FlatSkol ty    -> traceTc "RAEn4" (ppr ty) >>
+                           zonkTcTypeToType env ty
          MetaTv { mtv_ref = ref }
-           -> do { cts <- readMutVar ref
+           -> do { traceTc "RAEn5" empty
+                 ; cts <- readMutVar ref
+                 ; traceTc "RAEn13" empty
                  ; case cts of
-                      Flexi -> do { kind <- {-# SCC "zonkKind1" #-}
+                      Flexi -> do { traceTc "RAEn6" empty
+                                  ; kind <- {-# SCC "zonkKind1" #-}
                                             zonkTcTypeToType env (tyVarKind tv)
+                                  ; traceTc "RAEn7" (ppr kind)
                                   ; zonk_unbound_tyvar (setTyVarKind tv kind) }
-                      Indirect ty -> do { zty <- zonkTcTypeToType env ty
+                      Indirect ty -> do { traceTc "RAEn8" empty
+                                        ; zty <- zonkTcTypeToType env ty
                                         -- Small optimisation: shortern-out indirect steps
                                         -- so that the old type may be more easily collected.
                                           -- TODO (RAE): Perhaps re-enable this optimization,
                                           -- but see Note [Small optimization in zonking]
                                           -- first.
+                                        ; traceTc "RAEn9" empty
                                         ; -- writeMutVar ref (Indirect zty)
+                                        ; traceTc "RAEn10" empty
                                         ; return zty } }
   | otherwise
   = lookup_in_env
   where
     lookup_in_env    -- Look up in the env just as we do for Ids
       = case lookupVarEnv tv_env tv of
-          Nothing  -> return (mkTyCoVarTy tv)
-          Just tv' -> return (mkTyCoVarTy tv')
+          Nothing  -> traceTc "RAEn11" empty >>
+                      return (mkTyCoVarTy tv)
+          Just tv' -> traceTc "RAEn12" (ppr tv') >>
+                      return (mkTyCoVarTy tv')
 
 zonkTcTypeToType :: ZonkEnv -> TcType -> TcM Type
 zonkTcTypeToType env ty
