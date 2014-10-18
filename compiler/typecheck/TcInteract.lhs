@@ -1443,14 +1443,14 @@ doTopReactDict inerts fl cls xis
   | not (isWanted fl)   -- Never use instances for Given or Derived constraints
   = try_fundeps_and_return
 
-  | Just ev <- lookupSolvedDict inerts cls xis   -- Cached
+  | Just ev <- lookupSolvedDict inerts boxity cls xis   -- Cached
   , ctEvCheckDepth (ctLocDepth (ctev_loc fl)) ev
   = do { setEvBind dict_id (ctEvTerm ev);
        ; return $ SomeTopInt { tir_rule = "Dict/Top (cached)"
                              , tir_new_item = Stop } }
 
   | otherwise  -- Not cached
-   = do { lkup_inst_res <- matchClassInst inerts cls xis loc
+   = do { lkup_inst_res <- matchClassInst inerts fl cls xis
          ; case lkup_inst_res of
                GenInst wtvs ev_term -> do { addSolvedDict fl cls xis
                                           ; solve_from_instance wtvs ev_term }
@@ -1459,6 +1459,7 @@ doTopReactDict inerts fl cls xis
      dict_id = ctEvId fl
      pred = mkClassPred cls xis
      loc = ctev_loc fl
+     boxity = not (isUnLiftedType (ctEvPred fl))
 
      solve_from_instance :: [CtEvidence] -> EvTerm -> TcS TopInteractResult
       -- Precondition: evidence term matches the predicate workItem
@@ -1808,9 +1809,9 @@ instance Outputable LookupInstResult where
   ppr (GenInst ev t) = text "GenInst" <+> ppr ev <+> ppr t
 
 
-matchClassInst :: InertSet -> Class -> [Type] -> CtLoc -> TcS LookupInstResult
+matchClassInst :: InertSet -> CtEvidence -> Class -> [Type] -> TcS LookupInstResult
 
-matchClassInst _ clas [ ty ] _
+matchClassInst _ _ clas [ ty ]
   | className clas == knownNatClassName
   , Just n <- isNumLitTy ty = makeDict (EvNum n)
 
@@ -1843,15 +1844,16 @@ matchClassInst _ clas [ ty ] _
     = panicTcS (text "Unexpected evidence for" <+> ppr (className clas)
                      $$ vcat (map (ppr . idType) (classMethods clas)))
 
-matchClassInst _ clas [ _k, ty1, ty2 ] loc
+matchClassInst _ fl clas [ _k, ty1, ty2 ]
   | clas == coercibleClass
   = do { traceTcS "matchClassInst for" $
-         quotes (pprClassPred clas [ty1,ty2]) <+> text "at depth" <+> ppr (ctLocDepth loc)
-       ; ev <- getCoercibleInst loc ty1 ty2
+         quotes (pprClassPred clas [ty1,ty2]) <+> text "at depth" <+>
+                 ppr (ctLocDepth (ctev_loc fl))
+       ; ev <- getCoercibleInst fl ty1 ty2
        ; traceTcS "matchClassInst returned" $ ppr ev
        ; return ev }
 
-matchClassInst inerts clas tys loc
+matchClassInst inerts fl clas tys
    = do { dflags <- getDynFlags
         ; untch <- getUntouchables
         ; traceTcS "matchClassInst" $ vcat [ text "pred =" <+> ppr pred
@@ -1891,6 +1893,7 @@ matchClassInst inerts clas tys loc
                         ; return NoInstance } }
    where
      pred = mkClassPred clas tys
+     loc  = ctev_loc fl
 
      match_one :: DFunId -> [Maybe TcType] -> TcS LookupInstResult
                   -- See Note [DFunInstType: instantiating types] in InstEnv
@@ -1933,13 +1936,15 @@ matchClassInst inerts clas tys loc
 
 -- See Note [Coercible Instances]
 -- Changes to this logic should likely be reflected in coercible_msg in TcErrors.
-getCoercibleInst :: CtLoc -> TcType -> TcType -> TcS LookupInstResult
-getCoercibleInst loc ty1 ty2
+getCoercibleInst :: CtEvidence -> TcType -> TcType -> TcS LookupInstResult
+getCoercibleInst fl ty1 ty2
   = do { -- Get some global stuff in scope, for nice pattern-guard based code in `go`
          rdr_env <- getGlobalRdrEnvTcS
        ; famenv <- getFamInstEnvs
        ; go famenv rdr_env }
   where
+  loc = ctev_loc fl
+    
   go :: FamInstEnvs -> GlobalRdrEnv -> TcS LookupInstResult
   go famenv rdr_env
     -- Also see [Order of Coercible Instances]
@@ -1956,15 +1961,16 @@ getCoercibleInst loc ty1 ty2
           (bndrs2,body2) = tcSplitNamedForAllTysB ty2
     , equalLength bndrs1 bndrs2
     , map binderVisibility bndrs1 == map binderVisibility bndrs2
-    = do { ev_term <- deferTcSForAllEq Representational loc (bndrs1,body1) (bndrs2,body2)
+    = do { ev_term <- deferTcSForAllEq fl (bndrs1,body1) (bndrs2,body2)
          ; return $ GenInst [] ev_term }
 
     -- Coercible NT a                            (see case 3 in [Coercible Instances])
     | Just (rep_tc, concTy, ntCo) <- tcInstNewTyConTF_maybe famenv ty1
     , dataConsInScope rdr_env rep_tc -- Do not look at all tyConsOfTyCon
     = do { markDataConsAsUsed rdr_env rep_tc
-         ; ct_ev <- requestCoercible loc concTy ty2
-         ; local_var <- mkSysLocalM (fsLit "coev") $ mkCoerciblePred concTy ty2
+         ; let ct_ty = mkTcEqReprPredLikeEv fl concTy ty2
+         ; ct_ev <- requestCoercible loc ct_ty
+         ; local_var <- mkSysLocalM (fsLit "coev") ct_ty
          ; let binds = EvBinds (unitBag (EvBind local_var (getEvTerm ct_ev)))
                tcCo = TcLetCo binds (ntCo `mkTcTransCo` mkTcCoVarCo local_var)
          ; return $ GenInst (freshGoals [ct_ev]) (EvCoercion tcCo) }
@@ -1973,8 +1979,9 @@ getCoercibleInst loc ty1 ty2
     | Just (rep_tc, concTy, ntCo) <- tcInstNewTyConTF_maybe famenv ty2
     , dataConsInScope rdr_env rep_tc -- Do not look at all tyConsOfTyCon
     = do { markDataConsAsUsed rdr_env rep_tc
-         ; ct_ev <- requestCoercible loc ty1 concTy
-         ; local_var <- mkSysLocalM (fsLit "coev") $ mkCoerciblePred ty1 concTy
+         ; let ct_ty = mkTcEqReprPredLikeEv fl ty1 concTy
+         ; ct_ev <- requestCoercible loc ct_ty
+         ; local_var <- mkSysLocalM (fsLit "coev") ct_ty
          ; let binds = EvBinds (unitBag (EvBind local_var (getEvTerm ct_ev)))
                tcCo = TcLetCo binds $
                          mkTcCoVarCo local_var `mkTcTransCo` mkTcSymCo ntCo
@@ -1994,8 +2001,9 @@ getCoercibleInst loc ty1 ty2
                             , mkTcNomReflCo ta1 {- == ta2, due to nominalArgsAgree -}
                             )
                      Representational -> do
-                          ct_ev <- requestCoercible loc ta1 ta2
-                          local_var <- mkSysLocalM (fsLit "coev") $ mkCoerciblePred ta1 ta2
+                          let ct_ty = mkTcEqReprPredLikeEv fl ta1 ta2
+                          ct_ev <- requestCoercible loc ct_ty
+                          local_var <- mkSysLocalM (fsLit "coev") ct_ty
                           return
                             ( freshGoal ct_ev
                             , Just (EvBind local_var (getEvTerm ct_ev))
@@ -2008,7 +2016,8 @@ getCoercibleInst loc ty1 ty2
                                  , TcPhantomCo (mkTcReflCo Representational ka1)
                                                ta1 ta2)
                        | otherwise
-                       -> do ct_ev <- requestCoercible (mkKindLoc ta1 ta2 loc) ka1 ka2
+                       -> do let ct_ty = mkTcEqReprPredLikeEv fl ka1 ka2
+                             ct_ev <- requestCoercible (mkKindLoc ta1 ta2 loc) ct_ty
                              return
                                ( freshGoal ct_ev
                                , Nothing
@@ -2050,10 +2059,8 @@ markDataConsAsUsed rdr_env tc = addUsedRdrNamesTcS
   , not (null gres)
   , Imported (imp_spec:_) <- [gre_prov (head gres)] ]
 
-requestCoercible :: CtLoc -> TcType -> TcType -> TcS MaybeNew
-requestCoercible loc ty1 ty2 =
-    ASSERT2( typeKind ty1 `tcEqKind` typeKind ty2, ppr ty1 <+> ppr ty2)
-    newWantedEvVarNonrec loc' (mkCoerciblePred ty1 ty2)
+requestCoercible :: CtLoc -> TcType -> TcS MaybeNew
+requestCoercible loc ct_ty = newWantedEvVarNonrec loc' ct_ty
   where loc' = bumpCtLocDepth CountConstraints loc
 
 \end{code}

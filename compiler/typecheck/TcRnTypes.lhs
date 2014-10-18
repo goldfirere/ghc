@@ -51,6 +51,7 @@ module TcRnTypes(
         isCIrredEvCan, isCNonCanonical, isWantedCt, isDerivedCt,
         isGivenCt, isHoleCt,
         ctEvidence, ctLoc, ctPred, mkTcEqPredLikeEv,
+        mkTcEqReprPredLikeEv,
         mkNonCanonical, mkNonCanonicalCt,
         ctEvPred, ctEvTerm, ctEvId, ctEvCheckDepth,
 
@@ -1028,6 +1029,13 @@ mkTcEqPredLikeEv :: CtEvidence -> TcType -> TcType -> TcType
 mkTcEqPredLikeEv ev
   | isUnLiftedType (ctEvPred ev) = mkPrimEqPred
   | otherwise                    = mkTcEqPred
+
+-- | Makes a new representational predicate with the same boxity as
+-- the given evidence.
+mkTcEqReprPredLikeEv :: CtEvidence -> TcType -> TcType -> TcType
+mkTcEqReprPredLikeEv ev
+  | isUnLiftedType (ctEvPred ev) = mkReprPrimEqPred
+  | otherwise                    = mkCoerciblePred
 
 dropDerivedWC :: WantedConstraints -> WantedConstraints
 -- See Note [Dropping derived constraints]

@@ -142,7 +142,7 @@ import Maybes ( orElse, catMaybes, firstJusts )
 import Pair ( pSnd )
 
 import TrieMap
-import Control.Monad( ap, when )
+import Control.Monad( ap, when, guard )
 import Data.IORef
 import Data.List( partition )
 
@@ -794,10 +794,16 @@ lookupInInerts pty
                          | otherwise
                          = deflt
 
-lookupSolvedDict :: InertSet -> Class -> [Type] -> Maybe CtEvidence
+lookupSolvedDict :: InertSet -> Bool  -- True <=> find a *lifted* dictionary
+                 -> Class -> [Type] -> Maybe CtEvidence
 -- Returns just if exactly this predicate type exists in the solved.
-lookupSolvedDict (IS { inert_solved_dicts = solved }) cls tys
-  = findDict solved cls tys
+lookupSolvedDict (IS { inert_solved_dicts = solved }) is_lifted cls tys
+  = do { dict <- findDict solved cls tys
+       ; guard (isUnLiftedType (ctEvPred dict) == is_lifted)
+       ; return dict }
+    -- TODO (RAE): This is terrible, because we do a lookup and then check.
+    -- The data structure should probably be keyed by liftedness if we are
+    -- to do this.
 \end{code}
 
 
@@ -1876,24 +1882,25 @@ matchFam tycon args
 -- Deferring forall equalities as implications
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-deferTcSForAllEq :: Role -- Nominal or Representational
-                 -> CtLoc  -- Original wanted equality flavor
+deferTcSForAllEq :: CtEvidence  -- Original wanted evidence
                  -> ([Binder],TcType)   -- ForAll tvs1 body1
                  -> ([Binder],TcType)   -- ForAll tvs2 body2
                  -> TcS EvTerm
 -- Some of this functionality is repeated from TcUnify,
 -- consider having a single place where we create fresh implications.
-deferTcSForAllEq role loc (bndrs1,body1) (bndrs2,body2)
+deferTcSForAllEq ev (bndrs1,body1) (bndrs2,body2)
+ | Just (boxity, role, _, _) <- getEqPredTys_maybe (ctEvPred ev)
  = do { (subst1, skol_tvs) <- wrapTcS $ TcM.tcInstSkolTyCoVars tvs1
       ; let tys  = mkTyCoVarTys skol_tvs
             phi1 = Type.substTy subst1 body1
             phi2 = Type.substTy (zipTopTCvSubst tvs2 tys) body2
             skol_info = UnifyForAllSkol skol_tvs phi1
-        ; mev <- newWantedEvVar loc $ case role of
-                Nominal ->          mkPrimEqPred    phi1 phi2
-                              -- TODO (RAE): get the boxity right!
-                Representational -> mkCoerciblePred phi1 phi2
-                Phantom ->          panic "deferTcSForAllEq Phantom"
+        ; mev <- newWantedEvVar loc $ (case (boxity, role) of
+                (Boxed,   Nominal)          -> mkTcEqPred
+                (Unboxed, Nominal)          -> mkPrimEqPred
+                (Boxed,   Representational) -> mkCoerciblePred
+                (Unboxed, Representational) -> mkReprPrimEqPred
+                (_, Phantom) -> panic "deferTcSForAllEq Phantom") phi1 phi2
         ; coe_inside <- case mev of
             Cached ev_tm -> return (evTermCoercion ev_tm)
             Fresh ctev   -> do { ev_binds_var <- wrapTcS $ TcM.newTcEvBinds
@@ -1920,7 +1927,11 @@ deferTcSForAllEq role loc (bndrs1,body1) (bndrs2,body2)
 
         ; return $ EvCoercion (foldr mkTcForAllCo coe_inside skol_tvs)
         }
+
+ | otherwise = pprPanic "deferTcSForAllEq not equality" (ppr ev)
   where
+    loc = ctev_loc ev
+    
     tvs1 = map (binderVar "deferTcSForAllEq") bndrs1
     tvs2 = map (binderVar "deferTcSForAllEq") bndrs2
 \end{code}

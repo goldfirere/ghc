@@ -857,7 +857,7 @@ can_eq_nc' ev s1@(ForAllTy (Named {}) _) _ s2@(ForAllTy (Named {}) _) _
         then canEqFailure ev s1 s2
         else
           do { traceTcS "Creating implication for polytype equality" $ ppr ev
-             ; ev_term <- deferTcSForAllEq Nominal loc (bndrs1,body1) (bndrs2,body2)
+             ; ev_term <- deferTcSForAllEq ev (bndrs1,body1) (bndrs2,body2)
              ; setEvBind orig_ev ev_term
              ; return Stop } }
  | otherwise
