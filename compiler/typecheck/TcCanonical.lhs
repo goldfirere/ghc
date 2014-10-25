@@ -191,10 +191,10 @@ canEvNC :: CtEvidence -> TcS StopOrContinue
 -- Called only for non-canonical EvVars
 canEvNC ev
   = case classifyPredType (ctEvPred ev) of
-      ClassPred cls tys -> traceTcS "canEvNC:cls" (ppr cls <+> ppr tys) >> canClassNC ev cls tys
-      EqPred ty1 ty2    -> traceTcS "canEvNC:eq" (ppr ty1 $$ ppr ty2)   >> canEqNC    ev ty1 ty2
-      TuplePred tys     -> traceTcS "canEvNC:tup" (ppr tys)             >> canTuple   ev tys
-      IrredPred {}      -> traceTcS "canEvNC:irred" (ppr (ctEvPred ev)) >> canIrred   ev
+      ClassPred tc tys -> traceTcS "canEvNC:cls" (ppr tc <+> ppr tys)  >> canClassNC ev tc tys
+      EqPred ty1 ty2   -> traceTcS "canEvNC:eq" (ppr ty1 $$ ppr ty2)   >> canEqNC    ev ty1 ty2
+      TuplePred tys    -> traceTcS "canEvNC:tup" (ppr tys)             >> canTuple   ev tys
+      IrredPred {}     -> traceTcS "canEvNC:irred" (ppr (ctEvPred ev)) >> canIrred   ev
 \end{code}
 
 
@@ -223,7 +223,7 @@ canTuple ev tys
 \begin{code}
 canClass, canClassNC
    :: CtEvidence
-   -> Class -> [Type] -> TcS StopOrContinue
+   -> TyCon -> [Type] -> TcS StopOrContinue
 -- Precondition: EvVar is class evidence
 
 -- The canClassNC version is used on non-canonical constraints
@@ -231,22 +231,22 @@ canClass, canClassNC
 -- for already-canonical class constraints (but which might have
 -- been subsituted or somthing), and hence do not need superclasses
 
-canClassNC ev cls tys
-  = canClass ev cls tys
+canClassNC ev tc tys
+  = canClass ev tc tys
     `andWhenContinue` emitSuperclasses
 
-canClass ev cls tys
+canClass ev tc tys
   = do { (xis, cos) <- flattenMany FMFullFlatten ev tys
-       ; let co = mkTcTyConAppCo Nominal (classTyCon cls) cos
-             xi = mkClassPred cls xis
+       ; let co = mkTcTyConAppCo Nominal tc cos
+             xi = mkClassPred tc xis
        ; mb <- rewriteEvidence ev xi co
-       ; traceTcS "canClass" (vcat [ ppr ev <+> ppr cls <+> ppr tys
+       ; traceTcS "canClass" (vcat [ ppr ev <+> ppr tc <+> ppr tys
                                    , ppr xi, ppr mb ])
        ; case mb of
            Nothing -> return Stop
            Just new_ev -> continueWith $
                           CDictCan { cc_ev = new_ev
-                                   , cc_tyargs = xis, cc_class = cls } }
+                                   , cc_tyargs = xis, cc_class = tc } }
 
 emitSuperclasses :: Ct -> TcS StopOrContinue
 emitSuperclasses ct@(CDictCan { cc_ev = ev , cc_tyargs = xis_new, cc_class = cls })
@@ -357,8 +357,9 @@ is_improvement_pty :: PredType -> Bool
 is_improvement_pty ty = go (classifyPredType ty)
   where
     go (EqPred {})         = True
-    go (ClassPred cls _tys) = not $ null fundeps
-      where (_,fundeps) = classTvsFds cls
+    go (ClassPred tc _tys)
+      | Just cls <- tyConClass_maybe tc = not $ null $ snd $ classTvsFds cls
+      | otherwise                       = False
     go (TuplePred ts)      = any is_improvement_pty ts
     go (IrredPred {})      = True -- Might have equalities after reduction?
 \end{code}
@@ -385,11 +386,11 @@ canIrred old_ev
 
     do { -- Re-classify, in case flattening has improved its shape
        ; case classifyPredType (ctEvPred new_ev) of
-           ClassPred cls tys -> canClassNC new_ev cls tys
-           TuplePred tys     -> canTuple   new_ev tys
-           EqPred ty1 ty2    -> canEqNC new_ev ty1 ty2
-           _                 -> continueWith $
-                                CIrredEvCan { cc_ev = new_ev } } } }
+           ClassPred tc tys -> canClassNC new_ev tc tys
+           TuplePred tys    -> canTuple   new_ev tys
+           EqPred ty1 ty2   -> canEqNC new_ev ty1 ty2
+           _                -> continueWith $
+                               CIrredEvCan { cc_ev = new_ev } } } }
 
 canHole :: CtEvidence -> OccName -> TcS StopOrContinue
 canHole ev occ

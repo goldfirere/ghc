@@ -872,8 +872,8 @@ dsEvTerm (EvTupleMk tms)
 
 dsEvTerm (EvSuperClass d n)
   = do { d' <- dsEvTerm d
-       ; let (cls, tys) = getClassPredTys (exprType d')
-             sc_sel_id  = classSCSelId cls n    -- Zero-indexed
+       ; let (tc, tys) = getClassPredTys (exprType d')
+             sc_sel_id  = classSCSelId (tyConClass tc) n    -- Zero-indexed
        ; return $ Var sc_sel_id `mkTyApps` tys `App` d' }
   where
 

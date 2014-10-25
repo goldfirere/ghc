@@ -1748,11 +1748,13 @@ mkCallUDs' env f args
 
     type_determines_value pred    -- See Note [Type determines value]
         = case classifyPredType pred of
-            ClassPred cls _ -> not (isIPClass cls)
-            TuplePred ps    -> all type_determines_value ps
-            EqPred {}       -> True
-            IrredPred {}    -> True   -- Things like (D []) where D is a
-                                      -- Constraint-ranged family; Trac #7785
+            ClassPred tc _
+              | Just cls <- tyConClass_maybe tc -> not (isIPClass cls)
+              | otherwise                       -> True   -- (~R#)  -- TODO (RAE): Shameful!
+            TuplePred ps   -> all type_determines_value ps
+            EqPred {}      -> True
+            IrredPred {}   -> True   -- Things like (D []) where D is a
+                                     -- Constraint-ranged family; Trac #7785
 \end{code}
 
 Note [Type determines value]

@@ -1144,7 +1144,7 @@ inferConstraints cls inst_tys rep_tc rep_tc_args
 
        -- Constraints arising from the arguments of each constructor
     con_arg_constraints cls' get_constrained_tys
-      = [ mkPredOrigin (DerivOriginDC data_con arg_n) (mkClassPred cls' [inner_ty])
+      = [ mkPredOrigin (DerivOriginDC data_con arg_n) (mkClassPred (classTyCon cls') [inner_ty])
         | data_con <- tyConDataCons rep_tc
         , (arg_n, arg_ty) <- ASSERT( isVanillaDataCon data_con )
                              zip [1..] $  -- ASSERT is precondition of dataConInstOrigArgTys
@@ -1193,7 +1193,7 @@ inferConstraints cls inst_tys rep_tc rep_tc_args
     extra_constraints
       | cls `hasKey` dataClassKey
       , all (isLiftedTypeKind . typeKind) rep_tc_args
-      = [mkPredOrigin DerivOrigin (mkClassPred cls [ty]) | ty <- rep_tc_args]
+      = [mkPredOrigin DerivOrigin (mkClassPred (classTyCon cls) [ty]) | ty <- rep_tc_args]
       | otherwise
       = []
 \end{code}
@@ -1240,7 +1240,7 @@ checkSideConditions dflags mtheta cls cls_tys rep_tc rep_tc_args
   | otherwise = NonDerivableClass       -- Not a standard class
 
 classArgsErr :: Class -> [Type] -> SDoc
-classArgsErr cls cls_tys = quotes (ppr (mkClassPred cls cls_tys)) <+> ptext (sLit "is not a class")
+classArgsErr cls cls_tys = quotes (ppr (mkClassPred (classTyCon cls) cls_tys)) <+> ptext (sLit "is not a class")
 
 checkOldTypeableConditions :: Condition
 checkOldTypeableConditions = checkFlag Opt_DeriveDataTypeable `andCond` cond_oldTypeableOK
@@ -1650,7 +1650,7 @@ mkNewTypeEqn dflags overlap_mode tvs
         -- when making the Num instance of A!
         rep_inst_ty = newTyConInstRhs rep_tycon rep_tc_args
         rep_tys     = cls_tys ++ [rep_inst_ty]
-        rep_pred    = mkClassPred cls rep_tys
+        rep_pred    = mkClassPred (classTyCon cls) rep_tys
         rep_pred_o  = mkPredOrigin DerivOrigin rep_pred
                 -- rep_pred is the representation dictionary, from where
                 -- we are gong to get all the methods for the newtype
@@ -1829,7 +1829,7 @@ inferInstanceContexts oflag infer_specs
                 --   checkValidInstance tyvars theta clas inst_tys
            ; return (sortBy cmpType theta) }    -- Canonicalise before returning the solution
       where
-        the_pred = mkClassPred clas inst_tys
+        the_pred = mkClassPred (classTyCon clas) inst_tys
 
 ------------------------------------------------------------------
 mkInstance :: OverlapFlag -> ThetaType -> DerivSpec theta -> TcM ClsInst
@@ -2167,7 +2167,7 @@ derivingThingErr newtype_deriving clas tys ty why
   where
     extra | newtype_deriving = ptext (sLit "(even with cunning newtype deriving)")
           | otherwise        = Outputable.empty
-    pred = mkClassPred clas (tys ++ [ty])
+    pred = mkClassPred (classTyCon clas) (tys ++ [ty])
 
 derivingHiddenErr :: TyCon -> SDoc
 derivingHiddenErr tc

@@ -280,7 +280,7 @@ mkDictSelId name clas
     arg_tys        = dataConRepArgTys data_con  -- Includes the dictionary superclasses
     val_index      = assoc "MkId.mkDictSelId" (sel_names `zip` [0..]) name
 
-    sel_ty = mkInvForAllTys tyvars (mkFunTy (mkClassPred clas (mkOnlyTyVarTys tyvars))
+    sel_ty = mkInvForAllTys tyvars (mkFunTy (mkClassPred tycon (mkOnlyTyVarTys tyvars))
                                             (getNth arg_tys val_index))
 
     base_info = noCafIdInfo
@@ -333,7 +333,7 @@ mkDictSelRhs clas val_index
     arg_tys        = dataConRepArgTys data_con  -- Includes the dictionary superclasses
 
     the_arg_id     = getNth arg_ids val_index
-    pred           = mkClassPred clas (mkTyCoVarTys tyvars)
+    pred           = mkClassPred tycon (mkTyCoVarTys tyvars)
     dict_id        = mkTemplateLocal 1 pred
     arg_ids        = mkTemplateLocalsNum 2 arg_tys
 
@@ -969,7 +969,8 @@ mkDictFunTy :: [TyCoVar] -> ThetaType -> Class -> [Type] -> (Int, Type)
 mkDictFunTy tvs theta clas tys
   = (length silent_theta, dfun_ty)
   where
-    dfun_ty = mkInvSigmaTy tvs (silent_theta ++ theta) (mkClassPred clas tys)
+    tycon = classTyCon clas
+    dfun_ty = mkInvSigmaTy tvs (silent_theta ++ theta) (mkClassPred tycon tys)
     silent_theta 
       | null tvs, null theta 
       = []

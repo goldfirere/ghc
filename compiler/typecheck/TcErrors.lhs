@@ -264,8 +264,9 @@ reportFlats ctxt flats    -- Here 'flats' includes insolble goals
     is_dict _ (ClassPred {}) = True
     is_dict _ _              = False
 
-    is_ip _ (ClassPred cls _) = isIPClass cls
-    is_ip _ _                 = False
+    is_ip _ (ClassPred tc _)
+       | cls <- Just tyConClass_maybe tc = isIPClass cls
+    is_ip _ _                            = False
 
     is_irred _ (IrredPred {}) = True
     is_irred _ _              = False

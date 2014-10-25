@@ -76,7 +76,7 @@ check_instance :: Type -> Class -> TcM Bool
   -- Check that ty is an instance of cls
   -- We only care about whether it worked or not; return a boolean
 check_instance ty cls
-  = do  { (_, mb_res) <- tryTc (simplifyDefault [mkClassPred cls [ty]])
+  = do  { (_, mb_res) <- tryTc (simplifyDefault [mkClassPred (classTyCon cls) [ty]])
         ; return (isJust mb_res) }
 
 defaultDeclCtxt :: SDoc

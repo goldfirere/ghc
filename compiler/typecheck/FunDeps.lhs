@@ -220,9 +220,11 @@ improveFromAnother :: PredType -- Template item (usually given, or inert)
 -- Post: FDEqs always oriented from the other to the workitem
 --       Equations have empty quantified variables
 improveFromAnother pred1 pred2
-  | Just (cls1, tys1) <- getClassPredTys_maybe pred1
-  , Just (cls2, tys2) <- getClassPredTys_maybe pred2
-  , tys1 `lengthAtLeast` 2 && cls1 == cls2
+  | Just (tc1, tys1) <- getClassPredTys_maybe pred1
+  , Just (tc2, tys2) <- getClassPredTys_maybe pred2
+  , Just cls1 <- tyConClass_maybe tc1   -- TODO (RAE): Shameful.
+  , Just cls2 <- tyConClass_maybe tc2
+  , tys1 `lengthAtLeast` 2 && tc1 == tc2
   = [ FDEqn { fd_qtvs = [], fd_eqs = eqs, fd_pred1 = pred1, fd_pred2 = pred2, fd_loc = () }
     | let (cls_tvs, cls_fds) = classTvsFds cls1
     , fd <- cls_fds
@@ -252,7 +254,8 @@ improveFromInstEnv _inst_env pred
   | not (isClassPred pred)
   = panic "improveFromInstEnv: not a class predicate"
 improveFromInstEnv inst_env pred
-  | Just (cls, tys) <- getClassPredTys_maybe pred
+  | Just (tc, tys) <- getClassPredTys_maybe pred
+  , Just cls <- tyConClass_maybe tc   -- TODO (RAE): Shameful.
   , tys `lengthAtLeast` 2
   , let (cls_tvs, cls_fds) = classTvsFds cls
         instances          = classInstances inst_env cls
@@ -270,7 +273,7 @@ improveFromInstEnv inst_env pred
     , ispec <- instances
     , (meta_tvs, eqs) <- checkClsFD fd cls_tvs ispec
                                     emptyVarSet tys trimmed_tcs -- NB: orientation
-    , let p_inst = mkClassPred cls (is_tys ispec)
+    , let p_inst = mkClassPred tc (is_tys ispec)
     ]
 improveFromInstEnv _ _ = []
 
@@ -519,7 +522,8 @@ oclose preds fixed_tvs
     determined :: PredType -> [([Type],[Type])]
     determined pred
        = case classifyPredType pred of
-            ClassPred cls tys ->
+            ClassPred tc tys
+              | Just cls <- tyConClass_maybe tc ->
                do let (cls_tvs, cls_fds) = classTvsFds cls
                   fd <- cls_fds
                   return (instFD fd cls_tvs tys)

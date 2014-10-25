@@ -163,7 +163,8 @@ tcClassDecl2 (L loc (ClassDecl {tcdLName = class_name, tcdSigs = sigs,
               prag_fn     = mkPragFun sigs default_binds
               sig_fn      = mkHsSigFun sigs
               clas_tyvars = snd (tcSuperSkolTyCoVars tyvars)
-              pred        = mkClassPred clas (mkTyCoVarTys clas_tyvars)
+              tycon       = classTyCon clas
+              pred        = mkClassPred tycon (mkTyCoVarTys clas_tyvars)
         ; this_dict <- newEvVar pred
 
         ; traceTc "TIM2" (ppr sigs)
@@ -298,7 +299,7 @@ instantiateMethod clas sel_id inst_tys
                 `orElse` pprPanic "tcInstanceMethod" (ppr sel_id)
 
     ok_first_pred = case getClassPredTys_maybe first_pred of
-                      Just (clas1, _tys) -> clas == clas1
+                      Just (tc1, _tys) -> classTyCon clas == tc1
                       Nothing -> False
               -- The first predicate should be of form (C a b)
               -- where C is the class in question

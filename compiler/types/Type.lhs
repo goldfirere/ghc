@@ -1199,10 +1199,11 @@ isPredTy ty = go ty []
 
 isClassPred, isEqPred, isIPPred :: PredType -> Bool
 isClassPred ty = case tyConAppTyCon_maybe ty of
-    Just tyCon | isClassTyCon tyCon -> True
-    _                               -> False
+                   -- TODO (RAE): More shamefulness.
+    Just tyCon -> isClassTyCon tyCon || tyCon `hasKey` eqReprPrimTyConKey
+    _          -> False
 isEqPred ty = case tyConAppTyCon_maybe ty of
-    Just tyCon -> tyCon `hasKey` eqTyConKey
+    Just tyCon -> tyCon `hasKey` eqTyConKey || tyCon `hasKey` eqPrimTyConKey
     _          -> False
 
 isIPPred ty = case tyConAppTyCon_maybe ty of
@@ -1279,8 +1280,8 @@ mkReprPrimEqPred ty1  ty2
 
 --------------------- Dictionary types ---------------------------------
 \begin{code}
-mkClassPred :: Class -> [Type] -> PredType
-mkClassPred clas tys = TyConApp (classTyCon clas) tys
+mkClassPred :: TyCon -> [Type] -> PredType
+mkClassPred tc tys = TyConApp tc tys
 
 isDictTy :: Type -> Bool
 isDictTy = isClassPred
@@ -1327,19 +1328,16 @@ constraints build tuples.
 Decomposing PredType
 
 \begin{code}
-data PredTree = ClassPred Class [Type]
+data PredTree = ClassPred TyCon [Type]
               | EqPred Type Type
               | TuplePred [PredType]
               | IrredPred PredType
 
 classifyPredType :: PredType -> PredTree
 classifyPredType ev_ty = case splitTyConApp_maybe ev_ty of
-    Just (tc, tys) | Just clas <- tyConClass_maybe tc
-                   -> ClassPred clas tys
-    Just (tc, tys) | tc `hasKey` eqReprPrimTyConKey
-                   , [_,_,_,_] <- tys
-                   -> ClassPred coercibleClass (tail tys)
-                      -- TODO (RAE): This is truly awful.
+    Just (tc, tys) | isClassTyCon tc || tc `hasKey` eqReprPrimTyConKey
+                   -> ClassPred tc tys
+                      -- TODO (RAE): This is truly shameful.
                       -- Also, fix getClassPredTys_maybe
     Just (tc, tys) | tc `hasKey` eqTyConKey
                    , let [_, ty1, ty2] = tys
@@ -1353,18 +1351,16 @@ classifyPredType ev_ty = case splitTyConApp_maybe ev_ty of
 \end{code}
 
 \begin{code}
-getClassPredTys :: PredType -> (Class, [Type])
+getClassPredTys :: PredType -> (TyCon, [Type])
 getClassPredTys ty = case getClassPredTys_maybe ty of
-        Just (clas, tys) -> (clas, tys)
-        Nothing          -> pprPanic "getClassPredTys" (ppr ty)
+        Just (tc, tys) -> (tc, tys)
+        Nothing        -> pprPanic "getClassPredTys" (ppr ty)
 
-getClassPredTys_maybe :: PredType -> Maybe (Class, [Type])
+getClassPredTys_maybe :: PredType -> Maybe (TyCon, [Type])
 getClassPredTys_maybe ty = case splitTyConApp_maybe ty of
-        Just (tc, tys) | Just clas <- tyConClass_maybe tc -> Just (clas, tys)
-                       | tc `hasKey` eqReprPrimTyConKey
-                       , [_,_,_,_] <- tys
-                      -> Just (coercibleClass, tys)
-                          -- TODO (RAE): Still awful.
+        Just (tc, tys) | isClassTyCon tc || tc `hasKey` eqReprPrimTyConKey
+                      -> Just (tc, tys)
+                          -- TODO (RAE): Still shameful.
         _ -> Nothing
 
 getEqPredTys :: PredType -> (Type, Type)
