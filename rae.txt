@@ -1,0 +1,3 @@
+Questions:
+
+ - Is Note [Spontaneously solved in TyBinds] correct anymore? I don't think so.

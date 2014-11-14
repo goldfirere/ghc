@@ -1002,7 +1002,7 @@ data Ct
   | CTyEqCan {  -- tv ~ rhs
        -- Invariants:
        --   * See Note [Applying the inert substitution] in TcFlatten
-       --   * tv not in tvs(xi)   (occurs check)
+       --   * tv not in tvs(rhs)   (occurs check)
        --   * If tv is a TauTv, then rhs has no foralls
        --       (this avoids substituting a forall for the tyvar in other types)
        --   * typeKind ty `subKind` typeKind tv
@@ -1015,8 +1015,9 @@ data Ct
        --     unification happening; eg if rhs is touchable then lhs is too
       cc_ev     :: CtEvidence, -- See Note [Ct/evidence invariant]
       cc_tyvar  :: TcTyVar,
-      cc_rhs    :: TcType      -- Not necessarily function-free (hence not Xi)
+      cc_rhs    :: TcType,     -- Not necessarily function-free (hence not Xi)
                                -- See invariants above
+      cc_eq_rel :: EqRel
     }
 
   | CFunEqCan {  -- F xis ~ fsk
@@ -1498,6 +1499,10 @@ ctEvPred = ctev_pred
 
 ctEvLoc :: CtEvidence -> CtLoc
 ctEvLoc = ctev_loc
+
+-- | Get the equality relation relevant for a 'CtEvidence'
+ctEvEqRel :: CtEvidence -> EqRel
+ctEvEqRel = predTypeEqRel . ctEvPred
 
 ctEvTerm :: CtEvidence -> EvTerm
 ctEvTerm (CtGiven   { ctev_evtm = tm }) = tm

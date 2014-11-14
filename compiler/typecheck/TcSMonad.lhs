@@ -378,9 +378,11 @@ Type-family equations, of form (ev : F tys ~ ty), live in three places
 -- See Note [Detailed InertCans Invariants] for more
 data InertCans
   = IC { inert_eqs :: TyVarEnv EqualCtList
-              -- All CTyEqCans; index is the LHS tyvar
-              -- Some Refl equalities are also in tcs_ty_binds
+              -- All CTyEqCans with NomEq; index is the LHS tyvar
               -- see Note [Spontaneously solved in TyBinds] in TcInteract
+
+       , inert_repr_eqs :: TyVarEnv EqualCtList
+              -- All CTyEqCans with ReprEq; like inert_eqs otherwise
 
        , inert_funeqs :: FunEqMap Ct
               -- All CFunEqCans; index is the whole family head type.
@@ -429,7 +431,6 @@ data InertSet
        , inert_solved_dicts   :: DictMap CtEvidence
               -- Of form ev :: C t1 .. tn
               -- Always the result of using a top-level instance declaration
-              -- See Note [Solved constraints]
               -- - Used to avoid creating a new EvVar when we have a new goal
               --   that we have solved in the past
               -- - Stored not necessarily as fully rewritten

@@ -1265,6 +1265,7 @@ zonkEvBind env (EvBind var term)
          -- See Note [Optimise coercion zonking]
          -- This has a very big effect on some programs (eg Trac #5030)
        ; let ty' = idType var'
+
        ; case getEqPredTys_maybe ty' of
            Just (r, ty1, ty2) | ty1 `eqType` ty2
                   -> return (EvBind var' (EvCoercion (mkTcReflCo r ty1)))

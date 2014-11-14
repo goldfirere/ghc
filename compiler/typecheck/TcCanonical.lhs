@@ -138,9 +138,10 @@ canonicalize (CDictCan { cc_ev = ev
     canClass ev cls xis -- Do not add any superclasses
 canonicalize (CTyEqCan { cc_ev = ev
                        , cc_tyvar  = tv
-                       , cc_rhs    = xi })
+                       , cc_rhs    = xi
+                       , cc_eq_rel = eq_rel })
   = {-# SCC "canEqLeafTyVarEq" #-}
-    canEqTyVar ev NotSwapped tv xi xi
+    canEqTyVar ev eq_rel NotSwapped tv xi xi
 
 canonicalize (CFunEqCan { cc_ev = ev
                         , cc_fun    = fn
@@ -158,10 +159,14 @@ canEvNC :: CtEvidence -> TcS (StopOrContinue Ct)
 -- Called only for non-canonical EvVars
 canEvNC ev
   = case classifyPredType (ctEvPred ev) of
-      ClassPred cls tys -> traceTcS "canEvNC:cls" (ppr cls <+> ppr tys) >> canClassNC ev cls tys
-      EqPred ty1 ty2    -> traceTcS "canEvNC:eq" (ppr ty1 $$ ppr ty2)   >> canEqNC    ev ty1 ty2
-      TuplePred tys     -> traceTcS "canEvNC:tup" (ppr tys)             >> canTuple   ev tys
-      IrredPred {}      -> traceTcS "canEvNC:irred" (ppr (ctEvPred ev)) >> canIrred   ev
+      ClassPred cls tys     -> do traceTcS "canEvNC:cls" (ppr cls <+> ppr tys)
+                                  canClassNC ev cls tys
+      EqPred eq_rel ty1 ty2 -> do traceTcS "canEvNC:eq" (ppr ty1 $$ ppr ty2)
+                                  canEqNC    ev eq_rel ty1 ty2
+      TuplePred tys         -> do traceTcS "canEvNC:tup" (ppr tys)
+                                  canTuple   ev tys
+      IrredPred {}          -> do traceTcS "canEvNC:irred" (ppr (ctEvPred ev))
+                                  canIrred   ev
 \end{code}
 
 
@@ -351,11 +356,11 @@ canIrred old_ev
 
     do { -- Re-classify, in case flattening has improved its shape
        ; case classifyPredType (ctEvPred new_ev) of
-           ClassPred cls tys -> canClassNC new_ev cls tys
-           TuplePred tys     -> canTuple   new_ev tys
-           EqPred ty1 ty2    -> canEqNC new_ev ty1 ty2
-           _                 -> continueWith $
-                                CIrredEvCan { cc_ev = new_ev } } } }
+           ClassPred cls tys     -> canClassNC new_ev cls tys
+           TuplePred tys         -> canTuple   new_ev tys
+           EqPred eq_rel ty1 ty2 -> canEqNC new_ev eq_rel ty1 ty2
+           _                     -> continueWith $
+                                    CIrredEvCan { cc_ev = new_ev } } } }
 
 canHole :: CtEvidence -> OccName -> TcS (StopOrContinue Ct)
 canHole ev occ
@@ -376,54 +381,55 @@ canHole ev occ
 %************************************************************************
 
 \begin{code}
-canEqNC :: CtEvidence -> Type -> Type -> TcS (StopOrContinue Ct)
-canEqNC ev ty1 ty2 = can_eq_nc ev ty1 ty1 ty2 ty2
+canEqNC :: CtEvidence -> EqRel -> Type -> Type -> TcS (StopOrContinue Ct)
+canEqNC ev eq_rel ty1 ty2 = can_eq_nc ev eq_rel ty1 ty1 ty2 ty2
 
 can_eq_nc, can_eq_nc' 
-   :: CtEvidence 
+   :: CtEvidence
+   -> EqRel
    -> Type -> Type    -- LHS, after and before type-synonym expansion, resp 
    -> Type -> Type    -- RHS, after and before type-synonym expansion, resp 
    -> TcS (StopOrContinue Ct)
 
-can_eq_nc ev ty1 ps_ty1 ty2 ps_ty2
+can_eq_nc ev eq_rel ty1 ps_ty1 ty2 ps_ty2
   = do { traceTcS "can_eq_nc" $ 
-         vcat [ ppr ev, ppr ty1, ppr ps_ty1, ppr ty2, ppr ps_ty2 ]
-       ; can_eq_nc' ev ty1 ps_ty1 ty2 ps_ty2 }
+         vcat [ ppr ev, ppr eq_rel, ppr ty1, ppr ps_ty1, ppr ty2, ppr ps_ty2 ]
+       ; can_eq_nc' ev eq_rel ty1 ps_ty1 ty2 ps_ty2 }
 
 -- Expand synonyms first; see Note [Type synonyms and canonicalization]
-can_eq_nc' ev ty1 ps_ty1 ty2 ps_ty2
-  | Just ty1' <- tcView ty1 = can_eq_nc ev ty1' ps_ty1 ty2  ps_ty2
-  | Just ty2' <- tcView ty2 = can_eq_nc ev ty1  ps_ty1 ty2' ps_ty2
+can_eq_nc' ev eq_rel ty1 ps_ty1 ty2 ps_ty2
+  | Just ty1' <- tcView ty1 = can_eq_nc ev eq_rel ty1' ps_ty1 ty2  ps_ty2
+  | Just ty2' <- tcView ty2 = can_eq_nc ev eq_rel ty1  ps_ty1 ty2' ps_ty2
 
 -- Type family on LHS or RHS take priority over tyvars,
 -- so that  tv ~ F ty gets flattened
 -- Otherwise  F a ~ F a  might not get solved!
-can_eq_nc' ev (TyConApp fn1 tys1) _ ty2 ps_ty2
-  | isSynFamilyTyCon fn1 = can_eq_fam_nc ev NotSwapped fn1 tys1 ty2 ps_ty2
-can_eq_nc' ev ty1 ps_ty1 (TyConApp fn2 tys2) _
-  | isSynFamilyTyCon fn2 = can_eq_fam_nc ev IsSwapped fn2 tys2 ty1 ps_ty1
+can_eq_nc' ev eq_rel (TyConApp fn1 tys1) _ ty2 ps_ty2
+  | isSynFamilyTyCon fn1 = can_eq_fam_nc ev eq_rel NotSwapped fn1 tys1 ty2 ps_ty2
+can_eq_nc' ev eq_rel ty1 ps_ty1 (TyConApp fn2 tys2) _
+  | isSynFamilyTyCon fn2 = can_eq_fam_nc ev eq_rel IsSwapped fn2 tys2 ty1 ps_ty1
 
 -- Type variable on LHS or RHS are next
-can_eq_nc' ev (TyVarTy tv1) _ ty2 ps_ty2
-  = canEqTyVar ev NotSwapped tv1 ty2 ps_ty2
+can_eq_nc' ev eq_rel (TyVarTy tv1) _ ty2 ps_ty2
+  = canEqTyVar ev eq_rel NotSwapped tv1 ty2 ps_ty2
 can_eq_nc' ev ty1 ps_ty1 (TyVarTy tv2) _
-  = canEqTyVar ev IsSwapped tv2 ty1 ps_ty1
+  = canEqTyVar ev eq_rel IsSwapped tv2 ty1 ps_ty1
 
 ----------------------
 -- Otherwise try to decompose
 ----------------------
 
 -- Literals
-can_eq_nc' ev ty1@(LitTy l1) _ (LitTy l2) _
+can_eq_nc' ev eq_rel ty1@(LitTy l1) _ (LitTy l2) _
  | l1 == l2
   = do { when (isWanted ev) $
-         setEvBind (ctev_evar ev) (EvCoercion (mkTcNomReflCo ty1))
+         setEvBind (ctev_evar ev) (EvCoercion (mkTcReflCo (eqRelRole eq_rel) ty1))
        ; stopWith ev "Equal LitTy" }
 
 -- Decomposable type constructor applications 
 -- Synonyms and type functions (which are not decomposable)
 -- have already been dealt with 
-can_eq_nc' ev (TyConApp tc1 tys1) _ (TyConApp tc2 tys2) _
+can_eq_nc' ev eq_rel (TyConApp tc1 tys1) _ (TyConApp tc2 tys2) _
   | isDecomposableTyCon tc1
   , isDecomposableTyCon tc2
   = canDecomposableTyConApp ev tc1 tys1 tc2 tys2
