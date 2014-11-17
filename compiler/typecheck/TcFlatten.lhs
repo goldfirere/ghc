@@ -564,10 +564,19 @@ transitive expansion contains any type function applications.  If so,
 it expands the synonym and proceeds; if not, it simply returns the
 unexpanded synonym.
 
+Note [Flattener EqRels]
+~~~~~~~~~~~~~~~~~~~~~~~
+When flattening, we need to know which equality relation -- nominal
+or representation -- we should be respecting. If respecting nominal
+equality, we squeeze out only type families. If respecting representational
+equality, we squeeze out newtypes whose constructors are in scope, too.
+
 \begin{code}
 data FlattenEnv
-  = FE { fe_mode :: FlattenMode
-       , fe_ev   :: CtEvidence }
+  = FE { fe_mode   :: FlattenMode
+       , fe_loc    :: CtLoc
+       , fe_nature :: CtNature
+       , fe_eq_rel :: EqRel }   -- See Note [Flattener EqRels]
 
 data FlattenMode  -- Postcondition for all three: inert wrt the type substitution
   = FM_FlattenAll          -- Postcondition: function-free
@@ -580,6 +589,15 @@ data FlattenMode  -- Postcondition for all three: inert wrt the type substitutio
                            --   (but under type constructors is ok e.g. [F a])
 
   | FM_SubstOnly           -- See Note [Flattening under a forall]
+
+mkFlattenEnv :: CtEvidence -> FlattenMode -> FlattenEnv
+mkFlattenEnv ctev fm = FE { fe_mode = fm
+                          , fe_loc  = ctEvLoc ctev
+                          , fe_nature = ctEvNature ctev
+                          , fe_eq_rel = ctEvEqRel ctev }
+
+feRole :: FlattenEnv -> Role
+feRole = eqRelRole . fe_eq_rel
 \end{code}
 
 Note [Lazy flattening]
@@ -608,8 +626,19 @@ Bottom line: FM_Avoid is unused for now (Nov 14).
 Note: T5321Fun got faster when I disabled FM_Avoid
       T5837 did too, but it's pathalogical anyway
 
+Note [Phantoms in the flattener]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Suppose we're flattening (w.r.t. representational equality; see Note
+[Flattener EqRels]) `N Int (F Bool)`, where
+
+  newtype N a b = MkN a
+
+The second parameter to `N` has a phantom role. As we flatten the type
+above to 
+
 \begin{code}
--- Flatten a bunch of types all at once.
+-- Flatten a bunch of types all at once. Roles on the coercions returned
+-- always match the EqRel in the FlattenEnv.
 flattenMany :: FlattenEnv -> [Type] -> TcS ([Xi], [TcCoercion])
 -- Coercions :: Xi ~ Type
 -- Returns True iff (no flattening happened)
@@ -630,14 +659,31 @@ flatten :: FlattenEnv -> TcType -> TcS (Xi, TcCoercion)
 -- constraints.  See Note [Flattening] for more detail.
 --
 -- Postcondition: Coercion :: Xi ~ TcType
+-- The role on the result coercion matches the EqRel in the FlattenEnv
 
-flatten _ xi@(LitTy {}) = return (xi, mkTcNomReflCo xi)
+flatten fmode xi@(LitTy {}) = return (xi, mkTcReflCo (feRole fmode) xi)
 
 flatten fmode (TyVarTy tv)
   = flattenTyVar fmode tv
 
-flatten fmode (AppTy ty1 ty2)
+flatten fmode@(FE { fe_eq_rel = eq_rel }) (AppTy ty1 ty2)
   = do { (xi1,co1) <- flatten fmode ty1
+       ; case splitTyConApp_maybe xi1 of
+           Just _ | ReprEq <- eq_rel
+             -> do { -- we may have just exposed a newtype that could reduce
+                     -- with another argument. Recur.
+                     (xi, co) <- flatten fmode (mkAppTy xi1 ty2)
+                     -- co :: xi ~ xi1 ty2
+                     -- co1 :: xi1 ~ ty1
+                     -- co1 <ty2> :: xi1 ty2 ~ ty1 ty2
+                     -- co ; co1 <ty2> :: xi ~ ty1 ty2
+                   ; return (xi, co `mkTcTransCo`
+                                 mkTcAppCo co1 (mkTcNomReflCo ty2)) }
+           
+       ; let eq_rel2 = case nextRole co1 of
+               Nominal          -> NomEq
+               Representational -> ReprEq
+               Phantom          -> NomEq  -- See Note [Phantoms in the flattener]
        ; (xi2,co2) <- flatten fmode ty2
        ; traceTcS "flatten/appty" (ppr ty1 $$ ppr ty2 $$ ppr xi1 $$ ppr co1 $$ ppr xi2 $$ ppr co2)
        ; return (mkAppTy xi1 xi2, mkTcAppCo co1 co2) }
