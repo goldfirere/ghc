@@ -900,6 +900,7 @@ flatten_exact_fam_app fmode tc tys
     roles = tyConRolesX (feRole fmode) tc
 
 flatten_exact_fam_app_fully fmode tc tys
+  -- See Note [Reduce type family applications eagerly]
   = try_to_reduce tc tys False id $
     do { (xis, cos) <- flatten_many_nom (setFEEqRel (setFEMode fmode FM_FlattenAll) NomEq) tys
        ; let ret_co = mkTcTyConAppCo (feRole fmode) tc cos
@@ -974,9 +975,13 @@ then, rather than flattening to a skolem etc, we may as well just reduce
 it on the spot to (Cons x t).  This saves a lot of intermediate steps.
 Examples that are helped are tests T9872, and T5321Fun.
 
-So just before we create the new skolem, we attempt to reduce it by one
-step (using matchFam).  If that works, then recursively flatten the rhs,
-which may in turn do lots more reductions.
+Performance testing indicates that it's best to try this *twice*, once
+before flattening arguments and once after flattening arguments.
+Adding the extra reduction attempt before flattening arguments cut
+the allocation amounts for the T9872{a,b,c} tests by half. Testing
+also indicated that the early reduction should not use the flat-cache,
+but that the later reduction should. It's possible that with more
+examples, we might learn that these knobs should be set differently.
 
 Once we've got a flat rhs, we extend the flatten-cache to record the
 result.  Doing so can save lots of work when the same redex shows up
