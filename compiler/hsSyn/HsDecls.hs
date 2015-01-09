@@ -985,8 +985,10 @@ ppr_con_names xs  = interpp'SP xs
 instance (Outputable name) => OutputableBndr [Located name] where
   pprBndr _bs xs = cat $ punctuate comma (map ppr xs)
 
-  pprPrefixOcc [x] = ppr x
-  pprPrefixOcc xs  = cat $ punctuate comma (map ppr xs)
+  pprPrefixOcc [x] = pprTrace "RAEb1" empty $
+                     ppr x
+  pprPrefixOcc xs  = pprTrace "RAEb2" empty $
+                     cat $ punctuate comma (map ppr xs)
 
   pprInfixOcc [x] = ppr x
   pprInfixOcc xs  = cat $ punctuate comma (map ppr xs)

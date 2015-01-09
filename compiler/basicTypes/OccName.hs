@@ -278,7 +278,8 @@ instance Outputable OccName where
 instance OutputableBndr OccName where
     pprBndr _ = ppr
     pprInfixOcc n = pprInfixVar (isSymOcc n) (ppr n)
-    pprPrefixOcc n = pprPrefixVar (isSymOcc n) (ppr n)
+    pprPrefixOcc n = pprTrace "RAEd5" empty $
+                     pprPrefixVar (isSymOcc n) (ppr n)
 
 pprOccName :: OccName -> SDoc
 pprOccName (OccName sp occ)

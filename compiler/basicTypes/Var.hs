@@ -210,7 +210,8 @@ After CoreTidy, top-level LocalIds are turned into GlobalIds
 -}
 
 instance Outputable Var where
-  ppr var = sdocWithDynFlags $ \dflags ->
+  ppr var = pprTrace "RAEc1" empty $
+            sdocWithDynFlags $ \dflags ->
             getPprStyle $ \ppr_style ->
             if |  debugStyle ppr_style && (not (gopt Opt_SuppressVarKinds dflags))
                  -> parens (ppr (varName var) <+> ppr_debug var ppr_style <+>

@@ -51,7 +51,7 @@ import BasicTypes ( Boxity(..), isBoxed )
 import Bag
 import Pair
 import Digraph
-import Control.Applicative
+import Control.Applicative hiding ( empty )
 #if __GLASGOW_HASKELL__ < 709
 import Data.Traversable (traverse, sequenceA)
 #endif
@@ -1019,7 +1019,8 @@ pprHsWrapper :: SDoc -> HsWrapper -> SDoc
 -- In debug mode, print the wrapper
 -- otherwise just print what's inside
 pprHsWrapper doc wrap
-  = getPprStyle (\ s -> if debugStyle s then (help (add_parens doc) wrap False) else doc)
+  = pprTrace "RAEa1" empty $
+    getPprStyle (\ s -> if debugStyle s then (help (add_parens doc) wrap False) else pprTrace "RAEa2" empty doc)
   where
     help :: (Bool -> SDoc) -> HsWrapper -> Bool -> SDoc
     -- True  <=> appears in function application position

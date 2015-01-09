@@ -71,8 +71,10 @@ instance Outputable ConLike where
 instance OutputableBndr ConLike where
     pprInfixOcc (RealDataCon dc) = pprInfixOcc dc
     pprInfixOcc (PatSynCon ps) = pprInfixOcc ps
-    pprPrefixOcc (RealDataCon dc) = pprPrefixOcc dc
-    pprPrefixOcc (PatSynCon ps) = pprPrefixOcc ps
+    pprPrefixOcc (RealDataCon dc) = pprTrace "RAEd1" empty $
+                                    pprPrefixOcc dc
+    pprPrefixOcc (PatSynCon ps) = pprTrace "RAEd2" empty $
+                                  pprPrefixOcc ps
 
 instance Data.Data ConLike where
     -- don't traverse?

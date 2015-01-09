@@ -271,7 +271,8 @@ instance OutputableBndr RdrName where
 
     pprInfixOcc  rdr = pprInfixVar  (isSymOcc (rdrNameOcc rdr)) (ppr rdr)
     pprPrefixOcc rdr
-      | Just name <- isExact_maybe rdr = pprPrefixName name
+      | pprTrace "RAEd11" empty True
+      , Just name <- isExact_maybe rdr = pprPrefixName name
              -- pprPrefixName has some special cases, so
              -- we delegate to them rather than reproduce them
       | otherwise = pprPrefixVar (isSymOcc (rdrNameOcc rdr)) (ppr rdr)

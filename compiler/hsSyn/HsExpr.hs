@@ -483,7 +483,8 @@ So we use Nothing to mean "use the old built-in typing rule".
 -}
 
 instance OutputableBndr id => Outputable (HsExpr id) where
-    ppr expr = pprExpr expr
+    ppr expr = pprTrace "RAEy1" empty $
+               pprExpr expr
 
 -----------------------
 -- pprExpr, pprLExpr, pprBinds call pprDeeper;
@@ -492,8 +493,10 @@ pprLExpr :: OutputableBndr id => LHsExpr id -> SDoc
 pprLExpr (L _ e) = pprExpr e
 
 pprExpr :: OutputableBndr id => HsExpr id -> SDoc
-pprExpr e | isAtomicHsExpr e || isQuietHsExpr e =            ppr_expr e
-          | otherwise                           = pprDeeper (ppr_expr e)
+pprExpr e | isAtomicHsExpr e || isQuietHsExpr e = pprTrace "RAEy2" empty $
+                                                  ppr_expr e
+          | otherwise                           = pprTrace "RAEy3" empty $
+                                                  pprDeeper (ppr_expr e)
 
 isQuietHsExpr :: HsExpr id -> Bool
 -- Parentheses do display something, but it gives little info and
@@ -514,24 +517,32 @@ ppr_lexpr :: OutputableBndr id => LHsExpr id -> SDoc
 ppr_lexpr e = ppr_expr (unLoc e)
 
 ppr_expr :: forall id. OutputableBndr id => HsExpr id -> SDoc
-ppr_expr (HsVar v)       = pprPrefixOcc v
-ppr_expr (HsIPVar v)     = ppr v
-ppr_expr (HsLit lit)     = ppr lit
-ppr_expr (HsOverLit lit) = ppr lit
-ppr_expr (HsPar e)       = parens (ppr_lexpr e)
+ppr_expr (HsVar v)       = pprTrace "RAEz1" empty $
+                           pprPrefixOcc v
+ppr_expr (HsIPVar v)     = pprTrace "RAEz2" empty $
+                           ppr v
+ppr_expr (HsLit lit)     = pprTrace "RAEz3" empty $
+                           ppr lit
+ppr_expr (HsOverLit lit) = pprTrace "RAEz4" empty $
+                           ppr lit
+ppr_expr (HsPar e)       = pprTrace "RAEz5" empty $
+                           parens (ppr_lexpr e)
 
 ppr_expr (HsCoreAnn s e)
-  = vcat [ptext (sLit "HsCoreAnn") <+> ftext s, ppr_lexpr e]
+  = pprTrace "RAEz6" empty $
+    vcat [ptext (sLit "HsCoreAnn") <+> ftext s, ppr_lexpr e]
 
 ppr_expr (HsApp e1 e2)
-  = let (fun, args) = collect_args e1 [e2] in
+  = pprTrace "RAEz7" empty $
+    let (fun, args) = collect_args e1 [e2] in
     hang (ppr_lexpr fun) 2 (sep (map pprParendExpr args))
   where
     collect_args (L _ (HsApp fun arg)) args = collect_args fun (arg:args)
     collect_args fun args = (fun, args)
 
 ppr_expr (OpApp e1 op _ e2)
-  = case unLoc op of
+  = pprTrace "RAEz8" empty $
+    case unLoc op of
       HsVar v -> pp_infixly v
       _       -> pp_prefixly
   where
@@ -544,10 +555,12 @@ ppr_expr (OpApp e1 op _ e2)
     pp_infixly v
       = sep [pp_e1, sep [pprInfixOcc v, nest 2 pp_e2]]
 
-ppr_expr (NegApp e _) = char '-' <+> pprDebugParendExpr e
+ppr_expr (NegApp e _) = pprTrace "RAEz9" empty $
+                        char '-' <+> pprDebugParendExpr e
 
 ppr_expr (SectionL expr op)
-  = case unLoc op of
+  = pprTrace "RAEz10" empty $
+    case unLoc op of
       HsVar v -> pp_infixly v
       _       -> pp_prefixly
   where
@@ -558,7 +571,8 @@ ppr_expr (SectionL expr op)
     pp_infixly v = (sep [pp_expr, pprInfixOcc v])
 
 ppr_expr (SectionR op expr)
-  = case unLoc op of
+  = pprTrace "RAEz11" empty $
+    case unLoc op of
       HsVar v -> pp_infixly v
       _       -> pp_prefixly
   where
@@ -569,7 +583,8 @@ ppr_expr (SectionR op expr)
     pp_infixly v = sep [pprInfixOcc v, pp_expr]
 
 ppr_expr (ExplicitTuple exprs boxity)
-  = tupleParens (boxityNormalTupleSort boxity)
+  = pprTrace "RAEz12" empty $
+    tupleParens (boxityNormalTupleSort boxity)
                 (fcat (ppr_tup_args $ map unLoc exprs))
   where
     ppr_tup_args []               = []
@@ -582,92 +597,126 @@ ppr_expr (ExplicitTuple exprs boxity)
 
 --avoid using PatternSignatures for stage1 code portability
 ppr_expr (HsLam matches)
-  = pprMatches (LambdaExpr :: HsMatchContext id) matches
+  = pprTrace "RAEz13" empty $
+    pprMatches (LambdaExpr :: HsMatchContext id) matches
 
 ppr_expr (HsLamCase _ matches)
-  = sep [ sep [ptext (sLit "\\case {")],
+  = pprTrace "RAEz14" empty $
+    sep [ sep [ptext (sLit "\\case {")],
           nest 2 (pprMatches (CaseAlt :: HsMatchContext id) matches <+> char '}') ]
 
 ppr_expr (HsCase expr matches)
-  = sep [ sep [ptext (sLit "case"), nest 4 (ppr expr), ptext (sLit "of {")],
+  = pprTrace "RAEz15" empty $
+    sep [ sep [ptext (sLit "case"), nest 4 (ppr expr), ptext (sLit "of {")],
           nest 2 (pprMatches (CaseAlt :: HsMatchContext id) matches <+> char '}') ]
 
 ppr_expr (HsIf _ e1 e2 e3)
-  = sep [hsep [ptext (sLit "if"), nest 2 (ppr e1), ptext (sLit "then")],
+  = pprTrace "RAEz16" empty $
+    sep [hsep [ptext (sLit "if"), nest 2 (ppr e1), ptext (sLit "then")],
          nest 4 (ppr e2),
          ptext (sLit "else"),
          nest 4 (ppr e3)]
 
 ppr_expr (HsMultiIf _ alts)
-  = sep $ ptext (sLit "if") : map ppr_alt alts
+  = pprTrace "RAEz17" empty $
+    sep $ ptext (sLit "if") : map ppr_alt alts
   where ppr_alt (L _ (GRHS guards expr)) =
           sep [ char '|' <+> interpp'SP guards
               , ptext (sLit "->") <+> pprDeeper (ppr expr) ]
 
 -- special case: let ... in let ...
 ppr_expr (HsLet binds expr@(L _ (HsLet _ _)))
-  = sep [hang (ptext (sLit "let")) 2 (hsep [pprBinds binds, ptext (sLit "in")]),
+  = pprTrace "RAEz18" empty $
+    sep [hang (ptext (sLit "let")) 2 (hsep [pprBinds binds, ptext (sLit "in")]),
          ppr_lexpr expr]
 
 ppr_expr (HsLet binds expr)
-  = sep [hang (ptext (sLit "let")) 2 (pprBinds binds),
+  = pprTrace "RAEz19" (ppr expr) $
+    sep [hang (ptext (sLit "let")) 2 (pprBinds binds),
          hang (ptext (sLit "in"))  2 (ppr expr)]
 
-ppr_expr (HsDo do_or_list_comp stmts _) = pprDo do_or_list_comp stmts
+ppr_expr (HsDo do_or_list_comp stmts _) = pprTrace "RAEz20" empty $
+                                          pprDo do_or_list_comp stmts
 
 ppr_expr (ExplicitList _ _ exprs)
-  = brackets (pprDeeperList fsep (punctuate comma (map ppr_lexpr exprs)))
+  = pprTrace "RAEz21" empty $
+    brackets (pprDeeperList fsep (punctuate comma (map ppr_lexpr exprs)))
 
 ppr_expr (ExplicitPArr _ exprs)
-  = paBrackets (pprDeeperList fsep (punctuate comma (map ppr_lexpr exprs)))
+  = pprTrace "RAEz22" empty $
+    paBrackets (pprDeeperList fsep (punctuate comma (map ppr_lexpr exprs)))
 
 ppr_expr (RecordCon con_id _ rbinds)
-  = hang (ppr con_id) 2 (ppr rbinds)
+  = pprTrace "RAEz23" empty $
+    hang (ppr con_id) 2 (ppr rbinds)
 
 ppr_expr (RecordUpd aexp rbinds _ _ _)
-  = hang (pprParendExpr aexp) 2 (ppr rbinds)
+  = pprTrace "RAEz24" empty $
+    hang (pprParendExpr aexp) 2 (ppr rbinds)
 
 ppr_expr (ExprWithTySig expr sig _)
-  = hang (nest 2 (ppr_lexpr expr) <+> dcolon)
+  = pprTrace "RAEz25" empty $
+    hang (nest 2 (ppr_lexpr expr) <+> dcolon)
          4 (ppr sig)
 ppr_expr (ExprWithTySigOut expr sig)
-  = hang (nest 2 (ppr_lexpr expr) <+> dcolon)
+  = pprTrace "RAEz26" empty $
+    hang (nest 2 (ppr_lexpr expr) <+> dcolon)
          4 (ppr sig)
 
-ppr_expr (ArithSeq _ _ info) = brackets (ppr info)
-ppr_expr (PArrSeq  _ info) = paBrackets (ppr info)
+ppr_expr (ArithSeq _ _ info) = pprTrace "RAEz27" empty $
+                               brackets (ppr info)
+ppr_expr (PArrSeq  _ info) = pprTrace "RAEz28" empty $
+                             paBrackets (ppr info)
 
-ppr_expr EWildPat       = char '_'
-ppr_expr (ELazyPat e)   = char '~' <> pprParendExpr e
-ppr_expr (EAsPat v e)   = ppr v <> char '@' <> pprParendExpr e
-ppr_expr (EViewPat p e) = ppr p <+> ptext (sLit "->") <+> ppr e
+ppr_expr EWildPat       = pprTrace "RAEz29" empty $
+                          char '_'
+ppr_expr (ELazyPat e)   = pprTrace "RAEz30" empty $
+                          char '~' <> pprParendExpr e
+ppr_expr (EAsPat v e)   = pprTrace "RAEz31" empty $
+                          ppr v <> char '@' <> pprParendExpr e
+ppr_expr (EViewPat p e) = pprTrace "RAEz32" empty $
+                          ppr p <+> ptext (sLit "->") <+> ppr e
 
 ppr_expr (HsSCC lbl expr)
-  = sep [ ptext (sLit "{-# SCC") <+> doubleQuotes (ftext lbl) <+> ptext (sLit "#-}"),
+  = pprTrace "RAEz33" empty $
+    sep [ ptext (sLit "{-# SCC") <+> doubleQuotes (ftext lbl) <+> ptext (sLit "#-}"),
           pprParendExpr expr ]
 
-ppr_expr (HsWrap co_fn e) = pprHsWrapper (pprExpr e) co_fn
-ppr_expr (HsType id)      = ppr id
+ppr_expr (HsWrap co_fn e) = pprTrace "RAEz34" empty $
+                            pprHsWrapper (pprExpr e) co_fn
+ppr_expr (HsType id)      = pprTrace "RAEz35" empty $
+                            ppr id
 
-ppr_expr (HsSpliceE t s)       = pprSplice t s
-ppr_expr (HsBracket b)         = pprHsBracket b
-ppr_expr (HsRnBracketOut e []) = ppr e
-ppr_expr (HsRnBracketOut e ps) = ppr e $$ ptext (sLit "pending(rn)") <+> ppr ps
-ppr_expr (HsTcBracketOut e []) = ppr e
-ppr_expr (HsTcBracketOut e ps) = ppr e $$ ptext (sLit "pending(tc)") <+> ppr ps
-ppr_expr (HsQuasiQuoteE qq)    = ppr qq
+ppr_expr (HsSpliceE t s)       = pprTrace "RAEz36" empty $
+                                 pprSplice t s
+ppr_expr (HsBracket b)         = pprTrace "RAEz37" empty $
+                                 pprHsBracket b
+ppr_expr (HsRnBracketOut e []) = pprTrace "RAEz38" empty $
+                                 ppr e
+ppr_expr (HsRnBracketOut e ps) = pprTrace "RAEz39" empty $
+                                 ppr e $$ ptext (sLit "pending(rn)") <+> ppr ps
+ppr_expr (HsTcBracketOut e []) = pprTrace "RAEz40" empty $
+                                 ppr e
+ppr_expr (HsTcBracketOut e ps) = pprTrace "RAEz41" empty $
+                                 ppr e $$ ptext (sLit "pending(tc)") <+> ppr ps
+ppr_expr (HsQuasiQuoteE qq)    = pprTrace "RAEz42" empty $
+                                 ppr qq
 
 ppr_expr (HsProc pat (L _ (HsCmdTop cmd _ _ _)))
-  = hsep [ptext (sLit "proc"), ppr pat, ptext (sLit "->"), ppr cmd]
+  = pprTrace "RAEz43" empty $
+    hsep [ptext (sLit "proc"), ppr pat, ptext (sLit "->"), ppr cmd]
 
 ppr_expr (HsStatic e)
-  = hsep [ptext (sLit "static"), pprParendExpr e]
+  = pprTrace "RAEz44" empty $
+    hsep [ptext (sLit "static"), pprParendExpr e]
 
 ppr_expr (HsTick tickish exp)
-  = pprTicks (ppr exp) $
+  = pprTrace "RAEz45" empty $
+    pprTicks (ppr exp) $
     ppr tickish <+> ppr exp
 ppr_expr (HsBinTick tickIdTrue tickIdFalse exp)
-  = pprTicks (ppr exp) $
+  = pprTrace "RAEz46" empty $
+    pprTicks (ppr exp) $
     hcat [ptext (sLit "bintick<"),
           ppr tickIdTrue,
           ptext (sLit ","),
@@ -675,7 +724,8 @@ ppr_expr (HsBinTick tickIdTrue tickIdFalse exp)
           ptext (sLit ">("),
           ppr exp,ptext (sLit ")")]
 ppr_expr (HsTickPragma externalSrcLoc exp)
-  = pprTicks (ppr exp) $
+  = pprTrace "RAEz47" empty $
+    pprTicks (ppr exp) $
     hcat [ptext (sLit "tickpragma<"),
           ppr externalSrcLoc,
           ptext (sLit ">("),
@@ -683,21 +733,28 @@ ppr_expr (HsTickPragma externalSrcLoc exp)
           ptext (sLit ")")]
 
 ppr_expr (HsArrApp arrow arg _ HsFirstOrderApp True)
-  = hsep [ppr_lexpr arrow, larrowt, ppr_lexpr arg]
+  = pprTrace "RAEz48" empty $
+    hsep [ppr_lexpr arrow, larrowt, ppr_lexpr arg]
 ppr_expr (HsArrApp arrow arg _ HsFirstOrderApp False)
-  = hsep [ppr_lexpr arg, arrowt, ppr_lexpr arrow]
+  = pprTrace "RAEz49" empty $
+    hsep [ppr_lexpr arg, arrowt, ppr_lexpr arrow]
 ppr_expr (HsArrApp arrow arg _ HsHigherOrderApp True)
-  = hsep [ppr_lexpr arrow, larrowtt, ppr_lexpr arg]
+  = pprTrace "RAEz50" empty $
+    hsep [ppr_lexpr arrow, larrowtt, ppr_lexpr arg]
 ppr_expr (HsArrApp arrow arg _ HsHigherOrderApp False)
-  = hsep [ppr_lexpr arg, arrowtt, ppr_lexpr arrow]
+  = pprTrace "RAEz51" empty $
+    hsep [ppr_lexpr arg, arrowtt, ppr_lexpr arrow]
 
 ppr_expr (HsArrForm (L _ (HsVar v)) (Just _) [arg1, arg2])
-  = sep [pprCmdArg (unLoc arg1), hsep [pprInfixOcc v, pprCmdArg (unLoc arg2)]]
+  = pprTrace "RAEz52" empty $
+    sep [pprCmdArg (unLoc arg1), hsep [pprInfixOcc v, pprCmdArg (unLoc arg2)]]
 ppr_expr (HsArrForm op _ args)
-  = hang (ptext (sLit "(|") <+> ppr_lexpr op)
+  = pprTrace "RAEz53" empty $
+    hang (ptext (sLit "(|") <+> ppr_lexpr op)
          4 (sep (map (pprCmdArg.unLoc) args) <+> ptext (sLit "|)"))
 ppr_expr (HsUnboundVar nm)
-  = ppr nm
+  = pprTrace "RAEz54" empty $
+    ppr nm
 
 {-
 HsSyn records exactly where the user put parens, with HsPar.
@@ -1015,13 +1072,18 @@ deriving instance (Data body,DataId id) => Data (GRHS id body)
 pprMatches :: (OutputableBndr idL, OutputableBndr idR, Outputable body)
            => HsMatchContext idL -> MatchGroup idR body -> SDoc
 pprMatches ctxt (MG { mg_alts = matches })
-    = vcat (map (pprMatch ctxt) (map unLoc matches))
+    = pprTrace "RAE3" empty $
+      vcat (pprTrace "RAE4" empty $
+            map (pprTrace "RAE5" empty $
+                 pprMatch ctxt) (pprTrace "RAE6" empty $
+                                 map unLoc matches))
       -- Don't print the type; it's only a place-holder before typechecking
 
 -- Exported to HsBinds, which can't see the defn of HsMatchContext
 pprFunBind :: (OutputableBndr idL, OutputableBndr idR, Outputable body)
            => idL -> Bool -> MatchGroup idR body -> SDoc
-pprFunBind fun inf matches = pprMatches (FunRhs fun inf) matches
+pprFunBind fun inf matches = pprTrace "RAE2" empty $
+                             pprMatches (FunRhs fun inf) matches
 
 -- Exported to HsBinds, which can't see the defn of HsMatchContext
 pprPatBind :: forall bndr id body. (OutputableBndr bndr, OutputableBndr id, Outputable body)
@@ -1032,9 +1094,13 @@ pprPatBind pat (grhss)
 pprMatch :: (OutputableBndr idL, OutputableBndr idR, Outputable body)
          => HsMatchContext idL -> Match idR body -> SDoc
 pprMatch ctxt (Match pats maybe_ty grhss)
-  = sep [ sep (herald : map (nest 2 . pprParendLPat) other_pats)
-        , nest 2 ppr_maybe_ty
-        , nest 2 (pprGRHSs ctxt grhss) ]
+  = pprTrace "RAE7" empty $
+    sep [ sep (herald : map (nest 2 . pprParendLPat) (pprTrace "RAE8" empty $
+                                                      other_pats))
+        , pprTrace "RAE9" empty $
+          nest 2 ppr_maybe_ty
+        , pprTrace "RAE10" empty $
+          nest 2 (pprGRHSs ctxt grhss) ]
   where
     (herald, other_pats)
         = case ctxt of
@@ -1067,20 +1133,22 @@ pprMatch ctxt (Match pats maybe_ty grhss)
 pprGRHSs :: (OutputableBndr idL, OutputableBndr idR, Outputable body)
          => HsMatchContext idL -> GRHSs idR body -> SDoc
 pprGRHSs ctxt (GRHSs grhss binds)
-  = vcat (map (pprGRHS ctxt . unLoc) grhss)
+  = pprTrace "RAEx2" empty $
+    vcat (map (pprGRHS ctxt . unLoc) (pprTrace "RAEx3" empty grhss))
  $$ ppUnless (isEmptyLocalBinds binds)
       (text "where" $$ nest 4 (pprBinds binds))
 
 pprGRHS :: (OutputableBndr idL, OutputableBndr idR, Outputable body)
         => HsMatchContext idL -> GRHS idR body -> SDoc
 pprGRHS ctxt (GRHS [] body)
- =  pp_rhs ctxt body
+ =  pprTrace "RAEx4" empty $
+    pp_rhs ctxt body
 
 pprGRHS ctxt (GRHS guards body)
  = sep [char '|' <+> interpp'SP guards, pp_rhs ctxt body]
 
 pp_rhs :: Outputable body => HsMatchContext idL -> body -> SDoc
-pp_rhs ctxt rhs = matchSeparator ctxt <+> pprDeeper (ppr rhs)
+pp_rhs ctxt rhs = (pprTrace "RAEx5" (matchSeparator ctxt) $ matchSeparator ctxt) <+> (pprTrace "RAEx6" empty $ pprDeeper (ppr rhs))
 
 {-
 ************************************************************************

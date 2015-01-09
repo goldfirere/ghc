@@ -466,10 +466,12 @@ ppr_monobind (FunBind { fun_id = fun, fun_infix = inf,
                         fun_co_fn = wrap,
                         fun_matches = matches,
                         fun_tick = ticks })
-  = pprTicks empty (if null ticks then empty
+  = pprTrace "RAE1" empty $
+    pprTicks empty (if null ticks then empty
                     else text "-- ticks = " <> ppr ticks)
     $$  ifPprDebug (pprBndr LetBind (unLoc fun))
-    $$  pprFunBind (unLoc fun) inf matches
+    $$  (pprTrace "RAEx1" (ppr fun) $
+        pprFunBind (unLoc fun) inf matches)
     $$  ifPprDebug (ppr wrap)
 ppr_monobind (PatSynBind psb) = ppr psb
 ppr_monobind (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dictvars

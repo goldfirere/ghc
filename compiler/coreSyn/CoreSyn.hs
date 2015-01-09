@@ -1290,7 +1290,7 @@ instance Outputable b => Outputable (TaggedBndr b) where
 instance Outputable b => OutputableBndr (TaggedBndr b) where
   pprBndr _ b = ppr b   -- Simple
   pprInfixOcc  b = ppr b
-  pprPrefixOcc b = ppr b
+  pprPrefixOcc b = pprTrace "RAEd12" empty $ ppr b
 
 deTagExpr :: TaggedExpr t -> CoreExpr
 deTagExpr (Var v)                   = Var v

@@ -435,7 +435,8 @@ instance Outputable Name where
 instance OutputableBndr Name where
     pprBndr _ name = pprName name
     pprInfixOcc  = pprInfixName
-    pprPrefixOcc = pprPrefixName
+    pprPrefixOcc = pprTrace "RAEd4" empty $
+                   pprPrefixName
 
 
 pprName :: Name -> SDoc
@@ -570,10 +571,13 @@ pprInfixName, pprPrefixName :: (Outputable a, NamedThing a) => a -> SDoc
 pprInfixName  n = pprInfixVar (isSymOcc (getOccName n)) (ppr n)
 
 pprPrefixName thing
- |  name `hasKey` liftedTypeKindTyConKey
- = ppr name   -- See Note [Special treatment for kind *]
+ | pprTrace "RAEe2" empty $
+   name `hasKey` liftedTypeKindTyConKey
+ = pprTrace "RAEe3" empty $
+   ppr name   -- See Note [Special treatment for kind *]
  | otherwise
- = pprPrefixVar (isSymOcc (nameOccName name)) (ppr name)
+ = pprTrace "RAEe4" empty $
+   pprPrefixVar (isSymOcc (nameOccName name)) (ppr name)
  where
    name = getName thing
 

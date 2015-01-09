@@ -218,7 +218,8 @@ instance Outputable PatSyn where
 
 instance OutputableBndr PatSyn where
     pprInfixOcc = pprInfixName . getName
-    pprPrefixOcc = pprPrefixName . getName
+    pprPrefixOcc = pprTrace "RAEd10" empty $
+                   pprPrefixName . getName
 
 instance Data.Data PatSyn where
     -- don't traverse?

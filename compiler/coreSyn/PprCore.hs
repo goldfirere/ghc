@@ -269,7 +269,8 @@ and @pprCoreExpr@ functions.
 instance OutputableBndr Var where
   pprBndr = pprCoreBinder
   pprInfixOcc  = pprInfixName  . varName
-  pprPrefixOcc = pprPrefixName . varName
+  pprPrefixOcc n = pprTrace "RAEe1" empty $
+                   pprPrefixName (varName n)
 
 pprCoreBinder :: BindingSite -> Var -> SDoc
 pprCoreBinder LetBind binder

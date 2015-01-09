@@ -555,7 +555,8 @@ instance Outputable DataCon where
 
 instance OutputableBndr DataCon where
     pprInfixOcc con = pprInfixName (dataConName con)
-    pprPrefixOcc con = pprPrefixName (dataConName con)
+    pprPrefixOcc con = pprTrace "RAEd3" empty $
+                       pprPrefixName (dataConName con)
 
 instance Data.Data DataCon where
     -- don't traverse?
