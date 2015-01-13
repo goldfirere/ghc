@@ -419,11 +419,13 @@ isTyVar = isTKVar     -- Historical
 
 isTKVar :: Var -> Bool  -- True of both type and kind variables
 isTKVar (TyVar {})   = True
-isTKVar (TcTyVar {}) = True
+isTKVar (TcTyVar { tc_tv_details = details })
+  = not (isTcCoVarDetails details)
 isTKVar _            = False
 
 isTcTyVar :: Var -> Bool
-isTcTyVar (TcTyVar {}) = True
+isTcTyVar (TcTyVar { tc_tv_details = details }) =
+  = not (isTcCoVarDetails details)
 isTcTyVar _            = False
 
 isTcTyCoVar :: Var -> Bool
@@ -434,7 +436,8 @@ isId (Id {}) = True
 isId _       = False
 
 isCoVar :: Var -> Bool
-isCoVar v = isId v && isCoVarDetails (id_details v)
+isCoVar (TcTyVar { tc_tv_details = details }) = isTcCoVarDetails details
+isCoVar (Id      { id_details    = details }) = isCoVarDetails details
 
 isLocalId :: Var -> Bool
 isLocalId (Id { idScope = LocalId _ }) = True

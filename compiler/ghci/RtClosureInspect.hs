@@ -604,7 +604,7 @@ newVar = liftTcM . newFlexiTyVarTy
 newOpenVar :: TR TcType
 newOpenVar = liftTcM newOpenFlexiTyVarTy
 
-instTyCoVars :: [TyCoVar] -> TR (TCvSubst, [TcTyCoVar])
+instTyCoVars :: [TyCoVar] -> TR (TCvSubst, [TcType])
 -- Instantiate fresh mutable type variables from some TyVars
 -- This function preserves the print-name, which helps error messages
 instTyCoVars = let origin = panic "No origin for instTyCoVars in GHCi" in
@@ -623,8 +623,10 @@ type RttiInstantiation = [(TcTyCoVar, TyVar)]
 instScheme :: QuantifiedType -> TR (TcType, RttiInstantiation)
 instScheme (tvs, ty)
    -- TODO (RAE): The monads are confused.
-  = liftTcM $ do { (subst, tvs') <- tcInstTyCoVars tvs
-                 ; let rtti_inst = [(tv',tv) | (tv',tv) <- tvs' `zip` tvs]
+  = liftTcM $ do { (subst, tys') <- tcInstTyCoVars tvs
+                 ; let rtti_inst = [ (tv',tv)
+                                   | (ty',tv) <- tvs' `zip` tvs
+                                   , Just tv' <- return $ getTyCoVar_maybe ty' ]
                  ; return (substTy subst ty, rtti_inst) }
 
 applyRevSubst :: RttiInstantiation -> TR ()

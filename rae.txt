@@ -1,5 +1,11 @@
 stack:
+  - newEvVar should sometimes call newEq?
+    - newBoundEvVarId
+    - newWantedEvVar
+
   - shouldn't we *always* want closeOverKinds???  YES!!
+
+ - when we figure out the value of an unlifted coercion, update its idinfo to make an unfolding... then unfold during zonking. Or, if that doesn't pan out, make TcCoVars.
 
 - relax tcMatchTys, tcUnifyTys to ignore casts. URGH!
    --> and, in the process, unify all three unification algorithms (!)
@@ -13,8 +19,6 @@ stack:
 - search for "get the boxity right"
 
 - fix the kind check in TcUnify. (just one last function!)
-
-- reduceTyFamApp_maybe should really use erased types intelligently.
 
 fix toHsType w.r.t. implicit parameters (typecheck/should_compile/T8565.hs)
 

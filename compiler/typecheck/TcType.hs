@@ -374,6 +374,9 @@ data MetaInfo
                    -- It is a meta-tyvar, but it is always untouchable, with level 0
                    -- See Note [The flattening story] in TcFlatten
 
+   | CoVarTv       -- This is really a meta-*co*var, which we hope to solve
+                   -- for during constraint simplification
+
 -------------------------------------
 -- UserTypeCtxt describes the origin of the polymorphic type
 -- in the places where we need to an expression has that type

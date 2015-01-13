@@ -731,8 +731,8 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
                 = do { new_ty <- newFlexiTyVarTy (TcType.substTy subst (tyVarKind tv))
                      ; return (extendTCvSubst subst tv new_ty, new_ty) }
 
-        ; (result_subst, con1_tvs') <- tcInstTyCoVars RecordUpdOrigin con1_tvs
-        ; let result_inst_tys = mkOnlyTyVarTys con1_tvs'
+        ; (result_subst, result_inst_tys)
+            <- tcInstTyCoVars RecordUpdOrigin con1_tvs
 
         ; (scrut_subst, scrut_inst_tys) <- mapAccumLM mk_inst_ty emptyTCvSubst
                                                       (con1_tvs `zip` result_inst_tys)
@@ -1132,9 +1132,8 @@ tc_infer_id orig id_name
        --   * No need to deeply instantiate because type has all foralls at top
        = do { let wrap_id           = dataConWrapId con
                   (tvs, theta, rho) = tcSplitSigmaTy (idType wrap_id)
-            ; (subst, tvs') <- tcInstTyCoVars orig tvs
-            ; let tys'   = mkTyCoVarTys tvs'
-                  theta' = substTheta subst theta
+            ; (subst, tys') <- tcInstTyCoVars orig tvs
+            ; let theta' = substTheta subst theta
                   rho'   = substTy subst rho
             ; wrap <- instCall orig tys' theta'
             ; addDataConStupidTheta con tys'

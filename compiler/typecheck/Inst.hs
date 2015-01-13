@@ -168,13 +168,13 @@ deeplyInstantiate :: CtOrigin -> TcSigmaType -> TcM (HsWrapper, TcRhoType)
 deeplyInstantiate orig ty
     -- TODO (RAE): This should vare more about visibility, I think while merging
   | Just (arg_tys, tvs, theta, rho) <- tcDeepSplitSigmaTy_maybe ty
-  = do { (subst, tvs') <- tcInstTyCoVars orig tvs
+  = do { (subst, tys') <- tcInstTyCoVars orig tvs
        ; ids1  <- newSysLocalIds (fsLit "di") (substTys subst arg_tys)
        ; let theta' = substTheta subst theta
-       ; wrap1 <- instCall orig (mkTyCoVarTys tvs') theta'
+       ; wrap1 <- instCall orig tys' theta'
        ; traceTc "Instantiating (deeply)" (vcat [ text "origin" <+> pprCtOrigin orig
                                                 , text "type" <+> ppr ty
-                                                , text "with" <+> ppr tvs'
+                                                , text "with" <+> ppr tys'
                                                 , text "args:" <+> ppr ids1
                                                 , text "theta:" <+>  ppr theta' ])
        ; (wrap2, rho2) <- deeplyInstantiate orig (substTy subst rho)

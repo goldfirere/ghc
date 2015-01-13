@@ -15,7 +15,8 @@ module TcUnify (
   checkConstraints, newImplication,
 
   -- Various unifications
-  unifyType_, unifyType, unifyTypeList, unifyTheta, 
+  unifyType_, unifyType, unifyTypeList, unifyTheta,
+  unifyTypeCo,
 
   --------------------------------
   -- Holes
@@ -256,9 +257,8 @@ matchExpectedTyConApp tc orig_ty
     -- because that'll make types that are utterly ill-kinded.
     -- This happened in Trac #7368
     defer = ASSERT2( classifiesTypeWithValues res_kind, ppr tc )
-            do { (k_subst, kvs') <- tcInstTyCoVars (OccurrenceOf (tyConName tc)) kvs
+            do { (k_subst, kappa_tys) <- tcInstTyCoVars (OccurrenceOf (tyConName tc)) kvs
                ; let arg_kinds' = substTys k_subst arg_kinds
-                     kappa_tys  = mkOnlyTyVarTys kvs'
                ; tau_tys <- mapM newFlexiTyVarTy arg_kinds'
                ; co <- unifyType (mkTyConApp tc (kappa_tys ++ tau_tys)) orig_ty
                ; return (co, kappa_tys ++ tau_tys) }
@@ -454,9 +454,8 @@ tc_sub_type_ds origin ctxt ty_actual ty_expected
      -- TODO (RAE): Does this work with contravariance in forall types?
   | (tvs, theta, in_rho) <- tcSplitSigmaTy ty_actual
   , not (null tvs && null theta)
-  = do { (subst, tvs') <- tcInstTyCoVars origin tvs
-       ; let tys'    = mkTyCoVarTys tvs'
-             theta'  = substTheta subst theta
+  = do { (subst, tys') <- tcInstTyCoVars origin tvs
+       ; let theta'  = substTheta subst theta
              in_rho' = substTy subst in_rho
        ; in_wrap   <- instCall origin tys' theta'
        ; body_wrap <- tcSubTypeDS_NC ctxt in_rho' ty_expected
@@ -620,13 +619,16 @@ non-exported generic functions.
 unifyType_ :: TcTauType -> TcTauType -> TcM ()
 unifyType_ ty1 ty2 = void $ unifyType ty1 ty2
 
+-- | Like 'unifyType', but returns a 'Coercion', not a 'TcCoercion'
+unifyTypeCo :: TcTauType -> TcTauType -> TcM Coercion
+unifyTypeCo ty1 ty2 = uType origin ty1 ty2
+  where
+    origin = TypeEqOrigin { uo_actual = ty1, uo_expected = ty2 }
+    
 unifyType :: TcTauType -> TcTauType -> TcM TcCoercion
 -- Actual and expected types
 -- Returns a coercion : ty1 ~ ty2
-unifyType ty1 ty2 = do { co <- uType origin ty1 ty2
-                       ; return (mkTcCoercion co) }
-  where
-    origin = TypeEqOrigin { uo_actual = ty1, uo_expected = ty2 }
+unifyType ty1 ty2 = mkTcCoercion <$> unifyTypeCo ty1 ty2
 
 ---------------
 unifyPred :: PredType -> PredType -> TcM TcCoercion
@@ -675,7 +677,7 @@ uType, uType_defer
 -- It is always safe to defer unification to the main constraint solver
 -- See Note [Deferred unification]
 uType_defer origin ty1 ty2
-  = do { eqv <- newEq ty1 ty2
+  = do { eqv <- newEq Nominal ty1 ty2
        ; loc <- getCtLoc origin
        ; emitSimple $ mkNonCanonical $
              CtWanted { ctev_evar = eqv
@@ -1268,8 +1270,7 @@ checkExpectedKind ty act_kind exp_kind
         in
         if num_to_inst <= 0 then return (ty, act_ki)
         else
-        do { (subst, insted_tvs) <- tcInstTyCoVars AppOrigin inst_tvs
-           ; let args = mkTyCoVarTys insted_tvs
+        do { (subst, args) <- tcInstTyCoVars AppOrigin inst_tvs
            ; traceTc "instantiating implicit dependent vars:"
                (vcat $ zipWith (\tv arg -> ppr tv <+> text ":=" <+> ppr arg)
                                inst_tvs args)

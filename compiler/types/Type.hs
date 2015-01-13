@@ -60,6 +60,7 @@ module Type (
         isDictLikeTy,
         mkEqPred, mkCoerciblePred, mkPrimEqPred, mkReprPrimEqPred,
         mkHeteroPrimEqPred, mkHeteroReprPrimEqPred,
+        mkPrimEqPredRole,
         mkClassPred,
         isClassPred, isEqPred,
         isIPPred, isIPPred_maybe, isIPTyCon, isIPClass,
@@ -1292,6 +1293,11 @@ mkReprPrimEqPred ty1  ty2
   where
     k1 = typeKind ty1
     k2 = typeKind ty2
+
+mkPrimEqPredRole :: Role -> Type -> Type -> Type
+mkPrimEqPredRole Nominal          = mkPrimEqPred
+mkPrimEqPredRole Representational = mkReprPrimEqPred
+mkPrimEqPredRole Phantom          = panic "mkPrimEqPredRole"
 
 -- --------------------- Dictionary types ---------------------------------
 

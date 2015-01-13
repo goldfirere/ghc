@@ -77,6 +77,7 @@ import Class
 import Var
 
 -- others:
+import {-# SOURCE #-} TcUnify   ( unifyTypeCo )
 import TcRnMonad        -- TcType, amongst others
 import TcEvidence
 import Id
@@ -138,10 +139,13 @@ newEvVar :: TcPredType -> TcRnIf gbl lcl EvVar
 newEvVar ty = do { name <- newSysName (predTypeOccName ty) 
                  ; return (mkLocalId name ty) }
 
-newEq :: TcType -> TcType -> TcM EvVar
-newEq ty1 ty2
+newEq :: Role -> TcType -> TcType -> TcM TcCoVar
+newEq r ty1 ty2
   = do { name <- newSysName (mkVarOccFS (fsLit "cobox"))
-       ; return (mkLocalId name (mkPrimEqPred ty1 ty2)) }
+       ; details <- newMetaDetails CoVarTv
+       ; let kind = mkPrimEqPredRole r ty1 ty2
+             cv   = mkTcCoVar name kind details
+       ; return cv }
 
 newDict :: Class -> [TcType] -> TcM DictId
 newDict cls tys 
@@ -524,7 +528,7 @@ newOpenReturnTyVar
        ; tv <- newReturnTyVar k
        ; return (tv, k) }
 
-tcInstTyCoVars :: CtOrigin -> [TyCoVar] -> TcM (TCvSubst, [TcTyCoVar])
+tcInstTyCoVars :: CtOrigin -> [TyCoVar] -> TcM (TCvSubst, [TcType])
 -- Instantiate with META type variables
 -- Note that this works for a sequence of kind, type, and coercion variables
 -- variables.  Eg    [ (k:*), (a:k->k) ]
@@ -534,7 +538,7 @@ tcInstTyCoVars orig = mapAccumLM (tcInstTyCoVarX orig) emptyTCvSubst
     -- Since the tyvars are freshly made, they cannot possibly be
     -- captured by any existing for-alls.
 
-tcInstTyCoVarX :: CtOrigin -> TCvSubst -> TyCoVar -> TcM (TCvSubst, TcTyCoVar)
+tcInstTyCoVarX :: CtOrigin -> TCvSubst -> TyCoVar -> TcM (TCvSubst, TcType)
 -- Make a new unification variable tyvar whose Name and Kind come from
 -- an existing TyVar. We substitute kind variables in the kind.
 tcInstTyCoVarX origin subst tyvar
@@ -550,12 +554,19 @@ tcInstTyCoVarX origin subst tyvar
         ; let name   = mkSystemName uniq (getOccName tyvar)
               kind   = substTy subst (tyVarKind tyvar)
               new_tv = mkTcTyVar name kind details
-        ; return (extendTCvSubst subst tyvar (mkOnlyTyVarTy new_tv), new_tv) }
+              new_ty = mkOnlyTyVarTy new_tv
+        ; return (extendTCvSubst subst tyvar new_ty, new_ty) }
+
+-- it must be a covar!
+tcInstTyCoVarX origin subst covar
+  | Nominal <- role
+  = do { co <- unifyTypeCo t1 t2
+       ; let ty = mkCoercionTy co
+       ; return (extendTCvSubst subst covar ty, ty) }
+    
   | otherwise
-  = do { new_cv <- newEvVar (substTy subst (varType tyvar))
-         -- can't call unifyType, because we need to return a CoVar,
-         -- and unification might result in a TcCoercion that's not a CoVar
-         -- See Note [Coercion variables in tcInstTyCoVarX]
+  = do { new_cv <- newEq role t1 t2
+
        ; loc <- getCtLoc origin
        ; let ctev = CtWanted { ctev_evar = new_cv
                              , ctev_pred = varType new_cv
@@ -563,6 +574,9 @@ tcInstTyCoVarX origin subst tyvar
        ; emitSimple $ mkNonCanonical ctev
        ; return (extendTCvSubst subst tyvar (mkTyCoVarTy new_cv), new_cv) }
 
+  where
+    covar' = updateTyVarKind (substTy subst) covar
+    (_k1, _k2, t1, t2, role) = coVarKindsTypesRole covar'
 {-
 ************************************************************************
 *                                                                      *
