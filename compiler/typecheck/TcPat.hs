@@ -813,6 +813,7 @@ tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
 
         ; let dep_given = filter (isPredTy . tyVarKind) ex_tvs'
         ; given <- newEvVars theta'
+        ; traceTc "RAE tcDataConPat" (ppr con_span $$ ppr data_con) 
         ; (ev_binds, (arg_pats', res))
              <- checkConstraints skol_info ex_tvs' (dep_given ++ given) $
                 tcConArgs (RealDataCon data_con) arg_tys' arg_pats penv thing_inside
@@ -923,7 +924,8 @@ matchExpectedConTy data_tc pat_ty
              co2 = mkTcUnbranchedAxInstCo Nominal co_tc tys'
              -- co2 : T (ty1,ty2) ~ T7 ty1 ty2
 
-       ; return (mkTcSymCo co2 `mkTcTransCo` co1, tys') }
+       ; return (pprTrace "RAE matchExpectedConTy" empty $
+                 mkTcSymCo co2 `mkTcTransCo` co1, tys') }
 
   | otherwise
   = matchExpectedTyConApp data_tc pat_ty

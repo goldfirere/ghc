@@ -899,7 +899,8 @@ mkEqnHelp overlap_mode tvs cls cls_tys tycon tc_args kind_co mtheta
               -- Note [Looking up family instances for deriving]
          fam_envs <- tcGetFamInstEnvs
        ; let (rep_tc, rep_tc_args, rep_co) = tcLookupDataFamInst fam_envs tycon tc_args
-             rep_kind_co = mkSymCo (mkKindCo rep_co) `mkTransCo` kind_co
+             rep_kind_co = pprTrace "RAE mkEqnHelp" empty $
+                           mkSymCo (mkKindCo rep_co) `mkTransCo` kind_co
 
               -- If it's still a data family, the lookup failed; i.e no instance exists
        ; when (isDataFamilyTyCon rep_tc)

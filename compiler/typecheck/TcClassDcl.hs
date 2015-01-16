@@ -243,6 +243,7 @@ tcInstanceMethodBody skol_info tyvars dfun_ev_vars
               lm_bind = L loc (bind { fun_id = L loc (idName local_meth_id) })
                              -- Substitute the local_meth_name for the binder
                              -- NB: the binding is always a FunBind
+        ; traceTc "RAE tcInstanceMethodBody" (ppr meth_id)
         ; (ev_binds, (tc_bind, _, _)) 
                <- checkConstraints skol_info tyvars dfun_ev_vars $
                   tcPolyCheck NonRecursive no_prag_fn local_meth_sig lm_bind

@@ -1570,7 +1570,8 @@ occurCheckExpand dflags tv ty
                                          ; return (mkSymCo co') }
     go_co (TransCo co1 co2)         = do { co1' <- go_co co1
                                          ; co2' <- go_co co2
-                                         ; return (mkTransCo co1' co2') }
+                                         ; return (pprTrace "RAE occurCheckExpand" empty $
+                                                   mkTransCo co1' co2') }
     go_co (NthCo n co)              = do { co' <- go_co co
                                          ; return (mkNthCo n co') }
     go_co (LRCo lr co)              = do { co' <- go_co co

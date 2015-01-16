@@ -1133,7 +1133,8 @@ promoteCoercion (PhantomCo co _ _) = co
 promoteCoercion (UnsafeCo s _ t1 t2)
   = mkUnsafeCo s Representational (typeKind t1) (typeKind t2)
 promoteCoercion (SymCo co)         = mkSymCo (promoteCoercion co)
-promoteCoercion (TransCo co1 co2)  = mkTransCo (promoteCoercion co1)
+promoteCoercion (TransCo co1 co2)  = pprTrace "RAE promoteCoercion" empty $
+                                     mkTransCo (promoteCoercion co1)
                                                (promoteCoercion co2)
 promoteCoercion g@(NthCo n co)
   | Just (_, args) <- splitTyConAppCo_maybe co
@@ -1156,7 +1157,8 @@ promoteCoercion g@(LRCo lr co)
   | otherwise
   = mkKindCo g
 promoteCoercion (InstCo g _)      = promoteCoercion g
-promoteCoercion (CoherenceCo g h) = (mkSymCo h) `mkTransCo` promoteCoercion g
+promoteCoercion (CoherenceCo g h) = pprTrace "RAE promoteCoercion 2" empty $
+                                    (mkSymCo h) `mkTransCo` promoteCoercion g
 promoteCoercion (KindCo _)
   = ASSERT( False ) mkReflCo Representational liftedTypeKind
 promoteCoercion (SubCo g)         = promoteCoercion g
@@ -1228,7 +1230,8 @@ mkPiCo r v co | isTyVar v = mkForAllCo_TyHomo v co
 -- The first coercion *must* be Nominal.
 mkCoCast :: Coercion -> Coercion -> Coercion
 mkCoCast c g
-  = mkSymCo g1 `mkTransCo` c `mkTransCo` g2
+  = pprTrace "RAE mkCoCast" empty $
+    mkSymCo g1 `mkTransCo` c `mkTransCo` g2
   where
        -- g  :: (s1 ~# s2) ~# (t1 ~#  t2)
        -- g1 :: s1 ~# t1
@@ -1372,7 +1375,8 @@ topNormaliseTypeX_maybe stepper
                  | otherwise         = Nothing
 
     Nothing    `trans` co2 = Just co2
-    (Just co1) `trans` co2 = Just (co1 `mkTransCo` co2)
+    (Just co1) `trans` co2 = Just (pprTrace "RAE topNormType" empty $
+                                   co1 `mkTransCo` co2)
 
 topNormaliseNewType_maybe :: Type -> Maybe (Coercion, Type)
 -- ^ Sometimes we want to look through a @newtype@ and get its associated coercion.
@@ -1646,6 +1650,7 @@ extendLiftingContextEx lc@(LC in_scope env) ((v,ty):rest)
   = let (_, _, s1, s2, r) = coVarKindsTypesRole v
         lc' = LC (in_scope `extendInScopeSetSet` tyCoVarsOfCo co)
                  (extendVarEnv env v (CoCoArg Nominal co $
+                                         pprTrace "RAE extendLiftingCtx" empty $
                                          (mkSymCo (ty_co_subst lc r s1)) `mkTransCo`
                                          co `mkTransCo`
                                          (ty_co_subst lc r s2)))
@@ -1775,7 +1780,8 @@ liftCoSubstVarBndrCallback fun homo r lc@(LC in_scope cenv) old_var
                                 | r2 `ltRole` r1 -> downgradeRole r1 r2 eta
                                 | otherwise      -> fun lc r1 (tyVarKind old_var)
             lifted_r = if homo
-                       then mkNthCo 2 cv_eta
+                       then pprTrace "RAE liftCoSubstBndr" empty $
+                            mkNthCo 2 cv_eta
                             `mkTransCo` (mkCoVarCo cv2)
                             `mkTransCo` mkNthCo 3 (mkSymCo cv_eta)
                        else mkCoVarCo cv2

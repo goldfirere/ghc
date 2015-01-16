@@ -226,6 +226,7 @@ mkCast (Cast expr co2) co
              vcat ([ ptext (sLit "expr:") <+> ppr expr
                    , ptext (sLit "co2:") <+> ppr co2
                    , ptext (sLit "co:") <+> ppr co ]) )
+    pprTrace "RAE mkCast" Outputable.empty $
     mkCast expr (mkTransCo co2 co)
 
 mkCast (Tick t expr) co

@@ -214,6 +214,7 @@ simplifyDefault :: ThetaType    -- Wanted; has no type variables in it
 simplifyDefault theta
   = do { traceTc "simplifyInteractive" empty
        ; wanted <- newSimpleWanteds DefaultOrigin theta
+       ; traceTc "RAE simplifyDefault" empty
        ; (unsolved, _binds) <- solveWantedsTcM (mkSimpleWC wanted)
 
        ; traceTc "reportUnsolved {" empty
@@ -294,6 +295,7 @@ simplifyInfer rhs_tclvl apply_mr name_taus wanteds
               -- bindings, so we can't just revert to the input
               -- constraint.
 
+       ; traceTc "RAE simplifyInfer" empty
        ; ev_binds_var <- TcM.newTcEvBinds
        ; wanted_transformed_incl_derivs <- setTcLevel rhs_tclvl $
                                            runTcSWithEvBinds ev_binds_var (solveWanteds wanteds)
@@ -306,6 +308,7 @@ simplifyInfer rhs_tclvl apply_mr name_taus wanteds
               -- to less polymorphic types, see Note [Default while Inferring]
 
        ; tc_lcl_env <- TcRnMonad.getLclEnv
+       ; traceTc "RAE simplifyInfer 2" empty
        ; null_ev_binds_var <- TcM.newTcEvBinds
        ; let wanted_transformed@(WC { wc_simple = simple_wanteds })
                = dropDerivedWC wanted_transformed_incl_derivs
@@ -675,7 +678,8 @@ simplifyRule :: RuleName
 simplifyRule name lhs_wanted rhs_wanted
   = do {         -- We allow ourselves to unify environment
                  -- variables: runTcS runs with topTcLevel
-         (resid_wanted, _) <- solveWantedsTcM (lhs_wanted `andWC` rhs_wanted)
+         traceTc "RAE simplifyRule solveWanteds" (ppr name $$ ppr lhs_wanted $$ ppr rhs_wanted)
+       ; (resid_wanted, _) <- solveWantedsTcM (lhs_wanted `andWC` rhs_wanted)
                               -- Post: these are zonked and unflattened
 
        ; zonked_lhs_simples <- TcM.zonkSimples (wc_simple lhs_wanted)
@@ -778,7 +782,8 @@ solveWantedsTcM :: WantedConstraints -> TcM (WantedConstraints, Bag EvBind)
 -- Discards all Derived stuff in result
 -- Postcondition: fully zonked and unflattened constraints
 solveWantedsTcM wanted
-  = do { ev_binds_var <- TcM.newTcEvBinds
+  = do { traceTc "RAE solveWantedsTcM" empty
+       ; ev_binds_var <- TcM.newTcEvBinds
        ; wanteds' <- solveWantedsTcMWithEvBinds ev_binds_var wanted solveWantedsAndDrop
        ; binds <- TcRnMonad.getTcEvBinds ev_binds_var
        ; return (wanteds', binds) }
@@ -809,8 +814,10 @@ solveWanteds wanteds
        ; final_wanteds <- simpl_loop 1 solved_simples_wanteds
 
        ; bb <- getTcEvBindsMap
+       ; ev_binds_var <- TcS.getTcEvBinds
        ; traceTcS "solveWanteds }" $
                  vcat [ text "final wc =" <+> ppr final_wanteds
+                      , text "evbinds var =" <+> ppr ev_binds_var
                       , text "current evbinds  =" <+> ppr (evBindMapBinds bb) ]
 
        ; return final_wanteds }

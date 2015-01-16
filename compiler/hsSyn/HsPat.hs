@@ -287,14 +287,14 @@ pprPat (TuplePat pats bx _) = tupleParens (boxityNormalTupleSort bx) (interpp'SP
 pprPat (ConPatIn con details) = pprUserCon (unLoc con) details
 pprPat (ConPatOut { pat_con = con, pat_tvs = tvs, pat_dicts = dicts,
                     pat_binds = binds, pat_args = details })
-  = getPprStyle $ \ sty ->      -- Tiresome; in TcBinds.tcRhs we print out a
-    if debugStyle sty then      -- typechecked Pat in an error message,
+  = -- getPprStyle $ \ sty ->      -- Tiresome; in TcBinds.tcRhs we print out a
+    --if debugStyle sty then      -- typechecked Pat in an error message,
                                 -- and we want to make sure it prints nicely
         ppr con
           <> braces (sep [ hsep (map pprPatBndr (tvs ++ dicts))
                          , ppr binds])
           <+> pprConArgs details
-    else pprUserCon (unLoc con) details
+--    else pprUserCon (unLoc con) details
 
 pprPat (LitPat s)           = ppr s
 pprPat (NPat l Nothing  _)  = ppr l

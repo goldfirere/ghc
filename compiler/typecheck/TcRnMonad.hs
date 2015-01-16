@@ -1110,6 +1110,7 @@ debugTc thing
 newTcEvBinds :: TcM EvBindsVar
 newTcEvBinds = do { ref <- newTcRef emptyEvBindMap
                   ; uniq <- newUnique
+                  ; traceTc "RAE newTcEvBinds:" (ppr uniq)
                   ; return (EvBindsVar ref uniq) }
 
 addTcEvBind :: EvBindsVar -> EvVar -> EvTerm -> TcM ()

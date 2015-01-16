@@ -1228,7 +1228,8 @@ simplCast env body co0 cont0
                 -- and we'd like it to simplify to e[y/x] in one round
                 -- of simplification
          , s1 `eqType` t1  = cont            -- The coerces cancel out
-         | otherwise       = CastIt (mkTransCo co1 co2) cont
+         | otherwise       = CastIt (pprTrace "RAE simplCast" empty $
+                                     mkTransCo co1 co2) cont
 
        add_coerce co (Pair s1s2 _t1t2) cont@(ApplyToTy { sc_arg_ty = arg_ty, sc_cont = tail })
                 -- (f |> g) ty  --->   (f ty) |> (g @ ty)

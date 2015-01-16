@@ -1708,7 +1708,8 @@ subst_co subst co
     go (PhantomCo h t1 t2)   = ((mkPhantomCo $! (go h)) $! (go_ty t1)) $! (go_ty t2)
     go (UnsafeCo s r ty1 ty2)= (mkUnsafeCo s r $! go_ty ty1) $! go_ty ty2
     go (SymCo co)            = mkSymCo $! (go co)
-    go (TransCo co1 co2)     = (mkTransCo $! (go co1)) $! (go co2)
+    go (TransCo co1 co2)     = pprTrace "RAE subst_co" empty $
+                               (mkTransCo $! (go co1)) $! (go co2)
     go (NthCo d co)          = mkNthCo d $! (go co)
     go (LRCo lr co)          = mkLRCo lr $! (go co)
     go (InstCo co arg)       = (mkInstCo $! (go co)) $! go_arg arg

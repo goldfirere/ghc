@@ -1174,7 +1174,8 @@ exprIsConApp_maybe (in_scope, id_unf) expr
     go subst (Tick t expr) cont
        | not (tickishIsCode t) = go subst expr cont
     go subst (Cast expr co1) (CC [] co2)
-       = go subst expr (CC [] (subst_co subst co1 `mkTransCo` co2))
+       = go subst expr (CC [] (pprTrace "RAE exprIsConApp_maybe" empty $
+                               subst_co subst co1 `mkTransCo` co2))
     go subst (App fun arg) (CC args co)
        = go subst fun (CC (subst_arg subst arg : args) co)
     go subst (Lam var body) (CC (arg:args) co)

@@ -433,7 +433,8 @@ tc_sub_type origin ctxt ty_actual ty_expected
        ; return (coToHsWrapper (mkTcCoercion cow)) }
 
   | otherwise  -- See Note [Deep skolemisation]
-  = do { (sk_wrap, inner_wrap) <- tcGen ctxt ty_expected $ \ _ sk_rho ->
+  = do { traceTc "RAE tc_sub_type" (ppr ty_actual $$ ppr ty_expected)
+       ; (sk_wrap, inner_wrap) <- tcGen ctxt ty_expected $ \ _ sk_rho ->
                                   tc_sub_type_ds origin ctxt ty_actual sk_rho
        ; return (sk_wrap <.> inner_wrap) }
 
@@ -446,6 +447,7 @@ tc_sub_type_ds origin ctxt ty_actual ty_expected
   , Just (exp_arg, exp_res) <- tcSplitFunTy_maybe ty_expected
   = -- See Note [Co/contra-variance of subsumption checking]
     do { res_wrap <- tc_sub_type_ds origin ctxt act_res exp_res
+       ; traceTc "RAE tc_sub_type_ds arg_wrap" (pprCtOrigin origin)
        ; arg_wrap <- tc_sub_type    origin ctxt exp_arg act_arg
        ; return (mkWpFun arg_wrap res_wrap exp_arg exp_res) }
            -- arg_wrap :: exp_arg ~ act_arg
@@ -471,6 +473,7 @@ tcWrapResult :: HsExpr TcId -> TcRhoType -> TcRhoType -> TcM (HsExpr TcId)
 tcWrapResult expr actual_ty res_ty
   = do { cow <- tcSubTypeDS GenSigCtxt actual_ty res_ty
                 -- Both types are deeply skolemised
+       ; traceTc "RAE end tcWrapResult" (ppr expr $$ ppr actual_ty $$ ppr res_ty $$ ppr cow)
        ; return (mkHsWrap cow expr) }
 
 -----------------------------------
@@ -549,10 +552,11 @@ tcGen ctxt expected_ty thing_inside
         -- Use the *instantiated* type in the SkolemInfo
         -- so that the names of displayed type variables line up
         ; let skol_info = SigSkol ctxt (mkPiTypes given rho')
-
+        ; traceTc "RAE tcGen {" (ppr expected_ty)
         ; (ev_binds, result) <- checkConstraints skol_info tvs' given $
                                 thing_inside (filter isTyVar tvs') rho'
 
+        ; traceTc "RAE } tcGen" (ppr ev_binds)
         ; return (wrap <.> mkWpLet ev_binds, result) }
           -- The ev_binds returned by checkConstraints is very
           -- often empty, in which case mkWpLet is a no-op
@@ -570,7 +574,8 @@ checkConstraints skol_info skol_tvs given thing_inside
       -- tcPolyExpr, which uses tcGen and hence checkConstraints.
 
   | otherwise
-  = newImplication skol_info skol_tvs given thing_inside
+  = do { traceTc "RAE checkConstraints" (ppr skol_tvs $$ ppr given)
+       ; newImplication skol_info skol_tvs given thing_inside }
 
 newImplication :: SkolemInfo -> [TcTyCoVar]
                -> [EvVar] -> TcM result
@@ -590,7 +595,8 @@ newImplication skol_info skol_tvs given thing_inside
          then 
             return (emptyTcEvBinds, result)
          else do
-       { ev_binds_var <- newTcEvBinds
+       { traceTc "RAE newImplication {" (ppr skol_tvs $$ ppr given)
+       ; ev_binds_var <- newTcEvBinds
        ; env <- getLclEnv
        ; emitImplication $ Implic { ic_tclvl = tclvl
                                   , ic_skols = skol_tvs
@@ -602,6 +608,7 @@ newImplication skol_info skol_tvs given thing_inside
                                   , ic_env = env
                                   , ic_info = skol_info }
 
+       ; traceTc "RAE } newImplication" (ppr ev_binds_var)
        ; return (TcEvBinds ev_binds_var, result) } }
 
 {-

@@ -937,7 +937,8 @@ flatten_exact_fam_app_fully fmode tc tys
                    ; (fsk_xi, fsk_co) <- flatten_one fmode rhs_ty
                           -- The fsk may already have been unified, so flatten it
                           -- fsk_co :: fsk_xi ~ fsk
-                   ; return (fsk_xi, fsk_co `mkTcTransCo`
+                   ; return (fsk_xi, pprTrace "RAE flatten_exact_fully" empty $
+                                     fsk_co `mkTcTransCo`
                                      maybeTcSubCo (fe_eq_rel fmode)
                                                   (mkTcSymCo co) `mkTcTransCo`
                                      ret_co) }
@@ -945,7 +946,7 @@ flatten_exact_fam_app_fully fmode tc tys
 
            -- Try to reduce the family application right now
            -- See Note [Reduce type family applications eagerly]
-           _ -> try_to_reduce tc xis True (`mkTcTransCo` ret_co) $
+           _ -> try_to_reduce tc xis True (\co1 -> pprTrace "RAE flatten_fully 2" empty $ co1 `mkTcTransCo` ret_co) $
                 do { let fam_ty = mkTyConApp tc xis
                    ; (ev, fsk) <- newFlattenSkolem (fe_flavour fmode)
                                                    (fe_loc fmode)
@@ -963,7 +964,8 @@ flatten_exact_fam_app_fully fmode tc tys
                    ; emitFlatWork ct
 
                    ; traceTcS "flatten/flat-cache miss" $ (ppr fam_ty $$ ppr fsk $$ ppr ev)
-                   ; return (fsk_ty, maybeTcSubCo (fe_eq_rel fmode)
+                   ; return (fsk_ty, pprTrace "RAE flatten_fully 3" empty $
+                                     maybeTcSubCo (fe_eq_rel fmode)
                                                   (mkTcSymCo co)
                                      `mkTcTransCo` ret_co) }
         }
@@ -983,7 +985,8 @@ flatten_exact_fam_app_fully fmode tc tys
                  -> do { traceTcS "Eager T.F. reduction success" $
                          vcat [ppr tc, ppr tys, ppr norm_ty, ppr cache]
                        ; (xi, final_co) <- flatten_one fmode norm_ty
-                       ; let co = norm_co `mkTcTransCo` mkTcSymCo final_co
+                       ; let co = pprTrace "RAE try_to_reduce" empty $
+                                  norm_co `mkTcTransCo` mkTcSymCo final_co
                        ; when cache $
                          extendFlatCache tc tys (co, xi, fe_flavour fmode)
                        ; return (xi, update_co $ mkTcSymCo co) }
@@ -1268,7 +1271,8 @@ flattenTyVar fmode tv
            Right (ty1, co1)  -- Recurse
                     -> do { (ty2, co2) <- flatten_one fmode ty1
                           ; traceTcS "flattenTyVar3" (ppr tv $$ ppr ty2)
-                          ; return (ty2, co2 `mkTcTransCo` co1) }
+                          ; return (ty2, pprTrace "RAE flattenTyVar" empty $
+                                         co2 `mkTcTransCo` co1) }
        }
 
 flattenTyVarOuter :: FlattenEnv -> TcTyVar

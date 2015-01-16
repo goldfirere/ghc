@@ -138,6 +138,7 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
 
        ; (lhs_evs, other_lhs_wanted) <- simplifyRule (unLoc name) lhs_wanted
                                                      rhs_wanted
+       ; traceTc "RAE tcRule1" (ppr name $$ ppr lhs_evs $$ ppr other_lhs_wanted $$ ppr rhs_wanted)
 
         -- Now figure out what to quantify over
         -- c.f. TcSimplify.simplifyInfer
@@ -165,6 +166,7 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
 
            -- Simplify the RHS constraints
        ; lcl_env <- getLclEnv
+       ; traceTc "RAE tcRule" empty
        ; rhs_binds_var <- newTcEvBinds
        ; emitImplication $ Implic { ic_tclvl  = topTcLevel
                                   , ic_skols  = qtkvs
@@ -179,6 +181,7 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
            -- For the LHS constraints we must solve the remaining constraints
            -- (a) so that we report insoluble ones
            -- (b) so that we bind any soluble ones
+       ; traceTc "RAE tcRule 2" empty
        ; lhs_binds_var <- newTcEvBinds
        ; emitImplication $ Implic { ic_tclvl  = topTcLevel
                                   , ic_skols  = qtkvs

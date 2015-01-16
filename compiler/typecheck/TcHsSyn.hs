@@ -314,7 +314,8 @@ zonkTopDecls :: Bag EvBind
                      [LRuleDecl    Id],
                      [LVectDecl    Id])
 zonkTopDecls ev_binds binds exports sig_ns rules vects imp_specs fords
-  = do  { (env1, ev_binds') <- zonkEvBinds emptyZonkEnv ev_binds
+  = do  { traceTc "RAE zonkTopDecls" (vcat [ ppr ev_binds, ppr binds, ppr rules ])
+        ; (env1, ev_binds') <- zonkEvBinds emptyZonkEnv ev_binds
 
          -- Warn about missing signatures
          -- Do this only when we we have a type to offer
@@ -1484,7 +1485,8 @@ zonkCoToCo env co
     go (UnsafeCo s r ty1 ty2)    = mkUnsafeCo s r <$> zonkTcTypeToType env ty1
                                                   <*> zonkTcTypeToType env ty2
     go (SymCo co)                = mkSymCo <$> go co
-    go (TransCo co1 co2)         = mkTransCo <$> go co1 <*> go co2
+    go (TransCo co1 co2)         = pprTrace "RAE zonkCoToCo" empty $
+                                   mkTransCo <$> go co1 <*> go co2
     go (NthCo n co)              = mkNthCo n <$> go co
     go (LRCo lr co)              = mkLRCo lr <$> go co
     go (InstCo co arg)           = mkInstCo <$> go co <*> zonkCoArgToCoArg env arg
@@ -1581,7 +1583,8 @@ zonkTcCoToCo env co
     go (TcNthCo n co)         = do { co' <- go co; return (mkTcNthCo n co') }
     go (TcLRCo lr co)         = do { co' <- go co; return (mkTcLRCo lr co') }
     go (TcTransCo co1 co2)    = do { co1' <- go co1; co2' <- go co2
-                                   ; return (mkTcTransCo co1' co2') }
+                                   ; return (pprTrace "RAE zonkTcCoToCo" (ppr co1 $$ ppr (tcCoercionKind co1) $$ ppr co2 $$ ppr (tcCoercionKind co2) $$ ppr co1' $$ ppr (tcCoercionKind co1') $$ ppr co2' $$ ppr (tcCoercionKind co2') $$ ppr env) $
+                                             mkTcTransCo co1' co2') }
     go (TcForAllCo tv co)     = ASSERT( isImmutableTyVar tv || isCoVar tv )
                                 do { tv' <- updateTyVarKindM (zonkTcTypeToType env) tv
                                    ; co' <- go co

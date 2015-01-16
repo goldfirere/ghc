@@ -1181,7 +1181,8 @@ csTraceTcM trace_level mk_doc
 runTcS :: TcS a                -- What to run
        -> TcM (a, Bag EvBind)
 runTcS tcs
-  = do { ev_binds_var <- TcM.newTcEvBinds
+  = do { TcM.traceTc "RAE runTcS" empty
+       ; ev_binds_var <- TcM.newTcEvBinds
        ; res <- runTcSWithEvBinds ev_binds_var tcs
        ; ev_binds <- TcM.getTcEvBinds ev_binds_var
        ; return (res, ev_binds) }
@@ -1301,6 +1302,7 @@ tryTcS (TcS thing_inside)
   = TcS $ \env ->
     do { is_var <- TcM.newTcRef emptyInert
        ; unified_var <- TcM.newTcRef False
+       ; TcM.traceTc "RAE tryTcS" empty
        ; ev_binds_var <- TcM.newTcEvBinds
        ; wl_var <- TcM.newTcRef emptyWorkList
        ; let nest_env = env { tcs_ev_binds = ev_binds_var
@@ -1788,7 +1790,8 @@ deferTcSForAllEq role loc (bndrs1,body1) (bndrs2,body2)
         ; mb_ctev <- newWantedEvVar loc eq_pred
         ; coe_inside <- case mb_ctev of
             Cached term -> return (evTermCoercion term)
-            Fresh  ctev -> do { ev_binds_var <- newTcEvBinds
+            Fresh  ctev -> do { traceTcS "RAE deferTcSForAllEq" empty
+                              ; ev_binds_var <- newTcEvBinds
                               ; env <- wrapTcS $ TcM.getLclEnv
                               ; let ev_binds = TcEvBinds ev_binds_var
                                     new_ct = mkNonCanonical ctev

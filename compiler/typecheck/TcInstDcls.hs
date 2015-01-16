@@ -902,6 +902,7 @@ tcSuperClasses dfun_id inst_tyvars dfun_ev_vars sc_theta
   | otherwise
   = do {   -- Check that all superclasses can be deduced from
            -- the originally-specified dfun arguments
+       ; traceTc "RAE tcSuperClasses" (ppr dfun_id)
        ; _ <- checkConstraints InstSkol inst_tyvars orig_ev_vars $
               emitWanteds ScOrigin sc_theta
 

@@ -1723,7 +1723,8 @@ ty_co_match menv subst (CastTy ty1 co1) co
 
     opt_coh (SymCo co) = mkSymCo (opt_coh co)
     opt_coh (CoherenceCo (CoherenceCo co1 co2) co3)
-      = mk_coh co1 (mkTransCo co2 co3)
+      = pprTrace "RAE ty_co_match" Outputable.empty $
+        mk_coh co1 (mkTransCo co2 co3)
     opt_coh (CoherenceCo co1 co2) = mk_coh (opt_coh co1) co2
     opt_coh co = co
 

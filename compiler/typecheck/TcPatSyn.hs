@@ -139,6 +139,7 @@ tcCheckPatSynDecl PSB{ psb_id = lname@(L loc name), psb_args = details,
          --  * The arguments, type-coerced to the SigTyVars: wrapped_args
          --  * The instantiation of ex_tvs to pass to the success continuation: ex_tys
          --  * The provided theta substituted with the SigTyVars: prov_theta'
+       ; traceTc "RAE tcCheckPatSynDecl" empty
        ; (req_ev_binds, (lpat', (ex_tys, prov_theta', wrapped_args))) <-
            checkConstraints skol_info univ_tvs req_dicts $
            tcPat PatSyn lpat pat_ty $ do
@@ -158,6 +159,7 @@ tcCheckPatSynDecl PSB{ psb_id = lname@(L loc name), psb_args = details,
        ; let ex_tvs_rhs  = varSetElems ex_vars_rhs
 
          -- Check that prov_theta' can be satisfied with the dicts from the pattern
+       ; traceTc "RAE more pat syn" empty
        ; (prov_ev_binds, prov_dicts) <-
            checkConstraints skol_info ex_tvs_rhs prov_dicts_rhs $ do
            { let origin = PatOrigin -- TODO

@@ -230,6 +230,7 @@ tcLocalBinds (HsIPBinds (IPBinds ip_binds _)) thing_inside
         -- If the binding binds ?x = E, we  must now
         -- discharge any ?x constraints in expr_lie
         -- See Note [Implicit parameter untouchables]
+        ; traceTc "RAE tcLocalBinds IP" empty
         ; (ev_binds, result) <- checkConstraints (IPSkol ips)
                                   [] given_ips thing_inside
 
@@ -568,6 +569,7 @@ tcPolyCheck rec_tc prag_fn
        ; let skol_info = SigSkol (FunSigCtxt (idName poly_id)) (mkPhiTy theta tau)
              prag_sigs = prag_fn (idName poly_id)
              tvs = map snd tvs_w_scoped
+       ; traceTc "RAE tcPolyCheck" (ppr poly_id)
        ; (ev_binds, (binds', [mono_info]))
             <- setSrcSpan loc $
                checkConstraints skol_info tvs ev_vars $

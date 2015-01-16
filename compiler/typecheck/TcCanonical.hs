@@ -710,9 +710,11 @@ canEqCast ev eq_rel swapped ty1 co1 _ty2 ps_ty2
                                                      co1
              xdecomp casted_evt    = case swapped of
                NotSwapped -> [EvCoercion $
+                              pprTrace "RAE canEqCast" empty $
                               mkTcCoherenceRightCo (mkTcReflCo role ty1) co1
                               `mkTcTransCo` (evTermCoercion casted_evt)]
                IsSwapped  -> [EvCoercion $
+                              pprTrace "RAE canEqCast 2" empty $
                               evTermCoercion casted_evt `mkTcTransCo`
                               mkTcCoherenceLeftCo (mkTcReflCo role ty1) co1]
              xev = XEvTerm xpreds xcomp xdecomp
@@ -1195,6 +1197,7 @@ homogeniseRhsKind ev eq_rel lhs rhs build_ct
           -- type_ev :: (lhs :: k1) ~ (rhs |> sym kind_ev :: k1)
        ; let type_evt = getEvTerm mb_type_ev
        ; setEvBind evar (EvCoercion $
+                         pprTrace "RAE homogenise" empty $
                          (evTermCoercion type_evt) `mkTcTransCo`
                          (mkTcReflCo (eqRelRole eq_rel) rhs
                             `mkTcCoherenceLeftCo` homo_co))
@@ -1594,7 +1597,8 @@ rewriteEqEvidence old_ev swapped nlhs nrhs lhs_co rhs_co
   = return (ContinueWith (old_ev { ctev_pred = new_pred }))
 
   | CtGiven { ctev_evtm = old_tm } <- old_ev
-  = do { let new_tm = EvCoercion (lhs_co
+  = do { let new_tm = EvCoercion (pprTrace "RAE rewriteEqEvidence" empty $
+                                  lhs_co
                                   `mkTcTransCo` maybeSym swapped (evTermCoercion old_tm)
                                   `mkTcTransCo` mkTcSymCo rhs_co)
        ; new_ev <- newGivenEvVar loc' (new_pred, new_tm)
@@ -1604,6 +1608,7 @@ rewriteEqEvidence old_ev swapped nlhs nrhs lhs_co rhs_co
   | CtWanted { ctev_evar = evar } <- old_ev
   = do { new_evar <- newWantedEvVarNC loc' new_pred
        ; let co = maybeSym swapped $
+                  pprTrace "RAE rewriteEqEvidence 2" empty $
                   mkTcSymCo lhs_co
                   `mkTcTransCo` ctEvCoercion new_evar
                   `mkTcTransCo` rhs_co

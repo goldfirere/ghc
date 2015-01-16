@@ -481,7 +481,7 @@ ppr_monobind (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dictvars
     [ ptext (sLit "Exports:") <+> brackets (sep (punctuate comma (map ppr exports)))
     , ptext (sLit "Exported types:") <+> vcat [pprBndr LetBind (abe_poly ex) | ex <- exports]
     , ptext (sLit "Binds:") <+> pprLHsBinds val_binds
-    , ifPprDebug (ptext (sLit "Evidence:") <+> ppr ev_binds) ]
+    , (ptext (sLit "Evidence:") <+> ppr ev_binds) ]
 
 instance (OutputableBndr id) => Outputable (ABExport id) where
   ppr (ABE { abe_wrap = wrap, abe_poly = gbl, abe_mono = lcl, abe_prags = prags })

@@ -352,7 +352,8 @@ expandTypeSynonyms ty
     go_co subst (SymCo co)
       = mkSymCo (go_co subst co)
     go_co subst (TransCo co1 co2)
-      = mkTransCo (go_co subst co1) (go_co subst co2)
+      = pprTrace "RAE expandTypeSynonyms" empty $
+        mkTransCo (go_co subst co1) (go_co subst co2)
     go_co subst (NthCo n co)
       = mkNthCo n (go_co subst co)
     go_co subst (LRCo lr co)

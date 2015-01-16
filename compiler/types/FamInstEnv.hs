@@ -822,14 +822,16 @@ reduceTyFamApp_maybe envs role tc tys
                  , fim_coercion = match_co } : _ <- lookupFamInstEnv envs tc tys
       -- NB: Allow multiple matches because of compatible overlap
                                                     
-  = let co = downgradeRole role Nominal match_co
+  = let co = pprTrace "RAE reduceTyFam" empty $
+             downgradeRole role Nominal match_co
              `mkTransCo` mkUnbranchedAxInstCo role ax inst_tys
         ty = pSnd (coercionKind co)
     in Just (co, ty)
 
   | Just ax <- isClosedSynFamilyTyCon_maybe tc
   , Just (ind, inst_tys, cos) <- chooseBranch ax tys
-  = let co     = downgradeRole role Nominal (mkTyConAppCo Nominal tc cos)
+  = let co     = pprTrace "RAE reduceTyFam 2" empty $
+                 downgradeRole role Nominal (mkTyConAppCo Nominal tc cos)
                  `mkTransCo` mkAxInstCo role ax ind inst_tys
         ty     = pSnd (coercionKind co)
     in Just (co, ty)
@@ -1016,7 +1018,8 @@ topNormaliseType_maybe env ty
           -- after reducing the kind of a bound tyvar.
         
         case reduceTyFamApp_maybe env Representational tc ntys of
-          Just (co, rhs) -> NS_Step rec_nts rhs (args_co `mkTransCo` co)
+          Just (co, rhs) -> NS_Step rec_nts rhs (pprTrace "RAE topNorm" empty $
+                                                 args_co `mkTransCo` co)
           Nothing        -> NS_Done
 
 ---------------
@@ -1036,11 +1039,13 @@ normalise_tc_app env lc role tc tys
   , Just (tenv, rhs, ntys') <- tcExpandTyCon_maybe tc ntys
   , (co2, ninst_rhs) <- normalise_type env lc role (substTy (mkTopTCvSubst tenv) rhs)
   = if isReflCo co2 then (args_co,                 mkTyConApp tc ntys)
-                    else (args_co `mkTransCo` co2, mkAppTys ninst_rhs ntys')
+                    else (pprTrace "RAE norm_tc_app" empty $
+                          args_co `mkTransCo` co2, mkAppTys ninst_rhs ntys')
 
   | Just (first_co, ty') <- reduceTyFamApp_maybe env role tc ntys
   , (rest_co,nty) <- normalise_type env lc role ty'
-  = (args_co `mkTransCo` first_co `mkTransCo` rest_co, nty)
+  = (pprTrace "RAE norm_tc_app 2" empty $
+     args_co `mkTransCo` first_co `mkTransCo` rest_co, nty)
 
   | otherwise   -- No unique matching family instance exists;
                 -- we do not do anything
