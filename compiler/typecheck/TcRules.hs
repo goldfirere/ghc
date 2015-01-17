@@ -136,9 +136,9 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
                   ; (rhs', rhs_wanted) <- captureConstraints (tcMonoExpr rhs rule_ty)
                   ; return (lhs', lhs_wanted, rhs', rhs_wanted, rule_ty) }
 
-       ; (lhs_evs, other_lhs_wanted) <- simplifyRule (unLoc name) lhs_wanted
-                                                     rhs_wanted
-       ; traceTc "RAE tcRule1" (ppr name $$ ppr lhs_evs $$ ppr other_lhs_wanted $$ ppr rhs_wanted)
+       ; (lhs_evs, other_lhs_wanted, extra_ev_binds)
+            <- simplifyRule (unLoc name) lhs_wanted rhs_wanted
+       ; traceTc "RAE tcRule1" (ppr name $$ ppr lhs_evs $$ ppr other_lhs_wanted $$ ppr rhs_wanted $$ ppr extra_ev_binds)
 
         -- Now figure out what to quantify over
         -- c.f. TcSimplify.simplifyInfer
@@ -195,6 +195,7 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
 
        ; return (HsRule name act
                     (map (noLoc . RuleBndr . noLoc) (qtkvs ++ tpl_ids))
+                    extra_ev_binds
                     (mkHsDictLet (TcEvBinds lhs_binds_var) lhs') fv_lhs
                     (mkHsDictLet (TcEvBinds rhs_binds_var) rhs') fv_rhs) }
 

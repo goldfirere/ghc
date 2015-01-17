@@ -347,7 +347,8 @@ Reason
 -}
 
 dsRule :: LRuleDecl Id -> DsM (Maybe CoreRule)
-dsRule (L loc (HsRule name act vars lhs _tv_lhs rhs _fv_rhs))
+dsRule (L loc (HsRule name act vars ev_binds lhs _tv_lhs rhs _fv_rhs))
+-- RAE was here. Need to do something intelligent with ev_binds.
   = putSrcSpanDs loc $
     do  { let bndrs' = [var | L _ (RuleBndr (L _ var)) <- vars]
 

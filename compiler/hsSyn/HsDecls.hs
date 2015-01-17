@@ -1409,6 +1409,8 @@ data RuleDecl name
         Activation
         [LRuleBndr name]        -- Forall'd vars; after typechecking this
                                 --   includes tyvars
+        (Bag EvBind)            -- The "extra" EvBinds
+                                -- See Note [Extra EvBinds in simplifyRule]
         (Located (HsExpr name)) -- LHS
         (PostRn name NameSet)   -- Free-vars from the LHS
         (Located (HsExpr name)) -- RHS

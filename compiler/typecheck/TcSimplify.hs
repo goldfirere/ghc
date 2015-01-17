@@ -688,13 +688,16 @@ See also Note [Simplifying RULE constraints] in TcRules.
 simplifyRule :: RuleName
              -> WantedConstraints       -- Constraints from LHS
              -> WantedConstraints       -- Constraints from RHS
-             -> TcM ([EvVar], WantedConstraints)   -- LHS evidence variables
+             -> TcM ([EvVar], WantedConstraints, Bag EvBind)   -- LHS evidence variables
+               -- The Bag EvBind are the "extra" EvBinds.
+               -- See Note [Extra EvBinds in simplifyRule]
 -- See Note [Simplifying RULE constraints] in TcRule
 simplifyRule name lhs_wanted rhs_wanted
   = do {         -- We allow ourselves to unify environment
                  -- variables: runTcS runs with topTcLevel
          traceTc "RAE simplifyRule solveWanteds" (ppr name $$ ppr lhs_wanted $$ ppr rhs_wanted)
-       ; (resid_wanted, _) <- solveWantedsTcM (lhs_wanted `andWC` rhs_wanted)
+       ; let all_wanteds = lhs_wanted `andWC` rhs_wanted
+       ; (resid_wanted, ev_binds) <- solveWantedsTcM all_wanteds
                               -- Post: these are zonked and unflattened
 
        ; zonked_lhs_simples <- TcM.zonkSimples (wc_simple lhs_wanted)
@@ -711,6 +714,12 @@ simplifyRule name lhs_wanted rhs_wanted
                | otherwise
                = True
 
+             wanted_evvars = mkVarSet $ bagToList $
+                             mapBag (ctEvId . ctEvidence) (wc_simple all_wanteds)
+              -- See Note [Extra EvBinds in simplifyRule]
+             extra_ev_binds
+               = filterBag (not . (`elemVarSet` wanted_evvars) . evBindVar) ev_binds
+
        ; traceTc "simplifyRule" $
          vcat [ ptext (sLit "LHS of rule") <+> doubleQuotes (ftext name)
               , text "zonked_lhs_simples" <+> ppr zonked_lhs_simples
@@ -718,7 +727,8 @@ simplifyRule name lhs_wanted rhs_wanted
               , text "non_q_cts"  <+> ppr non_q_cts ]
 
        ; return ( map (ctEvId . ctEvidence) (bagToList q_cts)
-                , lhs_wanted { wc_simple = non_q_cts }) }
+                , lhs_wanted { wc_simple = non_q_cts }
+                , extra_ev_binds )}
 
 {-
 *********************************************************************************
