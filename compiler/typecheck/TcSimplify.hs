@@ -12,7 +12,7 @@ module TcSimplify(
 #include "HsVersions.h"
 
 import TcRnTypes
-import TcRnMonad
+import TcRnMonad as TcM
 import TcErrors
 import TcMType as TcM
 import TcType
@@ -59,7 +59,7 @@ simplifyTop wanteds
   = do { traceTc "simplifyTop {" $ text "wanted = " <+> ppr wanteds
        ; ev_binds_var <- TcM.newTcEvBinds
        ; zonked_final_wc <- solveWantedsTcMWithEvBinds ev_binds_var wanteds simpl_top
-       ; binds1 <- TcRnMonad.getTcEvBinds ev_binds_var
+       ; binds1 <- TcM.getTcEvBinds ev_binds_var
        ; traceTc "End simplifyTop }" empty
 
        ; traceTc "reportUnsolved {" empty
@@ -315,7 +315,7 @@ simplifyInfer rhs_tclvl apply_mr name_taus wanteds
               -- NB: We do not do any defaulting when inferring a type, this can lead
               -- to less polymorphic types, see Note [Default while Inferring]
 
-       ; tc_lcl_env <- TcRnMonad.getLclEnv
+       ; tc_lcl_env <- TcM.getLclEnv
        ; null_ev_binds_var <- TcM.newTcEvBinds
        ; let wanted_transformed@(WC { wc_simple = simple_wanteds })
                = dropDerivedWC wanted_transformed_incl_derivs
@@ -359,7 +359,7 @@ simplifyInfer rhs_tclvl apply_mr name_taus wanteds
                        `intersectsVarSet` mkVarSet qtvs) )
          -- we can't promote things that mention quantified variables!
 
-       ; outer_tclvl <- TcRnMonad.getTcLevel
+       ; outer_tclvl <- TcM.getTcLevel
        ; runTcSWithEvBinds null_ev_binds_var $  -- runTcS just to get the types right :-(
          mapM_ (promoteTyVar outer_tclvl) (varSetElems promote_tvs)
 
@@ -373,10 +373,10 @@ simplifyInfer rhs_tclvl apply_mr name_taus wanteds
              -- See Note [Retaining extra EvBinds]
        ; null_ev_binds <- TcM.getTcEvBinds null_ev_binds_var
        ; let extra_ev_binds = extraEvBinds null_ev_binds wanted_transformed
-       ; mapM_ (\(EvBind { evb_var =  var
-                         , evb_term = term
-                         , evb_loc  = loc  })
-                   -> TcM.addTcEvBind ev_binds_var var term loc) extra_ev_binds
+       ; mapBagM_ (\(EvBind { evb_var =  var
+                            , evb_term = term
+                            , evb_loc  = loc  })
+                      -> TcM.addTcEvBind ev_binds_var var term loc) extra_ev_binds
 
        ; let minimal_simple_preds = mkMinimalBySCs bound
                   -- See Note [Minimize by Superclasses]
@@ -728,11 +728,7 @@ simplifyRule name lhs_wanted rhs_wanted
                = True
 
              -- See Note [Extra EvBinds in simplifyRule]
-       ; let all_wanted_vars = mkVarSet $
-                               map (ctEvId . ctEvidence) $
-                               bagToList (wc_simple all_wanted)
-             extra_ev_binds
-               = filterBag (not . (`elemVarSet` all_wanted_vars) . evBindVar) ev_binds
+       ; let extra_ev_binds = extraEvBinds ev_binds all_wanted
 
        ; traceTc "simplifyRule" $
          vcat [ ptext (sLit "LHS of rule") <+> doubleQuotes (ftext name)
@@ -824,7 +820,7 @@ solveWantedsTcM :: WantedConstraints -> TcM (WantedConstraints, Bag EvBind)
 solveWantedsTcM wanted
   = do { ev_binds_var <- TcM.newTcEvBinds
        ; wanteds' <- solveWantedsTcMWithEvBinds ev_binds_var wanted solveWantedsAndDrop
-       ; binds <- TcRnMonad.getTcEvBinds ev_binds_var
+       ; binds <- TcM.getTcEvBinds ev_binds_var
        ; return (wanteds', binds) }
 
 solveWantedsAndDrop :: WantedConstraints -> TcS (WantedConstraints)

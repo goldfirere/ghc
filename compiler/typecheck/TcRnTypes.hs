@@ -63,7 +63,7 @@ module TcRnTypes(
 
         WantedConstraints(..), insolubleWC, emptyWC, isEmptyWC,
         andWC, unionsWC, addSimples, addImplics, mkSimpleWC, addInsols,
-        dropDerivedWC, tyCoVarsOfWC,
+        dropDerivedWC, tyCoVarsOfWC, extraEvBinds,
 
         Implication(..),
         SubGoalCounter(..),
@@ -1443,6 +1443,15 @@ addImplics wc implic = wc { wc_impl = wc_impl wc `unionBags` implic }
 addInsols :: WantedConstraints -> Bag Ct -> WantedConstraints
 addInsols wc cts
   = wc { wc_insol = wc_insol wc `unionBags` cts }
+
+-- | Filter out all EvBinds that are included in the WantedConstraints
+extraEvBinds :: Bag EvBind -> WantedConstraints -> Bag EvBind
+extraEvBinds binds (WC { wc_simple = simples })
+  = filterBag (not . (`elemVarSet` wanted_vars) . evBindVar) binds
+  where
+    wanted_vars = mkVarSet $
+                  map (ctEvId . ctEvidence) $
+                  bagToList simples
 
 instance Outputable WantedConstraints where
   ppr (WC {wc_simple = s, wc_impl = i, wc_insol = n})
