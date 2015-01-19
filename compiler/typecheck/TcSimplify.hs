@@ -251,6 +251,16 @@ To infer f's type we do the following:
 This ensures that the implication constraint we generate, if any,
 has a strictly-increased level compared to the ambient level outside
 the let binding.
+
+Note [Retaining extra EvBinds]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+It's possible that running the solver produces new coercion variables
+that then leak into types through side-effecting unification. So, in
+*every* run of the solver, even when we don't store the resulting EvBinds,
+we need to make sure to keep evidence around for these coercion variables.
+
+We do this by filtering out bindings for any Wanted that was passed into
+the solver. The remaining bindings may be important and must be retained.
 -}
 
 simplifyInfer :: TcLevel          -- Used when generating the constraints
@@ -359,6 +369,14 @@ simplifyInfer rhs_tclvl apply_mr name_taus wanteds
                               simple_wanteds
                   -- NB: simple_wanteds should be all CtWanted, so ctEvId should
                   -- be OK.
+
+             -- See Note [Retaining extra EvBinds]
+       ; null_ev_binds <- TcM.getTcEvBinds null_ev_binds_var
+       ; let extra_ev_binds = extraEvBinds null_ev_binds wanted_transformed
+       ; mapM_ (\(EvBind { evb_var =  var
+                         , evb_term = term
+                         , evb_loc  = loc  })
+                   -> TcM.addTcEvBind ev_binds_var var term loc) extra_ev_binds
 
        ; let minimal_simple_preds = mkMinimalBySCs bound
                   -- See Note [Minimize by Superclasses]

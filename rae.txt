@@ -1,7 +1,14 @@
 stack:
- - extendEvBinds
 
- - tcGetGlobalTyVars --> tcGetGlobalTyCoVars
+- Do something with the extra evbinds.
+  - simplifyAmbiguityCheck
+  - simplifyDeriv
+  - simplifyDefault
+  - disambigGroup
+  - (simplifyRule / tcRule)
+  - simplifyInfer (null_ev_binds_var)
+
+- tcGetGlobalTyVars --> tcGetGlobalTyCoVars
 
 - relax tcMatchTys, tcUnifyTys to ignore casts. URGH!
    --> and, in the process, unify all three unification algorithms (!)
@@ -22,6 +29,8 @@ fix parser; then fix TypeLits.Mult --> *
 
 QUESTIONS:
 - Check decideQuantification!
+
+- The extra EvBinds. Is there a better way to handle these?
 
 - Is it useful to keep vanilla skolems separate from ordinary tyvars? I think
 not.
@@ -189,6 +198,10 @@ type-cast coercion is R, not N. See also email *to* SCW (with no written respons
 on 7/14/14. The end of the discussion was to go with that email's Coherence1
 rule, which doesn't cause problems (other than some discomfort, as outlined
 in the email.)
+
+- Sometimes (e.g., when typechecking RULES) the solver is run and the result
+discarded. Yet, there can be new cobox variables invented that leak out
+when unifying types. Thus, we must not drop the solutions!
 
 - The kind-role rejiggering. But, I think this is resolved now, and I'm happy
   with it.
