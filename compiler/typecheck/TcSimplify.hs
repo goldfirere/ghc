@@ -676,23 +676,25 @@ we don't care directly about the EvBinds created during this run
 of the solver, we absolutely have to keep them around, as they have
 the definition for certain variables that may appear in types.
 
-We thus return the EvBinds. Later, when building the actual RuleDecl
-(in tcRule), we'll filter out any EvBinds which are duplicated in the
-second run of the solver. But we'll keep those that aren't duplicated.
+We thus return the EvBinds, filtering out any binds for wanteds that
+appear in the LHS or RHS wanteds, as these will be re-solved.
 See also Note [Simplifying RULE constraints] in TcRules.
 -}
 
 simplifyRule :: RuleName
              -> WantedConstraints       -- Constraints from LHS
              -> WantedConstraints       -- Constraints from RHS
-             -> TcM ([EvVar], WantedConstraints)   -- LHS evidence variables
+             -> TcM ([EvVar], WantedConstraints, Bag EvBind)  -- LHS evidence variables
+             -- Third return value is the "extra" EvBinds.
+             -- See Note [Extra EvBinds in simplifyRule]
 -- See Note [Simplifying RULE constraints] in TcRule
 simplifyRule name lhs_wanted rhs_wanted
   = do {         -- We allow ourselves to unify environment
                  -- variables: runTcS runs with topTcLevel
-         (resid_wanted, _) <- solveWantedsTcM (lhs_wanted `andWC` rhs_wanted)
+         let all_wanted = lhs_wanted `andWC` rhs_wanted
+       ; (resid_wanted, ev_binds) <- solveWantedsTcM all_wanted
                               -- Post: these are zonked and unflattened
-
+                                     
        ; zonked_lhs_simples <- TcM.zonkSimples (wc_simple lhs_wanted)
        ; let (q_cts, non_q_cts) = partitionBag quantify_me zonked_lhs_simples
              quantify_me  -- Note [RULE quantification over equalities]
@@ -707,14 +709,23 @@ simplifyRule name lhs_wanted rhs_wanted
                | otherwise
                = True
 
+             -- See Note [Extra EvBinds in simplifyRule]
+       ; let all_wanted_vars = mkVarSet $
+                               map (ctEvId . ctEvidence) $
+                               bagToList (wc_simple all_wanted)
+             extra_ev_binds
+               = filterBag (not . (`elemVarSet` all_wanted_vars) . evBindVar) ev_binds
+
        ; traceTc "simplifyRule" $
          vcat [ ptext (sLit "LHS of rule") <+> doubleQuotes (ftext name)
               , text "zonked_lhs_simples" <+> ppr zonked_lhs_simples
               , text "q_cts"      <+> ppr q_cts
-              , text "non_q_cts"  <+> ppr non_q_cts ]
+              , text "non_q_cts"  <+> ppr non_q_cts
+              , text "extra_ev_binds" <+> ppr extra_ev_binds ]
 
        ; return ( map (ctEvId . ctEvidence) (bagToList q_cts)
-                , lhs_wanted { wc_simple = non_q_cts }) }
+                , lhs_wanted { wc_simple = non_q_cts }
+                , extra_ev_binds ) }
 
 {-
 *********************************************************************************

@@ -20,6 +20,7 @@ import TcEvidence( TcEvBinds(..) )
 import Type
 import Id
 import Name
+import Bag
 import SrcLoc
 import Outputable
 import FastString
@@ -136,8 +137,8 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
                   ; (rhs', rhs_wanted) <- captureConstraints (tcMonoExpr rhs rule_ty)
                   ; return (lhs', lhs_wanted, rhs', rhs_wanted, rule_ty) }
 
-       ; (lhs_evs, other_lhs_wanted) <- simplifyRule (unLoc name) lhs_wanted
-                                                     rhs_wanted
+       ; (lhs_evs, other_lhs_wanted, extra_ev_binds)
+            <- simplifyRule (unLoc name) lhs_wanted rhs_wanted
 
         -- Now figure out what to quantify over
         -- c.f. TcSimplify.simplifyInfer
@@ -189,6 +190,9 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
                                   , ic_binds  = lhs_binds_var
                                   , ic_info   = RuleSkol (unLoc name)
                                   , ic_env    = lcl_env }
+
+       ; let extra_wanteds = mapBag (mkNonCanonical . evBindWanted) extra_ev_binds
+       ; emitSimples extra_wanteds
 
        ; return (HsRule name act
                     (map (noLoc . RuleBndr . noLoc) (qtkvs ++ tpl_ids))
