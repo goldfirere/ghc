@@ -13,7 +13,7 @@ module TcEvidence (
   -- Evidence bindings
   TcEvBinds(..), EvBindsVar(..), 
   EvBindMap(..), emptyEvBindMap, extendEvBinds, lookupEvBind, evBindMapBinds,
-  EvBind(..), emptyTcEvBinds, isEmptyTcEvBinds, evBindsSubst, sccEvBinds,
+  EvBind(..), emptyTcEvBinds, isEmptyTcEvBinds, evBindsSubst, sccEvBinds, evBindVar,
   EvTerm(..), mkEvCast, evVarsOfTerm,
   EvLit(..), evTermCoercion,
 

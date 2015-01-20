@@ -1447,8 +1447,14 @@ addInsols wc cts
 -- | Filter out all EvBinds that are included in the WantedConstraints
 extraEvBinds :: Bag EvBind -> WantedConstraints -> Bag EvBind
 extraEvBinds binds (WC { wc_simple = simples })
-  = filterBag (not . (`elemVarSet` wanted_vars) . evBindVar) binds
   where
+    go_scc (AcyclicSCC bind : rest) extras acc = go_bind [bind] rest extras acc
+    go_scc (CyclicSCC binds : rest) -- RAE was here.
+    
+    is_extra (EvBind { evb_var = var, evb_term = term })
+      = not $
+        (evVarsOfTerm term `extendVarSet` var) `intersectsVarSet` wanted_vars
+    
     wanted_vars = mkVarSet $
                   map (ctEvId . ctEvidence) $
                   bagToList simples
