@@ -128,7 +128,8 @@ mkCoreApp fun arg       = ASSERT2( isFunTy fun_ty, ppr fun $$ ppr arg )
                           mk_val_app fun arg arg_ty res_ty
                       where
                         fun_ty = exprType fun
-                        (arg_ty, res_ty) = splitFunTy fun_ty
+                        (arg_ty, res_ty) = pprTrace "RAE mkCoreApp" empty $
+                                           splitFunTy fun_ty
 
 -- | Construct an expression which represents the application of a number of
 -- expressions to another. The leftmost expression in the list is applied first
@@ -146,7 +147,8 @@ mkCoreApps orig_fun orig_args
                                                                   $$ ppr orig_args )
                                          go (mk_val_app fun arg arg_ty res_ty) res_ty args
                                        where
-                                         (arg_ty, res_ty) = splitFunTy fun_ty
+                                         (arg_ty, res_ty) = pprTrace "RAE mkCoreApps" empty $
+                                                            splitFunTy fun_ty
 
 -- | Construct an expression which represents the application of a number of
 -- expressions to that of a data constructor expression. The leftmost expression

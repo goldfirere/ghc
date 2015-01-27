@@ -243,7 +243,8 @@ mkCoLetMatchResult bind = adjustMatchResult (mkCoreLet bind)
 -- let var' = viewExpr var in mr
 mkViewMatchResult :: DsId -> CoreExpr -> DsId -> MatchResult -> MatchResult
 mkViewMatchResult var' viewExpr var = 
-    adjustMatchResult (mkCoreLet (NonRec var' (mkCoreAppDs viewExpr (Var var))))
+    adjustMatchResult (mkCoreLet (NonRec var' (pprTrace "RAE mkViewMatchResult" empty $
+                                               mkCoreAppDs viewExpr (Var var))))
 
 mkEvalMatchResult :: DsId -> DsType -> MatchResult -> MatchResult
 mkEvalMatchResult var ty
@@ -342,7 +343,8 @@ sort_alts = sortWith (dataConTag . alt_pat)
 
 mkPatSynCase :: DsId -> DsType -> CaseAlt PatSyn -> CoreExpr -> DsM CoreExpr
 mkPatSynCase var ty alt fail = do
-    matcher <- dsLExpr $ mkLHsWrap wrapper $ nlHsTyApp matcher [ty]
+    matcher <- pprTrace "RAE mkPatSynCase" empty $
+               dsLExpr $ mkLHsWrap wrapper $ nlHsTyApp matcher [ty]
     let MatchResult _ mkCont = match_result
     cont <- mkCoreLams bndrs <$> mkCont fail
     return $ mkCoreAppsDs matcher [Var var, ensure_unstrict cont, Lam voidArgId fail]
@@ -547,7 +549,8 @@ mkCoreAppDs (Var f `App` Type ty1 `App` Type ty2 `App` arg1) arg2
                    Var v1 | isLocalId v1 -> v1        -- Note [Desugaring seq (2) and (3)]
                    _                     -> mkWildValBinder ty1
 
-mkCoreAppDs fun arg = mkCoreApp fun arg  -- The rest is done in MkCore
+mkCoreAppDs fun arg = pprTrace "RAE mkCoreAppDs" (ppr fun $$ ppr arg) $
+                      mkCoreApp fun arg  -- The rest is done in MkCore
 
 mkCoreAppsDs :: CoreExpr -> [CoreExpr] -> CoreExpr
 mkCoreAppsDs fun args = foldl mkCoreAppDs fun args

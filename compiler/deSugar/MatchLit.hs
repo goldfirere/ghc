@@ -112,8 +112,10 @@ dsOverLit' :: DynFlags -> HsOverLit Id -> DsM CoreExpr
 dsOverLit' dflags (OverLit { ol_val = val, ol_rebindable = rebindable
                            , ol_witness = witness, ol_type = ty })
   | not rebindable
-  , Just expr <- shortCutLit dflags val ty = dsExpr expr        -- Note [Literal short cut]
-  | otherwise                              = dsExpr witness
+  , Just expr <- shortCutLit dflags val ty = pprTrace "RAE dsOverLit'" empty $
+                                             dsExpr expr        -- Note [Literal short cut]
+  | otherwise                              = pprTrace "RAE dsOverLit'2" empty $
+                                             dsExpr witness
 
 {-
 Note [Literal short cut]
@@ -421,9 +423,11 @@ matchNPats (var:vars) ty (eqn1:eqns)    -- All for the same literal
         ; lit_expr <- dsOverLit lit
         ; neg_lit <- case mb_neg of
                             Nothing -> return lit_expr
-                            Just neg -> do { neg_expr <- dsExpr neg
+                            Just neg -> do { neg_expr <- pprTrace "RAE matchNPats" empty $
+                                                         dsExpr neg
                                            ; return (App neg_expr lit_expr) }
-        ; eq_expr <- dsExpr eq_chk
+        ; eq_expr <- pprTrace "RAE matchNPath2" empty $
+                     dsExpr eq_chk
         ; let pred_expr = mkApps eq_expr [Var var, neg_lit]
         ; match_result <- match vars ty (shiftEqns (eqn1:eqns))
         ; return (mkGuardedMatchResult pred_expr match_result) }
@@ -451,8 +455,10 @@ matchNPlusKPats :: [DsId] -> DsType -> [EquationInfo] -> DsM MatchResult
 -- All NPlusKPats, for the *same* literal k
 matchNPlusKPats (var:vars) ty (eqn1:eqns)
   = do  { let NPlusKPat (L _ n1) lit ge minus = firstPat eqn1
-        ; ge_expr     <- dsExpr ge
-        ; minus_expr  <- dsExpr minus
+        ; ge_expr     <- pprTrace "RAE matchNPlusKPats" empty $
+                         dsExpr ge
+        ; minus_expr  <- pprTrace "RAE matchNPlusKPats2" empty $
+                         dsExpr minus
         ; lit_expr    <- dsOverLit lit
         ; n1'         <- dsVar n1
         ; let pred_expr   = mkApps ge_expr [Var var, lit_expr]

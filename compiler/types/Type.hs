@@ -571,7 +571,8 @@ splitFunTysN :: Int -> Type -> ([Type], Type)
 -- ^ Split off exactly the given number argument types, and panics if that is not possible
 splitFunTysN 0 ty = ([], ty)
 splitFunTysN n ty = ASSERT2( isFunTy ty, int n <+> ppr ty )
-                    case splitFunTy ty of { (arg, res) ->
+                    case pprTrace "RAE splitFunTysN" empty $
+                         splitFunTy ty of { (arg, res) ->
                     case splitFunTysN (n-1) res of { (args, res) ->
                     (arg:args, res) }}
 

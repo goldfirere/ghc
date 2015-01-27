@@ -388,7 +388,8 @@ matchView (var:vars) ty (eqns@(eqn1:_))
         ; match_result <- match (var':vars) ty $
                           map (decomposeFirstPat getViewPat) eqns
          -- compile the view expressions
-        ; viewExpr' <- dsLExpr viewExpr
+        ; viewExpr' <- pprTrace "RAE matchView" empty $
+                       dsLExpr viewExpr
         ; return (mkViewMatchResult var' viewExpr' var match_result) }
 matchView _ _ _ = panic "matchView"
 
@@ -401,7 +402,8 @@ matchOverloadedList (var:vars) ty (eqns@(eqn1:_))
        ; var' <- newUniqueId var (mkListTy elt_ty')  -- we construct the overall type by hand
        ; match_result <- match (var':vars) ty $
                             map (decomposeFirstPat getOLPat) eqns -- getOLPat builds the pattern inside as a non-overloaded version of the overloaded list pattern
-       ; e' <- dsExpr e
+       ; e' <- pprTrace "RAE matchOverloadedList" empty $
+               dsExpr e
        ; return (mkViewMatchResult var' e' var match_result) }
 matchOverloadedList _ _ _ = panic "matchOverloadedList"
 
@@ -812,7 +814,11 @@ matchWrapper ctxt (MG { mg_alts = matches
   where
     mk_eqn_info rhs_ty' (L _ (Match pats _ grhss))
       = do { let upats = map unLoc pats
-           ; match_result <- dsGRHSs ctxt upats grhss rhs_ty'
+           ; match_result <- pprTrace "RAE matchWrapper" (vcat [ ppr arg_tys
+                                                               , ppr rhs_ty
+                                                               , ppr origin
+                                                               , ppr pats ]) $
+                             dsGRHSs ctxt upats grhss rhs_ty'
            ; return (EqnInfo { eqn_pats = upats, eqn_rhs  = match_result}) }
 
     handleWarnings = if isGenerated origin

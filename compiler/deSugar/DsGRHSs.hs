@@ -46,7 +46,8 @@ necessary.  The type argument gives the type of the @ei@.
 dsGuarded :: GRHSs Id (LHsExpr Id) -> DsType -> DsM CoreExpr
 
 dsGuarded grhss rhs_ty = do
-    match_result <- dsGRHSs PatBindRhs [] grhss rhs_ty
+    match_result <- pprTrace "RAE dsGuarded" empty $
+                    dsGRHSs PatBindRhs [] grhss rhs_ty
     error_expr <- mkErrorAppDs nON_EXHAUSTIVE_GUARDS_ERROR_ID rhs_ty empty
     extractMatchResult match_result error_expr
 
@@ -58,6 +59,7 @@ dsGRHSs :: HsMatchContext Name -> [Pat Id]      -- These are to build a MatchCon
         -> DsM MatchResult
 dsGRHSs hs_ctx _ (GRHSs grhss binds) rhs_ty
   = ASSERT( notNull grhss )
+    pprTrace "RAE dsGRHSs" (ppr binds) $
     do { match_results <- mapM (dsGRHS hs_ctx rhs_ty) grhss
        ; let match_result1 = foldr1 combineMatchResults match_results
              match_result2 = adjustMatchResultDs (dsLocalBinds binds) match_result1
@@ -66,7 +68,8 @@ dsGRHSs hs_ctx _ (GRHSs grhss binds) rhs_ty
 
 dsGRHS :: HsMatchContext Name -> DsType -> LGRHS Id (LHsExpr Id) -> DsM MatchResult
 dsGRHS hs_ctx rhs_ty (L _ (GRHS guards rhs))
-  = matchGuards (map unLoc guards) (PatGuard hs_ctx) rhs rhs_ty
+  = pprTrace "RAE dsGRHS" (ppr guards $$ ppr rhs) $
+    matchGuards (map unLoc guards) (PatGuard hs_ctx) rhs rhs_ty
 
 {-
 ************************************************************************
@@ -86,7 +89,8 @@ matchGuards :: [GuardStmt Id]       -- Guard
 -- Here we must be in a guard context (not do-expression, nor list-comp)
 
 matchGuards [] _ rhs _
-  = do  { core_rhs <- dsLExpr rhs
+  = do  { core_rhs <- pprTrace "RAE matchGuards" empty $
+                      dsLExpr rhs
         ; return (cantFailMatchResult core_rhs) }
 
         -- BodyStmts must be guards
@@ -102,7 +106,8 @@ matchGuards (BodyStmt e _ _ _ : stmts) ctx rhs rhs_ty
     return (adjustMatchResultDs addTicks match_result)
 matchGuards (BodyStmt expr _ _ _ : stmts) ctx rhs rhs_ty = do
     match_result <- matchGuards stmts ctx rhs rhs_ty
-    pred_expr <- dsLExpr expr
+    pred_expr <- pprTrace "RAE matchGuards2" empty $
+                 dsLExpr expr
     return (mkGuardedMatchResult pred_expr match_result)
 
 matchGuards (LetStmt binds : stmts) ctx rhs rhs_ty = do
@@ -115,7 +120,8 @@ matchGuards (LetStmt binds : stmts) ctx rhs rhs_ty = do
 
 matchGuards (BindStmt pat bind_rhs _ _ : stmts) ctx rhs rhs_ty = do
     match_result <- matchGuards stmts ctx rhs rhs_ty
-    core_rhs <- dsLExpr bind_rhs
+    core_rhs <- pprTrace "RAE matchGuards3" empty $
+                dsLExpr bind_rhs
     matchSinglePat core_rhs (StmtCtxt ctx) pat rhs_ty match_result
 
 matchGuards (LastStmt  {} : _) _ _ _ = panic "matchGuards LastStmt"

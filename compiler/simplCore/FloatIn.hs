@@ -182,7 +182,8 @@ fiExpr dflags to_drop ann_expr@(_,AnnApp {})
       | otherwise
       = ((res_ty, extra_fvs), arg_fvs)
       where
-       (arg_ty, res_ty) = splitFunTy fun_ty
+       (arg_ty, res_ty) = pprTrace "RAE fiExpr" empty $
+                          splitFunTy fun_ty
 
     drop_here : extra_drop : fun_drop : arg_drops
       = sepBindsByDropPoint dflags False (extra_fvs : fun_fvs : arg_fvs) to_drop

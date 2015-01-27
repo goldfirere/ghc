@@ -99,7 +99,8 @@ dsHsBind :: HsBind Id -> DsM (OrdList (DsId,CoreExpr))
 
 dsHsBind (VarBind { var_id = var, var_rhs = expr, var_inline = inline_regardless })
   = do  { dflags <- getDynFlags
-        ; core_expr <- dsLExpr expr
+        ; core_expr <- pprTrace "RAE dsHsBind" empty $
+                       dsLExpr expr
         ; var' <- dsVar var
 
                 -- Dictionary bindings are always VarBinds,
@@ -113,7 +114,8 @@ dsHsBind (FunBind { fun_id = L _ fun, fun_matches = matches
                   , fun_co_fn = co_fn, fun_tick = tick
                   , fun_infix = inf })
  = do   { dflags <- getDynFlags
-        ; (args, body) <- matchWrapper (FunRhs (idName fun) inf) matches
+        ; (args, body) <- pprTrace "RAE FunBind" empty $
+                          matchWrapper (FunRhs (idName fun) inf) matches
         ; tick' <- mapM dsTickish tick
         ; let body' = mkOptTickBox tick' body
         ; rhs <- dsHsWrapper co_fn (mkLams args body')
@@ -849,7 +851,8 @@ dsHsWrapper (WpCompose c1 c2) e = do { e1 <- dsHsWrapper c2 e
                                      ; dsHsWrapper c1 e1 }
 dsHsWrapper (WpFun c1 c2 t1 _) e = do { x <- newSysLocalDs t1
                                       ; e1 <- dsHsWrapper c1 (Var x)
-                                      ; e2 <- dsHsWrapper c2 (e `mkCoreAppDs` e1)
+                                      ; e2 <- dsHsWrapper c2 (pprTrace "RAE dsHsWrapper" empty $
+                                                              e `mkCoreAppDs` e1)
                                       ; return (Lam x e2) }
 dsHsWrapper (WpCast co)       e = ASSERT(tcCoercionRole co == Representational)
                                   dsTcCoercion co (mkCast e)

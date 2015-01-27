@@ -255,6 +255,7 @@ deSugarExpr hsc_env tc_expr
          -- Do desugaring
        ; (msgs, mb_core_expr) <- initDs hsc_env (icInteractiveModule icntxt) rdr_env
                                         type_env fam_inst_env $
+                                 pprTrace "RAE deSugarExpr" empty $
                                  dsLExpr tc_expr
 
        ; case mb_core_expr of
@@ -364,9 +365,11 @@ dsRule (L loc (HsRule name act vars lhs _tv_lhs rhs _fv_rhs))
 
         ; lhs' <- unsetGOptM Opt_EnableRewriteRules $
                   unsetWOptM Opt_WarnIdentities $
+                  pprTrace "RAE dsRule" empty $
                   dsLExpr lhs   -- Note [Desugaring RULE left hand sides]
 
-        ; rhs' <- dsLExpr rhs
+        ; rhs' <- pprTrace "RAE dsRule RHS" empty $
+                  dsLExpr rhs
         ; dflags <- getDynFlags
 
         ; (bndrs'', lhs'', rhs'') <- unfold_coerce bndrs' lhs' rhs'
@@ -477,7 +480,8 @@ dsVect :: LVectDecl Id -> DsM CoreVect
 dsVect (L loc (HsVect (L _ v) rhs))
   = putSrcSpanDs loc $
     do { v'   <- dsVar v
-       ; rhs' <- dsLExpr rhs
+       ; rhs' <- pprTrace "RAE dsVect" empty $
+                 dsLExpr rhs
        ; return $ Vect v' rhs'
        }
 dsVect (L _loc (HsNoVect (L _ v)))

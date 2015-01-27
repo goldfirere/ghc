@@ -97,7 +97,8 @@ dsIPBinds (IPBinds ip_binds ev_binds) body
   where
     ds_ip_bind (L _ (IPBind ~(Right n) e)) body
       = do n' <- dsVar n
-           e' <- dsLExpr e
+           e' <- pprTrace "RAE dsIPBinds" empty $
+                 dsLExpr e
            return (Let (NonRec n' e') body)
 
 -------------------------
@@ -152,7 +153,8 @@ dsStrictBind (FunBind { fun_id = L _ fun, fun_matches = matches, fun_co_fn = co_
                 -- Can't be a bang pattern (that looks like a PatBind)
                 -- so must be simply unboxed
   = do { fun' <- dsVar fun
-       ; (args, rhs) <- matchWrapper (FunRhs (idName fun') inf) matches
+       ; (args, rhs) <- pprTrace "RAE strict FunBind" empty $
+                        matchWrapper (FunRhs (idName fun') inf) matches
        ; MASSERT( null args ) -- Functions aren't lifted
        ; MASSERT( isIdHsWrapper co_fn )
        ; tick' <- mapM dsTickish tick
@@ -195,9 +197,11 @@ strictMatchOnly _ = False -- I hope!  Checked immediately by caller in fact
 
 dsLExpr :: LHsExpr Id -> DsM CoreExpr
 
-dsLExpr (L loc e) = putSrcSpanDs loc $ dsExpr e
+dsLExpr (L loc e) = pprTrace "RAE dsLExpr1" (ppr e) $
+                    putSrcSpanDs loc $ dsExpr e
 
 dsExpr :: HsExpr Id -> DsM CoreExpr
+dsExpr e | pprTrace "RAE dsExpr1" (ppr e) $ False = panic "foo"
 dsExpr (HsPar e)              = dsLExpr e
 dsExpr (ExprWithTySigOut e _) = dsLExpr e
 dsExpr (HsVar var)            = varToCoreExpr <$> dsVar var  -- See Note [Desugaring vars]
@@ -206,7 +210,8 @@ dsExpr (HsLit lit)            = dsLit lit
 dsExpr (HsOverLit lit)        = dsOverLit lit
 
 dsExpr (HsWrap co_fn e)
-  = do { e' <- dsExpr e
+  = pprTrace "RAE dsExpr Wrap" (ppr co_fn $$ ppr e) $
+    do { e' <- dsExpr e
        ; wrapped_e <- dsHsWrapper co_fn e'
        ; dflags <- getDynFlags
        ; warnAboutIdentities dflags e' (exprType wrapped_e)
@@ -216,16 +221,19 @@ dsExpr (NegApp expr neg_expr)
   = App <$> dsExpr neg_expr <*> dsLExpr expr
 
 dsExpr (HsLam a_Match)
-  = uncurry mkLams <$> matchWrapper LambdaExpr a_Match
+  = uncurry mkLams <$> (pprTrace "RAE HsLam" empty $
+                        matchWrapper LambdaExpr a_Match)
 
 dsExpr (HsLamCase arg matches)
   = do { arg' <- dsType arg
        ; arg_var <- newSysLocalDs arg'
-       ; ([discrim_var], matching_code) <- matchWrapper CaseAlt matches
+       ; ([discrim_var], matching_code) <- pprTrace "RAE HsLamCase" empty $
+                                           matchWrapper CaseAlt matches
        ; return $ Lam arg_var $ bindNonRec discrim_var (Var arg_var) matching_code }
 
 dsExpr (HsApp fun arg)
-  = mkCoreAppDs <$> dsLExpr fun <*>  dsLExpr arg
+  = pprTrace "RAE dsExpr" (ppr fun $$ ppr arg) $
+    mkCoreAppDs <$> dsLExpr fun <*>  dsLExpr arg
 
 dsExpr (HsUnboundVar _) = panic "dsExpr: HsUnboundVar"
 
@@ -273,7 +281,8 @@ dsExpr (OpApp e1 op _ e2)
     mkCoreAppsDs <$> dsLExpr op <*> mapM dsLExpr [e1, e2]
 
 dsExpr (SectionL expr op)       -- Desugar (e !) to ((!) e)
-  = mkCoreAppDs <$> dsLExpr op <*> dsLExpr expr
+  = pprTrace "RAE dsExpr sectionL" empty $
+    mkCoreAppDs <$> dsLExpr op <*> dsLExpr expr
 
 -- dsLExpr (SectionR op expr)   -- \ x -> op x expr
 dsExpr (SectionR op expr) = do
@@ -317,7 +326,8 @@ dsExpr (HsCoreAnn _ expr)
 
 dsExpr (HsCase discrim matches)
   = do { core_discrim <- dsLExpr discrim
-       ; ([discrim_var], matching_code) <- matchWrapper CaseAlt matches
+       ; ([discrim_var], matching_code) <- pprTrace "RAE HsCase" empty $
+                                           matchWrapper CaseAlt matches
        ; return (bindNonRec discrim_var core_discrim matching_code) }
 
 -- Pepe: The binds are in scope in the body but NOT in the binding group
@@ -581,7 +591,8 @@ dsExpr expr@(RecordUpd record_expr (HsRecFields { rec_flds = fields })
         -- constructor aguments.
         ; alts <- mapM (mk_alt in_inst_tys' out_inst_tys' upd_fld_env) cons_to_upd
         ; ([discrim_var], matching_code)
-                <- matchWrapper RecUpd (MG { mg_alts = alts, mg_arg_tys = [in_ty]
+                <- pprTrace "RAE RecordUpd" empty $
+                   matchWrapper RecUpd (MG { mg_alts = alts, mg_arg_tys = [in_ty]
                                            , mg_res_ty = out_ty, mg_origin = FromSource })
                                            -- FromSource is not strictly right, but we
                                            -- want incomplete pattern-match warnings
@@ -626,7 +637,10 @@ dsExpr expr@(RecordUpd record_expr (HsRecFields { rec_flds = fields })
                         mkWpTyEvApps  (mkTyCoVarTys ex_tvs) <.>
                         mkWpTyApps [ty | (tv, ty) <- univ_tvs `zip` out_inst_tys'
                                        , not (tv `elemVarEnv` wrap_subst) ]
-                 rhs = foldl (\a b -> nlHsApp a b) inst_con val_args
+                 rhs = pprTrace "RAE mk_alt" (ppr wrap $$ ppr inst_con $$
+                                              ppr univ_tvs $$ ppr out_inst_tys' $$
+                                              ppr wrap_subst) $
+                       foldl (\a b -> nlHsApp a b) inst_con val_args
 
                         -- Tediously wrap the application in a cast
                         -- Note [Update for GADTs]
