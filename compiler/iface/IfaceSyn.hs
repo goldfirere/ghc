@@ -1185,8 +1185,6 @@ freeNamesIfCoercion (IfaceLRCo _ co)
   = freeNamesIfCoercion co
 freeNamesIfCoercion (IfaceInstCo co co2)
   = freeNamesIfCoercion co &&& freeNamesIfCoercion co2
-freeNamesIfCoercion (IfaceCoherenceCo c1 c2)
-  = freeNamesIfCoercion c1 &&& freeNamesIfCoercion c2
 freeNamesIfCoercion (IfaceKindCo c)
   = freeNamesIfCoercion c
 freeNamesIfCoercion (IfaceSubCo co)

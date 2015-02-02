@@ -524,14 +524,14 @@ data Coercion
 
   -- Coherence applies a coercion to the left-hand type of another coercion
   -- See Note [Coherence]
-  -- See Note [Roles and kind coercions]
-  | CoherenceCo Coercion Coercion
-     -- :: e -> R -> e
+  | CoherenceCo { coh_base, coh_kind, coh_left, coh_right :: Coercion }
+     -- coh_base :: e
+     -- coh_kind :: e
+     -- coh_left, coh_right :: R
 
   -- Extract a kind coercion from a (heterogeneous) type coercion
-  -- See Note [Roles and kind coercions]
   | KindCo Coercion
-     -- :: e -> R
+     -- :: e -> e
     
   | SubCo Coercion                  -- Turns a ~N into a ~R
     -- :: N -> R
@@ -768,20 +768,18 @@ The typing rule is:
 Note that is is an *invariant* that the kinds of the variables in a "Hetero"
 construction are different.
 
-For role information, see Note [Roles and kind coercions].
+The role of the "h" coercion in the ForAllCoBndr is always the same as the
+outer ForAllCo coercion. This is to keep uniformity with the treatment
+of (->), which can be seen as a degenerate forall.
 
 Note [Coherence]
 ~~~~~~~~~~~~~~~~
 The Coherence typing rule is thus:
 
-  g1 : s ~ t    s : k1    g2 : k1 ~ k2
-  ------------------------------------
-  CoherenceCo g1 g2 : (s |> g2) ~ t
-
-While this look (and is) unsymmetric, a combination of other coercion
-combinators can make the symmetric version.
-
-For role information, see Note [Roles and kind coercions].
+  g : t1 ~e t2   t1 : k1  t2 : k2  h1 : k1 ~R k1'
+  h2 : k2 ~R k2'  h : k1' ~e k2'
+  ---------------------------------------------
+  CoherenceCo g h h1 h2 : (t1 |> h1) ~ (t2 |> h2)
 
 Note [Predicate coercions]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -915,73 +913,6 @@ Phantom: All arguments must have role Phantom. This one isn't strictly
 necessary for soundness, but this choice removes ambiguity.
 
 The rules here also dictate what the parameters to mkTyConAppCo.
-
-Note [Roles and kind coercions]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-According to the "System FC With Explicit Kind Equality" paper, a
-coercion proving (t1 ~ t2), where t1 :: k1 and t2 :: k2, also proves
-(k1 ~ k2). This is precisely what KindCo shows. But, roles make
-this story subtler. Let's build up intuition through a few examples.
-
-Here are some definitions:
-
-  Bool :: *
-  True :: Bool
-  False :: Bool
-  Sunny :: *
-  axSunny :: Bool ~R Sunny
-
-At the term level, we have (True |> axSunny :: Sunny), because
-term-level casts use representational coercions. Uniformity compels
-us to make the same thing true at the type level. Thus, CastTy must
-take a representational coercion.
-
-Now, let's look at coherence. Here is the typing rule from the paper:
-
-g :: t1 ~ t2
-t1 |> h :: k    -- that is, t1 |> h is well-formed
----------------------- CoherenceCo
-g |> h :: t1 |> h ~ t2
-
-We must consider what the roles of CoherenceCo should be. I (Richard E.)
-propose this:
-
-g :: t1 ~r t2
-t1 |> h :: k
------------------------ CoherenceCo
-g |> h :: t1 |> h ~r t2
-
-That is, the second coercion must be representational, while the first's
-role carries through to the result.
-
-This may lead to a proof (True |> axSunny) ~N True.
-Recall that nominal equality
-is supposed to be equality in surface Haskell. So, a statement
-((True |> axSunny) ~N True) means that the two types should be indistinguishable
-in Haskell code. But, they're not indistinguishable! (True |> axSunny) is
-a desugaring of (coerce True), which is certainly distinct from plain old
-True. We resolve this strangeness by noting that (True |> axSunny) and
-True *have different kinds*. Thus, clearly, they are distinguishable.
-Accordingly, we refine our intuition of nominal equality to say that if
-two types are nominally equal and have nominally-equal kinds, then the
-types are indistinguishable in Haskell code.
-
-From this discussion, we can also see how we have to modify the KindCo
-rule:
-
-g :: (~r) k1 k2 t1 t2
---------------------- :: KindCo
-kind g :: k1 ~R k2
-
-This rule says that (kind g) is always representational. Accordingly, we must
-be careful that (safe) phantom coercions do not relate types of different
-kinds. TODO (RAE): Expand this point.
-
-Other places that roles are non-trivial with kind coercions are in the "eta"
-coercions in TyHetero and CoHetero CoBndrs, and correspondingly in the output
-of NthCo on forall-coercions. Thinking of (->) as a degenerate forall, we see
-that the correct role to use here is that of the payload coercion in the
-forall. See docs/core-spec/core-spec.pdf for the exact rules.
 
 Note [InstCo roles]
 ~~~~~~~~~~~~~~~~~~~

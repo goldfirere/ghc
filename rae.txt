@@ -1,5 +1,16 @@
 stack:
 
+
+Coherence rejigger todo:
+ - Fix eqType
+ - Remove implementation of tcMatchTys (checking for no overlap in free vars!)
+ - Fix implementation of unifyTys
+ - Change role on KindCo
+   - homogeniseRhsKind
+ - Change CoherenceCo
+   - mkTcCoherenceLeftCo
+   - mkTcCoherenceRightCo
+
 - tcGetGlobalTyVars --> tcGetGlobalTyCoVars
 
 - relax tcMatchTys, tcUnifyTys to ignore casts. URGH!

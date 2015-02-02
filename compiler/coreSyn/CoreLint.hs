@@ -1350,12 +1350,6 @@ lintCoercion co@(AxiomInstCo con ind cos)
            ; return (extendTCvSubst subst_l ktv s', 
                      extendTCvSubst subst_r ktv t') }
 
-lintCoercion (CoherenceCo co1 co2)
-  = do { (_, k2, t1, t2, r) <- lintCoercion co1
-       ; let lhsty = mkCastTy t1 co2
-       ; k1' <- lintType lhsty
-       ; return (k1', k2, lhsty, t2, r) }
-
 lintCoercion (KindCo co)
   = do { (k1, k2, _, _, _) <- lintCoercion co
        ; return (liftedTypeKind, liftedTypeKind, k1, k2, Representational) }
@@ -1450,7 +1444,6 @@ freeInCoercion v (TransCo g1 g2)           = (freeInCoercion v g1) && (freeInCoe
 freeInCoercion v (NthCo _ g)               = freeInCoercion v g
 freeInCoercion v (LRCo _ g)                = freeInCoercion v g
 freeInCoercion v (InstCo g w)              = (freeInCoercion v g) && (freeInCoercionArg v w)
-freeInCoercion v (CoherenceCo g _)         = freeInCoercion v g
 freeInCoercion v (KindCo g)                = freeInCoercion v g
 freeInCoercion v (SubCo g)                 = freeInCoercion v g
 freeInCoercion v (AxiomRuleCo _ ts cs)     = all (freeInType v) ts && all (freeInCoercion v) cs

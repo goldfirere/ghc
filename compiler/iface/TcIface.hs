@@ -879,8 +879,6 @@ tcIfaceCo = go
                                             <*> tcIfaceCoArg t2
     go (IfaceNthCo d c)          = NthCo d  <$> go c
     go (IfaceLRCo lr c)          = LRCo lr  <$> go c
-    go (IfaceCoherenceCo c1 c2)  = CoherenceCo <$> go c1
-                                               <*> tcIfaceCo c2
     go (IfaceKindCo c)           = KindCo   <$> tcIfaceCo c
     go (IfaceSubCo c)            = SubCo    <$> go c
     go (IfaceAxiomRuleCo ax tys cos) = AxiomRuleCo <$> go_axiom_rule ax

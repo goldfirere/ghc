@@ -178,7 +178,8 @@ data TcCoercion
   | TcLRCo LeftOrRight TcCoercion
   | TcSubCo TcCoercion
   | TcCastCo TcCoercion TcCoercion     -- co1 |> co2
-  | TcCoherenceCo TcCoercion Coercion
+  | TcCoherenceCo { tccoh_base, tccoh_kind  :: TcCoercion
+                  , tccoh_left, tccoh_right :: Coercion }
   | TcKindCo TcCoercion
   | TcLetCo TcEvBinds TcCoercion
   | TcCoercion Coercion            -- embed a Core Coercion
@@ -404,11 +405,13 @@ mkTcCoherenceLeftCo co g = TcCoherenceCo co g
 mkTcCoherenceRightCo :: TcCoercion -> Coercion -> TcCoercion
 mkTcCoherenceRightCo c1 c2 = mkTcSymCo (mkTcCoherenceLeftCo (mkTcSymCo c1) c2)
 
--- | Cast both types in a coercion. The second and third coercions must be
--- Representational.
-castTcCoercionKind :: TcCoercion -> Coercion -> Coercion -> TcCoercion
-castTcCoercionKind g h1 h2
-  = g `mkTcCoherenceLeftCo` h1 `mkTcCoherenceRightCo` h2
+-- | Cast both types in a coercion. The second coercion relates the target
+-- kinds, and has the same role as the first coercion. The third and fourth
+-- coercions must be representational.
+castTcCoercionKind :: TcCoercion -> TcCoercion -> Coercion -> Coercion -> TcCoercion
+castTcCoercionKind base kind l r
+  = TcCoherenceCo { tccoh_base = base, tccoh_kind = kind
+                  , tccoh_left = l,    tccoh_right = r }
 
 mkTcKindCo :: TcCoercion -> TcCoercion
 mkTcKindCo = TcKindCo
@@ -426,7 +429,8 @@ tcCoercionKind co = go co
     go (TcLetCo _ co)         = go co
     go (TcCastCo _ co)        = case getEqPredTys (pSnd (go co)) of
                                    (ty1,ty2) -> Pair ty1 ty2
-    go (TcCoherenceCo co g)   = pLiftFst (`mkCastTy` g) (go co)
+    go (TcCoherenceCo { tccoh_base = base, tccoh_left = l, tccoh_right = r })
+                              = mkCastTy <$> go base <*> Pair l r
     go (TcKindCo co)          = typeKind <$> go co
     go (TcTyConAppCo _ tc cos)= mkTyConApp tc <$> (sequenceA $ map go cos)
     go (TcAppCo co1 co2)      = mkAppTy <$> go co1 <*> go co2
@@ -486,7 +490,8 @@ tcCoercionRole = go
     go (TcSubCo _)            = Representational
     go (TcAxiomRuleCo c _ _)  = coaxrRole c
     go (TcCastCo c _)         = go c
-    go (TcCoherenceCo co _)   = go co
+    go (TcCoherenceCo { tccoh_kind = kind_co })
+                              = go kind_co  -- kind_co is likely smaller than base
     go (TcKindCo _)           = Representational
     go (TcLetCo _ c)          = go c
     go (TcCoercion co)        = coercionRole co
@@ -501,7 +506,8 @@ coVarsOfTcCo tc_co
     go (TcTyConAppCo _ _ cos)    = mapUnionVarSet go cos
     go (TcAppCo co1 co2)         = go co1 `unionVarSet` go co2
     go (TcCastCo co1 co2)        = go co1 `unionVarSet` go co2
-    go (TcCoherenceCo co g)      = go co `unionVarSet` coVarsOfCo g
+    go (TcCoherenceCo a b c d)   = mapUnionVarSet go [a, b] `unionVarSet`
+                                   mapUnionVarSet coVarsOfCo [c, d]
     go (TcKindCo co)             = go co
     go (TcForAllCo _ co)         = go co
     go (TcCoVarCo v)             = unitVarSet v
@@ -558,7 +564,11 @@ tcCoercionToCoercion subst tc_co
     go (TcSubCo co)             = mkSubCo <$> go co
     go (TcLetCo bs co)          = tcCoercionToCoercion (ds_co_binds bs) co
     go (TcCastCo co1 co2)       = mkCoCast <$> go co1 <*> go co2
-    go (TcCoherenceCo tco1 co2) = mkCoherenceCo <$> go tco1 <*> pure (substCo subst co2)
+    go (TcCoherenceCo { tccoh_base = base, tccoh_kind  = kind
+                      , tccoh_left = l,    tccoh_right = r }
+                                = mkCoherenceCo <$> go base <*> go kind
+                                                <*> pure (substCo subst l)
+                                                <*> pure (substCo subst r)
     go (TcKindCo co)            = mkKindCo <$> go co
     go (TcCoVarCo v)            = lookupCoVar subst v
     go (TcAxiomRuleCo co ts cs) = mkAxiomRuleCo co (map (Type.substTy subst) ts) <$> (mapM go cs)
@@ -593,8 +603,11 @@ ppr_co p (TcAppCo co1 co2)       = maybeParen p TyConPrec $
                                    -- TODO (RAE): Printing TcCastCo like this is terrible.
 ppr_co p (TcCastCo co1 co2)      = maybeParen p FunPrec $
                                    ppr_co FunPrec co1 <+> ptext (sLit "|>") <+> ppr_co FunPrec co2
-ppr_co p (TcCoherenceCo co g)    = maybeParen p FunPrec $
-                                   ppr_co FunPrec co <+> text "|>>" <+> ppr g
+ppr_co p (TcCoherenceCo { tccoh_base = co, tccoh_kind  = kind
+                        , tccoh_left = l,  tccoh_right = r })
+                                 = maybeParen p FunPrec $
+                                   ppr_co FunPrec co <+> text "|>>_" <> ppr kind
+                                   <+> parens (ppr l <> comma <+> ppr r)
 ppr_co p (TcKindCo co)           = maybeParen p FunPrec $
                                    text "kind" <+> ppr_co FunPrec co
 ppr_co p co@(TcForAllCo {})      = ppr_forall_co p co
