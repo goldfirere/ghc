@@ -1492,9 +1492,11 @@ zonkTcCoToCo env co
                                    ; return (mkTcAppCo co1' co2') }
     go (TcCastCo co1 co2)     = do { co1' <- go co1; co2' <- go co2
                                    ; return (TcCastCo co1' co2') }
-    go (TcCoherenceCo co g)   = do { co' <- go co
-                                   ; g' <- zonkCoToCo env g
-                                   ; return (TcCoherenceCo co' g') }
+    go (TcCoherenceCo a b c d)= do { a' <- go a
+                                   ; b' <- go b
+                                   ; c' <- zonkCoToCo env c
+                                   ; d' <- zonkCoToCo env d
+                                   ; return (TcCoherenceCo a' b' c' d') }
     go (TcKindCo co)          = do { co' <- go co
                                    ; return (TcKindCo co') }
     go (TcPhantomCo h ty1 ty2)= do { h'   <- go h

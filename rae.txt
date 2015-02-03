@@ -2,14 +2,23 @@ stack:
 
 
 Coherence rejigger todo:
- - Fix eqType
+ - Fix eqType, tcEqType, pickyEqType
+ - Remove cmpCoercionX?
  - Remove implementation of tcMatchTys (checking for no overlap in free vars!)
  - Fix implementation of unifyTys
  - Change role on KindCo
    - homogeniseRhsKind
- - Change CoherenceCo
+   - promoteCoercion
+ - Change CoherenceCo  ( searched for this already )
    - mkTcCoherenceLeftCo
    - mkTcCoherenceRightCo
+   - castTcCoercionKind
+   - evTermCoherence (should just be second parameter)
+   - ctEvCoherence (should just be a call to ctEvTerm)
+   - mkCoherenceRightCo
+   - mkCoherenceLeftCo
+   - fim_coercion
+   - chooseBranch
 
 - tcGetGlobalTyVars --> tcGetGlobalTyCoVars
 

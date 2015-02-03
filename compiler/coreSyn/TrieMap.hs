@@ -477,6 +477,7 @@ data CoercionMap a
        , km_left   :: CoercionMap a
        , km_right  :: CoercionMap a
        , km_inst   :: CoercionMap (CoercionArgMap a)
+       , km_coh    :: CoercionMap (CoercionMap (CoercionMap (CoercionMap a)))
        , km_kind   :: CoercionMap a
        , km_sub    :: CoercionMap a
        , km_axiom_rule :: Map.Map FastString
@@ -497,7 +498,7 @@ wrapEmptyKM = KM { km_refl = emptyTM, km_tc_app = emptyTM
                  , km_phant = emptyTM
                  , km_unsafe = emptyTM, km_sym = emptyTM, km_trans = emptyTM
                  , km_nth = emptyTM, km_left = emptyTM, km_right = emptyTM
-                 , km_inst = emptyTM, km_kind = emptyTM
+                 , km_inst = emptyTM, km_coh = emptyTM, km_kind = emptyTM
                  , km_sub = emptyTM, km_axiom_rule = emptyTM }
 
 wrapEmptyKAM :: CoercionArgMap a
@@ -528,7 +529,7 @@ mapC f (KM { km_refl = krefl, km_tc_app = ktc
            , km_phant = kphant
            , km_unsafe = kunsafe, km_sym = ksym, km_trans = ktrans
            , km_nth = knth, km_left = kml, km_right = kmr
-           , km_inst = kinst, km_kind = kkind
+           , km_inst = kinst, km_coh = kco, km_kind = kkind
            , km_sub = ksub, km_axiom_rule = kaxr
            })
   = KM { km_refl   = mapTM (mapTM f) krefl
@@ -548,6 +549,7 @@ mapC f (KM { km_refl = krefl, km_tc_app = ktc
        , km_left   = mapTM f kml
        , km_right  = mapTM f kmr
        , km_inst   = mapTM (mapTM f) kinst
+       , km_coh    = mapTM (mapTM (mapTM (mapTM f))) kco
        , km_kind   = mapTM f kkind
        , km_sub    = mapTM f ksub
        , km_axiom_rule = mapTM (mapTM (mapTM f)) kaxr }
@@ -592,6 +594,8 @@ lkC env co m
     go (NthCo n c)             = km_nth    >.> lookupTM n >=> lkC env c
     go (LRCo CLeft  c)         = km_left   >.> lkC env c
     go (LRCo CRight c)         = km_right  >.> lkC env c
+    go (CoherenceCo a b c d    = km_coh    >.> lkC env a >=> lkC env b
+                                           >=> lkC env c >=> lkC env d
     go (KindCo c)              = km_kind   >.> lkC env c
     go (SubCo c)               = km_sub    >.> lkC env c
     go (AxiomRuleCo co ts cs)  = km_axiom_rule >.>
@@ -633,6 +637,7 @@ xtC env (SymCo c)               f m = m { km_sym    = km_sym m |> xtC env    c f
 xtC env (NthCo n c)             f m = m { km_nth    = km_nth m |> xtInt n |>> xtC env c f }
 xtC env (LRCo CLeft  c)         f m = m { km_left   = km_left  m |> xtC env c f }
 xtC env (LRCo CRight c)         f m = m { km_right  = km_right m |> xtC env c f }
+xtC env (CoherenceCo a b c d)   f m = m { km_coh    = km_coh m |> xtC env a |>> xtC env b |>> xtC env c |>> xtC env d f }
 xtC env (KindCo c)              f m = m { km_kind   = km_kind m |> xtC env c f }
 xtC env (SubCo c)               f m = m { km_sub    = km_sub m |> xtC env c f }
 xtC env (AxiomRuleCo co ts cs)  f m = m { km_axiom_rule = km_axiom_rule m
@@ -663,6 +668,7 @@ fdC k m = foldTM (foldTM k) (km_refl m)
         . foldTM k          (km_left m)
         . foldTM k          (km_right m)
         . foldTM (foldTM k) (km_inst m)
+        . foldTM (foldTM (foldTM (foldTM k))) (km_coh m)
         . foldTM k          (km_kind m)
         . foldTM k          (km_sub m)
         . foldTM (foldTM (foldTM k)) (km_axiom_rule m)

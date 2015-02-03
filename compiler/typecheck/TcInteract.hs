@@ -15,7 +15,6 @@ import Type
 import Unify
 import InstEnv( lookupInstEnv, instanceDFunId )
 import CoAxiom(sfInteractTop, sfInteractInert)
-import Coercion ( buildCoherenceCo )
 
 import Var
 import TcType
@@ -659,16 +658,15 @@ I can think of two ways to fix this:
 interactFunEq :: TcLevel -> InertCans -> Ct -> TcS (StopOrContinue Ct)
 -- Try interacting the work item with the inert set
 interactFunEq tclvl inerts workItem@(CFunEqCan { cc_ev = ev, cc_fun = tc
-                                               , cc_tyargs = args, cc_fsk = fsk })
-  | Just (CFunEqCan { cc_tyargs = args_i
-                    , cc_ev = ev_i
+                                               , cc_fsk = fsk })
+  | Just (CFunEqCan { cc_ev = ev_i
                     , cc_fsk = fsk_i }) <- matching_inerts
   = if canRewriteOrSame tclvl ev_i ev
     then  -- Rewrite work-item using inert
       do { traceTcS "reactFunEq (discharge work item):" $
            vcat [ text "workItem =" <+> ppr workItem
                 , text "inertItem=" <+> ppr ev_i ]
-         ; reactFunEq tc ev_i args_i fsk_i ev args fsk
+         ; reactFunEq tc ev_i fsk_i ev fsk
          ; stopWith ev "Inert rewrites work item" }
     else  -- Rewrite intert using work-item
       do { traceTcS "reactFunEq (rewrite inert item):" $
@@ -677,7 +675,7 @@ interactFunEq tclvl inerts workItem@(CFunEqCan { cc_ev = ev, cc_fun = tc
          ; updInertFunEqs $ \ feqs -> insertFunEq feqs tc args workItem
                -- Do the updInertFunEqs before the reactFunEq, so that
                -- we don't kick out the inertItem as well as consuming it!
-         ; reactFunEq tc ev args fsk ev_i args_i fsk_i
+         ; reactFunEq tc ev fsk ev_i fsk_i
          ; stopWith ev "Work item rewrites inert" }
 
   | Just ops <- isBuiltInSynFamTyCon_maybe tc
@@ -710,10 +708,10 @@ lookupFlattenTyVar inert_eqs ftv
       _                                                       -> mkOnlyTyVarTy ftv
 
 reactFunEq :: TyCon   -- "F"
-           -> CtEvidence -> [TcType] -> TcTyVar    -- From this  :: F args1 ~ fsk1
-           -> CtEvidence -> [TcType] -> TcTyVar    -- Solve this :: F args2 ~ fsk2
+           -> CtEvidence -> TcTyVar    -- From this  :: F args ~ fsk1
+           -> CtEvidence -> TcTyVar    -- Solve this :: F args ~ fsk2
            -> TcS ()
-reactFunEq fam_tc from_this args1 fsk1 solve_this args2 fsk2
+reactFunEq fam_tc from_this fsk1 solve_this fsk2
   | CtGiven { ctev_evtm = tm, ctev_loc = loc } <- solve_this
   = do { let fsk_eq_co = mkTcSymCo (evTermCoercion tm) `mkTcTransCo` co
                          -- :: fsk2 ~ fsk1
@@ -730,15 +728,9 @@ reactFunEq fam_tc from_this args1 fsk1 solve_this args2 fsk2
   = pprPanic "reactFunEq" (ppr solve_this)
 
   where
-    coherence_cos = zipWith buildCoherenceCo args2 args1
-    coherence_tc_cos = map mkTcCoercion coherence_cos
-    middle_co = mkTcTyConAppCo Nominal fam_tc coherence_tc_cos
-      -- middle_co :: F args2 ~ F args1
-    co = middle_co `mkTcTransCo` ctEvCoercion from_this
-      -- co :: F args2 ~ fsk1
+    co = ctEvCoercion from_this
+      -- co :: F args ~ fsk1
       
-
-
 {-
 Note [Cache-caused loops]
 ~~~~~~~~~~~~~~~~~~~~~~~~~

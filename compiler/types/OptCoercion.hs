@@ -397,30 +397,17 @@ opt_co4 env sym rep r (InstCo co1 arg)
     r'   = chooseRole rep r
     arg' = opt_co_arg4 env sym False Nominal arg
 
--- TODO (RAE): Should this interact with PhantomCo?
-opt_co4 env sym rep r (CoherenceCo co1 co2)
-  | UnsafeCo s _r tyl1 tyr1 <- co1
-  = ASSERT( r == _r )
-    opt_co4_wrap env sym False output_role (mkUnsafeCo s output_role
-                                                (mkCastTy tyl1 co2) tyr1)
-  | TransCo col1 cor1 <- co1
-  = opt_co4_wrap env sym rep r (mkTransCo (mkCoherenceCo col1 co2) cor1)
-
-  | UnsafeCo s r_out tyl1' tyr1' <- co1'
-  = ASSERT( output_role == r_out )
-    if sym then mkUnsafeCo s r_out tyl1' (mkCastTy tyr1' co2')
-           else mkUnsafeCo s r_out (mkCastTy tyl1' co2') tyr1'
-  | TransCo col1' cor1' <- co1'
-  = if sym then opt_trans in_scope col1'
-                  (optCoercion (zapTCvSubst env) (mkCoherenceRightCo cor1' co2'))
-           else opt_trans in_scope (mkCoherenceCo col1' co2') cor1'
-
-  | otherwise
-  = wrapSym sym $ CoherenceCo (opt_co4_wrap env False rep r co1) co2'
-  where output_role = chooseRole rep r
-        co1' = opt_co4_wrap env sym   rep   r                co1
-        co2' = opt_co4_wrap env False False Representational co2
-        in_scope = getTCvInScope env
+-- TODO (RAE): Optimize CoherenceCo!
+opt_co4 env sym rep r (CoherenceCo { coh_base = base, coh_kind = kind
+                                   , coh_left = left, coh_right = right })
+  = mkCoherenceCo base' kind' left' right'
+  where
+    base' = opt_co4_wrap env sym rep r base
+    kind' = opt_co4_wrap env sym rep r kind
+    left1'  = opt_co4_wrap env False False Representational left
+    right1' = opt_co4_wrap env False False Representaitonal right
+    (left', right') | sym       = (right1', left1')
+                    | otherwise = (left1', right1')
 
 opt_co4 env sym _rep r (KindCo co)
   = ASSERT( r == Representational )
@@ -871,11 +858,13 @@ opt_trans_rule is co1 co2
     mk_sym_co_arg (TyCoArg co) = TyCoArg $ mkSymCo co
     mk_sym_co_arg (CoCoArg r co1 co2) = CoCoArg r co2 co1
 
+{- TODO (RAE): Optimize CoherenceCo!
 opt_trans_rule is co1 co2
   | Just (lco, lh) <- isCohRight_maybe co1
   , Just (rco, rh) <- isCohLeft_maybe co2
   , (coercionType lh) `eqType` (coercionType rh)
   = opt_trans_rule is lco rco
+-}
 
 opt_trans_rule _ co1 co2        -- Identity rule
   | (Pair ty1 _, r) <- coercionKindRole co1
@@ -1033,6 +1022,7 @@ matchAxiom sym ax@(CoAxiom { co_ax_tc = tc }) ind co
         -> zipWithM (liftCoSubstTyCoVar subst) roles qtvs
       _ -> Nothing
 
+{- TODO (RAE): Remove if/when unused
 -------------
 -- destruct a CoherenceCo
 isCohLeft_maybe :: Coercion -> Maybe (Coercion, Coercion)
@@ -1044,6 +1034,7 @@ isCohLeft_maybe _                     = Nothing
 isCohRight_maybe :: Coercion -> Maybe (Coercion, Coercion)
 isCohRight_maybe (SymCo (CoherenceCo co1 co2)) = Just (mkSymCo co1, co2)
 isCohRight_maybe _                             = Nothing
+-}
 
 -------------
 compatible_co :: Coercion -> Coercion -> Bool

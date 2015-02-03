@@ -109,7 +109,7 @@ import Type
 import CoAxiom  ( Role )
 import Class    ( Class )
 import TyCon    ( TyCon )
-import Coercion ( buildCoherenceCo, Coercion )
+import Coercion ( Coercion )
 import ConLike  ( ConLike(..) )
 import DataCon  ( DataCon, dataConUserType, dataConOrigArgTys )
 import PatSyn   ( PatSyn, patSynType )
@@ -1683,15 +1683,6 @@ isDerived _              = False
 -- See also Note [Use erased types in inert set] in TcSMonad.
 ctEvCoherence :: CtEvidence -> TcPredType -> EvTerm
 ctEvCoherence from_this = evTermCoherence (ctEvPred from_this) (ctEvTerm from_this)
-
--- | Like 'ctEvCoherence', but with arguments split out of a 'CtEvidence'
-evTermCoherence :: PredType -> EvTerm -> TcPredType -> EvTerm
-evTermCoherence from_pred from_term solve_pred
-  | from_pred `eqType` solve_pred
-  = from_term
-
-  | otherwise
-  = EvCast from_term (mkTcSubCo $ mkTcCoercion $ buildCoherenceCo from_pred solve_pred)
 
 {-
 %************************************************************************

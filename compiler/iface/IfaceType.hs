@@ -166,6 +166,7 @@ data IfaceCoercion     -- represents Coercions and CoercionArgs
   | IfaceNthCo       Int IfaceCoercion
   | IfaceLRCo        LeftOrRight IfaceCoercion
   | IfaceInstCo      IfaceCoercion IfaceCoercion
+  | IfaceCoherenceCo IfaceCoercion IfaceCoercion IfaceCoercion IfaceCoercion
   | IfaceKindCo      IfaceCoercion
   | IfaceSubCo       IfaceCoercion
   | IfaceAxiomRuleCo IfLclName [IfaceType] [IfaceCoercion]
@@ -281,6 +282,7 @@ ifTyVarsOfCoercion = go
     go (IfaceNthCo _ co)          = go co
     go (IfaceLRCo _ co)           = go co
     go (IfaceInstCo c1 c2)        = go c1 `unionUniqSets` go c2
+    go (IfaceCoherenceCo a b c d) = unionUniqSetsList map go [a,b,c,d]
     go (IfaceKindCo co)           = go co
     go (IfaceSubCo co)            = go co
     go (IfaceAxiomRuleCo rule tys cos)
@@ -986,6 +988,12 @@ instance Binary IfaceCoercion where
           putByte bh 14
           put_ bh a
           put_ bh b
+  put_ bh (IfaceCoherenceCo a b c d) = do
+          putByte bh 15
+          put_ bh a
+          put_ bh b
+          put_ bh c
+          put_ bh d
   put_ bh (IfaceKindCo a) = do
           putByte bh 16
           put_ bh a
@@ -1052,6 +1060,11 @@ instance Binary IfaceCoercion where
            14-> do a <- get bh
                    b <- get bh
                    return $ IfaceInstCo a b
+           15-> do a <- get bh
+                   b <- get bh
+                   c <- get bh
+                   d <- get bh
+                   return $ IfaceCoherenceCo a b c d
            16-> do a <- get bh
                    return $ IfaceKindCo a
            17-> do a <- get bh
@@ -1173,6 +1186,10 @@ toIfaceCoercion (NthCo d co)        = IfaceNthCo d (toIfaceCoercion co)
 toIfaceCoercion (LRCo lr co)        = IfaceLRCo lr (toIfaceCoercion co)
 toIfaceCoercion (InstCo co arg)     = IfaceInstCo (toIfaceCoercion co)
                                                   (argToIfaceCoercion arg)
+toIfaceCoercion (CoherenceCo a b c d)= IfaceCoherenceCo (toIfaceCoercion a)
+                                                        (toIfaceCoercion b)
+                                                        (toIfaceCoercion c)
+                                                        (toIfaceCoercion d)
 toIfaceCoercion (KindCo c)          = IfaceKindCo (toIfaceCoercion c)
 toIfaceCoercion (SubCo co)          = IfaceSubCo (toIfaceCoercion co)
 toIfaceCoercion (AxiomRuleCo co ts cs) = IfaceAxiomRuleCo

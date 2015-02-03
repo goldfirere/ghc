@@ -1350,6 +1350,18 @@ lintCoercion co@(AxiomInstCo con ind cos)
            ; return (extendTCvSubst subst_l ktv s', 
                      extendTCvSubst subst_r ktv t') }
 
+lintCoercion co@(CoherenceCo { coh_base = base, coh_kind = kind
+                             , coh_left = left, coh_right = right })
+  = do { (k1, k2, t1, t2, r) <- lintCoercion base
+       ; (k1', k12) <- lintStarCoercion Representational left
+       ; (k2', k22) <- lintStarCoercion Representational right
+       ; ensureEqTys k1 k1' (mkBadCoherenceMsg co CLeft  base t1 k1 left  (Pair k1' k12))
+       ; ensureEqTys k2 k2' (mkBadCoherenceMsg co CRight base t2 k2 right (Pair k2' k22))
+       ; (k12', k22') <- lintStarCoercion r kind
+       ; ensureEqTys k12 k12' (mkBadCoherenceKindMsg co CLeft  left  k12 kind k12')
+       ; ensureEqTys k22 k22' (mkBadCoherenceKindMsg co CRight right k22 kind k22')
+       ; return (k12, k22, t1 `mkCastTy` left, t2 `mkCastTy` right, r) }
+
 lintCoercion (KindCo co)
   = do { (k1, k2, _, _, _) <- lintCoercion co
        ; return (liftedTypeKind, liftedTypeKind, k1, k2, Representational) }
@@ -1444,6 +1456,7 @@ freeInCoercion v (TransCo g1 g2)           = (freeInCoercion v g1) && (freeInCoe
 freeInCoercion v (NthCo _ g)               = freeInCoercion v g
 freeInCoercion v (LRCo _ g)                = freeInCoercion v g
 freeInCoercion v (InstCo g w)              = (freeInCoercion v g) && (freeInCoercionArg v w)
+freeInCoercion v (CoherenceCo {coh_base = g}) = freeInCoercion v g
 freeInCoercion v (KindCo g)                = freeInCoercion v g
 freeInCoercion v (SubCo g)                 = freeInCoercion v g
 freeInCoercion v (AxiomRuleCo _ ts cs)     = all (freeInType v) ts && all (freeInCoercion v) cs
@@ -1961,6 +1974,27 @@ mkBadTyVarMsg tv
 pprLeftOrRight :: LeftOrRight -> MsgDoc
 pprLeftOrRight CLeft  = ptext (sLit "left")
 pprLeftOrRight CRight = ptext (sLit "right")
+
+mkBadCoherenceMsg :: Coercion -> LeftOrRight -> Coercion -> Type -> Kind
+                  -> Coercion -> Pair Type -> SDoc
+mkBadCoherenceMsg co side base ty ki side_co side_co_ki
+  = hang (text "Type mismatch on" <+> pprLeftOrRight side <+> text "of CoherenceCo.")
+       2 (vcat [ text "Base co:" <+> ppr base
+               , pprLeftOrRight side <+> text "type:" <+> ppr ty
+               , text "of kind:" <+> ppr ki
+               , pprLeftOrRight side <+> text "coercion:" <+> ppr side_co
+               , text "of kind:" <+> ppr side_co_ki
+               , text "Full co:" <+> ppr co ])
+
+mkBadCoherenceKindMsg :: Coercion -> LeftOrRight -> Coercion -> Kind
+                      -> Coercion -> Kind -> SDoc
+mkBadCoherenceKindMsg co side side_co res_k kind_co ki
+  = hang (text "Bad kind coerence in CoherenceCo on the" <+> pprLeftOrRight side <> dot)
+       2 (vcat [ pprLeftOrRight side <+> text "coercion:" <+> ppr side_co
+               , text "result type:" <+> ppr res_k
+               , text "kind coercion:" <+> ppr kind_co
+               , pprLeftOrRight side <+> text "type:" <+> ppr ki
+               , text "Full co:" <+> ppr co ])
 
 dupVars :: [[Var]] -> MsgDoc
 dupVars vars

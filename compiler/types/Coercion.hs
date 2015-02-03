@@ -175,7 +175,7 @@ coercionSize (TransCo co1 co2)   = 1 + coercionSize co1 + coercionSize co2
 coercionSize (NthCo _ co)        = 1 + coercionSize co
 coercionSize (LRCo  _ co)        = 1 + coercionSize co
 coercionSize (InstCo co arg)     = 1 + coercionSize co + coercionArgSize arg
-coercionSize (CoherenceCo c1 c2) = 1 + coercionSize c1 + coercionSize c2
+coercionSize (CoherenceCo a b c d)= 1 + sum $ map coercionSize [a, b, c, d]
 coercionSize (KindCo co)         = 1 + coercionSize co
 coercionSize (SubCo co)          = 1 + coercionSize co
 coercionSize (AxiomRuleCo _ ts cs) = 1 + sum (map typeSize ts)
@@ -238,9 +238,11 @@ ppr_co p (UnsafeCo s r ty1 ty2)
 ppr_co p (SymCo co)          = pprPrefixApp p (ptext (sLit "Sym")) [pprParendCo co]
 ppr_co p (NthCo n co)        = pprPrefixApp p (ptext (sLit "Nth:") <> int n) [pprParendCo co]
 ppr_co p (LRCo sel co)       = pprPrefixApp p (ppr sel) [pprParendCo co]
-ppr_co p (CoherenceCo c1 c2) = maybeParen p TyConPrec $
-                               (ppr_co FunPrec c1) <+> (ptext (sLit "|>")) <+>
-                               (ppr_co FunPrec c2)
+ppr_co p (CoherenceCo { coh_base = co, coh_kind = k_co, coh_left = l, coh_right = r })
+                             = maybeParen p TyConPrec $
+                               (ppr_co FunPrec c1) <+> (ptext (sLit "|>_"))
+                               <> pprParendCo k_co
+                               <+> parens (pprCo l <> comma <+> prpCo r)
 ppr_co p (KindCo co)         = pprPrefixApp p (ptext (sLit "kind")) [pprParendCo co]
 ppr_co p (SubCo co)         = pprPrefixApp p (ptext (sLit "Sub")) [pprParendCo co]
 ppr_co p (AxiomRuleCo co ts cs) = maybeParen p TopPrec $
@@ -491,6 +493,7 @@ it in OptCoercion.
 
 Note [Don't optimize mkCoherenceCo]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+TODO (RAE): Note still valid?
 One would expect to use an easy optimization in mkCoherenceCo: we would want
   (CoherenceCo (CoherenceCo co1 co2) co3)
 to become
@@ -856,13 +859,14 @@ mkInstCo co arg = let result = InstCo co arg
                   else result
 
 -- See Note [Don't optimize mkCoherenceCo]
--- TODO (RAE): This seems inefficient, if repeated. 
-mkCoherenceCo :: Coercion -> Coercion -> Coercion
-mkCoherenceCo co1 co2     = let result = CoherenceCo co1 co2
-                                Pair ty1 ty2 = coercionKind result in
-                            if ty1 `eqType` ty2
-                            then Refl (coercionRole co1) ty1
-                            else result
+mkCoherenceCo :: Coercion     -- ^ :: t1 ~r t2; t1 :: k1; t2 :: k2
+              -> Coercion     -- ^ :: k1' ~r k2'
+              -> Coercion     -- ^ h1 :: k1 ~R k1'
+              -> Coercion     -- ^ h2 :: k2 ~R k2'
+              -> Coercion     -- ^ :: (t1 |> h1) ~r (t2 |> h2)
+mkCoherenceCo base _ (Refl _) (Refl _) = base
+mkCoherenceCo base kind l r = CoherenceCo { coh_base = base, coh_kind  = kind
+                                          , coh_left = l,    coh_right = r }
 
 -- | A CoherenceCo c1 c2 applies the coercion c2 to the left-hand type
 -- in the kind of c1. This function uses sym to get the coercion on the 
@@ -971,8 +975,10 @@ setNominalRole_maybe (NthCo n co)
   = NthCo n <$> setNominalRole_maybe co
 setNominalRole_maybe (InstCo co arg)
   = InstCo <$> setNominalRole_maybe co <*> pure arg
-setNominalRole_maybe (CoherenceCo co1 co2)
-  = CoherenceCo <$> setNominalRole_maybe co1 <*> pure co2
+setNominalRole_maybe co@(CoherenceCo { coh_base = base, coh_kind = kind })
+  = do { base' <- setNominalRole_maybe base
+       ; kind' <- setNominalRole_maybe kind
+       ; return (co { coh_base = base', coh_kind = kind' }) }
 setNominalRole_maybe _ = Nothing
 
 -- | Makes a 'CoercionArg' become nominal, if possible
@@ -1173,8 +1179,8 @@ promoteCoercion g@(LRCo lr co)
         CoCoArg _ _ _ -> pprPanic "promoteCoercion" (ppr g)
   | otherwise
   = mkKindCo g
-promoteCoercion (InstCo g _)      = promoteCoercion g
-promoteCoercion (CoherenceCo g h) = (mkSymCo h) `mkTransCo` promoteCoercion g
+promoteCoercion (InstCo g _) = promoteCoercion g
+promoteCoercion (CoherenceCo { coh_kind = kind }) = kind
 promoteCoercion (KindCo _)
   = ASSERT( False ) mkReflCo Representational liftedTypeKind
 promoteCoercion (SubCo g)         = promoteCoercion g
@@ -1658,10 +1664,13 @@ extendLiftingContextEx lc@(LC in_scope env) ((v,ty):rest)
 -- works with existentially bound variables, which are considered to have
 -- nominal roles.
   | isTyVar v
-  = let lc' = LC (in_scope `extendInScopeSetSet` tyCoVarsOfType ty)
-                 (extendVarEnv env v (TyCoArg $ mkSymCo $ mkCoherenceCo
-                                         (mkReflCo Nominal ty)
-                                         (ty_co_subst lc Representational (tyVarKind v))))
+  = let k    = tyVarKind v
+        k_co = liftCoSubst Nominal lc k
+        co   = mkCoherenceCo (mkReflCo Nominal ty) k_co
+                             (mkReflCo Representational k) (mkSubCo k_co)
+                            
+        lc' = LC (in_scope `extendInScopeSetSet` tyCoVarsOfType ty)
+                 (extendVarEnv env v (TyCoArg co))
     in extendLiftingContextEx lc' rest
   | CoercionTy co <- ty
   = let (_, _, s1, s2, r) = coVarKindsTypesRole v
@@ -1876,7 +1885,7 @@ seqCo (TransCo co1 co2)     = seqCo co1 `seq` seqCo co2
 seqCo (NthCo _ co)          = seqCo co
 seqCo (LRCo _ co)           = seqCo co
 seqCo (InstCo co arg)       = seqCo co `seq` seqCoArg arg
-seqCo (CoherenceCo co1 co2) = seqCo co1 `seq` seqCo co2
+seqCo (CoherenceCo a b c d) = seqCos [a,b,c,d]
 seqCo (KindCo co)           = seqCo co
 seqCo (SubCo co)            = seqCo co
 seqCo (AxiomRuleCo _ ts cs) = seqTypes ts `seq` seqCos cs
@@ -1967,9 +1976,8 @@ coercionKind co = go co
         Pair ty1 ty2 = coercionKind co
     go (LRCo lr co)         = (pickLR lr . splitAppTy) <$> go co
     go (InstCo aco arg)     = go_app aco [arg]
-    go (CoherenceCo g h)
-      = let Pair ty1 ty2 = go g in
-        Pair (mkCastTy ty1 h) ty2
+    go (CoherenceCo { coh_base = co, coh_left = l, coh_right = r })
+      = mkCastTy <$> go co <*> Pair l r
     go (KindCo co)          = typeKind <$> go co
     go (SubCo co)           = go co
     go (AxiomRuleCo ax tys cos) =
@@ -2031,9 +2039,9 @@ coercionKindRole = go
         (Pair ty1 ty2, r) = go co
     go co@(LRCo {}) = (coercionKind co, Nominal)
     go (InstCo co arg) = go_app co [arg]
-    go (CoherenceCo co1 co2)
-      = let (Pair t1 t2, r) = go co1 in
-        (Pair (t1 `mkCastTy` co2) t2, r)
+    go (CoherenceCo { coh_base = co, coh_left = left, coh_right = right})
+      = let (tys, role) = go co in
+        (mkCastTy <$> tys <*> Pair left right, role) 
     go co@(KindCo {}) = (coercionKind co, Representational)
     go (SubCo co) = (coercionKind co, Representational)
     go co@(AxiomRuleCo ax _ _) = (coercionKind co, coaxrRole ax)
@@ -2299,94 +2307,3 @@ mkGADTVars tmpl_tvs dc_tvs subst
            ; let name = mkSystemVarName u (fsLit "gadt")
            ; return $ mkCoVar name (mkCoercionType Nominal t1 t2) }
 
-
-{-
-%************************************************************************
-%*                                                                      *
-             Building a coherence coercion
-%*                                                                      *
-%************************************************************************
--}
-
--- | Finds a nominal coercion between two types, assuming that the
--- erased version of those types are equal. Panics otherwise.
-buildCoherenceCo :: Type -> Type -> Coercion
-buildCoherenceCo orig_ty1 orig_ty2
-  = build_coherence_co
-      (mkRnEnv2 (mkInScopeSet (tyCoVarsOfTypes [orig_ty1, orig_ty2])))
-      orig_ty1 orig_ty2
-
-build_coherence_co :: RnEnv2 -> Type -> Type -> Coercion
-build_coherence_co = go
-  where
-    go env ty1 ty2 | Just ty1' <- coreView ty1 = go env ty1' ty2
-    go env ty1 ty2 | Just ty2' <- coreView ty2 = go env ty1  ty2'
-    
-    go env (TyVarTy tv1) (TyVarTy tv2)
-      = ASSERT( rnOccL env tv1 == rnOccR env tv2 )
-        mkReflCo Nominal (mkOnlyTyVarTy $ rnOccL env tv1)
-    go env (AppTy tyl1 tyr1) (AppTy tyl2 tyr2)
-      = mkAppCo (go env tyl1 tyl2) (build_coherence_co_arg env tyr1 tyr2)
-    go env ty1@(TyConApp tc1 tys1) ty2@(TyConApp tc2 tys2)
-      = ASSERT2( tc1 == tc2, ppr ty1 $$ ppr ty2 )
-        mkTyConAppCo Nominal tc1 (zipWith (build_coherence_co_arg env) tys1 tys2)
-    go env (ForAllTy (Anon arg1) res1) (ForAllTy (Anon arg2) res2)
-      = mkFunCo Nominal (go env arg1 arg2) (go env res1 res2)
-    go env (ForAllTy (Named tv1 _) ty1) (ForAllTy (Named tv2 _) ty2)
-      = mkForAllCo bndr (go env' ty1 ty2)
-        where (env', bndr) = go_bndr env tv1 tv2
-    go _   (LitTy lit1) (LitTy lit2)
-      = ASSERT( lit1 == lit2 )
-        mkReflCo Nominal (LitTy lit1)
-    go env (CastTy ty1 co1) ty2
-      = mkCoherenceLeftCo (go env ty1 ty2) (rename_co rnEnvL env co1)
-    go env ty1 (CastTy ty2 co2)
-      = mkCoherenceRightCo (go env ty1 ty2) (rename_co rnEnvR env co2)
-
-    go _ ty1 ty2  = pprPanic "buildCoherenceCo" (ppr ty1 $$ ppr ty2)
-
-    go_bndr env tv1 tv2
-      | k1 `eqType` k2 = let (env', tv') = rnBndr2_var env tv1 tv2 in
-                         (env', mkHomoCoBndr tv')
-                            
-      | isCoVar tv1    = let (env1, tv1') = rnBndrL env  tv1
-                             (env2, tv2') = rnBndrR env1 tv2 in
-                         (env2, mkCoHeteroCoBndr eta tv1' tv2')
-
-      | otherwise      = let (env1, tv1') = rnBndrL env  tv1
-                             (env2, tv2') = rnBndrR env1 tv2
-                             in_scope     = rnInScopeSet env2
-                             cv           = mkFreshCoVar in_scope
-                                              (mkOnlyTyVarTy tv1')
-                                              (mkOnlyTyVarTy tv2')
-                             env3         = addRnInScopeSet env2 (unitVarSet cv)
-                         in
-                         (env3, mkTyHeteroCoBndr eta tv1' tv2' cv)
-                         
-      where
-        k1  = tyVarKind tv1
-        k2  = tyVarKind tv2
-        eta = go env k1 k2
-
-buildCoherenceCoArg :: Type -> Type -> CoercionArg
-buildCoherenceCoArg orig_ty1 orig_ty2
-  = build_coherence_co_arg
-      (mkRnEnv2 (mkInScopeSet (tyCoVarsOfTypes [orig_ty1, orig_ty2])))
-      orig_ty1 orig_ty2
-
-build_coherence_co_arg :: RnEnv2 -> Type -> Type -> CoercionArg
-build_coherence_co_arg = go_arg
-  where
-    go_arg env (CoercionTy co1) (CoercionTy co2)
-      = mkCoCoArg Nominal (rename_co rnEnvL env co1) (rename_co rnEnvR env co2)
-    go_arg env ty1 ty2
-      = mkTyCoArg (build_coherence_co env ty1 ty2)
-
-rename_co :: (RnEnv2 -> VarEnv Var) -> RnEnv2 -> Coercion -> Coercion
-rename_co getvars env = substCo subst
-  where varenv = getvars env
-        (ty_env, co_env) = partitionVarEnv isTyVar varenv
-        tv_subst_env = mapVarEnv mkOnlyTyVarTy ty_env
-        cv_subst_env = mapVarEnv mkCoVarCo     co_env
-
-        subst = mkTCvSubst (rnInScopeSet env) (tv_subst_env, cv_subst_env)

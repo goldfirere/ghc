@@ -368,8 +368,8 @@ expandTypeSynonyms ty
       = mkLRCo lr (go_co subst co)
     go_co subst (InstCo co arg)
       = mkInstCo (go_co subst co) (go_arg subst arg)
-    go_co subst (CoherenceCo co1 co2)
-      = mkCoherenceCo (go_co subst co1) (go_co subst co2)
+    go_co subst (CoherenceCo a b c d)
+      = mkCoherenceCo (go_co subst a) (go_co subst b) (go_co subst c) (go_co subst d)
     go_co subst (KindCo co)
       = mkKindCo (go_co subst co)
     go_co subst (SubCo co)
@@ -2106,7 +2106,7 @@ tyConsOfType ty
      go_co (NthCo _ co)            = go_co co
      go_co (LRCo _ co)             = go_co co
      go_co (InstCo co arg)         = go_co co `plusNameEnv` go_arg arg
-     go_co (CoherenceCo co1 co2)   = go_co co1 `plusNameEnv` go_co co2
+     go_co (CoherenceCo a b c d)   = plusNamEnvs $ map go_co [a,b,c,d]
      go_co (KindCo co)             = go_co co
      go_co (SubCo co)              = go_co co
      go_co (AxiomRuleCo _ ts cs)   = go_s ts `plusNameEnv` go_cos cs

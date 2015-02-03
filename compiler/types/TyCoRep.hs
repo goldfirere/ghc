@@ -973,7 +973,7 @@ tyCoVarsOfCo (TransCo co1 co2)   = tyCoVarsOfCo co1 `unionVarSet` tyCoVarsOfCo c
 tyCoVarsOfCo (NthCo _ co)        = tyCoVarsOfCo co
 tyCoVarsOfCo (LRCo _ co)         = tyCoVarsOfCo co
 tyCoVarsOfCo (InstCo co arg)     = tyCoVarsOfCo co `unionVarSet` tyCoVarsOfCoArg arg
-tyCoVarsOfCo (CoherenceCo c1 c2) = tyCoVarsOfCo c1 `unionVarSet` tyCoVarsOfCo c2
+tyCoVarsOfCo (CoherenceCo a b c d)= tyCoVarsOfCos [a,b,c,d]
 tyCoVarsOfCo (KindCo co)         = tyCoVarsOfCo co
 tyCoVarsOfCo (SubCo co)          = tyCoVarsOfCo co
 tyCoVarsOfCo (AxiomRuleCo _ ts cs) = tyCoVarsOfTypes ts `unionVarSet` tyCoVarsOfCos cs
@@ -1019,7 +1019,7 @@ coVarsOfCo (TransCo co1 co2)   = coVarsOfCo co1 `unionVarSet` coVarsOfCo co2
 coVarsOfCo (NthCo _ co)        = coVarsOfCo co
 coVarsOfCo (LRCo _ co)         = coVarsOfCo co
 coVarsOfCo (InstCo co arg)     = coVarsOfCo co `unionVarSet` coVarsOfCoArg arg
-coVarsOfCo (CoherenceCo c1 c2) = coVarsOfCos [c1, c2]
+coVarsOfCo (CoherenceCo a b c d)= coVarsOfCos [a,b,c,d]
 coVarsOfCo (KindCo co)         = coVarsOfCo co
 coVarsOfCo (SubCo co)          = coVarsOfCo co
 coVarsOfCo (AxiomRuleCo _ ts cs) = coVarsOfTypes ts `unionVarSet` coVarsOfCos cs
@@ -1643,7 +1643,7 @@ subst_co subst co
     go (NthCo d co)          = mkNthCo d $! (go co)
     go (LRCo lr co)          = mkLRCo lr $! (go co)
     go (InstCo co arg)       = (mkInstCo $! (go co)) $! go_arg arg
-    go (CoherenceCo co1 co2) = (mkCoherenceCo $! (go co1)) $! (go co2)
+    go (CoherenceCo a b c d) = (((mkCoherenceCo $! (go a)) $! (go b)) $! (go c)) $! (go d)
     go (KindCo co)           = mkKindCo $! (go co)
     go (SubCo co)            = mkSubCo $! (go co)
     go (AxiomRuleCo c ts cs) = let ts1 = map go_ty ts
@@ -2343,7 +2343,7 @@ tidyCo env@(_, subst) co
     go (NthCo d co)          = NthCo d $! go co
     go (LRCo lr co)          = LRCo lr $! go co
     go (InstCo co ty)        = (InstCo $! go co) $! go_arg ty
-    go (CoherenceCo co1 co2) = (CoherenceCo $! go co1) $! go co2
+    go (CoherenceCo a b c d) = (((CoherenceCo $! go a) $! go b) $! go c) $! go d
     go (KindCo co)           = KindCo $! go co
     go (SubCo co)            = SubCo $! go co
     go (AxiomRuleCo ax tys cos) = let tys1 = tidyTypes env tys

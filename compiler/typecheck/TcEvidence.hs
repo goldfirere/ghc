@@ -395,15 +395,23 @@ mkTcCoVarCo ipv = TcCoVarCo ipv
   -- evidence variables as it goes.  In any case, the optimisation
   -- will be done in the later zonking phase
 
--- | Cast the left type in a coercion. The second coercion must be
--- Representational.
+-- | Cast the left type in a coercion. The two coercions must have the same role.
 mkTcCoherenceLeftCo :: TcCoercion -> Coercion -> TcCoercion
-mkTcCoherenceLeftCo co g = TcCoherenceCo co g
+mkTcCoherenceLeftCo co g = mkTcCoherenceCo co
+                                           (mkTcSymCo $ mkTcKindCo $ mkTcCoercion g)
+                                           (downgradeRole Representational role g)
+                                           (mkTcReflCo Representational ty2)
+  where Pair _ty1 ty2 = tcCoercionKind co
+        role          = coercionRole g
 
--- | Cast the right type in a coercion. The second coercion must be
--- Representational.
+-- | Cast the right type in a coercion. The two coercions must have the same role.
 mkTcCoherenceRightCo :: TcCoercion -> Coercion -> TcCoercion
-mkTcCoherenceRightCo c1 c2 = mkTcSymCo (mkTcCoherenceLeftCo (mkTcSymCo c1) c2)
+mkTcCoherenceRightCo c1 c2 = mkTcCoherenceCo c1
+                                             (mkTcKindCo $ mkTcCoercion c2)
+                                             (mkTcReflCo Representational ty1)
+                                             (downgradeRole Representational role c2)
+  where Pair ty1 _ty2 = tcCoercionKind c1
+        role          = coercionRole c2
 
 -- | Cast both types in a coercion. The second coercion relates the target
 -- kinds, and has the same role as the first coercion. The third and fourth

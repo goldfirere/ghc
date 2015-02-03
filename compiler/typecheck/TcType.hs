@@ -670,7 +670,7 @@ exactTyCoVarsOfType ty
     goCo (NthCo _ co)        = goCo co
     goCo (LRCo _ co)         = goCo co
     goCo (InstCo co arg)     = goCo co `unionVarSet` goCoArg arg
-    goCo (CoherenceCo c1 c2) = goCo c1 `unionVarSet` goCo c2
+    goCo (CoherenceCo a b c d)= mapUnionVarSet goCo [a,b,c,d]
     goCo (KindCo co)         = goCo co
     goCo (SubCo co)          = goCo co
     goCo (AxiomRuleCo _ t c) = exactTyCoVarsOfTypes t `unionVarSet` goCos c
@@ -1501,7 +1501,7 @@ occurCheckExpand dflags tv ty
     fast_check_co (InstCo co arg)        = fast_check_co co && fast_check_co_arg arg
     fast_check_co (NthCo _ co)           = fast_check_co co
     fast_check_co (LRCo _ co)            = fast_check_co co
-    fast_check_co (CoherenceCo co1 co2)  = fast_check_co co1 && fast_check_co co2
+    fast_check_co (CoherenceCo a b c d)  = all fast_check_co [a, b, c, d]
     fast_check_co (KindCo co)            = fast_check_co co
     fast_check_co (SubCo co)             = fast_check_co co
     fast_check_co (AxiomRuleCo _ ts cs)
@@ -1590,9 +1590,8 @@ occurCheckExpand dflags tv ty
     go_co (InstCo co arg)           = do { co' <- go_co co
                                          ; arg' <- go_arg arg
                                          ; return (mkInstCo co' arg') }
-    go_co (CoherenceCo co1 co2)     = do { co1' <- go_co co1
-                                         ; co2' <- go_co co2
-                                         ; return (mkCoherenceCo co1' co2') }
+    go_co (CoherenceCo a b c d)     = do { [a',b',c',d'] <- mapM go_co [a,b,c,d]
+                                         ; return (mkCoherenceCo a' b' c' d') }
     go_co (KindCo co)               = do { co' <- go_co co
                                          ; return (mkKindCo co') }
     go_co (SubCo co)                = do { co' <- go_co co
@@ -1838,7 +1837,7 @@ orphNamesOfCo (TransCo co1 co2)     = orphNamesOfCo co1 `unionNameSet` orphNames
 orphNamesOfCo (NthCo _ co)          = orphNamesOfCo co
 orphNamesOfCo (LRCo  _ co)          = orphNamesOfCo co
 orphNamesOfCo (InstCo co arg)       = orphNamesOfCo co `unionNameSet` orphNamesOfCoArg arg
-orphNamesOfCo (CoherenceCo co1 co2) = orphNamesOfCo co1 `unionNameSet` orphNamesOfCo co2
+orphNamesOfCo (CoherenceCo a b c d) = unionNameSets $ map orphNamesOfCo [a,b,c,d]
 orphNamesOfCo (KindCo co)           = orphNamesOfCo co
 orphNamesOfCo (SubCo co)            = orphNamesOfCo co
 orphNamesOfCo (AxiomRuleCo _ ts cs) = orphNamesOfTypes ts `unionNameSet`
