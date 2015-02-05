@@ -858,7 +858,6 @@ mkInstCo co arg = let result = InstCo co arg
                   then Refl (coercionRole co) ty1
                   else result
 
--- See Note [Don't optimize mkCoherenceCo]
 mkCoherenceCo :: Coercion     -- ^ :: t1 ~r t2; t1 :: k1; t2 :: k2
               -> Coercion     -- ^ :: k1' ~r k2'
               -> Coercion     -- ^ h1 :: k1 ~R k1'
@@ -868,22 +867,31 @@ mkCoherenceCo base _ (Refl _) (Refl _) = base
 mkCoherenceCo base kind l r = CoherenceCo { coh_base = base, coh_kind  = kind
                                           , coh_left = l,    coh_right = r }
 
--- | A CoherenceCo c1 c2 applies the coercion c2 to the left-hand type
--- in the kind of c1. This function uses sym to get the coercion on the 
--- right-hand type of c1. Thus, if c1 :: s ~ t, then mkCoherenceRightCo c1 c2
--- has the kind (s ~ (t |> c2)) down through type constructors.
--- The second coercion must be representational.
-mkCoherenceRightCo :: Coercion -> Coercion -> Coercion
-mkCoherenceRightCo c1 c2 = mkSymCo (mkCoherenceCo (mkSymCo c1) c2)
+-- | See arguments.
+mkCoherenceRightCo :: Coercion  -- ^ :: t1 ~r t2, where t1 :: k1 & t2 :: k2
+                   -> Coercion  -- ^ :: k1 ~r k2'
+                   -> Coercion  -- ^ co :: k2 ~R k2'
+                   -> Coercion  -- ^ :: t1 ~r (t2 |> co)
+mkCoherenceRightCo base _ (Refl {}) = base
+mkCoherenceRightCo base kind co
+  = CoherenceCo { coh_base = base, coh_kind = kind, coh_right = right
+                , coh_left = mkReflCo Representational k1 }
+  where
+    Pair t1 _ = coercionKind base
+    k1        = typeKind t1
 
--- | An explictly directed synonym of mkCoherenceCo. The second
--- coercion must be representational.
-mkCoherenceLeftCo :: Coercion -> Coercion -> Coercion
-mkCoherenceLeftCo = mkCoherenceCo
-
-infixl 5 `mkCoherenceCo` 
-infixl 5 `mkCoherenceRightCo`
-infixl 5 `mkCoherenceLeftCo`
+-- | See arguments.
+mkCoherenceLeftCo :: Coercion   -- ^ :: t1 ~r t2, where t1 :: k1 & t2 :: k2
+                  -> Coercion   -- ^ :: k1' ~r k2
+                  -> Coercion   -- ^ co :: k1 ~R k1'
+                  -> Coercion   -- ^ :: (t1 |> co) ~r t2
+mkCoherenceLeftCo base _ (Refl {}) = base
+mkCoherenceLeftCo base kind co
+  = CoherenceCo { coh_base = base, coh_kind = kind, coh_left = left
+                , coh_right = mkReflCo Representational k2 }
+  where
+    Pair _ t2 = coercionKind base
+    k2        = typeKind t2
 
 mkKindCo :: Coercion -> Coercion
 mkKindCo (Refl _ ty) = Refl Representational (typeKind ty)

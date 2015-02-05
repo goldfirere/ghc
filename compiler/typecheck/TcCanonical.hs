@@ -701,15 +701,19 @@ canEqCast :: CtEvidence
           -> TcType -> TcType     -- RHS (res. LHS), both normal and pretty
           -> TcS (StopOrContinue Ct)
 canEqCast ev eq_rel swapped ty1 co1 _ty2 ps_ty2
-  = do { let xpreds                = [unSwap swapped (mkTcEqPredLikeEv ev)
-                                                     ty1 ps_ty2]
+  = do { let xpreds                = [ mkTcEqPredLikeEv ev ty1 ps_ty2
+                                     , mkTcEqPredLikeEv ev k1' k2 ]
 
-             -- uncasted_evt :: ty1 ~ ty2; result :: (ty1 |> co) ~ ty2
-             xcomp ~[uncasted_evt] = EvCoercion $
-                                     mk_coherence_co swapped
-                                                     (evTermCoercion uncasted_evt)
-                                                     co1
-             xdecomp casted_evt    = case swapped of
+             -- uncasted_evt :: ty1 ~ ty2;
+             -- kind_evt :: k1' ~ k2;
+             -- result :: (ty1 |> co) ~ ty2;  (ty1 |> co) :: k1'
+             xcomp ~[uncasted_evt, kind_evt]
+               = EvCoercion $
+                 maybe_sym (mkTcCoherenceLeftCo uncasted_evt kind_evt co1)
+             xdecomp casted_evt = case swapped of
+               NotSwapped -> [
+                             , EvCoercion $ mkTcKindCo casted_co ]
+               
                NotSwapped -> [EvCoercion $
                               mkTcCoherenceRightCo (mkTcReflCo role ty1) co1
                               `mkTcTransCo` (evTermCoercion casted_evt)]
@@ -720,9 +724,9 @@ canEqCast ev eq_rel swapped ty1 co1 _ty2 ps_ty2
        ; xCtEvidence ev xev
        ; stopWith ev "Decomposed Cast" }
   where
-    mk_coherence_co NotSwapped = mkTcCoherenceLeftCo
-    mk_coherence_co IsSwapped  = mkTcCoherenceRightCo
-
+    maybe_sym = case swapped of NotSwapped -> id
+                                Swapped    -> mkTcSymCo
+    
     role = eqRelRole eq_rel
 
 ------------------------
