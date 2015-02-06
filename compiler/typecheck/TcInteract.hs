@@ -730,7 +730,9 @@ reactFunEq fam_tc from_this args1 fsk1 solve_this args2 fsk2
   = pprPanic "reactFunEq" (ppr solve_this)
 
   where
-    coherence_cos = zipWith buildCoherenceCo args2 args1
+      -- this should always succeed b/c of correct lookup
+    coherence_cos = expectJust "reactFunEq" $
+                    zipWithM buildCoherenceCo args2 args1
     coherence_tc_cos = map mkTcCoercion coherence_cos
     middle_co = mkTcTyConAppCo Nominal fam_tc coherence_tc_cos
       -- middle_co :: F args2 ~ F args1

@@ -1,5 +1,10 @@
 stack:
 
+ - Remove cmpCoercionX?
+ - Remove implementation of tcMatchTys (checking for no overlap in free vars!)
+ - Fix implementation of unifyTys
+
+
 - tcGetGlobalTyVars --> tcGetGlobalTyCoVars
 
 - relax tcMatchTys, tcUnifyTys to ignore casts. URGH!

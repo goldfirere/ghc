@@ -755,7 +755,14 @@ deriveTyData is_instance tvs tc tc_args (L loc deriv_pred)
               -- to the types.  See Note [Unify kinds in deriving]
               -- We are assuming the tycon tyvars and the class tyvars are distinct
               mb_match        = tcUnifyTy inst_ty_kind cls_arg_kind
-              Just kind_subst = mb_match
+              Just (kind_subst, nom_kind_co) = mb_match
+              kind_co         = mkSubCo nom_kind_co
+                -- if we're deriving (C x) on a datatype definition (T a b),
+                -- then (C x) should have kind (cls_arg_kind -> Constraint).
+                -- The logic above (n_args_to_drop/keep) might determine, say,
+                -- to drop b, giving us tc_args_to_keep = [a].
+                -- We now have (T a :: inst_ty_kind).
+                -- Then, (kind_co :: inst_ty_kind ~R cls_arg_kind).
               
               all_tkvs        = varSetElemsWellScoped $
                                 mkVarSet deriv_tvs `unionVarSet`
@@ -766,15 +773,6 @@ deriveTyData is_instance tvs tc tc_args (L loc deriv_pred)
               final_tc_args   = substTys subst tc_args_to_keep
               final_cls_tys   = substTys subst cls_tys
 
-              kind_co         = mkSubCo $
-                                buildCoherenceCo (substTy subst inst_ty_kind)
-                                                 (substTy subst cls_arg_kind)
-                -- if we're deriving (C x) on a datatype definition (T a b),
-                -- then (C x) should have kind (cls_arg_kind -> Constraint).
-                -- The logic above (n_args_to_drop/keep) might determine, say,
-                -- to drop b, giving us tc_args_to_keep = [a].
-                -- We now have (T a :: inst_ty_kind).
-                -- Then, (kind_co :: inst_ty_kind ~R cls_arg_kind).
               
         ; traceTc "derivTyData1" (vcat [ pprTCvBndrs tvs, ppr tc, ppr tc_args, ppr deriv_pred
                                        , pprTCvBndrs (varSetElems $ tyCoVarsOfTypes tc_args)

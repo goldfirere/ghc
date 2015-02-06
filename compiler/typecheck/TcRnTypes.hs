@@ -1691,7 +1691,10 @@ evTermCoherence from_pred from_term solve_pred
   = from_term
 
   | otherwise
-  = EvCast from_term (mkTcSubCo $ mkTcCoercion $ buildCoherenceCo from_pred solve_pred)
+  = EvCast from_term (mkTcSubCo $
+                      mkTcCoercion $
+                      expectJust "evTermCoherence" $
+                      buildCoherenceCo from_pred solve_pred)
 
 {-
 %************************************************************************

@@ -214,29 +214,27 @@ match_ty :: MatchEnv    -- For the most part this is pushed downwards
                            --      in-scope set of the RnEnv2
          -> CvSubstEnv
          -> Type -> Type   -- Template and target respectively
-         -> Maybe (TvSubstEnv, CvSubstEnv)
--- TODO (RAE): Right now, this requires exact matching. Loosen.
+         -> Maybe (TvSubstEnv, CvSubstEnv, Coercion)  -- co :: substed lhs ~ rhs
 match_ty menv tsubst csubst ty1 ty2
   | Just ty1' <- coreView ty1 = match_ty menv tsubst csubst ty1' ty2
   | Just ty2' <- coreView ty2 = match_ty menv tsubst csubst ty1 ty2'
 
 match_ty menv tsubst csubst (TyVarTy tv1) ty2
   | Just ty1' <- lookupVarEnv tsubst tv1'       -- tv1' is already bound
-  = if eqTypeX (nukeRnEnvL rn_env) ty1' ty2
+  = do { co <- buildCoherenceCoX (nukeRnEnvL rn_env) ty1' ty2
         -- ty1 has no locally-bound variables, hence nukeRnEnvL
-    then Just (tsubst, csubst)
-    else Nothing        -- ty2 doesn't match
+       ; return (tsubst, csubst, co) }
 
-  | tv1' `elemVarSet` me_tmpls menv
+  | tv1' `elemVarSet` me_tmpls menv -- RAE was here
   = if any (inRnEnvR rn_env) (varSetElems (tyCoVarsOfType ty2))
     then Nothing        -- Occurs check
                         -- ezyang: Is this really an occurs check?  It seems
                         -- to just reject matching \x. A against \x. x (maintaining
                         -- the invariant that the free vars of the range of @subst@
                         -- are a subset of the in-scope set in @me_env menv@.)
-    else do { (tsubst1, csubst1)
+    else do { (tsubst1, csubst1, co_kind)
                 <- match_kind menv tsubst csubst (tyVarKind tv1') (typeKind ty2)
-            ; return (extendVarEnv tsubst1 tv1' ty2, csubst1) }
+            ; return (extendVarEnv tsubst1 tv1' (ty2 `mkCastTyOrRefl` , csubst1) }
 
    | otherwise  -- tv1 is not a template tyvar
    = case ty2 of

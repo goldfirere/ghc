@@ -666,7 +666,8 @@ Note [Family instance overlap conflicts]
 type MatchFun =  FamInst                -- The FamInst template
               -> TyVarSet -> [Type]     --   fi_tvs, fi_tys of that FamInst
               -> [Type]                 -- Target to match against
-              -> Maybe TCvSubst
+              -> Maybe (TCvSubst, [CoercionArg])
+                                        -- co_args :: substed fi_tys ~N target
 
 lookup_fam_inst_env'          -- The worker, local to this module
     :: MatchFun
@@ -688,13 +689,13 @@ lookup_fam_inst_env' match_fun ie fam match_tys
       = find rest
 
         -- Proper check
-      | Just subst <- match_fun item (mkVarSet tpl_tvs) tpl_tys match_tys1
+      | Just (subst, cos) <- match_fun item (mkVarSet tpl_tvs) tpl_tys match_tys1
       = let lhs = substTys subst tpl_tys in
         (FamInstMatch { fim_instance = item
                       , fim_tys      = substTyVars subst tpl_tvs `chkAppend` match_tys2
-                      , fim_coercion = mkTyConAppCo Nominal fam $
-                                       zipWith buildCoherenceCoArg match_tys lhs
-                                         `chkAppend` map (liftSimply Nominal) match_tys2
+                      , fim_coercion = mkTyConAppCo Nominal fam cos
+                                       `chkAppend`
+                                       map (liftSimply Nominal) match_tys2
                       })
         : find rest
 
@@ -861,14 +862,12 @@ findBranch :: [CoAxBranch]             -- branches to check
 findBranch (CoAxBranch { cab_tvs = tpl_tvs, cab_lhs = tpl_lhs, cab_incomps = incomps }
               : rest) ind target_tys
   = case tcMatchTys (mkVarSet tpl_tvs) tpl_lhs target_tys of
-      Just subst -- matching worked. now, check for apartness.
+      Just (subst, cos) -- matching worked. now, check for apartness.
         |  all (isSurelyApart
                 . tcUnifyTysFG instanceBindFun flattened_target
                 . coAxBranchLHS) incomps
         -> -- matching worked & we're apart from all incompatible branches. success
-           let ax_lhs = substTys subst tpl_lhs
-               cos    = zipWith buildCoherenceCoArg ax_lhs target_tys
-           in
+           let ax_lhs = substTys subst tpl_lhs in
            Just (ind, substTyCoVars subst tpl_tvs, cos)
 
       -- failure. keep looking

@@ -2308,79 +2308,83 @@ mkGADTVars tmpl_tvs dc_tvs subst
 %************************************************************************
 -}
 
--- | Finds a nominal coercion between two types, assuming that the
--- erased version of those types are equal. Panics otherwise.
-buildCoherenceCo :: Type -> Type -> Coercion
+-- | Finds a nominal coercion between two types, if the
+-- erased version of those types are equal. Returns Nothing otherwise.
+buildCoherenceCo :: Type -> Type -> Maybe Coercion
 buildCoherenceCo orig_ty1 orig_ty2
-  = build_coherence_co
+  = buildCoherenceCoX
       (mkRnEnv2 (mkInScopeSet (tyCoVarsOfTypes [orig_ty1, orig_ty2])))
       orig_ty1 orig_ty2
 
-build_coherence_co :: RnEnv2 -> Type -> Type -> Coercion
-build_coherence_co = go
+buildCoherenceCoX :: RnEnv2 -> Type -> Type -> Maybe Coercion
+buildCoherenceCoX = go
   where
     go env ty1 ty2 | Just ty1' <- coreView ty1 = go env ty1' ty2
     go env ty1 ty2 | Just ty2' <- coreView ty2 = go env ty1  ty2'
     
     go env (TyVarTy tv1) (TyVarTy tv2)
-      = ASSERT( rnOccL env tv1 == rnOccR env tv2 )
-        mkReflCo Nominal (mkOnlyTyVarTy $ rnOccL env tv1)
+      | rnOccL env tv1 == rnOccR env tv2
+      = Just $ mkReflCo Nominal (mkOnlyTyVarTy $ rnOccL env tv1)
     go env (AppTy tyl1 tyr1) (AppTy tyl2 tyr2)
-      = mkAppCo (go env tyl1 tyl2) (build_coherence_co_arg env tyr1 tyr2)
+      = mkAppCo <$> go env tyl1 tyl2 <*> buildCoherenceCoArgX env tyr1 tyr2
     go env ty1@(TyConApp tc1 tys1) ty2@(TyConApp tc2 tys2)
-      = ASSERT2( tc1 == tc2, ppr ty1 $$ ppr ty2 )
-        mkTyConAppCo Nominal tc1 (zipWith (build_coherence_co_arg env) tys1 tys2)
+      | tc1 == tc2
+      = mkTyConAppCo Nominal tc1 <$> zipWithM (buildCoherenceCoArgX env) tys1 tys2
     go env (ForAllTy (Anon arg1) res1) (ForAllTy (Anon arg2) res2)
-      = mkFunCo Nominal (go env arg1 arg2) (go env res1 res2)
+      = mkFunCo Nominal <$> go env arg1 arg2 <*> go env res1 res2
     go env (ForAllTy (Named tv1 _) ty1) (ForAllTy (Named tv2 _) ty2)
-      = mkForAllCo bndr (go env' ty1 ty2)
-        where (env', bndr) = go_bndr env tv1 tv2
+      = do { (env', bndr) <- go_bndr env tv1 tv2
+           ; mkForAllCo bndr <$> go env' ty1 ty2 }
     go _   (LitTy lit1) (LitTy lit2)
-      = ASSERT( lit1 == lit2 )
-        mkReflCo Nominal (LitTy lit1)
+      | lit1 == lit2
+      = Just $ mkReflCo Nominal (LitTy lit1)
     go env (CastTy ty1 co1) ty2
-      = mkCoherenceLeftCo (go env ty1 ty2) (rename_co rnEnvL env co1)
+      = mkCoherenceLeftCo <$> go env ty1 ty2 <*> pure (rename_co rnEnvL env co1)
     go env ty1 (CastTy ty2 co2)
-      = mkCoherenceRightCo (go env ty1 ty2) (rename_co rnEnvR env co2)
+      = mkCoherenceRightCo <$> go env ty1 ty2 <*> pure (rename_co rnEnvR env co2)
 
-    go _ ty1 ty2  = pprPanic "buildCoherenceCo" (ppr ty1 $$ ppr ty2)
+    go _ _ _ = Nothing
 
     go_bndr env tv1 tv2
-      | k1 `eqType` k2 = let (env', tv') = rnBndr2_var env tv1 tv2 in
-                         (env', mkHomoCoBndr tv')
-                            
-      | isCoVar tv1    = let (env1, tv1') = rnBndrL env  tv1
-                             (env2, tv2') = rnBndrR env1 tv2 in
-                         (env2, mkCoHeteroCoBndr eta tv1' tv2')
+      = do { eta <- go env k1 k2
+           ; if | k1 `eqType` k2
+                -> let (env', tv') = rnBndr2_var env tv1 tv2 in
+                   Just (env', mkHomoCoBndr tv')
 
-      | otherwise      = let (env1, tv1') = rnBndrL env  tv1
-                             (env2, tv2') = rnBndrR env1 tv2
-                             in_scope     = rnInScopeSet env2
-                             cv           = mkFreshCoVar in_scope
-                                              (mkOnlyTyVarTy tv1')
-                                              (mkOnlyTyVarTy tv2')
-                             env3         = addRnInScopeSet env2 (unitVarSet cv)
-                         in
-                         (env3, mkTyHeteroCoBndr eta tv1' tv2' cv)
-                         
+                | isCoVar tv1
+                -> let (env1, tv1') = rnBndrL env  tv1
+                       (env2, tv2') = rnBndrR env1 tv2 in
+                   Just (env2, mkCoHeteroCoBndr eta tv1' tv2')
+
+                | otherwise
+                -> let (env1, tv1') = rnBndrL env  tv1
+                       (env2, tv2') = rnBndrR env1 tv2
+                       in_scope     = rnInScopeSet env2
+                       cv           = mkFreshCoVar in_scope
+                                                   (mkOnlyTyVarTy tv1')
+                                                   (mkOnlyTyVarTy tv2')
+                       env3         = addRnInScopeSet env2 (unitVarSet cv)
+                   in
+                   Just (env3, mkTyHeteroCoBndr eta tv1' tv2' cv) }
       where
         k1  = tyVarKind tv1
         k2  = tyVarKind tv2
-        eta = go env k1 k2
 
-buildCoherenceCoArg :: Type -> Type -> CoercionArg
+
+buildCoherenceCoArg :: Type -> Type -> Maybe CoercionArg
 buildCoherenceCoArg orig_ty1 orig_ty2
-  = build_coherence_co_arg
+  = buildCoherenceCoArgX
       (mkRnEnv2 (mkInScopeSet (tyCoVarsOfTypes [orig_ty1, orig_ty2])))
       orig_ty1 orig_ty2
 
-build_coherence_co_arg :: RnEnv2 -> Type -> Type -> CoercionArg
-build_coherence_co_arg = go_arg
+buildCoherenceCoArgX :: RnEnv2 -> Type -> Type -> Maybe CoercionArg
+buildCoherenceCoArgX = go_arg
   where
     go_arg env (CoercionTy co1) (CoercionTy co2)
-      = mkCoCoArg Nominal (rename_co rnEnvL env co1) (rename_co rnEnvR env co2)
+      = Just $
+        mkCoCoArg Nominal (rename_co rnEnvL env co1) (rename_co rnEnvR env co2)
     go_arg env ty1 ty2
-      = mkTyCoArg (build_coherence_co env ty1 ty2)
+      = mkTyCoArg <$> buildCoherenceCoX env ty1 ty2
 
 rename_co :: (RnEnv2 -> VarEnv Var) -> RnEnv2 -> Coercion -> Coercion
 rename_co getvars env = substCo subst
