@@ -1,4 +1,7 @@
-{-# LANGUAGE TypeFamilies, DataKinds, UndecidableInstances, PolyKinds #-}
+{-# LANGUAGE DataKinds            #-}
+{-# LANGUAGE PolyKinds            #-}
+{-# LANGUAGE TypeFamilies         #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module T6018 where
 
@@ -126,3 +129,13 @@ barapp1 = bar True
 
 barapp2 :: Int
 barapp2 = bar 1
+
+-- associated type and type family below triggered a bug with poly kinds
+class PolyKindVarsC a where
+    type PolyKindVarsF a = (r :: k) | r -> a
+
+instance PolyKindVarsC '[] where
+    type PolyKindVarsF '[] = '[]
+
+type family PolyKindVars (a :: k0) = (r :: k1) | r -> a
+type instance PolyKindVars '[] = '[]

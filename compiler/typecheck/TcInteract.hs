@@ -829,9 +829,8 @@ improveLocalFunEqs loc inerts fam_tc args fsk
     do_one_injective injective_args
                     (CFunEqCan { cc_tyargs = iargs, cc_fsk = ifsk })
       | rhs `tcEqType` lookupFlattenTyVar tv_eqs ifsk
-      = [Pair arg iarg | (arg, iarg, is_injective_arg)
-                           <- zip3 args iargs injective_args
-                       , is_injective_arg ]
+      = [Pair arg iarg | (arg, iarg, True)
+                           <- zip3 args iargs injective_args ]
       | otherwise
       = []
     do_one_injective _ _ = pprPanic "interactFunEq 2" (ppr fam_tc)

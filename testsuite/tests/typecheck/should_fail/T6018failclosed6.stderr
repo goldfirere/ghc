@@ -1,6 +1,6 @@
 
 T6018failclosed6.hs:7:5:
-    Family instance declaration violates injectivity annotation.
+    Type family equation violates injectivity annotation.
     Non-injective type variable ‘b’ should not appear
     in the RHS of type family equation:
       QClosed Int b = b

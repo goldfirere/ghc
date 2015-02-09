@@ -457,7 +457,7 @@ conflictInjInstErr :: InjErrorBuilder a -> a -> [a] -> (SDoc, SrcSpan)
 conflictInjInstErr errorBuilder tyfamEqn conflictingEqns
   | confEqn : _ <- conflictingEqns
   = errorBuilder (text "Type family equations violate injectivity annotation:")
-                 [tyfamEqn, confEqn]
+                 [confEqn, tyfamEqn]
   | otherwise
   = panic "conflictInjInstErr"
 
@@ -481,7 +481,7 @@ tyfamsUsedInjErr errorBuilder tyfamEqn tyfams_called
 -- | Error message for injective type variables unused in the RHS.
 mkUnusedInjectiveVarsErr :: TyVarSet -> SDoc
 mkUnusedInjectiveVarsErr unused_tyvars =
-    text "Family instance declaration violates injectivity annotation." $$
+    text "Type family equation violates injectivity annotation." $$
     text "Type variable" <> plural (varSetElems unused_tyvars) <+>
     pprQuotedList (varSetElems unused_tyvars) <+>
     text "should appear in the RHS of type family equation:"
@@ -489,7 +489,7 @@ mkUnusedInjectiveVarsErr unused_tyvars =
 -- | Error message for non-injective type variables used in the RHS.
 mkUsedNonInjectiveVarsErr :: TyVarSet -> SDoc
 mkUsedNonInjectiveVarsErr unused_tyvars =
-    text "Family instance declaration violates injectivity annotation." $$
+    text "Type family equation violates injectivity annotation." $$
     text "Non-injective type variable" <> plural (varSetElems unused_tyvars) <+>
     pprQuotedList (varSetElems unused_tyvars) <+>
     text "should not appear" $$

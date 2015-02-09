@@ -1,6 +1,6 @@
 
 T6018failclosed4.hs:10:5:
-    Family instance declaration violates injectivity annotation.
+    Type family equation violates injectivity annotation.
     Type variable ‘n’ should appear in the RHS of type family equation:
       KClosed ('S n) m = 'S m
     In the equations for closed type family ‘KClosed’

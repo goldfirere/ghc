@@ -513,7 +513,9 @@ injectiveBranches injectivity
            -- If LHSs are equal under the substitution used for RHSs then this
            -- pair of equations does not violate injectivity annotation. If LHSs
            -- are not equal under that substitution then this pair of equations
-           -- violates injectivity annotation.
+           -- violates injectivity annotation, but for closed type families it
+           -- still might be the case that the LHS after substitution is
+           -- dominated.
            in if eqTypes lhs1Subst lhs2Subst
               then Nothing
               else Just ( ax1 { cab_lhs = Type.substTys subst lhs1
@@ -835,9 +837,10 @@ unusedInjTvsInRHS :: [Bool] -> [Type] -> Type -> (TyVarSet, TyVarSet)
 unusedInjTvsInRHS injList lhs rhs =
     -- See Note [Injectivity annotation check]. This function implements second
     -- check described there.
-    let -- get the list of type variables in which type family is injective
-        injVars = tyVarsOfTypes (filterByList injList lhs)
-        rhsVars = tyVarsOfType   rhs
+    let dropKVars = filterVarSet (not . isKindVar)
+        -- get the list of type variables in which type family is injective
+        injVars = dropKVars $ tyVarsOfTypes (filterByList injList lhs)
+        rhsVars = dropKVars $ tyVarsOfType   rhs
     in  -- return all injective variables not mentioned in the RHS
         -- and all non-injective variables mentioned in the RHS
         ( injVars `minusVarSet` rhsVars
