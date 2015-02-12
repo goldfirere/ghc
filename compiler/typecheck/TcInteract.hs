@@ -1397,8 +1397,7 @@ shortCutReduction :: CtEvidence -> TcTyVar -> TcCoercion
 shortCutReduction old_ev fsk ax_co fam_tc tc_args
   | isGiven old_ev
   = ASSERT( ctEvEqRel old_ev == NomEq )
-    runFlatten $
-    do { (xis, cos) <- flattenManyNom old_ev tc_args
+    do { (xis, cos, old_ev) <- flattenManyNom old_ev tc_args
                -- ax_co :: F args ~ G tc_args
                -- cos   :: xis ~ tc_args
                -- old_ev :: F args ~ fsk
@@ -1411,13 +1410,13 @@ shortCutReduction old_ev fsk ax_co fam_tc tc_args
                                         `mkTcTransCo` ctEvCoercion old_ev) )
 
        ; let new_ct = CFunEqCan { cc_ev = new_ev, cc_fun = fam_tc, cc_tyargs = xis, cc_fsk = fsk }
-       ; emitFlatWork new_ct
+       ; emitWorkCt new_ct
        ; stopWith old_ev "Fun/Top (given, shortcut)" }
 
   | otherwise
   = ASSERT( not (isDerived old_ev) )   -- Caller ensures this
     ASSERT( ctEvEqRel old_ev == NomEq )
-    do { (xis, cos) <- flattenManyNom old_ev tc_args
+    do { (xis, cos, old_ev) <- flattenManyNom old_ev tc_args
                -- ax_co :: F args ~ G tc_args
                -- cos   :: xis ~ tc_args
                -- G cos ; sym ax_co ; old_ev :: G xis ~ fsk
@@ -1431,7 +1430,7 @@ shortCutReduction old_ev fsk ax_co fam_tc tc_args
                                       `mkTcTransCo` ctEvCoercion new_ev))
 
        ; let new_ct = CFunEqCan { cc_ev = new_ev, cc_fun = fam_tc, cc_tyargs = xis, cc_fsk = fsk }
-       ; emitFlatWork new_ct
+       ; emitWorkCt new_ct
        ; stopWith old_ev "Fun/Top (wanted, shortcut)" }
   where
     loc = ctEvLoc old_ev

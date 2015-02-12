@@ -231,7 +231,7 @@ canClassNC ev cls tys
 canClass ev cls tys
   =   -- all classes do *nominal* matching
     ASSERT2( ctEvRole ev == Nominal, ppr ev $$ ppr cls $$ ppr tys )
-    do { (xis, cos) <- flattenManyNom ev tys
+    do { (xis, cos, ev) <- flattenManyNom ev tys
        ; let co = mkTcTyConAppCo Nominal (classTyCon cls) cos
              xi = mkClassPred cls xis
              mk_ct new_ev = CDictCan { cc_ev = new_ev
@@ -393,7 +393,7 @@ canIrred :: CtEvidence -> TcS (StopOrContinue Ct)
 canIrred old_ev
   = do { let old_ty = ctEvPred old_ev
        ; traceTcS "can_pred" (text "IrredPred = " <+> ppr old_ty)
-       ; (xi,co) <- flatten FM_FlattenAll old_ev old_ty -- co :: xi ~ old_ty
+       ; (xi,co,old_ev) <- flatten FM_FlattenAll old_ev old_ty -- co :: xi ~ old_ty
        ; rewriteEvidence old_ev xi co `andWhenContinue` \ new_ev ->
     do { -- Re-classify, in case flattening has improved its shape
        ; case classifyPredType (ctEvPred new_ev) of
@@ -406,7 +406,7 @@ canIrred old_ev
 canHole :: CtEvidence -> OccName -> HoleSort -> TcS (StopOrContinue Ct)
 canHole ev occ hole_sort
   = do { let ty = ctEvPred ev
-       ; (xi,co) <- flatten FM_SubstOnly ev ty -- co :: xi ~ ty
+       ; (xi,co,ev) <- flatten FM_SubstOnly ev ty -- co :: xi ~ ty
        ; rewriteEvidence ev xi co `andWhenContinue` \ new_ev ->
     do { emitInsoluble (CHoleCan { cc_ev = new_ev
                                  , cc_occ = occ
@@ -548,7 +548,7 @@ can_eq_fam_nc :: CtEvidence -> EqRel -> SwapFlag
 --   or the swapped version thereof
 -- Flatten both sides and go round again
 can_eq_fam_nc ev eq_rel swapped fn tys rhs ps_rhs
-  = do { (xi_lhs, co_lhs) <- flattenFamApp FM_FlattenAll ev fn tys
+  = do { (xi_lhs, co_lhs, ev) <- flattenFamApp FM_FlattenAll ev fn tys
        ; rewriteEqEvidence ev eq_rel swapped xi_lhs rhs co_lhs
                            (mkTcReflCo (eqRelRole eq_rel) rhs)
          `andWhenContinue` \ new_ev ->
@@ -652,8 +652,8 @@ can_eq_wanted_app :: CtEvidence -> EqRel -> TcType -> TcType
 -- One or the other is an App; neither is a type variable
 -- See Note [Canonicalising type applications]
 can_eq_wanted_app ev eq_rel ty1 ty2
-  = do { (xi1, co1) <- flatten FM_FlattenAll ev ty1
-       ; (xi2, co2) <- flatten FM_FlattenAll ev ty2
+  = do { (xi1, co1, ev) <- flatten FM_FlattenAll ev ty1
+       ; (xi2, co2, ev) <- flatten FM_FlattenAll ev ty2
         ; rewriteEqEvidence ev eq_rel NotSwapped xi1 xi2 co1 co2
           `andWhenContinue` \ new_ev ->
           try_decompose_app new_ev eq_rel xi1 xi2 }
@@ -811,8 +811,8 @@ canEqFailure :: CtEvidence -> EqRel
              -> TcType -> TcType -> TcS (StopOrContinue Ct)
 canEqFailure ev ReprEq ty1 ty2
   = do { -- See Note [Flatten irreducible representational equalities]
-         (xi1, co1) <- flatten FM_FlattenAll ev ty1
-       ; (xi2, co2) <- flatten FM_FlattenAll ev ty2
+         (xi1, co1, ev) <- flatten FM_FlattenAll ev ty1
+       ; (xi2, co2, ev) <- flatten FM_FlattenAll ev ty2
        ; traceTcS "canEqFailure with ReprEq" $
          vcat [ ppr ev, ppr ty1, ppr ty2, ppr xi1, ppr xi2 ]
        ; if xi1 `eqType` ty1 && xi2 `eqType` ty2
@@ -827,8 +827,8 @@ canEqHardFailure :: CtEvidence -> EqRel
                  -> TcType -> TcType -> TcS (StopOrContinue Ct)
 -- See Note [Make sure that insolubles are fully rewritten]
 canEqHardFailure ev eq_rel ty1 ty2
-  = do { (s1, co1) <- flatten FM_SubstOnly ev ty1
-       ; (s2, co2) <- flatten FM_SubstOnly ev ty2
+  = do { (s1, co1, ev) <- flatten FM_SubstOnly ev ty1
+       ; (s2, co2, ev) <- flatten FM_SubstOnly ev ty2
        ; rewriteEqEvidence ev eq_rel NotSwapped s1 s2 co1 co2
          `andWhenContinue` \ new_ev ->
     do { emitInsoluble (mkNonCanonical new_ev)
@@ -957,7 +957,7 @@ canCFunEqCan :: CtEvidence
 -- and the RHS is a fsk, which we must *not* substitute.
 -- So just substitute in the LHS
 canCFunEqCan ev fn tys fsk
-  = do { (tys', cos) <- flattenManyNom ev tys
+  = do { (tys', cos, ev) <- flattenManyNom ev tys
                         -- cos :: tys' ~ tys
        ; let lhs_co  = mkTcTyConAppCo Nominal fn cos
                         -- :: F tys' ~ F tys
@@ -978,7 +978,7 @@ canEqTyVar :: CtEvidence -> EqRel -> SwapFlag
 -- A TyVar on LHS, but so far un-zonked
 canEqTyVar ev eq_rel swapped tv1 ty2 ps_ty2              -- ev :: tv ~ s2
   = do { traceTcS "canEqTyVar" (ppr tv1 $$ ppr ty2 $$ ppr swapped)
-       ; mb_yes <- flattenTyVar ev tv1
+       ; (mb_yes, ev) <- flattenTyVar ev tv1
        ; case mb_yes of
          { Right (ty1, co1) -> -- co1 :: ty1 ~ tv1
              do { traceTcS "canEqTyVar2"
@@ -994,7 +994,7 @@ canEqTyVar ev eq_rel swapped tv1 ty2 ps_ty2              -- ev :: tv ~ s2
          -- let fmode = FE { fe_ev = ev, fe_mode = FM_Avoid tv1' True }
          -- Flatten the RHS less vigorously, to avoid gratuitous flattening
          -- True <=> xi2 should not itself be a type-function application
-       ; (xi2, co2) <- flatten FM_FlattenAll ev ps_ty2 -- co2 :: xi2 ~ ps_ty2
+       ; (xi2, co2, ev) <- flatten FM_FlattenAll ev ps_ty2 -- co2 :: xi2 ~ ps_ty2
                       -- Use ps_ty2 to preserve type synonyms if poss
        ; traceTcS "canEqTyVar flat LHS"
            (vcat [ ppr tv1, ppr tv1', ppr ty2, ppr swapped, ppr xi2 ])

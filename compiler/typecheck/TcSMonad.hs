@@ -9,7 +9,6 @@ module TcSMonad (
     extendWorkListCts, appendWorkList, selectWorkItem,
     workListSize,
     updWorkListTcS, updWorkListTcS_return,
-    runFlatten, emitFlatWork,
 
     -- The TcS monad
     TcS, runTcS, runTcSWithEvBinds,
@@ -44,7 +43,7 @@ module TcSMonad (
     splitInertCans, removeInertCts,
     prepareInertsForImplications,
     addInertCan, insertInertItemTcS, insertFunEq,
-    emitInsoluble, emitWorkNC,
+    emitInsoluble, emitWorkNC, emitWorkCt,
     EqualCtList,
 
     -- Inert CDictCans
@@ -160,55 +159,6 @@ so that it's easier to deal with them first, but the separation
 is not strictly necessary. Notice that non-canonical constraints
 are also parts of the worklist.
 
-Note [The flattening work list]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The "flattening work list", held in the tcs_flat_work field of TcSEnv,
-is a list of CFunEqCans generated during flattening.  The key idea
-is this.  Consider flattening (Eq (F (G Int) (H Bool)):
-  * The flattener recursively calls itself on sub-terms before building
-    the main term, so it will encounter the terms in order
-              G Int
-              H Bool
-              F (G Int) (H Bool)
-    flattening to sub-goals
-              w1: G Int ~ fuv0
-              w2: H Bool ~ fuv1
-              w3: F fuv0 fuv1 ~ fuv2
-
-  * Processing w3 first is BAD, because we can't reduce i t,so it'll
-    get put into the inert set, and later kicked out when w1, w2 are
-    solved.  In Trac #9872 this led to inert sets containing hundreds
-    of suspended calls.
-
-  * So we want to process w1, w2 first.
-
-  * So you might think that we should just use a FIFO deque for the work-list,
-    so that putting adding goals in order w1,w2,w3 would mean we processed
-    w1 first.
-
-  * BUT suppose we have 'type instance G Int = H Char'.  Then processing
-    w1 leads to a new goal
-                w4: H Char ~ fuv0
-    We do NOT want to put that on the far end of a deque!  Instead we want
-    to put it at the *front* of the work-list so that we continue to work
-    on it.
-
-So the work-list structure is this:
-
-  * The wl_funeqs is a LIFO stack; we push new goals (such as w4) on
-    top (extendWorkListFunEq), and take new work from the top
-    (selectWorkItem).
-
-  * When flattening, emitFlatWork pushes new flattening goals (like
-    w1,w2,w3) onto the flattening work list, tcs_flat_work, another
-    push-down stack.
-
-  * When we finish flattening, we *reverse* the tcs_flat_work stack
-    onto the wl_funeqs stack (which brings w1 to the top).
-
-The function runFlatten initialised the tcs_flat_work stack, and reverses
-it onto wl_fun_eqs at the end.
-
 -}
 
 -- See Note [WorkList priorities]
@@ -298,35 +248,6 @@ instance Outputable WorkList where
           , ppUnless (isEmptyBag implics) $
             ptext (sLit "Implics =") <+> vcat (map ppr (bagToList implics))
           ])
-
-emitFlatWork :: Ct -> TcS ()
--- See Note [The flattening work list]
-emitFlatWork ct
-  = TcS $ \env ->
-    do { let flat_ref = tcs_flat_work env
-       ; TcM.updTcRef flat_ref (ct :) }
-
-runFlatten :: TcS a -> TcS a
--- Run thing_inside (which does flattening), and put all
--- the work it generates onto the main work list
--- See Note [The flattening work list]
-runFlatten (TcS thing_inside)
-  = TcS $ \env ->
-    do { let flat_ref = tcs_flat_work env
-       ; old_flats <- TcM.updTcRefX flat_ref (\_ -> [])
-       ; res <- thing_inside env
-       ; new_flats <- TcM.updTcRefX flat_ref (\_ -> old_flats)
-       ; TcM.updTcRef (tcs_worklist env) (add_flats new_flats)
-       ; return res }
-  where
-    add_flats new_flats wl
-      = wl { wl_funeqs = add_funeqs new_flats (wl_funeqs wl) }
-
-    add_funeqs []     wl = wl
-    add_funeqs (f:fs) wl = add_funeqs fs (f:wl)
-      -- add_funeqs fs ws = reverse fs ++ ws
-      -- e.g. add_funeqs [f1,f2,f3] [w1,w2,w3,w4]
-      --        = [f3,f2,f1,w1,w2,w3,w4]
 
 {-
 ************************************************************************
@@ -1214,9 +1135,7 @@ data TcSEnv
 
       -- The main work-list and the flattening worklist
       -- See Note [Work list priorities] and
-      --     Note [The flattening work list]
-      tcs_worklist  :: IORef WorkList, -- Current worklist
-      tcs_flat_work :: IORef [Ct]      -- Flattening worklist
+      tcs_worklist  :: IORef WorkList -- Current worklist
     }
 
 ---------------
@@ -1316,14 +1235,12 @@ runTcSWithEvBinds ev_binds_var tcs
        ; step_count <- TcM.newTcRef 0
        ; inert_var <- TcM.newTcRef is
        ; wl_var <- TcM.newTcRef emptyWorkList
-       ; fw_var <- TcM.newTcRef (panic "Flat work list")
 
        ; let env = TcSEnv { tcs_ev_binds  = ev_binds_var
                           , tcs_unified   = unified_var
                           , tcs_count     = step_count
                           , tcs_inerts    = inert_var
-                          , tcs_worklist  = wl_var
-                          , tcs_flat_work = fw_var }
+                          , tcs_worklist  = wl_var }
 
              -- Run the computation
        ; res <- unTcS tcs env
@@ -1372,13 +1289,11 @@ nestImplicTcS ref inner_tclvl (TcS thing_inside)
                                    -- See Note [Do not inherit the flat cache]
        ; new_inert_var <- TcM.newTcRef nest_inert
        ; new_wl_var    <- TcM.newTcRef emptyWorkList
-       ; new_fw_var    <- TcM.newTcRef (panic "Flat work list")
        ; let nest_env = TcSEnv { tcs_ev_binds    = ref
                                , tcs_unified     = unified_var
                                , tcs_count       = count
                                , tcs_inerts      = new_inert_var
-                               , tcs_worklist    = new_wl_var
-                               , tcs_flat_work   = new_fw_var }
+                               , tcs_worklist    = new_wl_var }
        ; res <- TcM.setTcLevel inner_tclvl $
                 thing_inside nest_env
 
@@ -1493,6 +1408,11 @@ emitWorkNC evs
   | otherwise
   = do { traceTcS "Emitting fresh work" (vcat (map ppr evs))
        ; updWorkListTcS (extendWorkListCts (map mkNonCanonical evs)) }
+
+emitWorkCt :: Ct -> TcS ()
+emitWorkCt ct
+  = do { traceTcS "Emitting fresh (canonical) work" (ppr ct)
+       ; updWorkListTcS (extendWorkListCt ct) }
 
 emitInsoluble :: Ct -> TcS ()
 -- Emits a non-canonical constraint that will stand for a frozen error in the inerts.
