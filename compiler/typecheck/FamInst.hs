@@ -7,7 +7,7 @@ module FamInst (
         checkFamInstConsistency, tcExtendLocalFamInstEnv,
         tcLookupFamInst,
         tcLookupDataFamInst, tcLookupDataFamInst_maybe,
-        tcInstNewTyCon_maybe, tcTopNormaliseNewTypeTF_maybe,
+        tcInstNewTyCon_maybe, tcUnwrapNewType_maybe,
         newFamInst
     ) where
 
@@ -35,7 +35,7 @@ import Name
 import Control.Monad
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Control.Arrow ( first, second )
+import Control.Arrow ( second )
 
 #include "HsVersions.h"
 
@@ -224,13 +224,13 @@ tcInstNewTyCon_maybe tc tys = fmap (second TcCoercion) $
 -- | Like 'tcLookupDataFamInst_maybe', but returns the arguments back if
 -- there is no data family to unwrap.
 tcLookupDataFamInst :: FamInstEnvs -> TyCon -> [TcType]
-                    -> (TyCon, [TcType], TcCoercion)
+                    -> (TyCon, [TcType], Coercion)
 tcLookupDataFamInst fam_inst_envs tc tc_args
   | Just (rep_tc, rep_args, co)
       <- tcLookupDataFamInst_maybe fam_inst_envs tc tc_args
-  = (rep_tc, rep_args, TcCoercion co)
+  = (rep_tc, rep_args, co)
   | otherwise
-  = (tc, tc_args, mkTcRepReflCo (mkTyConApp tc tc_args))
+  = (tc, tc_args, mkReflCo Representational (mkTyConApp tc tc_args))
 
 tcLookupDataFamInst_maybe :: FamInstEnvs -> TyCon -> [TcType]
                           -> Maybe (TyCon, [TcType], Coercion)
@@ -249,49 +249,24 @@ tcLookupDataFamInst_maybe fam_inst_envs tc tc_args
   | otherwise
   = Nothing
 
--- | Get rid of top-level newtypes, potentially looking through newtype
--- instances. Only unwraps newtypes that are in scope. This is used
--- for solving for `Coercible` in the solver. This version is careful
--- not to unwrap data/newtype instances if it can't continue unwrapping.
--- Such care is necessary for proper error messages.
---
--- Does not look through type families. Does not normalise arguments to a
--- tycon.
---
--- Always produces a representational coercion.
-tcTopNormaliseNewTypeTF_maybe :: FamInstEnvs
-                              -> GlobalRdrEnv
-                              -> Type
-                              -> Maybe (TcCoercion, Type)
-tcTopNormaliseNewTypeTF_maybe faminsts rdr_env ty
--- cf. FamInstEnv.topNormaliseType_maybe and Coercion.topNormaliseNewType_maybe
-  = fmap (first TcCoercion) $ topNormaliseTypeX_maybe stepper ty
+-- | Unwrap one level of newtype, looking through data families. Only unwraps
+-- newtypes whose constructor is in scope. Always returns an R coercion.
+tcUnwrapNewType_maybe :: FamInstEnvs -> GlobalRdrEnv -> TyCon -> [Type]
+                      -> Maybe (Type, Coercion)
+tcUnwrapNewType_maybe faminsts rdr_env tc tys
+  = do { let (rep_tc, rep_tys, co1) = tcLookupDataFamInst faminsts tc tys
+       ; guard (data_cons_in_scope rep_tc)
+       ; (inner_ty, co2) <- instNewTyCon_maybe rep_tc rep_tys
+       ; return (inner_ty, co1 `mkTransCo` co2) }
   where
-    stepper
-      = unwrap_newtype
-        `composeSteppers`
-        \ rec_nts tc tys ->
-        case tcLookupDataFamInst_maybe faminsts tc tys of
-          Just (tc', tys', co) ->
-            modifyStepResultCo (co `mkTransCo`)
-                               (unwrap_newtype rec_nts tc' tys')
-          Nothing -> NS_Done
-
-    unwrap_newtype rec_nts tc tys
-      | data_cons_in_scope tc
-      = unwrapNewTypeStepper rec_nts tc tys
-
-      | otherwise
-      = NS_Done
-
     data_cons_in_scope :: TyCon -> Bool
     data_cons_in_scope tc
       = isWiredInName (tyConName tc) ||
         (not (isAbstractTyCon tc) && all in_scope data_con_names)
       where
         data_con_names = map dataConName (tyConDataCons tc)
-        in_scope dc    = not $ null $ lookupGRE_Name rdr_env dc
-
+        in_scope dc    = not $ null $ lookupGRE_Name rdr_env dc    
+    
 {-
 ************************************************************************
 *                                                                      *

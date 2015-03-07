@@ -21,10 +21,9 @@ import TyCon
 import TypeRep
 import Coercion
 import FamInstEnv ( FamInstEnvs )
-import FamInst ( tcTopNormaliseNewTypeTF_maybe )
+import FamInst ( tcUnwrapNewType_maybe )
 import Var
-import DataCon ( dataConName )
-import Name( isSystemName, nameOccName )
+import Name( isSystemName )
 import OccName( OccName )
 import Outputable
 import DynFlags( DynFlags )
@@ -231,7 +230,7 @@ canClassNC ev cls tys
 canClass ev cls tys
   =   -- all classes do *nominal* matching
     ASSERT2( ctEvRole ev == Nominal, ppr ev $$ ppr cls $$ ppr tys )
-    do { (xis, cos, ev) <- flattenManyNom ev tys
+    do { (xis, cos) <- flattenManyNom ev tys
        ; let co = mkTcTyConAppCo Nominal (classTyCon cls) cos
              xi = mkClassPred cls xis
              mk_ct new_ev = CDictCan { cc_ev = new_ev
@@ -393,7 +392,7 @@ canIrred :: CtEvidence -> TcS (StopOrContinue Ct)
 canIrred old_ev
   = do { let old_ty = ctEvPred old_ev
        ; traceTcS "can_pred" (text "IrredPred = " <+> ppr old_ty)
-       ; (xi,co,old_ev) <- flatten FM_FlattenAll old_ev old_ty -- co :: xi ~ old_ty
+       ; (xi,co) <- flatten FM_FlattenAll old_ev old_ty -- co :: xi ~ old_ty
        ; rewriteEvidence old_ev xi co `andWhenContinue` \ new_ev ->
     do { -- Re-classify, in case flattening has improved its shape
        ; case classifyPredType (ctEvPred new_ev) of
@@ -406,7 +405,7 @@ canIrred old_ev
 canHole :: CtEvidence -> OccName -> HoleSort -> TcS (StopOrContinue Ct)
 canHole ev occ hole_sort
   = do { let ty = ctEvPred ev
-       ; (xi,co,ev) <- flatten FM_SubstOnly ev ty -- co :: xi ~ ty
+       ; (xi,co) <- flatten FM_SubstOnly ev ty -- co :: xi ~ ty
        ; rewriteEvidence ev xi co `andWhenContinue` \ new_ev ->
     do { emitInsoluble (CHoleCan { cc_ev = new_ev
                                  , cc_occ = occ
@@ -452,24 +451,31 @@ can_eq_nc' _rdr_env _envs ev eq_rel ty1 ps_ty1 ty2 ps_ty2
   | Just ty1' <- tcView ty1 = can_eq_nc ev eq_rel ty1' ps_ty1 ty2  ps_ty2
   | Just ty2' <- tcView ty2 = can_eq_nc ev eq_rel ty1  ps_ty1 ty2' ps_ty2
 
+can_eq_nc' _rdr_env _envs ev eq_rel ty1 _ ty2 _
+  | ty1 `eqType` ty2
+  = canEqReflexive ev eq_rel ty1  -- short-cut: see Note [Eager reflexivity check]
+
 -- Type family on LHS or RHS take priority over tyvars,
 -- so that  tv ~ F ty gets flattened
 -- Otherwise  F a ~ F a  might not get solved!
-can_eq_nc' _rdr_env _envs ev eq_rel (TyConApp fn1 tys1) _ ty2 ps_ty2
+can_eq_nc' _rdr_env _envs ev eq_rel ty1@(TyConApp fn1 _) _ ty2 ps_ty2
   | isTypeFamilyTyCon fn1
-  = can_eq_fam_nc ev eq_rel NotSwapped fn1 tys1 ty2 ps_ty2
-can_eq_nc' _rdr_env _envs ev eq_rel ty1 ps_ty1 (TyConApp fn2 tys2) _
+  = can_eq_flatten ev eq_rel NotSwapped ty1 ty2 ps_ty2
+can_eq_nc' _rdr_env _envs ev eq_rel ty1 ps_ty1 ty2@(TyConApp fn2 _) _
   | isTypeFamilyTyCon fn2
-  = can_eq_fam_nc ev eq_rel IsSwapped fn2 tys2 ty1 ps_ty1
+  = can_eq_flatten ev eq_rel IsSwapped ty2 ty1 ps_ty1
 
 -- When working with ReprEq, unwrap newtypes next.
--- Otherwise, a ~ Id a wouldn't get solved
-can_eq_nc' rdr_env envs ev ReprEq ty1 _ ty2 ps_ty2
-  | Just (co, ty1') <- tcTopNormaliseNewTypeTF_maybe envs rdr_env ty1
-  = can_eq_newtype_nc rdr_env ev NotSwapped co ty1 ty1' ty2 ps_ty2
-can_eq_nc' rdr_env envs ev ReprEq ty1 ps_ty1 ty2 _
-  | Just (co, ty2') <- tcTopNormaliseNewTypeTF_maybe envs rdr_env ty2
-  = can_eq_newtype_nc rdr_env ev IsSwapped  co ty2 ty2' ty1 ps_ty1
+-- Otherwise, a ~ Id a wouldn't get solved.
+-- NB: The use of tcUnwrapNewType_maybe here is a little inefficient, because
+-- the result is thrown out instead of used. Refactoring this complicated
+-- the code, providing only a minimal optimization.
+can_eq_nc' rdr_env envs ev ReprEq ty1@(TyConApp tc1 tys1) _ ty2 ps_ty2
+  | isJust $ tcUnwrapNewType_maybe envs rdr_env tc1 tys1
+  = can_eq_flatten ev ReprEq NotSwapped ty1 ty2 ps_ty2
+can_eq_nc' rdr_env envs ev ReprEq ty1 ps_ty1 ty2@(TyConApp tc2 tys2) _
+  | isJust $ tcUnwrapNewType_maybe envs rdr_env tc2 tys2
+  = can_eq_flatten ev ReprEq IsSwapped  ty2 ty1 ps_ty1
 
 -- Type variable on LHS or RHS are next
 can_eq_nc' _rdr_env _envs ev eq_rel (TyVarTy tv1) _ ty2 ps_ty2
@@ -540,15 +546,15 @@ can_eq_nc' _rdr_env _envs ev eq_rel _ ps_ty1 _ ps_ty2
   = canEqHardFailure ev eq_rel ps_ty1 ps_ty2
 
 ------------
-can_eq_fam_nc :: CtEvidence -> EqRel -> SwapFlag
-              -> TyCon -> [TcType]
-              -> TcType -> TcType
-              -> TcS (StopOrContinue Ct)
+can_eq_flatten :: CtEvidence -> EqRel -> SwapFlag
+               -> TcType                 -- ty to be flattened
+               -> TcType -> TcType       -- other type, internal and pretty
+               -> TcS (StopOrContinue Ct)
 -- Canonicalise a non-canonical equality of form (F tys ~ ty)
 --   or the swapped version thereof
 -- Flatten both sides and go round again
-can_eq_fam_nc ev eq_rel swapped fn tys rhs ps_rhs
-  = do { (xi_lhs, co_lhs, ev) <- flattenFamApp FM_FlattenAll ev fn tys
+can_eq_flatten ev eq_rel swapped lhs rhs ps_rhs
+  = do { (xi_lhs, co_lhs) <- flatten FM_FlattenAll ev lhs
        ; rewriteEqEvidence ev eq_rel swapped xi_lhs rhs co_lhs
                            (mkTcReflCo (eqRelRole eq_rel) rhs)
          `andWhenContinue` \ new_ev ->
@@ -566,9 +572,7 @@ and
   [W] X ~R X
 
 Naively, we would start unwrapping X and end up in a loop. Instead,
-we do this eager reflexivity check. This is necessary only for representational
-equality because the flattener technology deals with the similar case
-(recursive type families) for nominal equality.
+we do this eager reflexivity check.
 
 As an alternative, suppose we also have
 
@@ -583,8 +587,7 @@ for a solid match or a solid discrepancy. Indeed, there is something
 appropriate to this looping, because X and Y *do* have the same representation,
 in the limit -- they're both (Fix ((->) Int)). However, no finitely-sized
 coercion will ever witness it. This loop won't actually cause GHC to hang,
-though, because of the stack-blowing check in can_eq_newtype_nc, along
-with the fact that rewriteEqEvidence bumps the stack depth.
+though, because of the stack-blowing check in the flattener.
 
 Note [AppTy reflexivity check]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -599,61 +602,14 @@ we do a reflexivity check.
 E.] am worried that it would slow down the common case.)
 -}
 
-------------------------
--- | We're able to unwrap a newtype. Update the bits accordingly.
-can_eq_newtype_nc :: GlobalRdrEnv
-                  -> CtEvidence           -- ^ :: ty1 ~ ty2
-                  -> SwapFlag
-                  -> TcCoercion           -- ^ :: ty1 ~ ty1'
-                  -> TcType               -- ^ ty1
-                  -> TcType               -- ^ ty1'
-                  -> TcType               -- ^ ty2
-                  -> TcType               -- ^ ty2, with type synonyms
-                  -> TcS (StopOrContinue Ct)
-can_eq_newtype_nc rdr_env ev swapped co ty1 ty1' ty2 ps_ty2
-  = do { traceTcS "can_eq_newtype_nc" $
-         vcat [ ppr ev, ppr swapped, ppr co, ppr ty1', ppr ty2 ]
-
-         -- check for blowing our stack:
-         -- See Note [Eager reflexivity check] for an example of
-         -- when this is necessary
-       ; dflags <- getDynFlags
-       ; if isJust $ subGoalDepthExceeded (maxSubGoalDepth dflags)
-                                          (ctLocDepth (ctEvLoc ev))
-         then do { emitInsoluble (mkNonCanonical ev)
-                 ; stopWith ev "unwrapping newtypes blew stack" }
-         else do
-       { if ty1 `eqType` ty2   -- See Note [Eager reflexivity check]
-         then canEqReflexive ev ReprEq ty1
-         else do
-       { markDataConsAsUsed rdr_env (tyConAppTyCon ty1)
-           -- we have actually used the newtype constructor here, so
-           -- make sure we don't warn about importing it!
-
-       ; rewriteEqEvidence ev ReprEq swapped ty1' ps_ty2
-                           (mkTcSymCo co) (mkTcReflCo Representational ps_ty2)
-         `andWhenContinue` \ new_ev ->
-         can_eq_nc new_ev ReprEq ty1' ty1' ty2 ps_ty2 }}}
-
--- | Mark all the datacons of the given 'TyCon' as used in this module,
--- avoiding "redundant import" warnings.
-markDataConsAsUsed :: GlobalRdrEnv -> TyCon -> TcS ()
-markDataConsAsUsed rdr_env tc = addUsedRdrNamesTcS
-  [ mkRdrQual (is_as (is_decl imp_spec)) occ
-  | dc <- tyConDataCons tc
-  , let dc_name = dataConName dc
-        occ  = nameOccName dc_name
-  , gre : _               <- return $ lookupGRE_Name rdr_env dc_name
-  , Imported (imp_spec:_) <- return $ gre_prov gre ]
-
 -------------------------------------------------
 can_eq_wanted_app :: CtEvidence -> EqRel -> TcType -> TcType
                   -> TcS (StopOrContinue Ct)
 -- One or the other is an App; neither is a type variable
 -- See Note [Canonicalising type applications]
 can_eq_wanted_app ev eq_rel ty1 ty2
-  = do { (xi1, co1, ev) <- flatten FM_FlattenAll ev ty1
-       ; (xi2, co2, ev) <- flatten FM_FlattenAll ev ty2
+  = do { (xi1, co1) <- flatten FM_FlattenAll ev ty1
+       ; (xi2, co2) <- flatten FM_FlattenAll ev ty2
         ; rewriteEqEvidence ev eq_rel NotSwapped xi1 xi2 co1 co2
           `andWhenContinue` \ new_ev ->
           try_decompose_app new_ev eq_rel xi1 xi2 }
@@ -811,8 +767,8 @@ canEqFailure :: CtEvidence -> EqRel
              -> TcType -> TcType -> TcS (StopOrContinue Ct)
 canEqFailure ev ReprEq ty1 ty2
   = do { -- See Note [Flatten irreducible representational equalities]
-         (xi1, co1, ev) <- flatten FM_FlattenAll ev ty1
-       ; (xi2, co2, ev) <- flatten FM_FlattenAll ev ty2
+         (xi1, co1) <- flatten FM_FlattenAll ev ty1
+       ; (xi2, co2) <- flatten FM_FlattenAll ev ty2
        ; traceTcS "canEqFailure with ReprEq" $
          vcat [ ppr ev, ppr ty1, ppr ty2, ppr xi1, ppr xi2 ]
        ; if xi1 `eqType` ty1 && xi2 `eqType` ty2
@@ -827,8 +783,8 @@ canEqHardFailure :: CtEvidence -> EqRel
                  -> TcType -> TcType -> TcS (StopOrContinue Ct)
 -- See Note [Make sure that insolubles are fully rewritten]
 canEqHardFailure ev eq_rel ty1 ty2
-  = do { (s1, co1, ev) <- flatten FM_SubstOnly ev ty1
-       ; (s2, co2, ev) <- flatten FM_SubstOnly ev ty2
+  = do { (s1, co1) <- flatten FM_SubstOnly ev ty1
+       ; (s2, co2) <- flatten FM_SubstOnly ev ty2
        ; rewriteEqEvidence ev eq_rel NotSwapped s1 s2 co1 co2
          `andWhenContinue` \ new_ev ->
     do { emitInsoluble (mkNonCanonical new_ev)
@@ -957,7 +913,7 @@ canCFunEqCan :: CtEvidence
 -- and the RHS is a fsk, which we must *not* substitute.
 -- So just substitute in the LHS
 canCFunEqCan ev fn tys fsk
-  = do { (tys', cos, ev) <- flattenManyNom ev tys
+  = do { (tys', cos) <- flattenManyNom ev tys
                         -- cos :: tys' ~ tys
        ; let lhs_co  = mkTcTyConAppCo Nominal fn cos
                         -- :: F tys' ~ F tys
@@ -978,7 +934,7 @@ canEqTyVar :: CtEvidence -> EqRel -> SwapFlag
 -- A TyVar on LHS, but so far un-zonked
 canEqTyVar ev eq_rel swapped tv1 ty2 ps_ty2              -- ev :: tv ~ s2
   = do { traceTcS "canEqTyVar" (ppr tv1 $$ ppr ty2 $$ ppr swapped)
-       ; (mb_yes, ev) <- flattenTyVar ev tv1
+       ; mb_yes <- flattenTyVar ev tv1
        ; case mb_yes of
          { Right (ty1, co1) -> -- co1 :: ty1 ~ tv1
              do { traceTcS "canEqTyVar2"
@@ -994,7 +950,7 @@ canEqTyVar ev eq_rel swapped tv1 ty2 ps_ty2              -- ev :: tv ~ s2
          -- let fmode = FE { fe_ev = ev, fe_mode = FM_Avoid tv1' True }
          -- Flatten the RHS less vigorously, to avoid gratuitous flattening
          -- True <=> xi2 should not itself be a type-function application
-       ; (xi2, co2, ev) <- flatten FM_FlattenAll ev ps_ty2 -- co2 :: xi2 ~ ps_ty2
+       ; (xi2, co2) <- flatten FM_FlattenAll ev ps_ty2 -- co2 :: xi2 ~ ps_ty2
                       -- Use ps_ty2 to preserve type synonyms if poss
        ; traceTcS "canEqTyVar flat LHS"
            (vcat [ ppr tv1, ppr tv1', ppr ty2, ppr swapped, ppr xi2 ])
@@ -1538,16 +1494,16 @@ rewriteEqEvidence :: CtEvidence         -- Old evidence :: olhs ~ orhs (not swap
 --
 -- It's all a form of rewwriteEvidence, specialised for equalities
 rewriteEqEvidence old_ev eq_rel swapped nlhs nrhs lhs_co rhs_co
+  | NotSwapped <- swapped
+  , isTcReflCo lhs_co      -- See Note [Rewriting with Refl]
+  , isTcReflCo rhs_co
+  = return (ContinueWith (old_ev { ctev_pred = new_pred }))
+
   | CtDerived {} <- old_ev
   = do { mb <- newDerived loc' new_pred
        ; case mb of
            Just new_ev -> continueWith new_ev
            Nothing     -> stopWith old_ev "Cached derived" }
-
-  | NotSwapped <- swapped
-  , isTcReflCo lhs_co      -- See Note [Rewriting with Refl]
-  , isTcReflCo rhs_co
-  = return (ContinueWith (old_ev { ctev_pred = new_pred }))
 
   | CtGiven { ctev_evtm = old_tm } <- old_ev
   = do { let new_tm = EvCoercion (lhs_co
@@ -1576,7 +1532,7 @@ rewriteEqEvidence old_ev eq_rel swapped nlhs nrhs lhs_co rhs_co
       -- of recursive newtypes, where "reducing" a newtype can actually make
       -- it bigger. See Note [Eager reflexivity check] in TcCanonical before
       -- considering changing this behavior.
-    loc'     = bumpCtLocDepth CountConstraints (ctEvLoc old_ev)
+    loc'     = bumpCtLocDepth (ctEvLoc old_ev)
 
 {- Note [unifyWanted and unifyDerived]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -170,20 +170,20 @@ solveSimples :: Cts -> TcS ()
 
 solveSimples cts
   = {-# SCC "solveSimples" #-}
-    do { dyn_flags <- getDynFlags
-       ; updWorkListTcS (\wl -> foldrBag extendWorkListCt wl cts)
-       ; solve_loop (maxSubGoalDepth dyn_flags) }
+    do { updWorkListTcS (\wl -> foldrBag extendWorkListCt wl cts)
+       ; solve_loop }
   where
-    solve_loop max_depth
+    solve_loop
       = {-# SCC "solve_loop" #-}
-        do { sel <- selectNextWorkItem max_depth
+        do { sel <- selectNextWorkItem
            ; case sel of
               NoWorkRemaining     -- Done, successfuly (modulo frozen)
                 -> return ()
-              MaxDepthExceeded cnt ct -- Failure, depth exceeded
-                -> wrapErrTcS $ solverDepthErrorTcS cnt (ctEvidence ct)
+              MaxDepthExceeded ct -- Failure, depth exceeded
+                -> wrapErrTcS $ solverDepthErrorTcS (ctLoc ct) (ctPred ct)
               NextWorkItem ct     -- More work, loop around!
-                -> do { runSolverPipeline thePipeline ct; solve_loop max_depth } }
+                -> do { runSolverPipeline thePipeline ct
+                      ; solve_loop } }
 
 
 -- | Extract the (inert) givens and invoke the plugins on them.
@@ -311,26 +311,26 @@ type SimplifierStage = WorkItem -> TcS (StopOrContinue Ct)
 
 data SelectWorkItem
        = NoWorkRemaining      -- No more work left (effectively we're done!)
-       | MaxDepthExceeded SubGoalCounter Ct
+       | MaxDepthExceeded Ct
                               -- More work left to do but this constraint has exceeded
-                              -- the maximum depth for one of the subgoal counters and we
-                              -- must stop
+                              -- the maximum depth and we must stop
        | NextWorkItem Ct      -- More work left, here's the next item to look at
 
-selectNextWorkItem :: SubGoalDepth -- Max depth allowed
-                   -> TcS SelectWorkItem
-selectNextWorkItem max_depth
-  = updWorkListTcS_return pick_next
+selectNextWorkItem :: TcS SelectWorkItem
+selectNextWorkItem
+  = do { dflags <- getDynFlags
+       ; updWorkListTcS_return (pick_next dflags) }
   where
-    pick_next :: WorkList -> (SelectWorkItem, WorkList)
-    pick_next wl
+    pick_next :: DynFlags -> WorkList -> (SelectWorkItem, WorkList)
+    pick_next dflags wl
       = case selectWorkItem wl of
           (Nothing,_)
               -> (NoWorkRemaining,wl)           -- No more work
           (Just ct, new_wl)
-              | Just cnt <- subGoalDepthExceeded max_depth (ctLocDepth (ctLoc ct)) -- Depth exceeded
-              -> (MaxDepthExceeded cnt ct,new_wl)
-          (Just ct, new_wl)
+              | subGoalDepthExceeded dflags (ctLocDepth (ctLoc ct)) 
+              -> (MaxDepthExceeded ct,new_wl)   -- Depth exceeded
+
+              | otherwise
               -> (NextWorkItem ct, new_wl)      -- New workitem and worklist
 
 runSolverPipeline :: [(String,SimplifierStage)] -- The pipeline
@@ -615,7 +615,7 @@ interactDict inerts workItem@(CDictCan { cc_ev = ev_w, cc_class = cls, cc_tyargs
   , isWanted ev_w
   , Just mkEvCs <- isCallStackIP (ctEvLoc ev_w) cls ty
   = do let ev_cs =
-             case lookupInertDict inerts (ctEvLoc ev_w) cls tys of
+             case lookupInertDict inerts cls tys of
                Just ev | isGiven ev -> mkEvCs (ctEvTerm ev)
                _ -> mkEvCs (EvCallStack EvCsEmpty)
 
@@ -628,7 +628,7 @@ interactDict inerts workItem@(CDictCan { cc_ev = ev_w, cc_class = cls, cc_tyargs
        setWantedEvBind (ctEvId ev_w) ev_tm
        stopWith ev_w "Wanted CallStack IP"
 
-  | Just ctev_i <- lookupInertDict inerts (ctEvLoc ev_w) cls tys
+  | Just ctev_i <- lookupInertDict inerts cls tys
   = do { (inert_effect, stop_now) <- solveOneFromTheOther ctev_i ev_w
        ; case inert_effect of
            IRKeep    -> return ()
@@ -1271,7 +1271,7 @@ doTopReactDict inerts work_item@(CDictCan { cc_ev = fl, cc_class = cls
   | not (isWanted fl)   -- Never use instances for Given or Derived constraints
   = try_fundeps_and_return
 
-  | Just ev <- lookupSolvedDict inerts dict_loc cls xis   -- Cached
+  | Just ev <- lookupSolvedDict inerts cls xis   -- Cached
   = do { setWantedEvBind dict_id (ctEvTerm ev);
        ; stopWith fl "Dict/Top (cached)" }
 
@@ -1286,7 +1286,7 @@ doTopReactDict inerts work_item@(CDictCan { cc_ev = fl, cc_class = cls
      dict_pred = mkClassPred cls xis
      dict_loc = ctEvLoc fl
      dict_origin = ctLocOrigin dict_loc
-     deeper_loc = bumpCtLocDepth CountConstraints dict_loc
+     deeper_loc = bumpCtLocDepth dict_loc
 
      solve_from_instance :: [CtEvidence] -> EvTerm -> TcS (StopOrContinue Ct)
       -- Precondition: evidence term matches the predicate workItem
@@ -1380,7 +1380,7 @@ doTopReactFunEq work_item@(CFunEqCan { cc_ev = old_ev, cc_fun = fam_tc
           ; stopWith old_ev "Fun/Top (wanted)" } } }
   where
     loc = ctEvLoc old_ev
-    deeper_loc = bumpCtLocDepth CountTyFunApps loc
+    deeper_loc = bumpCtLocDepth loc
 
     try_improvement
       | Just ops <- isBuiltInSynFamTyCon_maybe fam_tc
@@ -1397,7 +1397,7 @@ shortCutReduction :: CtEvidence -> TcTyVar -> TcCoercion
 shortCutReduction old_ev fsk ax_co fam_tc tc_args
   | isGiven old_ev
   = ASSERT( ctEvEqRel old_ev == NomEq )
-    do { (xis, cos, old_ev) <- flattenManyNom old_ev tc_args
+    do { (xis, cos) <- flattenManyNom old_ev tc_args
                -- ax_co :: F args ~ G tc_args
                -- cos   :: xis ~ tc_args
                -- old_ev :: F args ~ fsk
@@ -1416,7 +1416,7 @@ shortCutReduction old_ev fsk ax_co fam_tc tc_args
   | otherwise
   = ASSERT( not (isDerived old_ev) )   -- Caller ensures this
     ASSERT( ctEvEqRel old_ev == NomEq )
-    do { (xis, cos, old_ev) <- flattenManyNom old_ev tc_args
+    do { (xis, cos) <- flattenManyNom old_ev tc_args
                -- ax_co :: F args ~ G tc_args
                -- cos   :: xis ~ tc_args
                -- G cos ; sym ax_co ; old_ev :: G xis ~ fsk
@@ -1434,7 +1434,7 @@ shortCutReduction old_ev fsk ax_co fam_tc tc_args
        ; stopWith old_ev "Fun/Top (wanted, shortcut)" }
   where
     loc = ctEvLoc old_ev
-    deeper_loc = bumpCtLocDepth CountTyFunApps loc
+    deeper_loc = bumpCtLocDepth loc
 
 dischargeFmv :: EvVar -> TcTyVar -> TcCoercion -> TcType -> TcS ()
 -- (dischargeFmv x fmv co ty)

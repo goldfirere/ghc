@@ -896,30 +896,28 @@ lookupFlatCache fam_tc tys
     lookup_flats flat_cache = findFunEq flat_cache fam_tc tys
 
 
-lookupInInerts :: CtLoc -> TcPredType -> TcS (Maybe CtEvidence)
+lookupInInerts :: TcPredType -> TcS (Maybe CtEvidence)
 -- Is this exact predicate type cached in the solved or canonicals of the InertSet?
-lookupInInerts loc pty
+lookupInInerts pty
   | ClassPred cls tys <- classifyPredType pty
   = do { inerts <- getTcSInerts
-       ; return (lookupSolvedDict inerts loc cls tys `mplus`
-                 lookupInertDict (inert_cans inerts) loc cls tys) }
+       ; return (lookupSolvedDict inerts cls tys `mplus`
+                 lookupInertDict (inert_cans inerts) cls tys) }
   | otherwise -- NB: No caching for equalities, IPs, holes, or errors
   = return Nothing
 
-lookupInertDict :: InertCans -> CtLoc -> Class -> [Type] -> Maybe CtEvidence
-lookupInertDict (IC { inert_dicts = dicts }) loc cls tys
+lookupInertDict :: InertCans -> Class -> [Type] -> Maybe CtEvidence
+lookupInertDict (IC { inert_dicts = dicts }) cls tys
   = case findDict dicts cls tys of
-      Just ct | let ev = ctEvidence ct
-              , ctEvCheckDepth cls loc ev
-              -> Just ev
+      Just ct -> Just (ctEvidence ct)
       _       -> Nothing
 
-lookupSolvedDict :: InertSet -> CtLoc -> Class -> [Type] -> Maybe CtEvidence
+lookupSolvedDict :: InertSet -> Class -> [Type] -> Maybe CtEvidence
 -- Returns just if exactly this predicate type exists in the solved.
-lookupSolvedDict (IS { inert_solved_dicts = solved }) loc cls tys
+lookupSolvedDict (IS { inert_solved_dicts = solved }) cls tys
   = case findDict solved cls tys of
-      Just ev | ctEvCheckDepth cls loc ev -> Just ev
-      _                                   -> Nothing
+      Just ev -> Just ev
+      _       -> Nothing
 
 {-
 ************************************************************************
@@ -1768,7 +1766,7 @@ newWantedEvVarNC loc pty
 newWantedEvVar :: CtLoc -> TcPredType -> TcS (CtEvidence, Freshness)
 -- For anything except ClassPred, this is the same as newWantedEvVarNC
 newWantedEvVar loc pty
-  = do { mb_ct <- lookupInInerts loc pty
+  = do { mb_ct <- lookupInInerts pty
        ; case mb_ct of
             Just ctev | not (isDerived ctev)
                       -> do { traceTcS "newWantedEvVar/cache hit" $ ppr ctev
@@ -1790,7 +1788,7 @@ newDerived :: CtLoc -> TcPredType -> TcS (Maybe CtEvidence)
 -- Returns Nothing    if cached,
 --         Just pred  if not cached
 newDerived loc pred
-  = do { mb_ct <- lookupInInerts loc pred
+  = do { mb_ct <- lookupInInerts pred
        ; return (case mb_ct of
                     Just {} -> Nothing
                     Nothing -> Just (CtDerived { ctev_pred = pred, ctev_loc = loc })) }
