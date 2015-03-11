@@ -27,7 +27,6 @@ import NameEnv
 import Outputable
 import TcSMonad as TcS
 import DynFlags( DynFlags )
-import TcErrors ( solverDepthErrorTcS )
 import RdrName
 import DataCon ( dataConName )
 import Name    ( nameOccName )
@@ -648,10 +647,8 @@ getLoc = getFlatEnvField fe_loc
 
 checkStackDepth :: Type -> FlatM ()
 checkStackDepth ty
-  = FlatM $ \env -> do { dflags <- getDynFlags
-                       ; let loc = fe_loc env
-                       ; when (subGoalDepthExceeded dflags (ctLocDepth loc)) $
-                           wrapErrTcS $ solverDepthErrorTcS loc ty }
+  = do { loc <- getLoc
+       ; liftTcS $ checkReductionDepth loc ty }
 
 -- | Change the 'EqRel' in a 'FlatM'.
 setEqRel :: EqRel -> FlatM a -> FlatM a

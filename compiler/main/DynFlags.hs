@@ -2602,13 +2602,11 @@ dynamic_flags = [
   , defFlag "fcontext-stack"
       (intSuffixM (\n d ->
        do { deprecate $ "use -freduction-depth=" ++ show n ++ " instead"
-          ; return $ d{ reductionDepth = max (reductionDepth d)
-                                             (treatZeroAsInf n) } }))
+          ; return $ d{ reductionDepth = treatZeroAsInf n } }))
   , defFlag "ftype-function-depth"
       (intSuffixM (\n d ->
        do { deprecate $ "use -freduction-depth=" ++ show n ++ " instead"
-          ; return $ d{ reductionDepth = max (reductionDepth d)
-                                             (treatZeroAsInf n) } }))
+          ; return $ d{ reductionDepth = treatZeroAsInf n } }))
   , defFlag "fstrictness-before"
       (intSuffix (\n d -> d{ strictnessBefore = n : strictnessBefore d }))
   , defFlag "ffloat-lam-args"

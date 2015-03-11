@@ -1297,7 +1297,8 @@ doTopReactDict inerts work_item@(CDictCan { cc_ev = fl, cc_class = cls
              ; setWantedEvBind dict_id ev_term
              ; stopWith fl "Dict/Top (solved, no new work)" }
         | otherwise
-        = do { traceTcS "doTopReact/found non-nullary instance for" $
+        = do { checkReductionDepth deeper_loc dict_pred
+             ; traceTcS "doTopReact/found non-nullary instance for" $
                ppr dict_id
              ; setWantedEvBind dict_id ev_term
              ; let mk_new_wanted ev

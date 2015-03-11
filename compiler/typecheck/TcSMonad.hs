@@ -28,7 +28,7 @@ module TcSMonad (
     setWantedTyBind, reportUnifications,
     setEvBind, setWantedEvBind, setEvBindIfWanted,
     newEvVar, newGivenEvVar, newGivenEvVars,
-    newDerived, emitNewDerived,
+    newDerived, emitNewDerived, checkReductionDepth,
 
     getInstEnvs, getFamInstEnvs,                -- Getting the environments
     getTopEnv, getGblEnv, getTcEvBinds, getTcLevel,
@@ -107,6 +107,7 @@ import Type
 import TcEvidence
 import Class
 import TyCon
+import TcErrors   ( solverDepthErrorTcS )
 
 import Name
 import RdrName (RdrName, GlobalRdrEnv)
@@ -1598,7 +1599,8 @@ newFlattenSkolem :: CtFlavour -> CtLoc
                  -> TcType         -- F xis
                  -> TcS (CtEvidence, TcTyVar)    -- [W] x:: F xis ~ fsk
 newFlattenSkolem Given loc fam_ty
-  =  do { fsk <- wrapTcS $
+  =  do { checkReductionDepth loc fam_ty
+        ; fsk <- wrapTcS $
                  do { uniq <- TcM.newUnique
                     ; let name = TcM.mkTcTyVarName uniq (fsLit "fsk")
                     ; return (mkTcTyVar name (typeKind fam_ty) (FlatSkol fam_ty)) }
@@ -1608,7 +1610,8 @@ newFlattenSkolem Given loc fam_ty
         ; return (ev, fsk) }
 
 newFlattenSkolem _ loc fam_ty  -- Make a wanted
-  = do { fuv <- wrapTcS $
+  = do { checkReductionDepth loc fam_ty
+       ; fuv <- wrapTcS $
                  do { uniq <- TcM.newUnique
                     ; ref  <- TcM.newMutVar Flexi
                     ; let details = MetaTv { mtv_info  = FlatMetaTv
@@ -1707,7 +1710,8 @@ newGivenEvVar :: CtLoc -> (TcPredType, EvTerm) -> TcS CtEvidence
 --               See Note [Do not create Given kind equalities]
 newGivenEvVar loc (pred, rhs)
   = ASSERT2( not (isKindEquality pred), ppr pred $$ pprCtOrigin (ctLocOrigin loc) )
-    do { new_ev <- newEvVar pred
+    do { checkReductionDepth loc pred
+       ; new_ev <- newEvVar pred
        ; setEvBind (mkGivenEvBind new_ev rhs)
        ; return (CtGiven { ctev_pred = pred, ctev_evtm = EvId new_ev, ctev_loc = loc }) }
 
@@ -1760,7 +1764,8 @@ TcCanonical), and will do no harm.
 newWantedEvVarNC :: CtLoc -> TcPredType -> TcS CtEvidence
 -- Don't look up in the solved/inerts; we know it's not there
 newWantedEvVarNC loc pty
-  = do { new_ev <- newEvVar pty
+  = do { checkReductionDepth loc pty
+       ; new_ev <- newEvVar pty
        ; return (CtWanted { ctev_pred = pty, ctev_evar = new_ev, ctev_loc = loc })}
 
 newWantedEvVar :: CtLoc -> TcPredType -> TcS (CtEvidence, Freshness)
@@ -1788,11 +1793,21 @@ newDerived :: CtLoc -> TcPredType -> TcS (Maybe CtEvidence)
 -- Returns Nothing    if cached,
 --         Just pred  if not cached
 newDerived loc pred
-  = do { mb_ct <- lookupInInerts pred
+  = do { checkReductionDepth loc pred
+       ; mb_ct <- lookupInInerts pred
        ; return (case mb_ct of
                     Just {} -> Nothing
                     Nothing -> Just (CtDerived { ctev_pred = pred, ctev_loc = loc })) }
 
+-- | Checks if the depth of the given location is too much. Fails if
+-- it's too big, with an appropriate error message.
+checkReductionDepth :: CtLoc -> TcType   -- ^ type being reduced
+                    -> TcS ()
+checkReductionDepth loc ty
+  = do { dflags <- getDynFlags
+       ; when (subGoalDepthExceeded dflags (ctLocDepth loc)) $
+         wrapErrTcS $
+         solverDepthErrorTcS loc ty }
 
 matchFam :: TyCon -> [Type] -> TcS (Maybe (TcCoercion, TcType))
 matchFam tycon args = wrapTcS $ matchFamTcM tycon args
