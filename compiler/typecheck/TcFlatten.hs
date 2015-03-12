@@ -2,7 +2,7 @@
 
 module TcFlatten(
    FlattenEnv(..), FlattenMode(..), mkFlattenEnv,
-   flatten, flattenManyNom, flattenFamApp, flattenTyVar,
+   flatten, flattenManyNom,
 
    unflatten,
 
@@ -539,14 +539,11 @@ wanteds, we will
 
 -}
 
-type FlatWorkListRef = TcRef [Ct]  -- See Note [The flattening work list]
-
 data FlattenEnv
-  = FE { fe_mode    :: FlattenMode
-       , fe_loc     :: CtLoc              -- See Note [Flattener CtLoc]
-       , fe_flavour :: CtFlavour
-       , fe_eq_rel  :: EqRel              -- See Note [Flattener EqRels]
-       , fe_work    :: FlatWorkListRef }  -- See Note [The flattening work list]
+  = FE { fe_mode     :: FlattenMode
+       , fe_loc      :: CtLoc              -- See Note [Flattener CtLoc]
+       , fe_flavour  :: CtFlavour
+       , fe_eq_rel   :: EqRel  }           -- See Note [Flattener EqRels]
 
 data FlattenMode  -- Postcondition for all three: inert wrt the type substitution
   = FM_FlattenAll          -- Postcondition: function-free
@@ -559,25 +556,30 @@ data FlattenMode  -- Postcondition for all three: inert wrt the type substitutio
 --                           --  * If flat_top is True, top level is not a function application
 --                           --   (but under type constructors is ok e.g. [F a])
 
-mkFlattenEnv :: FlattenMode -> CtEvidence -> FlatWorkListRef -> FlattenEnv
-mkFlattenEnv fm ctev ref = FE { fe_mode    = fm
-                              , fe_loc     = ctEvLoc ctev
-                              , fe_flavour = ctEvFlavour ctev
-                              , fe_eq_rel  = ctEvEqRel ctev
-                              , fe_work    = ref }
+mkFlattenEnv :: FlattenMode -> CtEvidence -> FlattenEnv
+mkFlattenEnv fm ctev = FE { fe_mode     = fm
+                          , fe_loc      = ctEvLoc ctev
+                          , fe_flavour  = ctEvFlavour ctev
+                          , fe_eq_rel   = ctEvEqRel ctev }
 
 -- | The 'FlatM' monad is a wrapper around 'TcS' with the following
 -- extra capabilities: (1) it offers access to a 'FlattenEnv';
--- and (2) it maintains the flattening worklist.
--- See Note [The flattening work list].
+-- (2) it maintains the flattening worklist; and (3) it allows
+-- for erroring out due to looping terms while supporting a fallback
+-- type. See Notes [The flattening work list] and [Fallback type].
 newtype FlatM a
-  = FlatM { runFlatM :: FlattenEnv -> TcS a }
+  = FlatM { runFlatM :: FlattenEnv -> TcS (Maybe a, [Ct]) }
+      -- a Nothing return value indicates an error: use the fallback.
+      -- The [Ct] bit is the flattening work list
 
 instance Monad FlatM where
-  return x = FlatM $ const (return x)
+  return x = FlatM $ \_   -> return (Just x, [])
   m >>= k  = FlatM $ \env ->
-             do { a  <- runFlatM m env
-                ; runFlatM (k a) env }
+             do { (a, work1) <- runFlatM m env
+                ; case a of
+                    Nothing -> return (Nothing, []) -- discard work
+                    Just x  -> do { (b, work2) <- runFlatM (k x) env
+                                  ; return (b, work2 ++ work1) } }
 
 instance Functor FlatM where
   fmap = liftM
@@ -588,25 +590,29 @@ instance Applicative FlatM where
 
 liftTcS :: TcS a -> FlatM a
 liftTcS thing_inside
-  = FlatM $ const thing_inside 
-
+  = FlatM $ \_ -> do { result <- thing_inside
+                     ; return (Just result, []) }
+                    
 emitFlatWork :: Ct -> FlatM ()
 -- See Note [The flattening work list]
-emitFlatWork ct = FlatM $ \env -> updTcRef (fe_work env) (ct :)
+emitFlatWork ct
+  = FlatM $ \_ -> return (Just (), [ct])
 
-runFlatten :: FlattenMode -> CtEvidence -> FlatM a -> TcS a
+runFlatten :: FlattenMode -> CtEvidence
+           -> TcType   -- the type being flattened
+           -> FlatM (Xi, TcCoercion)
+           -> TcS   (Xi, TcCoercion)
 -- Run thing_inside (which does flattening), and put all
 -- the work it generates onto the main work list
 -- See Note [The flattening work list]
--- NB: The returned evidence is always the same as the original, but with
--- perhaps a new CtLoc
-runFlatten mode ev thing_inside
-  = do { flat_ref <- newTcRef []
-       ; let fmode = mkFlattenEnv mode ev flat_ref
-       ; res <- runFlatM thing_inside fmode
-       ; new_flats <- readTcRef flat_ref
-       ; updWorkListTcS (add_flats new_flats)
-       ; return res }
+runFlatten mode ev ty thing_inside
+  = do { let fmode = mkFlattenEnv mode ev
+       ; (res, work) <- runFlatM thing_inside fmode
+       ; case res of
+         { Nothing      -> return (ty, mkTcReflCo (ctEvRole ev) ty)
+         ; Just success -> do
+       { updWorkListTcS (add_flats work)
+       ; return success }}}
   where
     add_flats new_flats wl
       = wl { wl_funeqs = add_funeqs new_flats (wl_funeqs wl) }
@@ -622,7 +628,7 @@ traceFlat herald doc = liftTcS $ traceTcS herald doc
 
 getFlatEnvField :: (FlattenEnv -> a) -> FlatM a
 getFlatEnvField accessor
-  = FlatM $ \env -> return (accessor env)
+  = FlatM $ \env -> return (Just $ accessor env, [])
 
 getEqRel :: FlatM EqRel
 getEqRel = getFlatEnvField fe_eq_rel
@@ -645,11 +651,16 @@ getMode = getFlatEnvField fe_mode
 getLoc :: FlatM CtLoc
 getLoc = getFlatEnvField fe_loc
 
-checkStackDepth :: Type -> FlatM ()
-checkStackDepth ty
-  = do { loc <- getLoc
-       ; liftTcS $ checkReductionDepth loc ty }
-
+-- | Abort computation if the reduction depth (stored in the monad) has
+-- gotten too high.
+checkStackDepth :: FlatM ()
+checkStackDepth
+  = FlatM $ \(FE { fe_loc = loc }) ->
+    do { dflags <- getDynFlags
+       ; if subGoalDepthExceeded dflags (ctLocDepth loc)
+         then return (Nothing, [])
+         else return (Just (), []) }
+         
 -- | Change the 'EqRel' in a 'FlatM'.
 setEqRel :: EqRel -> FlatM a -> FlatM a
 setEqRel new_eq_rel thing_inside
@@ -789,6 +800,22 @@ Bottom line: FM_Avoid is unused for now (Nov 14).
 Note: T5321Fun got faster when I disabled FM_Avoid
       T5837 did too, but it's pathalogical anyway
 
+Note [Fallback type]
+~~~~~~~~~~~~~~~~~~~~
+Flattening can sometimes loop, when expanding a recursive type family
+or a recursive newtype. However, it's conceivable that the canonicalizer
+can make progress even if we can't flatten fully. For example:
+
+  newtype Foo a = MkFoo (Foo a)   -- pathological
+
+  [W] Foo Age ~R Foo Int
+
+If we try to flatten Foo Age, we loop. This loop is caught (by checkStackDepth)
+but this equality is actually solvable. Instead of reporting the error, then,
+we just return a fallback type.
+
+If the fallback type is used, the flattening work list is ignored.
+
 Note [Phantoms in the flattener]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Suppose we have
@@ -814,10 +841,9 @@ yields a better error message anyway.)
 *                                                                      *
 ********************************************************************* -}
 
-flatten :: FlattenMode -> CtEvidence -> TcType
-        -> TcS (Xi, TcCoercion)
+flatten :: FlattenMode -> CtEvidence -> TcType -> TcS (Xi, TcCoercion)
 flatten mode ev ty
-  = runFlatten mode ev (flatten_one ty)
+  = runFlatten mode ev ty (flatten_one ty)
 
 flattenManyNom :: CtEvidence -> [TcType] -> TcS ([Xi], [TcCoercion])
 -- Externally-callable, hence runFlatten
@@ -825,19 +851,7 @@ flattenManyNom :: CtEvidence -> [TcType] -> TcS ([Xi], [TcCoercion])
 -- always the arguments of a saturated type-family, so
 --      ctEvFlavour ev = Nominal
 -- and we want to flatten all at nominal role
-flattenManyNom ev tys
-  = runFlatten FM_FlattenAll ev (flatten_many_nom tys)
-
-flattenFamApp :: FlattenMode -> CtEvidence
-              -> TyCon -> [TcType] -> TcS (Xi, TcCoercion)
--- Externally callable, hence runFlatten
-flattenFamApp mode ev tc tys
-  = runFlatten mode ev (flatten_fam_app tc tys)
-
-flattenTyVar :: CtEvidence -> TcTyVar
-             -> TcS (Either TyVar (TcType, TcCoercion))
-flattenTyVar ev tv
-  = runFlatten FM_FlattenAll ev (flatten_tyvar tv)
+flattenManyNom ev = mapAndUnzipM (flatten FM_FlattenAll ev)
 
 {- *********************************************************************
 *                                                                      *
@@ -1047,7 +1061,11 @@ flatten_ty_con_app tc tys
        ; case eq_rel of
          { ReprEq | Just (rep_ty, new_co)
                       <- tcUnwrapNewType_maybe fam_inst_envs rdr_env tc tys
-                  -> do { checkStackDepth rep_ty
+                  -> do { checkStackDepth
+                        ; traceFlat "Unwrapping newtype"
+                            (vcat [ ppr tc
+                                  , ppr tys
+                                  , ppr rep_ty ])
                         ; markDataConsAsUsed rdr_env tc
                             -- we have actually used the newtype constructor here, so
                             -- make sure we don't warn about importing it!
@@ -1223,7 +1241,7 @@ flatten_exact_fam_app_fully tc tys
                   -> FlatM (Xi, TcCoercion)  -- continuation upon failure
                   -> FlatM (Xi, TcCoercion)
     try_to_reduce tc tys cache update_co k
-      = do { checkStackDepth (mkTyConApp tc tys)
+      = do { checkStackDepth
            ; mb_match <- liftTcS $ matchFam tc tys
            ; case mb_match of
                Just (norm_co, norm_ty)

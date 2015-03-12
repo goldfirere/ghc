@@ -20,15 +20,12 @@ import Class
 import TyCon
 import TypeRep
 import Coercion
-import FamInstEnv ( FamInstEnvs )
-import FamInst ( tcUnwrapNewType_maybe )
 import Var
 import Name( isSystemName )
 import OccName( OccName )
 import Outputable
 import DynFlags( DynFlags )
 import VarSet
-import RdrName
 
 import Pair
 import Util
@@ -433,25 +430,21 @@ can_eq_nc
 can_eq_nc ev eq_rel ty1 ps_ty1 ty2 ps_ty2
   = do { traceTcS "can_eq_nc" $
          vcat [ ppr ev, ppr eq_rel, ppr ty1, ppr ps_ty1, ppr ty2, ppr ps_ty2 ]
-       ; rdr_env <- getGlobalRdrEnvTcS
-       ; fam_insts <- getFamInstEnvs
-       ; can_eq_nc' rdr_env fam_insts ev eq_rel ty1 ps_ty1 ty2 ps_ty2 }
+       ; can_eq_nc' ev eq_rel ty1 ps_ty1 ty2 ps_ty2 }
 
 can_eq_nc'
-   :: GlobalRdrEnv   -- needed to see which newtypes are in scope
-   -> FamInstEnvs    -- needed to unwrap data instances
-   -> CtEvidence
+   :: CtEvidence
    -> EqRel
    -> Type -> Type    -- LHS, after and before type-synonym expansion, resp
    -> Type -> Type    -- RHS, after and before type-synonym expansion, resp
    -> TcS (StopOrContinue Ct)
 
 -- Expand synonyms first; see Note [Type synonyms and canonicalization]
-can_eq_nc' _rdr_env _envs ev eq_rel ty1 ps_ty1 ty2 ps_ty2
+can_eq_nc' ev eq_rel ty1 ps_ty1 ty2 ps_ty2
   | Just ty1' <- tcView ty1 = can_eq_nc ev eq_rel ty1' ps_ty1 ty2  ps_ty2
   | Just ty2' <- tcView ty2 = can_eq_nc ev eq_rel ty1  ps_ty1 ty2' ps_ty2
 
-can_eq_nc' _rdr_env _envs ev eq_rel ty1 _ ty2 _
+can_eq_nc' ev eq_rel ty1 _ ty2 _
   | ty1 `eqType` ty2
   = canEqReflexive ev eq_rel ty1
     -- short-cut: see Note [Eager reflexivity check]
@@ -459,29 +452,37 @@ can_eq_nc' _rdr_env _envs ev eq_rel ty1 _ ty2 _
 -- Type family on LHS or RHS take priority over tyvars,
 -- so that  tv ~ F ty gets flattened
 -- Otherwise  F a ~ F a  might not get solved!
-can_eq_nc' _rdr_env _envs ev eq_rel ty1@(TyConApp fn1 _) _ ty2 ps_ty2
+can_eq_nc' ev eq_rel ty1@(TyConApp fn1 _) _ ty2 ps_ty2
   | isTypeFamilyTyCon fn1
   = can_eq_flatten ev eq_rel NotSwapped ty1 ty2 ps_ty2
-can_eq_nc' _rdr_env _envs ev eq_rel ty1 ps_ty1 ty2@(TyConApp fn2 _) _
+can_eq_nc' ev eq_rel ty1 ps_ty1 ty2@(TyConApp fn2 _) _
   | isTypeFamilyTyCon fn2
   = can_eq_flatten ev eq_rel IsSwapped ty2 ty1 ps_ty1
 
 -- When working with ReprEq, unwrap newtypes next.
 -- Otherwise, a ~ Id a wouldn't get solved.
--- NB: The use of tcUnwrapNewType_maybe here is a little inefficient, because
--- the result is thrown out instead of used. Refactoring this complicated
--- the code, providing only a minimal optimization.
-can_eq_nc' rdr_env envs ev ReprEq ty1@(TyConApp tc1 tys1) _ ty2 ps_ty2
-  | isJust $ tcUnwrapNewType_maybe envs rdr_env tc1 tys1
+can_eq_nc' ev ReprEq ty1@(TyConApp tc1 _) _ ty2 ps_ty2
+  | isNewTyCon tc1
   = can_eq_flatten ev ReprEq NotSwapped ty1 ty2 ps_ty2
-can_eq_nc' rdr_env envs ev ReprEq ty1 ps_ty1 ty2@(TyConApp tc2 tys2) _
-  | isJust $ tcUnwrapNewType_maybe envs rdr_env tc2 tys2
+can_eq_nc' ev ReprEq ty1 ps_ty1 ty2@(TyConApp tc2 _) _
+  | isNewTyCon tc2
   = can_eq_flatten ev ReprEq IsSwapped  ty2 ty1 ps_ty1
 
+can_eq_nc' ev eq_rel ty1 ps_ty1 ty2 ps_ty2
+  = can_eq_nc_rigid ev eq_rel ty1 ps_ty1 ty2 ps_ty2
+
+-- | like 'can_eq_nc'', but it's guaranteed that neither type is a reducible
+-- type family (or newtype, in the ReprEq case).
+can_eq_nc_rigid :: CtEvidence
+                -> EqRel
+                -> Type -> Type
+                -> Type -> Type
+                -> TcS (StopOrContinue Ct)
+
 -- Type variable on LHS or RHS are next
-can_eq_nc' _rdr_env _envs ev eq_rel (TyVarTy tv1) _ ty2 ps_ty2
+can_eq_nc_rigid ev eq_rel (TyVarTy tv1) _ ty2 ps_ty2
   = canEqTyVar ev eq_rel NotSwapped tv1 ty2 ps_ty2
-can_eq_nc' _rdr_env _envs ev eq_rel ty1 ps_ty1 (TyVarTy tv2) _
+can_eq_nc_rigid ev eq_rel ty1 ps_ty1 (TyVarTy tv2) _
   = canEqTyVar ev eq_rel IsSwapped tv2 ty1 ps_ty1
 
 ----------------------
@@ -489,7 +490,7 @@ can_eq_nc' _rdr_env _envs ev eq_rel ty1 ps_ty1 (TyVarTy tv2) _
 ----------------------
 
 -- Literals
-can_eq_nc' _rdr_env _envs ev eq_rel ty1@(LitTy l1) _ (LitTy l2) _
+can_eq_nc_rigid ev eq_rel ty1@(LitTy l1) _ (LitTy l2) _
  | l1 == l2
   = do { setEvBindIfWanted ev (EvCoercion $
                                mkTcReflCo (eqRelRole eq_rel) ty1)
@@ -498,27 +499,27 @@ can_eq_nc' _rdr_env _envs ev eq_rel ty1@(LitTy l1) _ (LitTy l2) _
 -- Decomposable type constructor applications
 -- Synonyms and type functions (which are not decomposable)
 -- have already been dealt with
-can_eq_nc' _rdr_env _envs ev eq_rel (TyConApp tc1 tys1) _ (TyConApp tc2 tys2) _
+can_eq_nc_rigid ev eq_rel (TyConApp tc1 tys1) _ (TyConApp tc2 tys2) _
   | isDecomposableTyCon tc1
   , isDecomposableTyCon tc2
   = canDecomposableTyConApp ev eq_rel tc1 tys1 tc2 tys2
 
-can_eq_nc' _rdr_env _envs ev eq_rel (TyConApp tc1 _) ps_ty1 (FunTy {}) ps_ty2
+can_eq_nc_rigid ev eq_rel (TyConApp tc1 _) ps_ty1 (FunTy {}) ps_ty2
   | isDecomposableTyCon tc1
       -- The guard is important
       -- e.g.  (x -> y) ~ (F x y) where F has arity 1
       --       should not fail, but get the app/app case
   = canEqHardFailure ev eq_rel ps_ty1 ps_ty2
 
-can_eq_nc' _rdr_env _envs ev eq_rel (FunTy s1 t1) _ (FunTy s2 t2) _
+can_eq_nc_rigid ev eq_rel (FunTy s1 t1) _ (FunTy s2 t2) _
   = do { canDecomposableTyConAppOK ev eq_rel funTyCon [s1,t1] [s2,t2]
        ; stopWith ev "Decomposed FunTyCon" }
 
-can_eq_nc' _rdr_env _envs ev eq_rel (FunTy {}) ps_ty1 (TyConApp tc2 _) ps_ty2
+can_eq_nc_rigid ev eq_rel (FunTy {}) ps_ty1 (TyConApp tc2 _) ps_ty2
   | isDecomposableTyCon tc2
   = canEqHardFailure ev eq_rel ps_ty1 ps_ty2
 
-can_eq_nc' _rdr_env _envs ev eq_rel s1@(ForAllTy {}) _ s2@(ForAllTy {}) _
+can_eq_nc_rigid ev eq_rel s1@(ForAllTy {}) _ s2@(ForAllTy {}) _
  | CtWanted { ctev_loc = loc, ctev_evar = orig_ev } <- ev
  = do { let (tvs1,body1) = tcSplitForAllTys s1
             (tvs2,body2) = tcSplitForAllTys s2
@@ -535,13 +536,13 @@ can_eq_nc' _rdr_env _envs ev eq_rel s1@(ForAllTy {}) _ s2@(ForAllTy {}) _
         pprEq s1 s2    -- See Note [Do not decompose given polytype equalities]
       ; stopWith ev "Discard given polytype equality" }
 
-can_eq_nc' _rdr_env _envs ev eq_rel ty1@(AppTy {}) _ ty2 _
+can_eq_nc_rigid ev eq_rel ty1@(AppTy {}) _ ty2 _
   = can_eq_app ev eq_rel ty1 ty2
-can_eq_nc' _rdr_env _envs ev eq_rel ty1 _ ty2@(AppTy {}) _
+can_eq_nc_rigid ev eq_rel ty1 _ ty2@(AppTy {}) _
   = can_eq_app ev eq_rel ty1 ty2
 
 -- Everything else is a definite type error, eg LitTy ~ TyConApp
-can_eq_nc' _rdr_env _envs ev eq_rel _ ps_ty1 _ ps_ty2
+can_eq_nc_rigid ev eq_rel _ ps_ty1 _ ps_ty2
   = canEqHardFailure ev eq_rel ps_ty1 ps_ty2
 
 ------------
@@ -551,11 +552,16 @@ can_eq_flatten :: CtEvidence -> EqRel -> SwapFlag
                -> TcS (StopOrContinue Ct)
 -- Flatten lhs and go round again
 can_eq_flatten ev eq_rel swapped lhs rhs ps_rhs
-  = do { (xi_lhs, co_lhs) <- flatten FM_FlattenAll ev lhs
+  = do { traceTcS "RAE can_eq_flatten1" (ppr lhs)
+       ; (xi_lhs, co_lhs) <- flatten FM_FlattenAll ev lhs
+       ; traceTcS "RAE can_eq_flatten2" (ppr xi_lhs $$ ppr co_lhs)
        ; rewriteEqEvidence ev eq_rel swapped xi_lhs rhs co_lhs
                            (mkTcReflCo (eqRelRole eq_rel) rhs)
          `andWhenContinue` \ new_ev ->
-         can_eq_nc new_ev eq_rel xi_lhs xi_lhs rhs ps_rhs }
+         if isTcReflCo co_lhs  -- can happen in case of recursive newtypes;
+                               -- calling can_eq_nc_rigid avoids a loop
+         then can_eq_nc_rigid new_ev eq_rel xi_lhs xi_lhs rhs ps_rhs
+         else can_eq_nc       new_ev eq_rel xi_lhs xi_lhs rhs ps_rhs }
 
 {-
 Note [Eager reflexivity check]
@@ -931,18 +937,18 @@ canEqTyVar :: CtEvidence -> EqRel -> SwapFlag
 -- A TyVar on LHS, but so far un-zonked
 canEqTyVar ev eq_rel swapped tv1 ty2 ps_ty2              -- ev :: tv ~ s2
   = do { traceTcS "canEqTyVar" (ppr tv1 $$ ppr ty2 $$ ppr swapped)
-       ; mb_yes <- flattenTyVar ev tv1
-       ; case mb_yes of
-         { Right (ty1, co1) -> -- co1 :: ty1 ~ tv1
+       ; (xi1, co1) <- flatten FM_FlattenAll ev (mkTyVarTy tv1)
+       ; case tcGetTyVar_maybe xi1 of
+         { Nothing ->
              do { traceTcS "canEqTyVar2"
                            (vcat [ ppr tv1, ppr ty2, ppr swapped
-                                 , ppr ty1 , ppUnless (isDerived ev) (ppr co1)])
-                ; rewriteEqEvidence ev eq_rel swapped ty1 ps_ty2
+                                 , ppr xi1 , ppUnless (isDerived ev) (ppr co1)])
+                ; rewriteEqEvidence ev eq_rel swapped xi1 ps_ty2
                                     co1 (mkTcReflCo (eqRelRole eq_rel) ps_ty2)
                   `andWhenContinue` \ new_ev ->
-                  can_eq_nc new_ev eq_rel ty1 ty1 ty2 ps_ty2 }
+                  can_eq_nc new_ev eq_rel xi1 xi1 ty2 ps_ty2 }
 
-         ; Left tv1' ->
+         ; Just tv1' ->
     do { -- FM_Avoid commented out: see Note [Lazy flattening] in TcFlatten
          -- let fmode = FE { fe_ev = ev, fe_mode = FM_Avoid tv1' True }
          -- Flatten the RHS less vigorously, to avoid gratuitous flattening
