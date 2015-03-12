@@ -1690,7 +1690,7 @@ ctEvId ctev = pprPanic "ctEvId:" (ppr ctev)
 
 instance Outputable CtEvidence where
   ppr fl = case fl of
-             CtGiven {}   -> ptext (sLit "[G]@") <> ppr (ctLocDepth (ctev_loc fl)) <+> ppr (ctev_evtm fl) <+> ppr_pty
+             CtGiven {}   -> ptext (sLit "[G]") <+> ppr (ctev_evtm fl) <+> ppr_pty
              CtWanted {}  -> ptext (sLit "[W]") <+> ppr (ctev_evar fl) <+> ppr_pty
              CtDerived {} -> ptext (sLit "[D]") <+> text "_" <+> ppr_pty
          where ppr_pty = dcolon <+> ppr (ctEvPred fl)
