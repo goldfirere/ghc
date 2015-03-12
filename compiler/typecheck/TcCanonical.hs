@@ -453,7 +453,8 @@ can_eq_nc' _rdr_env _envs ev eq_rel ty1 ps_ty1 ty2 ps_ty2
 
 can_eq_nc' _rdr_env _envs ev eq_rel ty1 _ ty2 _
   | ty1 `eqType` ty2
-  = canEqReflexive ev eq_rel ty1  -- short-cut: see Note [Eager reflexivity check]
+  = canEqReflexive ev eq_rel ty1
+    -- short-cut: see Note [Eager reflexivity check]
 
 -- Type family on LHS or RHS take priority over tyvars,
 -- so that  tv ~ F ty gets flattened
@@ -535,11 +536,9 @@ can_eq_nc' _rdr_env _envs ev eq_rel s1@(ForAllTy {}) _ s2@(ForAllTy {}) _
       ; stopWith ev "Discard given polytype equality" }
 
 can_eq_nc' _rdr_env _envs ev eq_rel ty1@(AppTy {}) _ ty2 _
-  | isGiven ev = try_decompose_app ev eq_rel ty1 ty2
-  | otherwise  = can_eq_wanted_app ev eq_rel ty1 ty2
+  = can_eq_app ev eq_rel ty1 ty2
 can_eq_nc' _rdr_env _envs ev eq_rel ty1 _ ty2@(AppTy {}) _
-  | isGiven ev = try_decompose_app ev eq_rel ty1 ty2
-  | otherwise  = can_eq_wanted_app ev eq_rel ty1 ty2
+  = can_eq_app ev eq_rel ty1 ty2
 
 -- Everything else is a definite type error, eg LitTy ~ TyConApp
 can_eq_nc' _rdr_env _envs ev eq_rel _ ps_ty1 _ ps_ty2
@@ -550,9 +549,7 @@ can_eq_flatten :: CtEvidence -> EqRel -> SwapFlag
                -> TcType                 -- ty to be flattened
                -> TcType -> TcType       -- other type, internal and pretty
                -> TcS (StopOrContinue Ct)
--- Canonicalise a non-canonical equality of form (F tys ~ ty)
---   or the swapped version thereof
--- Flatten both sides and go round again
+-- Flatten lhs and go round again
 can_eq_flatten ev eq_rel swapped lhs rhs ps_rhs
   = do { (xi_lhs, co_lhs) <- flatten FM_FlattenAll ev lhs
        ; rewriteEqEvidence ev eq_rel swapped xi_lhs rhs co_lhs
@@ -603,16 +600,16 @@ E.] am worried that it would slow down the common case.)
 -}
 
 -------------------------------------------------
-can_eq_wanted_app :: CtEvidence -> EqRel -> TcType -> TcType
-                  -> TcS (StopOrContinue Ct)
+can_eq_app :: CtEvidence -> EqRel -> TcType -> TcType
+              -> TcS (StopOrContinue Ct)
 -- One or the other is an App; neither is a type variable
 -- See Note [Canonicalising type applications]
-can_eq_wanted_app ev eq_rel ty1 ty2
+can_eq_app ev eq_rel ty1 ty2
   = do { (xi1, co1) <- flatten FM_FlattenAll ev ty1
        ; (xi2, co2) <- flatten FM_FlattenAll ev ty2
-        ; rewriteEqEvidence ev eq_rel NotSwapped xi1 xi2 co1 co2
-          `andWhenContinue` \ new_ev ->
-          try_decompose_app new_ev eq_rel xi1 xi2 }
+       ; rewriteEqEvidence ev eq_rel NotSwapped xi1 xi2 co1 co2
+         `andWhenContinue` \ new_ev ->
+         try_decompose_app new_ev eq_rel xi1 xi2 }
 
 ---------
 try_decompose_app :: CtEvidence -> EqRel
@@ -642,7 +639,7 @@ try_decompose_repr_app ev ty1 ty2
   | AppTy {} <- ty2
   = canEqFailure ev ReprEq ty1 ty2
 
-  | otherwise  -- flattening in can_eq_wanted_app exposed some TyConApps!
+  | otherwise  -- flattening in can_eq_app exposed some TyConApps!
   = ASSERT2( isJust (tcSplitTyConApp_maybe ty1) || isJust (tcSplitTyConApp_maybe ty2)
             , ppr ty1 $$ ppr ty2 )  -- If this assertion fails, we may fall
                                     -- into an infinite loop
