@@ -587,10 +587,10 @@ mkTyClGroup decls = TyClGroup { group_tyclds = decls, group_roles = [] }
 --    variable naming the result of a type family.
 
 --  * "a" is the "RHS of injectivity condition". RHS contains space-separated
---    type variables naming the arguments of a type family. The variables must
---    appear in the order in which they were declared. Some variables can be
---    omitted if a type family is not injective in these arguments. Example:
---        type family Foo a b c = d | d -> a c where ...
+--    type and kind variables representing the arguments of a type
+--    family. Variables can be omitted if a type family is not injective in
+--    these arguments. Example:
+--          type family Foo a b c = d | d -> a c where ...
 --
 -- Note that:
 --  a) naming of type family result is required to provide injectivity

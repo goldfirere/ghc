@@ -24,100 +24,48 @@ T6018rnfail.hs:16:16:
     Bound at: T6018rnfail.hs:16:16
               T6018rnfail.hs:16:20
 
-T6018rnfail.hs:22:16:
+T6018rnfail.hs:20:16:
     Conflicting definitions for ‘a’
-    Bound at: T6018rnfail.hs:22:16
-              T6018rnfail.hs:22:20
+    Bound at: T6018rnfail.hs:20:16
+              T6018rnfail.hs:20:20
 
-T6018rnfail.hs:23:17:
+T6018rnfail.hs:21:17:
     Conflicting definitions for ‘a’
-    Bound at: T6018rnfail.hs:23:17
-              T6018rnfail.hs:23:21
+    Bound at: T6018rnfail.hs:21:17
+              T6018rnfail.hs:21:21
 
-T6018rnfail.hs:26:12:
+T6018rnfail.hs:24:12:
     Conflicting definitions for ‘a’
-    Bound at: T6018rnfail.hs:26:12
-              T6018rnfail.hs:26:16
+    Bound at: T6018rnfail.hs:24:12
+              T6018rnfail.hs:24:16
 
-T6018rnfail.hs:26:16:
+T6018rnfail.hs:24:16:
     Type variable ‘a’ naming a type family result shadows
     an already bound type variable.
 
-T6018rnfail.hs:29:30:
-    Unexpected type variable on the RHS of injectivity condition: ‘b’
-    All variables should appear at most once and in exactly the same order
-    as they were declared in type family head.
+T6018rnfail.hs:27:1: Not in scope: type variable ‘c’
 
-T6018rnfail.hs:30:31:
-    Unexpected type variable on the RHS of injectivity condition: ‘b’
-    All variables should appear at most once and in exactly the same order
-    as they were declared in type family head.
+T6018rnfail.hs:28:1: Not in scope: type variable ‘c’
 
-T6018rnfail.hs:33:26:
-    Unexpected type variable on the RHS of injectivity condition: ‘b’
-    All variables should appear at most once and in exactly the same order
-    as they were declared in type family head.
+T6018rnfail.hs:31:3: Not in scope: type variable ‘c’
 
-T6018rnfail.hs:36:1: Not in scope: type variable ‘c’
+T6018rnfail.hs:34:1: Not in scope: type variable ‘c’
 
-T6018rnfail.hs:37:1: Not in scope: type variable ‘c’
+T6018rnfail.hs:35:1: Not in scope: type variable ‘c’
 
-T6018rnfail.hs:40:3: Not in scope: type variable ‘c’
+T6018rnfail.hs:38:3: Not in scope: type variable ‘c’
 
-T6018rnfail.hs:43:32:
-    Unexpected type variable on the RHS of injectivity condition: ‘a’
-    All variables should appear at most once and in exactly the same order
-    as they were declared in type family head.
-
-T6018rnfail.hs:44:33:
-    Unexpected type variable on the RHS of injectivity condition: ‘a’
-    All variables should appear at most once and in exactly the same order
-    as they were declared in type family head.
-
-T6018rnfail.hs:47:28:
-    Unexpected type variable on the RHS of injectivity condition: ‘a’
-    All variables should appear at most once and in exactly the same order
-    as they were declared in type family head.
-
-T6018rnfail.hs:50:34:
-    Too many type variables on RHS of injectivity condition.
-         You listed three: a, b, b
-         But at most two are allowed: a, b
-
-T6018rnfail.hs:51:35:
-    Too many type variables on RHS of injectivity condition.
-         You listed three: a, b, b
-         But at most two are allowed: a, b
-
-T6018rnfail.hs:54:30:
-    Too many type variables on RHS of injectivity condition.
-         You listed three: a, b, b
-         But at most two are allowed: a, b
-
-T6018rnfail.hs:57:1: Not in scope: type variable ‘c’
-
-T6018rnfail.hs:58:1: Not in scope: type variable ‘c’
-
-T6018rnfail.hs:61:3: Not in scope: type variable ‘c’
-
-T6018rnfail.hs:65:37:
-    Unexpected type variable on the RHS of injectivity condition: ‘k’
-    All variables should appear at most once and in exactly the same order
-    as they were declared in type family head.
-
-T6018rnfail.hs:69:15:
+T6018rnfail.hs:42:15:
     Type variable ‘a’ naming a type family result shadows
     an already bound type variable.
 
-T6018rnfail.hs:73:26:
-    Too many type variables on RHS of injectivity condition.
-         You listed two: a, b
-         But at most one is allowed: a
+T6018rnfail.hs:46:19:
+    Unknown type variable on the RHS of injectivity condition: b
 
-T6018rnfail.hs:76:21: Not in scope: type variable ‘r’
+T6018rnfail.hs:49:21: Not in scope: type variable ‘r’
 
-T6018rnfail.hs:77:21: Not in scope: type variable ‘r’
+T6018rnfail.hs:50:21: Not in scope: type variable ‘r’
 
-T6018rnfail.hs:79:26: Not in scope: type variable ‘r’
+T6018rnfail.hs:52:26: Not in scope: type variable ‘r’
 
-T6018rnfail.hs:80:26: Not in scope: type variable ‘r’
+T6018rnfail.hs:53:26: Not in scope: type variable ‘r’

@@ -6591,18 +6591,16 @@ instance Show v => Show (GMap () v) where ...
        </listitem>
        <listitem><para>injectivity annotation of the form <literal>| A ->
        B</literal>, where <literal>A</literal> is the result type variable (see
-       previous bullet) and <literal>B</literal> is a list of argument type
-       variables introduced earlier in head in which type family is
-       injective. It is possible to omit some type variables if type family is
-       not injective in them. Listed variables must appear in exactly the
-       same order as their order of declaration in type family
-       head.</para></listitem>
+       previous bullet) and <literal>B</literal> is a list of argument type and
+       kind variables introduced earlier in head in which type family is
+       injective. It is possible to omit some variables if type family is
+       not injective in them.</para></listitem>
      </itemizedlist>
      Examples:
      <programlisting>
 type family Id a = result | result -> a where
-type family F a b c = d | d -> a b c
-type family G a b c = foo | foo -> a b where
+type family F a b c = d | d -> a c b
+type family G (a :: k) b c = foo | foo -> k b where
      </programlisting>
      </para>
      <para>For open and closed type families it is OK to name the result but

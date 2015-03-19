@@ -37,6 +37,7 @@ module HsTypes (
         hsExplicitTvs,
         hsTyVarName, mkHsWithBndrs, hsLKiTyVarNames,
         hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
+        tyVarBndrNames,
         splitLHsInstDeclTy_maybe,
         splitHsClassTy_maybe, splitLHsClassTy_maybe,
         splitHsFunType,
@@ -67,6 +68,7 @@ import Maybes( isJust )
 
 import Data.Data hiding ( Fixity )
 import Data.Maybe ( fromMaybe )
+import qualified Data.Set as Set
 
 {-
 ************************************************************************
@@ -590,6 +592,24 @@ hsLKiTyVarNames :: LHsTyVarBndrs Name -> [Name]
 -- Kind and type variables
 hsLKiTyVarNames (HsQTvs { hsq_kvs = kvs, hsq_tvs = tvs })
   = kvs ++ map hsLTyVarName tvs
+
+-- Extracts variable names used in a type variable binder. Note that HsType
+-- represents data and type constructors as type variables and so this function
+-- will also return data and type constructors.
+tyVarBndrNames :: (Ord name) => LHsTyVarBndr name -> Set.Set name
+tyVarBndrNames (L _ (UserTyVar name))
+  = Set.singleton name
+tyVarBndrNames (L _ (KindedTyVar (L _ name) k))
+  = name `Set.insert` go (unLoc k)
+    where
+      go (HsTyVar name)               = Set.singleton name
+      go (HsFunTy  (L _ k1) (L _ k2)) = go k1 `Set.union` go k2
+      go (HsAppTy  (L _ k1) (L _ k2)) = go k1 `Set.union` go k2
+      go (HsListTy (L _ k))           = go k
+      go (HsTupleTy _ tys)            = Set.unions (map (go . unLoc) tys)
+      go (HsOpTy (L _ k1) _ (L _ k2)) = go k1 `Set.union` go k2
+      go (HsParTy (L _ ty))           = go ty
+      go _                            = Set.empty
 
 hsLTyVarLocName :: LHsTyVarBndr name -> Located name
 hsLTyVarLocName = fmap hsTyVarName

@@ -1,7 +1,8 @@
-{-# LANGUAGE DataKinds            #-}
-{-# LANGUAGE PolyKinds            #-}
-{-# LANGUAGE TypeFamilies         #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE DataKinds             #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PolyKinds             #-}
+{-# LANGUAGE TypeFamilies          #-}
+{-# LANGUAGE UndecidableInstances  #-}
 
 module T6018 where
 
@@ -139,3 +140,34 @@ instance PolyKindVarsC '[] where
 
 type family PolyKindVars (a :: k0) = (r :: k1) | r -> a
 type instance PolyKindVars '[] = '[]
+
+-- Declarations below test more liberal RHSs of injectivity annotations:
+-- permiting variables to appear in different order than the one in which they
+-- were declared.
+type family H a b = r | r -> b a
+type family Hc a b = r | r -> b a where
+  Hc a b = a b
+class Hcl a b where
+  type Ht a b = r | r -> b a
+
+-- repeated tyvars in the RHS of injectivity annotation: no warnings or errors
+-- (consistent with behaviour for functional dependencies)
+type family Jx a b = r | r -> a a
+type family Jcx a b = r | r -> a a where
+  Jcx a b = a
+class Jcl a b where
+  type Jt a b = r | r -> a a
+
+type family Kx a b = r | r -> a b b
+type family Kcx a b = r | r -> a b b where
+  Kcx a b = a b
+class Kcl a b where
+  type Kt a b = r | r -> a b b
+
+-- Declaring kind injectivity. Here we only claim that knowing the RHS
+-- determines the LHS kind but not the type.
+type family L (a :: k1) = (r :: k2) | r -> k1 where
+    L 'True  = Int
+    L 'False = Int
+    L Maybe  = 3
+    L IO     = 3
