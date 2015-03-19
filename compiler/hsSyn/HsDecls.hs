@@ -91,12 +91,14 @@ import HsTypes
 import HsDoc
 import TyCon
 import Var
+import VarSet
 import Name
 import BasicTypes
 import Coercion
 import ForeignCall
 import PlaceHolder ( PostTc,PostRn,PlaceHolder(..),DataId )
 import NameSet
+import TypeRep ( closeOverKinds )
 
 -- others:
 import InstEnv
@@ -815,10 +817,17 @@ getInjectivityList _ Nothing = Nothing
   -- list of Bools, where True means that corresponding type variable was
   -- mentioned in lInjNames (type family is injective in that argument) and
   -- False means that it was not mentioned in lInjNames (type family is not
-  -- injective in that type variable).
+  -- injective in that type variable). We also extend injectivity information to
+  -- kind variables, so if a user declares:
+  --
+  --   type family F (a :: k1) (b :: k2) = r | r -> a
+  --
+  -- then we mark both `a` and `k1` as injective.
 getInjectivityList tvs (Just (L _ (InjectivityAnn _ lInjNames))) =
-  Just $ map (`elemNameSet` inj_tvs) (map tyVarName tvs)
-      where inj_tvs = mkNameSet (map unLoc lInjNames)
+  let inj_tvs_names = mkNameSet (map unLoc lInjNames)
+      inj_tvs     = filter (\tv -> tyVarName tv `elemNameSet` inj_tvs_names) tvs
+      inj_kvs_tvs = closeOverKinds (mkVarSet inj_tvs)
+  in Just $ map (`elemVarSet` inj_kvs_tvs) tvs
 
 {-
 Note [Complete user-supplied kind signatures]
