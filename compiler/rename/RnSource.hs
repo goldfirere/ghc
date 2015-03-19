@@ -1314,7 +1314,7 @@ rnInjectivityAnn :: [LHsTyVarBndr RdrName]     -- ^ Type variables declared in
 rnInjectivityAnn tvBndrs (TyVarSig resTv)
                  (L srcSpan (InjectivityAnn injFrom injTo))
  = do
-   { let tvNames  = Set.unions $ map tyVarBndrNames tvBndrs
+   { let tvNames  = Set.unions $ map extractTyVarBndrNames tvBndrs
          resName  = hsLTyVarName resTv
          -- See Note [Renaming injectivity annotation]
          lhsValid = resName == unLoc injFrom
