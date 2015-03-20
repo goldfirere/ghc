@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, DataKinds, UndecidableInstances #-}
+{-# LANGUAGE TypeFamilies, DataKinds, UndecidableInstances, PolyKinds #-}
 
 module T6018fail where
 
@@ -47,8 +47,3 @@ type instance K (S n) m = S m
 type MaybeSyn a = Id a
 type family L a = r | r -> a
 type instance L a = MaybeSyn a
-
--- RHS mentions a type variable but user does not declare that type
--- family should be injective in that variable
-type family Q a b = r | r -> a
-type instance Q Int b = b

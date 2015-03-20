@@ -45,9 +45,3 @@ T6018fail.hs:45:15:
 T6018fail.hs:49:15:
     Calling type family ‘Id’ is not allowed in injective type family equation:
       L a -- Defined at T6018fail.hs:49:15
-
-T6018fail.hs:54:15:
-    Type family equation violates injectivity annotation.
-    Non-injective type variable ‘b’ should not appear
-    in the RHS of type family equation:
-      Q Int b -- Defined at T6018fail.hs:54:15

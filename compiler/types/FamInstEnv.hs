@@ -831,8 +831,8 @@ lookupFamInjInstEnvConflicts injList (pkg_ie, home_ie)
 
 
 -- | Return a list of type variables that the function is injective in and that
--- are not used in the RHS of family instance declaration.
-unusedInjTvsInRHS :: [Bool] -> [Type] -> Type -> (TyVarSet, TyVarSet)
+-- are not used in the RHS of family instance declaration
+unusedInjTvsInRHS :: [Bool] -> [Type] -> Type -> TyVarSet
 -- INVARIANT: [Bool] list contains at least one True value
 unusedInjTvsInRHS injList lhs rhs =
     -- See Note [Injectivity annotation check]. This function implements second
@@ -842,9 +842,7 @@ unusedInjTvsInRHS injList lhs rhs =
         injVars = dropKVars $ tyVarsOfTypes (filterByList injList lhs)
         rhsVars = dropKVars $ tyVarsOfType   rhs
     in  -- return all injective variables not mentioned in the RHS
-        -- and all non-injective variables mentioned in the RHS
-        ( injVars `minusVarSet` rhsVars
-        , rhsVars `minusVarSet` injVars )
+        injVars `minusVarSet` rhsVars
 
 
 -- | Return a list of type families used in the RHS of family instance

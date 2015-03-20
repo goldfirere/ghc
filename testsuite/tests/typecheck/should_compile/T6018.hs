@@ -171,3 +171,19 @@ type family L (a :: k1) = (r :: k2) | r -> k1 where
     L 'False = Int
     L Maybe  = 3
     L IO     = 3
+
+data KProxy (a :: *) = KProxy
+type family KP (kproxy :: KProxy k) = r | r -> k
+type instance KP ('KProxy :: KProxy Bool) = Int
+type instance KP ('KProxy :: KProxy *)    = Char
+
+kproxy_id :: KP ('KProxy :: KProxy k) -> KP ('KProxy :: KProxy k)
+kproxy_id x = x
+
+kproxy_id_use = kproxy_id 'a'
+
+type family Fa (a :: k) (b :: k) = r | r -> k where
+    Fa a b = a
+
+type family Fb (a :: k) (b :: k) = r | r -> k where
+    Fb a b = b

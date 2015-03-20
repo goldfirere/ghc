@@ -10,8 +10,7 @@ module FamInst (
         tcInstNewTyCon_maybe, tcTopNormaliseNewTypeTF_maybe,
         newFamInst,
         makeInjectivityErrors,
-        conflictInjInstErr, unusedInjectiveVarsErr,
-        usedNonInjectiveVarsErr, tyfamsUsedInjErr
+        conflictInjInstErr, unusedInjectiveVarsErr, tyfamsUsedInjErr
     ) where
 
 import HscTypes
@@ -396,7 +395,6 @@ checkForInjectivityConflicts instEnvs famInst
                       (conflictInjInstErr      makeFamInstsErr)
                       (tyfamsUsedInjErr        makeFamInstsErr)
                       (unusedInjectiveVarsErr  makeFamInstsErr)
-                      (usedNonInjectiveVarsErr makeFamInstsErr)
     ; mapM_ (\(err, span) -> setSrcSpan span $ addErr err) errs
     ; return (null errs)
     }
@@ -419,22 +417,18 @@ makeInjectivityErrors
    -> (a -> [a]      -> (SDoc, SrcSpan)) -- Generates errors for inj. conflicts
    -> (a -> [TyCon]  -> (SDoc, SrcSpan)) -- Ditto for type families in th RHS
    -> (a -> TyVarSet -> (SDoc, SrcSpan)) -- Ditto for unused injective vars
-   -> (a -> TyVarSet -> (SDoc, SrcSpan)) -- Ditto for used non-injective vars
    -> [(SDoc, SrcSpan)]
 makeInjectivityErrors thing inj lhs rhs conflicts conflictErr
-                      tyfamsErr unusedInjVarsErr usedNonInjVarsErr =
+                      tyfamsErr unusedInjVarsErr =
   let no_conflicts     = null conflicts
-      (unused_inj_tvs, used_non_inj_tvs)
-                       = unusedInjTvsInRHS inj (lhs thing) (rhs thing)
+      unused_inj_tvs   = unusedInjTvsInRHS inj (lhs thing) (rhs thing)
       all_inj_tvs_used = isEmptyVarSet unused_inj_tvs
-      non_inj_tvs_used = isEmptyVarSet used_non_inj_tvs
       tyfams_used      = tyFamsUsedInRHS (rhs thing)
       no_tyfams        = null tyfams_used
       errorUnless p f  = if p then [] else [f]
    in    errorUnless no_tyfams        (tyfamsErr         thing tyfams_used     )
       ++ errorUnless no_conflicts     (conflictErr       thing conflicts       )
       ++ errorUnless all_inj_tvs_used (unusedInjVarsErr  thing unused_inj_tvs  )
-      ++ errorUnless non_inj_tvs_used (usedNonInjVarsErr thing used_non_inj_tvs)
 
 
 conflictInstErr :: FamInst -> [FamInstMatch] -> TcRn ()
@@ -467,12 +461,6 @@ unusedInjectiveVarsErr :: InjErrorBuilder a -> a -> TyVarSet -> (SDoc, SrcSpan)
 unusedInjectiveVarsErr errorBuilder tyfamEqn unused_tyvars
   = errorBuilder (mkUnusedInjectiveVarsErr unused_tyvars) [tyfamEqn]
 
--- | Build error message for equation with non-injective type variables used in
--- the RHS.
-usedNonInjectiveVarsErr :: InjErrorBuilder a -> a -> TyVarSet -> (SDoc, SrcSpan)
-usedNonInjectiveVarsErr errorBuilder tyfamEqn used_tyvars
-  = errorBuilder (mkUsedNonInjectiveVarsErr used_tyvars) [tyfamEqn]
-
 -- | Build error message for equation with type families used in the RHS.
 tyfamsUsedInjErr :: InjErrorBuilder a -> a -> [TyCon] -> (SDoc, SrcSpan)
 tyfamsUsedInjErr errorBuilder tyfamEqn tyfams_called
@@ -485,15 +473,6 @@ mkUnusedInjectiveVarsErr unused_tyvars =
     text "Type variable" <> plural (varSetElems unused_tyvars) <+>
     pprQuotedList (varSetElems unused_tyvars) <+>
     text "should appear in the RHS of type family equation:"
-
--- | Error message for non-injective type variables used in the RHS.
-mkUsedNonInjectiveVarsErr :: TyVarSet -> SDoc
-mkUsedNonInjectiveVarsErr unused_tyvars =
-    text "Type family equation violates injectivity annotation." $$
-    text "Non-injective type variable" <> plural (varSetElems unused_tyvars) <+>
-    pprQuotedList (varSetElems unused_tyvars) <+>
-    text "should not appear" $$
-    text "in the RHS of type family equation:"
 
 -- | Error message for type families used in the RHS of injective type family.
 mkTyfamsUsedInjErr :: [TyCon] -> SDoc

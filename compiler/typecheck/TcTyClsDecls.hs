@@ -1584,7 +1584,6 @@ checkValidClosedCoAxiom (CoAxiom { co_ax_branches = branches, co_ax_tc = tc })
                       (conflictInjInstErr      (makeClosedFamInjErr tc))
                       (tyfamsUsedInjErr        (makeClosedFamInjErr tc))
                       (unusedInjectiveVarsErr  (makeClosedFamInjErr tc))
-                      (usedNonInjectiveVarsErr (makeClosedFamInjErr tc))
          -- add found errors
        ; mapM_ (\(err, span) -> setSrcSpan span $ addErr err) errs
        ; return (cur_branch : prev_branches) }
