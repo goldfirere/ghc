@@ -107,6 +107,7 @@ import Outputable
 import Util
 import SrcLoc
 import FastString
+import DynFlags
 
 import Bag
 import Data.Data        hiding (TyCon,Fixity)
@@ -827,7 +828,12 @@ getInjectivityList tvs (Just (L _ (InjectivityAnn _ lInjNames))) =
   let inj_tvs_names = mkNameSet (map unLoc lInjNames)
       inj_tvs     = filter (\tv -> tyVarName tv `elemNameSet` inj_tvs_names) tvs
       inj_kvs_tvs = closeOverKinds (mkVarSet inj_tvs)
-  in Just $ map (`elemVarSet` inj_kvs_tvs) tvs
+      foo = Just $ map (`elemVarSet` inj_kvs_tvs) tvs
+  in trace ("tvs: " ++ showSDoc unsafeGlobalDynFlags (ppr tvs)) $
+     trace ("inj_tvs_names: " ++ showSDoc unsafeGlobalDynFlags (ppr inj_tvs_names)) $
+     trace ("inj_tvs: " ++ showSDoc unsafeGlobalDynFlags (ppr inj_tvs)) $
+     trace ("inj_kvs_tvs: " ++ showSDoc unsafeGlobalDynFlags (ppr inj_kvs_tvs)) $
+     trace ("getInjectivityList foo: " ++ show foo) $ foo
 
 {-
 Note [Complete user-supplied kind signatures]

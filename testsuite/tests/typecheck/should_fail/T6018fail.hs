@@ -47,3 +47,7 @@ type instance K (S n) m = S m
 type MaybeSyn a = Id a
 type family L a = r | r -> a
 type instance L a = MaybeSyn a
+
+-- This should fail because there is no way to determine k from the RHS
+type family Fc (a :: k) (b :: k) = r | r -> k where
+    Fc a b = Int

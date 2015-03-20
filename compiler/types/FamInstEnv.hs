@@ -60,6 +60,7 @@ import Pair
 import SrcLoc
 import NameSet
 import FastString
+import DynFlags
 
 {-
 ************************************************************************
@@ -837,11 +838,12 @@ unusedInjTvsInRHS :: [Bool] -> [Type] -> Type -> TyVarSet
 unusedInjTvsInRHS injList lhs rhs =
     -- See Note [Injectivity annotation check]. This function implements second
     -- check described there.
-    let dropKVars = filterVarSet (not . isKindVar)
-        -- get the list of type variables in which type family is injective
-        injVars = dropKVars $ tyVarsOfTypes (filterByList injList lhs)
-        rhsVars = dropKVars $ tyVarsOfType   rhs
+    let -- get the list of type variables in which type family is injective
+        injVars = tyVarsOfTypes (filterByList injList lhs)
+        rhsVars = tyVarsOfType   rhs
     in  -- return all injective variables not mentioned in the RHS
+        trace ("injvars: " ++ showSDoc unsafeGlobalDynFlags (ppr injVars)) $
+        trace ("rhsvars: " ++ showSDoc unsafeGlobalDynFlags (ppr rhsVars)) $
         injVars `minusVarSet` rhsVars
 
 
