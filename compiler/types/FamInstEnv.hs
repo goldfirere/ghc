@@ -838,9 +838,12 @@ unusedInjTvsInRHS :: [Bool] -> [Type] -> Type -> TyVarSet
 unusedInjTvsInRHS injList lhs rhs =
     -- See Note [Injectivity annotation check]. This function implements second
     -- check described there.
-    let -- get the list of type variables in which type family is injective
+    let -- set of type and kind variables in which type family is injective
         injVars = tyVarsOfTypes (filterByList injList lhs)
-        rhsVars = tyVarsOfType   rhs
+        -- set of type variables appearing on the RHS (if a type variable
+        -- appears its associated kind variable is asuumed to also appear in the
+        -- RHS)
+        rhsVars = closeOverKinds $ tyVarsOfType rhs
     in  -- return all injective variables not mentioned in the RHS
         trace ("injvars: " ++ showSDoc unsafeGlobalDynFlags (ppr injVars)) $
         trace ("rhsvars: " ++ showSDoc unsafeGlobalDynFlags (ppr rhsVars)) $

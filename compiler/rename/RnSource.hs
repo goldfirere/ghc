@@ -48,7 +48,7 @@ import Util             ( mapSnd )
 import Control.Monad
 import Data.List ( partition, sortBy )
 import Maybes( orElse, mapMaybe )
-import qualified Data.Set as Set ( difference, unions, fromList, toList, null )
+import qualified Data.Set as Set ( difference, fromList, toList, null )
 #if __GLASGOW_HASKELL__ < 709
 import Data.Traversable (traverse)
 #endif
@@ -1245,7 +1245,7 @@ rnFamDecl mb_cls (FamilyDecl { fdLName = tycon, fdTyVars = tyvars
                    return ( TyVarSig rndKind, emptyFVs
                           , rndTyvars { hsq_tvs = rndTvs })
 
-              ; injectivity' <- traverse (rnInjectivityAnn tvBndrs resultSig)
+              ; injectivity' <- traverse (rnInjectivityAnn tyvars' resultSig')
                                           injectivity
 
               ; return ( (tycon', tyvars', resultSig', injectivity')
@@ -1258,7 +1258,6 @@ rnFamDecl mb_cls (FamilyDecl { fdLName = tycon, fdTyVars = tyvars
   where
      fmly_doc = TyFamilyCtx tycon
      kvs      = extractRdrKindSigVars resultSig
-     tvBndrs  = hsQTvBndrs tyvars
      -- if the user supplied a binding for result type variable we add it to the
      -- list of type variable bindings (extTvs = extended type variables)
      extTvs   = case resultSig of
@@ -1306,24 +1305,25 @@ rnFamDecl mb_cls (FamilyDecl { fdLName = tycon, fdTyVars = tyvars
 -- | Rename injectivity annotation. Note that injectivity annotation is just the
 -- part after the "|".  Everything that appears before it is renamed in
 -- rnFamDecl.
-rnInjectivityAnn :: [LHsTyVarBndr RdrName]     -- ^ Type variables declared in
+rnInjectivityAnn :: LHsTyVarBndrs Name         -- ^ Type variables declared in
                                                --   type family head
-                 -> FamilyResultSig RdrName    -- ^ Result signature
+                 -> FamilyResultSig Name       -- ^ Result signature
                  -> LInjectivityAnn RdrName    -- ^ Injectivity annotation
                  -> RnM (LInjectivityAnn Name)
 rnInjectivityAnn tvBndrs (TyVarSig resTv)
                  (L srcSpan (InjectivityAnn injFrom injTo))
  = do
-   { let tvNames  = Set.unions $ map extractTyVarBndrNames tvBndrs
+   { (injDecl'@(L _ (InjectivityAnn injFrom' injTo')), noRnErrors)
+          <- askNoErrs $ do
+               injFrom' <- rnLTyVar True injFrom
+               injTo'   <- mapM (rnLTyVar True) injTo
+               return $ L srcSpan (InjectivityAnn injFrom' injTo')
+
+   ; let tvNames  = Set.fromList $ hsLKiTyVarNames tvBndrs
          resName  = hsLTyVarName resTv
          -- See Note [Renaming injectivity annotation]
-         lhsValid = resName == unLoc injFrom
-         rhsValid = Set.fromList (map unLoc injTo) `Set.difference` tvNames
-
-   ; (injDecl', noRnErrors) <- askNoErrs $ do
-       injFrom' <- rnLTyVar True injFrom
-       injTo'   <- mapM (rnLTyVar True) injTo
-       return $ L srcSpan (InjectivityAnn injFrom' injTo')
+         lhsValid = EQ == (stableNameCmp resName (unLoc injFrom'))
+         rhsValid = Set.fromList (map unLoc injTo') `Set.difference` tvNames
 
    -- if renaming of type variables ended with errors (eg. there were
    -- not-in-scope variables) don't check the validity of injectivity
