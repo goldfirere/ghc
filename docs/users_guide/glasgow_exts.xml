@@ -6592,9 +6592,8 @@ instance Show v => Show (GMap () v) where ...
        <listitem><para>injectivity annotation of the form <literal>| A ->
        B</literal>, where <literal>A</literal> is the result type variable (see
        previous bullet) and <literal>B</literal> is a list of argument type and
-       kind variables introduced earlier in head in which type family is
-       injective. It is possible to omit some variables if type family is
-       not injective in them.</para></listitem>
+       kind variables in which type family is injective. It is possible to omit
+       some variables if type family is not injective in them.</para></listitem>
      </itemizedlist>
      Examples:
      <programlisting>
@@ -6628,10 +6627,10 @@ type family G (a :: k) b c = foo | foo -> k b where
        </listitem>
        <listitem><para>If for any equation either:
        <itemizedlist>
-         <listitem><para>LHS injective pattern variable is not mentioned in the
+         <listitem><para>LHS injective pattern variable does not appear in the
          RHS or;</para></listitem>
-         <listitem><para>LHS non-injective pattern variable is mentioned in the
-         RHS</para></listitem>
+         <listitem><para>at least one LHS pattern variable having an injective
+         kind does not appear in the RHS</para></listitem>
        </itemizedlist>
        then the type family is not injective.</para>
        </listitem>
