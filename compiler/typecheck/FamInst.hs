@@ -469,10 +469,22 @@ tyfamsUsedInjErr errorBuilder tyfamEqn tyfams_called
 -- | Error message for injective type variables unused in the RHS.
 mkUnusedInjectiveVarsErr :: TyVarSet -> SDoc
 mkUnusedInjectiveVarsErr unused_tyvars =
-    text "Type family equation violates injectivity annotation." $$
-    text "Type variable" <> plural (varSetElems unused_tyvars) <+>
-    pprQuotedList (varSetElems unused_tyvars) <+>
-    text "should appear in the RHS of type family equation:"
+    let tyVars = varSetElems $ filterVarSet isTypeVar unused_tyvars
+        kiVars = varSetElems $ filterVarSet isKindVar unused_tyvars
+        tyVarsSDoc
+            = if not (null tyVars)
+              then text "Injective type variable" <> plural tyVars <+>
+                   pprQuotedList tyVars <+> doOrDoes tyVars <+>
+                   text "not appear in the RHS of type family equation"
+              else empty
+        kiVarsSDoc
+            = if not (null kiVars)
+              then text "Kind variable" <> plural kiVars <+>
+                   pprQuotedList kiVars <+> isOrAre kiVars <+>
+                   text "not inferable from the RHS of type family equation"
+              else empty
+    in text "Type family equation violates injectivity annotation." $$
+       tyVarsSDoc $$ kiVarsSDoc
 
 -- | Error message for type families used in the RHS of injective type family.
 mkTyfamsUsedInjErr :: [TyCon] -> SDoc

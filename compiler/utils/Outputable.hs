@@ -33,7 +33,7 @@ module Outputable (
         fsep, fcat,
         hang, punctuate, ppWhen, ppUnless,
         speakNth, speakNTimes, speakN, speakNOf, plural, irregularPlural,
-        isOrAre,
+        isOrAre, doOrDoes,
 
         coloured, PprColour, colType, colCoerc, colDataCon,
         colBinder, bold, keyword,
@@ -1008,6 +1008,15 @@ irregularPlural  _  _        plural = plural
 isOrAre :: [a] -> SDoc
 isOrAre [_] = ptext (sLit "is")
 isOrAre _   = ptext (sLit "are")
+
+-- | Determines the form of to do appropriate for the length of a list:
+--
+-- > doOrDoes [] = ptext (sLit "do")
+-- > doOrDoes ["Hello"] = ptext (sLit "does")
+-- > doOrDoes ["Hello", "World"] = ptext (sLit "do")
+doOrDoes :: [a] -> SDoc
+doOrDoes [_] = ptext (sLit "does")
+doOrDoes _   = ptext (sLit "do")
 
 {-
 ************************************************************************

@@ -60,7 +60,6 @@ import Pair
 import SrcLoc
 import NameSet
 import FastString
-import DynFlags
 
 {-
 ************************************************************************
@@ -845,8 +844,6 @@ unusedInjTvsInRHS injList lhs rhs =
         -- RHS)
         rhsVars = closeOverKinds $ tyVarsOfType rhs
     in  -- return all injective variables not mentioned in the RHS
-        trace ("injvars: " ++ showSDoc unsafeGlobalDynFlags (ppr injVars)) $
-        trace ("rhsvars: " ++ showSDoc unsafeGlobalDynFlags (ppr rhsVars)) $
         injVars `minusVarSet` rhsVars
 
 

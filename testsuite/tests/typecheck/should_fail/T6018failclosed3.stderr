@@ -1,7 +1,7 @@
 
 T6018failclosed3.hs:8:5:
     Type family equation violates injectivity annotation.
-    Type variable ‘b’ should appear in the RHS of type family equation:
+    Injective type variable ‘b’ does not appear in the RHS of type family equation
       JClosed Int b c = Char
     In the equations for closed type family ‘JClosed’
     In the type family declaration for ‘JClosed’

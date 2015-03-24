@@ -34,17 +34,35 @@ T6018fail.hs:36:15:
 
 T6018fail.hs:41:15:
     Type family equation violates injectivity annotation.
-    Type variable ‘b’ should appear in the RHS of type family equation:
+    Injective type variable ‘b’ does not appear in the RHS of type family equation
       J Int b c -- Defined at T6018fail.hs:41:15
 
 T6018fail.hs:45:15:
     Type family equation violates injectivity annotation.
-    Type variable ‘n’ should appear in the RHS of type family equation:
+    Injective type variable ‘n’ does not appear in the RHS of type family equation
       K ('S n) m -- Defined at T6018fail.hs:45:15
 
 T6018fail.hs:49:15:
     Calling type family ‘Id’ is not allowed in injective type family equation:
       L a -- Defined at T6018fail.hs:49:15
 
-T6018fail.hs:52:15:
+T6018fail.hs:57:10:
     Type family equation violates injectivity annotation.
+    Kind variable ‘k1’ is not inferable from the RHS of type family equation
+      PolyKindVarsF '[] -- Defined at T6018fail.hs:57:10
+
+T6018fail.hs:60:15:
+    Type family equation violates injectivity annotation.
+    Kind variable ‘k1’ is not inferable from the RHS of type family equation
+      PolyKindVars '[] -- Defined at T6018fail.hs:60:15
+
+T6018fail.hs:64:15:
+    Type family equation violates injectivity annotation.
+    Kind variable ‘k’ is not inferable from the RHS of type family equation
+      Fc a b -- Defined at T6018fail.hs:64:15
+
+T6018fail.hs:68:15:
+    Type family equation violates injectivity annotation.
+    Injective type variables ‘a’, ‘b’ do not appear in the RHS of type family equation
+    Kind variable ‘k’ is not inferable from the RHS of type family equation
+      Gc a b -- Defined at T6018fail.hs:68:15

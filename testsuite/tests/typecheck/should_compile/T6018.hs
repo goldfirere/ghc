@@ -131,16 +131,6 @@ barapp1 = bar True
 barapp2 :: Int
 barapp2 = bar 1
 
--- associated type and type family below triggered a bug with poly kinds
-class PolyKindVarsC a where
-    type PolyKindVarsF a = (r :: k) | r -> a
-
-instance PolyKindVarsC '[] where
-    type PolyKindVarsF '[] = '[]
-
-type family PolyKindVars (a :: k0) = (r :: k1) | r -> a
-type instance PolyKindVars '[] = '[]
-
 -- Declarations below test more liberal RHSs of injectivity annotations:
 -- permiting variables to appear in different order than the one in which they
 -- were declared.

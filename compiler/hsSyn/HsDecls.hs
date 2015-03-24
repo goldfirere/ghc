@@ -107,7 +107,6 @@ import Outputable
 import Util
 import SrcLoc
 import FastString
-import DynFlags
 
 import Bag
 import Data.Data        hiding (TyCon,Fixity)
@@ -825,15 +824,12 @@ getInjectivityList _ Nothing = Nothing
   --
   -- then we mark both `a` and `k1` as injective.
 getInjectivityList tvs (Just (L _ (InjectivityAnn _ lInjNames))) =
-  let inj_tvs_names = mkNameSet (map unLoc lInjNames)
-      inj_tvs     = filter (\tv -> tyVarName tv `elemNameSet` inj_tvs_names) tvs
-      inj_kvs_tvs = closeOverKinds (mkVarSet inj_tvs)
-      foo = Just $ map (`elemVarSet` inj_kvs_tvs) tvs
-  in trace ("tvs: " ++ showSDoc unsafeGlobalDynFlags (ppr tvs)) $
-     trace ("inj_tvs_names: " ++ showSDoc unsafeGlobalDynFlags (ppr inj_tvs_names)) $
-     trace ("inj_tvs: " ++ showSDoc unsafeGlobalDynFlags (ppr inj_tvs)) $
-     trace ("inj_kvs_tvs: " ++ showSDoc unsafeGlobalDynFlags (ppr inj_kvs_tvs)) $
-     trace ("getInjectivityList foo: " ++ show foo) $ foo
+  let injNames      = map unLoc lInjNames
+      namesEq n1 n2 = EQ == (n1 `stableNameCmp` n2)
+      isInjName n   = not . null $ filter (\injN -> namesEq n injN) injNames
+      injTvs        = filter (\tv -> isInjName (tyVarName tv)) tvs
+      injKvsTvs     = closeOverKinds (mkVarSet injTvs)
+  in Just $ map (`elemVarSet` injKvsTvs) tvs
 
 {-
 Note [Complete user-supplied kind signatures]

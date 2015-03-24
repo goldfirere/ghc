@@ -48,6 +48,21 @@ type MaybeSyn a = Id a
 type family L a = r | r -> a
 type instance L a = MaybeSyn a
 
+-- These should fail because given the RHS kind there is no way to determine LHS
+-- kind
+class PolyKindVarsC a where
+    type PolyKindVarsF a = (r :: k) | r -> a
+
+instance PolyKindVarsC '[] where
+    type PolyKindVarsF '[] = '[]
+
+type family PolyKindVars (a :: k0) = (r :: k1) | r -> a
+type instance PolyKindVars '[] = '[]
+
 -- This should fail because there is no way to determine k from the RHS
-type family Fc (a :: k) (b :: k) = r | r -> k where
-    Fc a b = Int
+type family Fc (a :: k) (b :: k) = r | r -> k
+type instance Fc a b = Int
+
+-- This should fail because there is no way to determine a, b and k from the RHS
+type family Gc (a :: k) (b :: k) = r | r -> a b
+type instance Gc a b = Int
