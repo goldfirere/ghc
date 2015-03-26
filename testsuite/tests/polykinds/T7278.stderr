@@ -1,5 +1,6 @@
 
-T7278.hs:8:43:
-    ‘t’ is applied to too many type arguments
+T7278.hs:9:43:
+    Expecting two fewer arguments to ‘t’
+    Expected kind ‘* -> * -> *’, but ‘t’ has kind ‘k’
     In the type signature for ‘f’:
       f :: (C (t :: k) (TF t)) => TF t p1 p0 -> t p1 p0

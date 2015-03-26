@@ -431,7 +431,7 @@ cvtConstr (ForallC tvs ctxt con)
   = do  { tvs'  <- cvtTvs tvs
         ; L loc ctxt' <- cvtContext ctxt
         ; L _ con' <- cvtConstr con
-        ; returnL $ con' { con_qvars = mkHsQTvs (hsQTvBndrs tvs' ++ hsQTvBndrs (con_qvars con'))
+        ; returnL $ con' { con_qvars = mkHsQTvs (hsQTvExplicit tvs' ++ hsQTvExplicit (con_qvars con'))
                          , con_cxt = L loc (ctxt' ++ (unLoc $ con_cxt con')) } }
 
 cvt_arg :: (TH.Strict, TH.Type) -> CvtM (LHsType RdrName)
@@ -1004,7 +1004,7 @@ cvtTypeKind ty_str ty
              -> do { tvs' <- cvtTvs tvs
                    ; cxt' <- cvtContext cxt
                    ; ty'  <- cvtType ty
-                   ; returnL $ mkExplicitHsForAllTy (hsQTvBndrs tvs') cxt' ty'
+                   ; returnL $ mkExplicitHsForAllTy (hsQTvExplicit tvs') cxt' ty'
                    }
 
            SigT ty ki
@@ -1040,6 +1040,7 @@ cvtTypeKind ty_str ty
              -> mk_apps (HsTyVar (getRdrName consDataCon)) tys'
 
            StarT
+              -- TODO (RAE): Fix TH to use 'TYPE ...' syntax
              -> returnL (HsTyVar (getRdrName liftedTypeKindTyCon))
 
            ConstraintT
@@ -1064,8 +1065,8 @@ split_ty_app ty = go ty []
     go f as           = return (f,as)
 
 cvtTyLit :: TH.TyLit -> HsTyLit
-cvtTyLit (NumTyLit i) = HsNumTy i
-cvtTyLit (StrTyLit s) = HsStrTy (fsLit s)
+cvtTyLit (TH.NumTyLit i) = HsNumTy i
+cvtTyLit (TH.StrTyLit s) = HsStrTy (fsLit s)
 
 cvtKind :: TH.Kind -> CvtM (LHsKind RdrName)
 cvtKind = cvtTypeKind "kind"

@@ -17,7 +17,6 @@ module TcGenGenerics (canDoGenerics, canDoGenerics1,
 import DynFlags
 import HsSyn
 import Type
-import Kind             ( isKind )
 import TcType
 import TcGenDeriv
 import DataCon
@@ -84,11 +83,11 @@ genGenericMetaTyCons tc mod =
         s_occ m n = mkGenS tc_occ m n
 
         mkTyCon name = ASSERT( isExternalName name )
-                       buildAlgTyCon name [] [] Nothing [] distinctAbstractTyConRhs
-                                          NonRecursive
-                                          False          -- Not promotable
-                                          False          -- Not GADT syntax
-                                          NoParentTyCon
+                       mkAlgTyCon name liftedTypeKind
+                                  [] [] Nothing [] distinctAbstractTyConRhs
+                                  NoParentTyCon
+                                  NonRecursive
+                                  False          -- Not GADT syntax
 
       d_name  <- newGlobalBinder mod d_occ loc
       c_names <- forM (zip [0..] tc_cons) $ \(m,_) ->
@@ -257,7 +256,7 @@ canDoGenerics tc tc_args
           --
           -- Data family indices can be instantiated; the `tc_args` here are
           -- the representation tycon args
-              (if (all isTyVarTy (filterOut isKind tc_args))
+              (if (all isTyVarTy (filterInvisibles tc tc_args))
                 then IsValid
                 else NotValid (tc_name <+> text "must not be instantiated;" <+>
                                text "try deriving `" <> tc_name <+> tc_tys <>
@@ -481,7 +480,7 @@ tc_mkRepFamInsts gk tycon metaDts mod =
                      (init all_tyvars, Gen1_ $ last all_tyvars)
              where all_tyvars = tyConTyVars tycon
 
-           tyvar_args = mkTyVarTys tyvars
+           tyvar_args = mkTyCoVarTys tyvars
 
            appT :: [Type]
            appT = case tyConFamInst_maybe tycon of
@@ -561,19 +560,19 @@ argTyFold argVar (ArgTyAlg {ata_rec0 = mkRec0,
   go t = isParam `mplus` isApp where
 
     isParam = do -- handles parameters
-      t' <- getTyVar_maybe t
+      t' <- getTyCoVar_maybe t
       Just $ if t' == argVar then mkPar1 -- moreover, it is "the" parameter
              else mkRec0 t -- NB mkRec0 instead of the conventional mkPar0
 
     isApp = do -- handles applications
       (phi, beta) <- tcSplitAppTy_maybe t
 
-      let interesting = argVar `elemVarSet` exactTyVarsOfType beta
+      let interesting = argVar `elemVarSet` exactTyCoVarsOfType beta
 
       -- Does it have no interesting structure to represent?
       if not interesting then Nothing
         else -- Is the argument the parameter? Special case for mkRec1.
-          if Just argVar == getTyVar_maybe beta then Just $ mkRec1 phi
+          if Just argVar == getTyCoVar_maybe beta then Just $ mkRec1 phi
             else mkComp phi `fmap` go beta -- It must be a composition.
 
 
@@ -607,7 +606,7 @@ tc_mkRepTy gk_ tycon metaDts =
         mkRec1 a   = mkTyConApp rec1  [a]
         mkPar1     = mkTyConTy  par1
         mkD    a   = mkTyConApp d1    [metaDTyCon, sumP (tyConDataCons a)]
-        mkC  i d a = mkTyConApp c1    [d, prod i (dataConInstOrigArgTys a $ mkTyVarTys $ tyConTyVars tycon)
+        mkC  i d a = mkTyConApp c1    [d, prod i (dataConInstOrigArgTys a $ mkOnlyTyVarTys $ tyConTyVars tycon)
                                                  (null (dataConFieldLabels a))]
         -- This field has no label
         mkS True  _ a = mkTyConApp s1 [mkTyConTy nS1, a]

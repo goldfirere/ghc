@@ -63,6 +63,7 @@ vectTyConDecl tycon name'
                      (tyConTyVars tycon)        -- keep original type vars
                      (map (const Nominal) (tyConRoles tycon)) -- all role are N for safety
                      theta'                     -- superclasses
+                     (tyConKind tycon)          -- keep original kind
                      (snd . classTvsFds $ cls)  -- keep the original functional dependencies
                      []                         -- no associated types (for the moment)
                      methods'                   -- method info
@@ -98,17 +99,17 @@ vectTyConDecl tycon name'
              gadt_flag = isGadtSyntaxTyCon tycon
 
            -- build the vectorised type constructor
-       ; return $ buildAlgTyCon 
+       ; return $ mkAlgTyCon 
                     name'                   -- new name
+                    (tyConKind tycon)       -- keep original kind
                     (tyConTyVars tycon)     -- keep original type vars
                     (map (const Nominal) (tyConRoles tycon)) -- all roles are N for safety
                     Nothing
                     []                      -- no stupid theta
                     rhs'                    -- new constructor defs
-                    rec_flag                -- whether recursive
-                    False                   -- Not promotable
-                    gadt_flag               -- whether in GADT syntax
                     NoParentTyCon           
+                    rec_flag                -- whether recursive
+                    gadt_flag               -- whether in GADT syntax
        }
 
   -- some other crazy thing that we don't handle
@@ -159,7 +160,7 @@ vectDataCon dc
   | not . null $ ex_tvs
   = do dflags <- getDynFlags
        cantVectorise dflags "Can't vectorise constructor with existential type variables yet" (ppr dc)
-  | not . null $ eq_spec
+  | not . null $ (dep_eq_spec ++ eq_spec)
   = do dflags <- getDynFlags
        cantVectorise dflags "Can't vectorise constructor with equality context yet" (ppr dc)
   | not . null $ dataConFieldLabels dc
@@ -172,7 +173,7 @@ vectDataCon dc
   = do { name'   <- mkLocalisedName mkVectDataConOcc name
        ; tycon'  <- vectTyCon tycon
        ; arg_tys <- mapM vectType rep_arg_tys
-       ; let ret_ty = mkFamilyTyConApp tycon' (mkTyVarTys univ_tvs)
+       ; let ret_ty = mkFamilyTyConApp tycon' (mkTyCoVarTys univ_tvs)
        ; fam_envs  <- readGEnv global_fam_inst_env
        ; liftDs $ buildDataCon fam_envs
                     name'
@@ -191,4 +192,4 @@ vectDataCon dc
     name        = dataConName dc
     rep_arg_tys = dataConRepArgTys dc
     tycon       = dataConTyCon dc
-    (univ_tvs, ex_tvs, eq_spec, theta, _arg_tys, _res_ty) = dataConFullSig dc
+    (univ_tvs, ex_tvs, dep_eq_spec, eq_spec, theta, _arg_tys, _res_ty) = dataConFullSig dc

@@ -5,7 +5,7 @@ Traversable instances.
 
 {-# LANGUAGE CPP #-}
 
-module Pair ( Pair(..), unPair, toPair, swap ) where
+module Pair ( Pair(..), unPair, toPair, swap, pLiftFst, pLiftSnd ) where
 
 #include "HsVersions.h"
 
@@ -48,3 +48,9 @@ toPair (x,y) = Pair x y
 
 swap :: Pair a -> Pair a
 swap (Pair x y) = Pair y x
+
+pLiftFst :: (a -> a) -> Pair a -> Pair a
+pLiftFst f (Pair a b) = Pair (f a) b
+
+pLiftSnd :: (a -> a) -> Pair a -> Pair a
+pLiftSnd f (Pair a b) = Pair a (f b)

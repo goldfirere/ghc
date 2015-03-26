@@ -8,8 +8,8 @@ T7594.hs:33:12:
       ‘b’ is a rigid type variable bound by
           the inferred type of bar2 :: b at T7594.hs:33:1
     Possible fix: add a type signature for ‘bar2’
-    Expected type: a -> b
-      Actual type: a -> IO ()
+       Expected type: a -> b
+         Actual type: a -> IO ()
     Relevant bindings include bar2 :: b (bound at T7594.hs:33:1)
     In the first argument of ‘app’, namely ‘print’
     In the expression: app print q2

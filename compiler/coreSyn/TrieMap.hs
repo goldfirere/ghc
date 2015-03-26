@@ -3,15 +3,15 @@
 (c) The GRASP/AQUA Project, Glasgow University, 1992-1998
 -}
 
-{-# LANGUAGE RankNTypes, TypeFamilies #-}
+{-# LANGUAGE ScopedTypeVariables, RankNTypes, TypeFamilies,
+             GeneralizedNewtypeDeriving #-}
 module TrieMap(
    CoreMap, emptyCoreMap, extendCoreMap, lookupCoreMap, foldCoreMap,
    TypeMap, emptyTypeMap, extendTypeMap, lookupTypeMap, foldTypeMap,
-   CoercionMap,
+   LooseTypeMap,
    MaybeMap,
    ListMap,
-   TrieMap(..), insertTM, deleteTM,
-   lookupTypeMapTyCon
+   TrieMap(..), insertTM, deleteTM
  ) where
 
 import CoreSyn
@@ -19,13 +19,11 @@ import Coercion
 import Literal
 import Name
 import Type
-import TypeRep
-import TyCon(TyCon)
+import TyCoRep         -- builds maps based on internal structure of types
 import Var
 import UniqFM
 import Unique( Unique )
 import FastString(FastString)
-import CoAxiom(CoAxiomRule(coaxrName))
 
 import qualified Data.Map    as Map
 import qualified Data.IntMap as IntMap
@@ -455,162 +453,23 @@ fdA k m = foldTM k (am_deflt m)
 ************************************************************************
 -}
 
-data CoercionMap a
-  = EmptyKM
-  | KM { km_refl   :: RoleMap (TypeMap a)
-       , km_tc_app :: RoleMap (NameEnv (ListMap CoercionMap a))
-       , km_app    :: CoercionMap (CoercionMap a)
-       , km_forall :: CoercionMap (TypeMap a)
-       , km_var    :: VarMap a
-       , km_axiom  :: NameEnv (IntMap.IntMap (ListMap CoercionMap a))
-       , km_univ   :: RoleMap (TypeMap (TypeMap a))
-       , km_sym    :: CoercionMap a
-       , km_trans  :: CoercionMap (CoercionMap a)
-       , km_nth    :: IntMap.IntMap (CoercionMap a)
-       , km_left   :: CoercionMap a
-       , km_right  :: CoercionMap a
-       , km_inst   :: CoercionMap (TypeMap a)
-       , km_sub    :: CoercionMap a
-       , km_axiom_rule :: Map.Map FastString
-                                  (ListMap TypeMap (ListMap CoercionMap a))
-       }
-
-wrapEmptyKM :: CoercionMap a
-wrapEmptyKM = KM { km_refl = emptyTM, km_tc_app = emptyTM
-                 , km_app = emptyTM, km_forall = emptyTM
-                 , km_var = emptyTM, km_axiom = emptyNameEnv
-                 , km_univ = emptyTM, km_sym = emptyTM, km_trans = emptyTM
-                 , km_nth = emptyTM, km_left = emptyTM, km_right = emptyTM
-                 , km_inst = emptyTM, km_sub = emptyTM
-                 , km_axiom_rule = emptyTM }
+-- We should really never care about the contents of a coercion. Instead,
+-- just look up the coercion's type.
+newtype CoercionMap a = CoercionMap (CoreTypeMap a)
 
 instance TrieMap CoercionMap where
    type Key CoercionMap = Coercion
-   emptyTM  = EmptyKM
+   emptyTM  = CoercionMap EmptyTM
    lookupTM = lkC emptyCME
    alterTM  = xtC emptyCME
-   foldTM   = fdC
-   mapTM    = mapC
-
-mapC :: (a->b) -> CoercionMap a -> CoercionMap b
-mapC _ EmptyKM = EmptyKM
-mapC f (KM { km_refl = krefl, km_tc_app = ktc
-           , km_app = kapp, km_forall = kforall
-           , km_var = kvar, km_axiom = kax
-           , km_univ   = kuniv  , km_sym = ksym, km_trans = ktrans
-           , km_nth = knth, km_left = kml, km_right = kmr
-           , km_inst = kinst, km_sub = ksub
-           , km_axiom_rule = kaxr })
-  = KM { km_refl   = mapTM (mapTM f) krefl
-       , km_tc_app = mapTM (mapNameEnv (mapTM f)) ktc
-       , km_app    = mapTM (mapTM f) kapp
-       , km_forall = mapTM (mapTM f) kforall
-       , km_var    = mapTM f kvar
-       , km_axiom  = mapNameEnv (IntMap.map (mapTM f)) kax
-       , km_univ   = mapTM (mapTM (mapTM f)) kuniv
-       , km_sym    = mapTM f ksym
-       , km_trans  = mapTM (mapTM f) ktrans
-       , km_nth    = IntMap.map (mapTM f) knth
-       , km_left   = mapTM f kml
-       , km_right  = mapTM f kmr
-       , km_inst   = mapTM (mapTM f) kinst
-       , km_sub    = mapTM f ksub
-       , km_axiom_rule = mapTM (mapTM (mapTM f)) kaxr
-       }
+   foldTM f (CoercionMap core_tm)      = foldTM f core_tm
+   mapTM f (CoercionMap core_tm)       = CoercionMap (mapTM f core_tm)
 
 lkC :: CmEnv -> Coercion -> CoercionMap a -> Maybe a
-lkC env co m
-  | EmptyKM <- m = Nothing
-  | otherwise    = go co m
-  where
-    go (Refl r ty)             = km_refl   >.> lookupTM r >=> lkT env ty
-    go (TyConAppCo r tc cs)    = km_tc_app >.> lookupTM r >=> lkNamed tc >=> lkList (lkC env) cs
-    go (AxiomInstCo ax ind cs) = km_axiom  >.> lkNamed ax >=> lookupTM ind >=> lkList (lkC env) cs
-    go (AppCo c1 c2)           = km_app    >.> lkC env c1 >=> lkC env c2
-    go (TransCo c1 c2)         = km_trans  >.> lkC env c1 >=> lkC env c2
-
-    -- the provenance is not used in the map
-    go (UnivCo _ r t1 t2)      = km_univ   >.> lookupTM r >=> lkT env t1 >=> lkT env t2
-    go (InstCo c t)            = km_inst   >.> lkC env c  >=> lkT env t
-    go (ForAllCo v c)          = km_forall >.> lkC (extendCME env v) c >=> lkBndr env v
-    go (CoVarCo v)             = km_var    >.> lkVar env v
-    go (SymCo c)               = km_sym    >.> lkC env c
-    go (NthCo n c)             = km_nth    >.> lookupTM n >=> lkC env c
-    go (LRCo CLeft  c)         = km_left   >.> lkC env c
-    go (LRCo CRight c)         = km_right  >.> lkC env c
-    go (SubCo c)               = km_sub    >.> lkC env c
-    go (AxiomRuleCo co ts cs)  = km_axiom_rule >.>
-                                    lookupTM (coaxrName co) >=>
-                                    lkList (lkT env) ts >=>
-                                    lkList (lkC env) cs
-
+lkC env co (CoercionMap core_tm) = lkCT env (coercionType co) core_tm
 
 xtC :: CmEnv -> Coercion -> XT a -> CoercionMap a -> CoercionMap a
-xtC env co f EmptyKM = xtC env co f wrapEmptyKM
-xtC env (Refl r ty)             f m = m { km_refl   = km_refl m   |> xtR r |>> xtT env ty f }
-xtC env (TyConAppCo r tc cs)    f m = m { km_tc_app = km_tc_app m |> xtR r |>> xtNamed tc |>> xtList (xtC env) cs f }
-xtC env (AxiomInstCo ax ind cs) f m = m { km_axiom  = km_axiom m  |> xtNamed ax |>> xtInt ind |>> xtList (xtC env) cs f }
-xtC env (AppCo c1 c2)           f m = m { km_app    = km_app m    |> xtC env c1 |>> xtC env c2 f }
-xtC env (TransCo c1 c2)         f m = m { km_trans  = km_trans m  |> xtC env c1 |>> xtC env c2 f }
--- the provenance is not used in the map
-xtC env (UnivCo _ r t1 t2)        f m = m { km_univ   = km_univ   m |> xtR r |>> xtT env t1 |>> xtT env t2 f }
-xtC env (InstCo c t)            f m = m { km_inst   = km_inst m   |> xtC env c  |>> xtT env t  f }
-xtC env (ForAllCo v c)          f m = m { km_forall = km_forall m |> xtC (extendCME env v) c
-                                                      |>> xtBndr env v f }
-xtC env (CoVarCo v)             f m = m { km_var    = km_var m |> xtVar env  v f }
-xtC env (SymCo c)               f m = m { km_sym    = km_sym m |> xtC env    c f }
-xtC env (NthCo n c)             f m = m { km_nth    = km_nth m |> xtInt n |>> xtC env c f }
-xtC env (LRCo CLeft  c)         f m = m { km_left   = km_left  m |> xtC env c f }
-xtC env (LRCo CRight c)         f m = m { km_right  = km_right m |> xtC env c f }
-xtC env (SubCo c)               f m = m { km_sub    = km_sub m |> xtC env c f }
-xtC env (AxiomRuleCo co ts cs)  f m = m { km_axiom_rule = km_axiom_rule m
-                                                        |>  alterTM (coaxrName co)
-                                                        |>> xtList (xtT env) ts
-                                                        |>> xtList (xtC env) cs f}
-
-fdC :: (a -> b -> b) -> CoercionMap a -> b -> b
-fdC _ EmptyKM = \z -> z
-fdC k m = foldTM (foldTM k) (km_refl m)
-        . foldTM (foldTM (foldTM k)) (km_tc_app m)
-        . foldTM (foldTM k) (km_app m)
-        . foldTM (foldTM k) (km_forall m)
-        . foldTM k (km_var m)
-        . foldTM (foldTM (foldTM k)) (km_axiom m)
-        . foldTM (foldTM (foldTM k)) (km_univ   m)
-        . foldTM k (km_sym m)
-        . foldTM (foldTM k) (km_trans m)
-        . foldTM (foldTM k) (km_nth m)
-        . foldTM k          (km_left m)
-        . foldTM k          (km_right m)
-        . foldTM (foldTM k) (km_inst m)
-        . foldTM k          (km_sub m)
-        . foldTM (foldTM (foldTM k)) (km_axiom_rule m)
-
-newtype RoleMap a = RM { unRM :: (IntMap.IntMap a) }
-
-instance TrieMap RoleMap where
-  type Key RoleMap = Role
-  emptyTM = RM emptyTM
-  lookupTM = lkR
-  alterTM = xtR
-  foldTM = fdR
-  mapTM = mapR
-
-lkR :: Role -> RoleMap a -> Maybe a
-lkR Nominal          = lookupTM 1 . unRM
-lkR Representational = lookupTM 2 . unRM
-lkR Phantom          = lookupTM 3 . unRM
-
-xtR :: Role -> XT a -> RoleMap a -> RoleMap a
-xtR Nominal          f = RM . alterTM 1 f . unRM
-xtR Representational f = RM . alterTM 2 f . unRM
-xtR Phantom          f = RM . alterTM 3 f . unRM
-
-fdR :: (a -> b -> b) -> RoleMap a -> b -> b
-fdR f (RM m) = foldTM f m
-
-mapR :: (a -> b) -> RoleMap a -> RoleMap b
-mapR f = RM . mapTM f . unRM
+xtC env co f (CoercionMap m) = CoercionMap (xtCT env (coercionType co) f m)
 
 {-
 ************************************************************************
@@ -620,108 +479,206 @@ mapR f = RM . mapTM f . unRM
 ************************************************************************
 -}
 
-data TypeMap a
+-- NB: This respects the Note [Non-trivial definitional equality] in
+-- TyCoRep. CoreTypeMap assumes any queries are with types of the same
+-- kind as those stored in the map. It thus ignores casts/coercions.
+data CoreTypeMap a
   = EmptyTM
-  | TM { tm_var   :: VarMap a
-       , tm_app    :: TypeMap (TypeMap a)
-       , tm_fun    :: TypeMap (TypeMap a)
-       , tm_tc_app :: NameEnv (ListMap TypeMap a)
-       , tm_forall :: TypeMap (BndrMap a)
+  | TM { tm_var    :: VarMap a
+       , tm_app    :: CoreTypeMap (CoreTypeMap a)
+       , tm_fun    :: CoreTypeMap (CoreTypeMap a)
+       , tm_tc_app :: NameEnv (ListMap CoreTypeMap a)
+       , tm_forall :: CoreTypeMap (BinderMap a)
        , tm_tylit  :: TyLitMap a
+       , tm_coerce :: Maybe a
        }
 
+-- This is the real, kinded type map. It just looks up a kind, followed
+-- by the type. All kinds are of sort *, so the first lookup is guaranteed
+-- to be well-kinded.
+newtype TypeMap a
+  = TypeMap (CoreTypeMap (CoreTypeMap a))
+
+-- | A 'LooseTypeMap' doesn't do a kind-check. Thus, when lookup up (t |> g),
+-- you'll find entries inserted under (t), even if (g) is non-reflexive.
+newtype LooseTypeMap a
+  = LooseTypeMap (CoreTypeMap a)
 
 instance Outputable a => Outputable (TypeMap a) where
   ppr m = text "TypeMap elts" <+> ppr (foldTypeMap (:) [] m)
 
 foldTypeMap :: (a -> b -> b) -> b -> TypeMap a -> b
-foldTypeMap k z m = fdT k m z
+foldTypeMap k z m = foldTM k m z
 
 emptyTypeMap :: TypeMap a
-emptyTypeMap = EmptyTM
+emptyTypeMap = emptyTM
 
 lookupTypeMap :: TypeMap a -> Type -> Maybe a
-lookupTypeMap cm t = lkT emptyCME t cm
-
--- Returns the type map entries that have keys starting with the given tycon.
--- This only considers saturated applications (i.e. TyConApp ones).
-lookupTypeMapTyCon :: TypeMap a -> TyCon -> [a]
-lookupTypeMapTyCon EmptyTM _ = []
-lookupTypeMapTyCon TM { tm_tc_app = cs } tc =
-  case lookupUFM cs tc of
-    Nothing -> []
-    Just xs -> foldTM (:) xs []
+lookupTypeMap cm t = lookupTM t cm
 
 extendTypeMap :: TypeMap a -> Type -> a -> TypeMap a
-extendTypeMap m t v = xtT emptyCME t (\_ -> Just v) m
+extendTypeMap m t v = alterTM t (\_ -> Just v) m
 
-wrapEmptyTypeMap :: TypeMap a
-wrapEmptyTypeMap = TM { tm_var  = emptyTM
-                      , tm_app  = EmptyTM
-                      , tm_fun  = EmptyTM
+wrapEmptyTypeMap :: CoreTypeMap a
+wrapEmptyTypeMap = TM { tm_var    = emptyTM
+                      , tm_app    = emptyTM
+                      , tm_fun    = emptyTM
                       , tm_tc_app = emptyNameEnv
                       , tm_forall = EmptyTM
-                      , tm_tylit  = emptyTyLitMap }
+                      , tm_tylit  = emptyTyLitMap
+                      , tm_coerce = Nothing }
+
+instance TrieMap CoreTypeMap where
+   type Key CoreTypeMap = Type
+   emptyTM  = EmptyTM
+   lookupTM = lkCT emptyCME
+   alterTM  = xtCT emptyCME
+   foldTM   = fdCT
+   mapTM    = mapCT
 
 instance TrieMap TypeMap where
-   type Key TypeMap = Type
-   emptyTM  = EmptyTM
-   lookupTM = lkT emptyCME
-   alterTM  = xtT emptyCME
-   foldTM   = fdT
-   mapTM    = mapT
+  type Key TypeMap = Type
+  emptyTM = TypeMap EmptyTM
+  lookupTM = lkT emptyCME
+  alterTM  = xtT emptyCME
 
-mapT :: (a->b) -> TypeMap a -> TypeMap b
-mapT _ EmptyTM = EmptyTM
-mapT f (TM { tm_var  = tvar, tm_app = tapp, tm_fun = tfun
-           , tm_tc_app = ttcapp, tm_forall = tforall, tm_tylit = tlit })
+  mapTM f (TypeMap core_tm) = TypeMap (mapTM (mapTM f) core_tm)
+  foldTM f (TypeMap core_tm) = foldTM (foldTM f) core_tm
+
+instance TrieMap LooseTypeMap where
+  type Key LooseTypeMap = Type
+  emptyTM = LooseTypeMap emptyTM
+  lookupTM ty (LooseTypeMap core_tm) = lookupTM ty core_tm
+  alterTM ty xt (LooseTypeMap core_tm) = LooseTypeMap (alterTM ty xt core_tm)
+  mapTM f (LooseTypeMap core_tm) = LooseTypeMap (mapTM f core_tm)
+  foldTM f (LooseTypeMap core_tm) = foldTM f core_tm
+
+mapCT :: (a->b) -> CoreTypeMap a -> CoreTypeMap b
+mapCT _ EmptyTM = EmptyTM
+mapCT f (TM { tm_var  = tvar, tm_app = tapp, tm_fun = tfun
+            , tm_tc_app = ttcapp, tm_forall = tforall, tm_tylit = tlit
+            , tm_coerce = tco })
   = TM { tm_var    = mapTM f tvar
        , tm_app    = mapTM (mapTM f) tapp
        , tm_fun    = mapTM (mapTM f) tfun
        , tm_tc_app = mapNameEnv (mapTM f) ttcapp
        , tm_forall = mapTM (mapTM f) tforall
-       , tm_tylit  = mapTM f tlit }
+       , tm_tylit  = mapTM f tlit
+       , tm_coerce = fmap f tco
+       }
 
 -----------------
 lkT :: CmEnv -> Type -> TypeMap a -> Maybe a
-lkT env ty m
+lkT env ty (TypeMap m) = lkCT env (typeKind ty) m >>= lkCT env ty
+
+lkCT :: CmEnv -> Type -> CoreTypeMap a -> Maybe a
+lkCT env ty m
   | EmptyTM <- m = Nothing
   | otherwise    = go ty m
   where
     go ty | Just ty' <- coreView ty = go ty'
-    go (TyVarTy v)       = tm_var    >.> lkVar env v
-    go (AppTy t1 t2)     = tm_app    >.> lkT env t1 >=> lkT env t2
-    go (FunTy t1 t2)     = tm_fun    >.> lkT env t1 >=> lkT env t2
-    go (TyConApp tc tys) = tm_tc_app >.> lkNamed tc >=> lkList (lkT env) tys
-    go (LitTy l)         = tm_tylit  >.> lkTyLit l
-    go (ForAllTy tv ty)  = tm_forall >.> lkT (extendCME env tv) ty >=> lkBndr env tv
-
+    go (TyVarTy v)          = tm_var    >.> lkVar env v
+    go (AppTy t1 t2)        = tm_app    >.> lkCT env t1 >=> lkCT env t2
+    go (TyConApp tc tys)    = tm_tc_app >.> lkNamed tc >=> lkList (lkCT env) tys
+    go (LitTy l)            = tm_tylit  >.> lkTyLit l
+    go (ForAllTy bndr ty)   = tm_forall >.> lkCT env' ty >=> lkB env bndr
+      where env'
+              | Just tv <- binderVar_maybe bndr = extendCME env tv
+              | otherwise                       = env
+    go (CastTy ty _)        = go ty
+    go (CoercionTy {})      = tm_coerce
 
 -----------------
 xtT :: CmEnv -> Type -> XT a -> TypeMap a -> TypeMap a
-xtT env ty f m
-  | EmptyTM <- m            = xtT env ty  f wrapEmptyTypeMap
-  | Just ty' <- coreView ty = xtT env ty' f m
+xtT env ty f (TypeMap m) = TypeMap (m |> xtCT env (typeKind ty) |>> xtCT env ty f)
 
-xtT env (TyVarTy v)       f  m = m { tm_var    = tm_var m |> xtVar env v f }
-xtT env (AppTy t1 t2)     f  m = m { tm_app    = tm_app m |> xtT env t1 |>> xtT env t2 f }
-xtT env (FunTy t1 t2)     f  m = m { tm_fun    = tm_fun m |> xtT env t1 |>> xtT env t2 f }
-xtT env (ForAllTy tv ty)  f  m = m { tm_forall = tm_forall m |> xtT (extendCME env tv) ty
-                                                 |>> xtBndr env tv f }
-xtT env (TyConApp tc tys) f  m = m { tm_tc_app = tm_tc_app m |> xtNamed tc
-                                                 |>> xtList (xtT env) tys f }
-xtT _   (LitTy l)         f  m = m { tm_tylit  = tm_tylit m |> xtTyLit l f }
+xtCT :: CmEnv -> Type -> XT a -> CoreTypeMap a -> CoreTypeMap a
+xtCT env ty f m
+  | EmptyTM <- m            = xtCT env ty  f wrapEmptyTypeMap
+  | Just ty' <- coreView ty = xtCT env ty' f m
 
-fdT :: (a -> b -> b) -> TypeMap a -> b -> b
-fdT _ EmptyTM = \z -> z
-fdT k m = foldTM k (tm_var m)
+xtCT env (TyVarTy v)       f  m     = m { tm_var    = tm_var m |> xtVar env v f }
+xtCT env (AppTy t1 t2)     f  m     = m { tm_app    = tm_app m |> xtCT env t1 |>> xtCT env t2 f }
+xtCT env (ForAllTy bndr ty) f m     = m { tm_forall = tm_forall m
+                                                 |> xtCT env' ty
+                                                 |>> xtB env bndr f }
+  where env'
+          | Just tv <- binderVar_maybe bndr = extendCME env tv
+          | otherwise                       = env
+xtCT env (TyConApp tc tys) f  m     = m { tm_tc_app = tm_tc_app m |> xtNamed tc
+                                                 |>> xtList (xtCT env) tys f }
+xtCT _   (LitTy l)         f  m     = m { tm_tylit  = tm_tylit m |> xtTyLit l f }
+xtCT env (CastTy ty _)     f  m     = xtCT env ty f m
+xtCT _   (CoercionTy {})   f  m     = m { tm_coerce = tm_coerce m |> f }
+
+fdCT :: (a -> b -> b) -> CoreTypeMap a -> b -> b
+fdCT _ EmptyTM = \z -> z
+fdCT k m = foldTM k (tm_var m)
         . foldTM (foldTM k) (tm_app m)
         . foldTM (foldTM k) (tm_fun m)
         . foldTM (foldTM k) (tm_tc_app m)
         . foldTM (foldTM k) (tm_forall m)
         . foldTyLit k (tm_tylit m)
+        . foldMaybe k (tm_coerce m)
 
+------------------------
+data BinderMap a
+  = BM { bm_named_vis   :: VarMap a
+       , bm_named_invis :: VarMap a
+       , bm_anon        :: TypeMap a
+       }
 
+instance Outputable a => Outputable (BinderMap a) where
+  ppr m = text "BinderMap elts" <+> ppr (foldBinderMap (:) [] m)
+
+foldBinderMap :: (a -> b -> b) -> b -> BinderMap a -> b
+foldBinderMap k z m = fdB k m z
+
+emptyBinderMap :: BinderMap a
+emptyBinderMap = BM { bm_named_vis   = emptyTM
+                    , bm_named_invis = emptyTM
+                    , bm_anon        = emptyTM }
+
+instance TrieMap BinderMap where
+   type Key BinderMap = Binder
+   emptyTM  = emptyBinderMap
+   lookupTM = lkB emptyCME
+   alterTM  = xtB emptyCME
+   foldTM   = fdB
+   mapTM    = mapB
+
+mapB :: (a->b) -> BinderMap a -> BinderMap b
+mapB f (BM { bm_named_vis = n_vis, bm_named_invis = n_invis,
+             bm_anon = anon })
+  = BM { bm_named_vis   = mapTM f n_vis
+       , bm_named_invis = mapTM f n_invis
+       , bm_anon        = mapTM f anon
+       }
+
+lkB :: CmEnv -> Binder -> BinderMap a -> Maybe a
+lkB env = go
+  where
+    go bndr
+      | Just v <- binderVar_maybe bndr
+      = case binderVisibility bndr of
+          Visible   -> bm_named_vis   >.> lkVar env v
+          Invisible -> bm_named_invis >.> lkVar env v
+      | otherwise
+      = bm_anon >.> lkT env (binderType bndr)
+
+xtB :: CmEnv -> Binder -> XT a -> BinderMap a -> BinderMap a
+xtB env bndr f m
+  | Just v <- binderVar_maybe bndr
+  = case binderVisibility bndr of
+      Visible ->   m { bm_named_vis   = bm_named_vis m   |> xtVar env v f }
+      Invisible -> m { bm_named_invis = bm_named_invis m |> xtVar env v f }
+  | otherwise
+  = m { bm_anon = bm_anon m |> xtT env (binderType bndr) f }
+
+fdB :: (a -> b -> b) -> BinderMap a -> b -> b
+fdB k m = foldTM k (bm_named_vis m)
+        . foldTM k (bm_named_invis m)
+        . foldTM k (bm_anon m)
 
 ------------------------
 data TyLitMap a = TLM { tlm_number :: Map.Map Integer a

@@ -29,9 +29,9 @@ import CoreFVs
 import Class
 import DataCon
 import TyCon
-import TcType
-import Type
-import TypeRep
+import TcType  hiding ( lookupVar )
+import Type    hiding ( lookupVar )
+import TyCoRep hiding ( lookupVar )
 import Var
 import VarEnv
 import VarSet
@@ -360,7 +360,7 @@ vectExpr (_, AnnApp (_, AnnApp (_, AnnVar v) (_, AnnType ty)) err)
   | v == pAT_ERROR_ID
   = do 
     { (vty, lty) <- vectAndLiftType ty
-    ; return (mkCoreApps (Var v) [Type vty, err'], mkCoreApps (Var v) [Type lty, err'])
+    ; return (mkCoreApps (Var v) [Type (getLevity "vectExpr" vty), Type vty, err'], mkCoreApps (Var v) [Type lty, err'])
     }
   where
     err' = deAnnotate err
@@ -685,7 +685,7 @@ vectScalarDFun :: Var        -- ^ Original dfun
                -> VM CoreExpr
 vectScalarDFun var
   = do {   -- bring the type variables into scope
-       ; mapM_ defLocalTyVar tvs
+       ; mapM_ defLocalTyCoVar tvs
 
            -- vectorise dictionary argument types and generate variables for them
        ; vTheta     <- mapM vectType theta
@@ -696,7 +696,7 @@ vectScalarDFun var
        ; thetaVars  <- mapM (newLocalVar (fsLit "d")) theta
        ; thetaExprs <- zipWithM unVectDict theta vThetaVars
        ; let thetaDictBinds = zipWith NonRec thetaVars thetaExprs
-             dict           = Var var `mkTyApps` (mkTyVarTys tvs) `mkVarApps` thetaVars
+             dict           = Var var `mkTyApps` (mkTyCoVarTys tvs) `mkVarApps` thetaVars
              scsOps         = map (\selId -> varToCoreExpr selId `mkTyApps` tys `mkApps` [dict])
                                   selIds
        ; vScsOps <- mapM (\e -> vectorised <$> vectScalarFun e) scsOps
@@ -709,11 +709,11 @@ vectScalarDFun var
        ; return $ mkLams (tvs ++ vThetaBndr) vBody
        }
   where
-    ty                = varType var
-    (tvs, theta, pty) = tcSplitSigmaTy  ty        -- 'theta' is the instance context
-    (cls, tys)        = tcSplitDFunHead pty       -- 'pty' is the instance head
-    selIds            = classAllSelIds cls
-    dataCon           = classDataCon cls
+    ty                   = varType var
+    (tvs, theta, pty)    = tcSplitSigmaTy  ty        -- 'theta' is the instance context
+    (cls, tys)           = tcSplitDFunHead pty       -- 'pty' is the instance head
+    selIds               = classAllSelIds cls
+    dataCon              = classDataCon cls
 
 -- Build a value of the dictionary before vectorisation from original, unvectorised type and an
 -- expression computing the vectorised dictionary.
@@ -757,7 +757,7 @@ vectLam inline loop_breaker expr@((fvs, _vi), AnnLam _ _)
       ; let (bndrs, body) = collectAnnValBinders expr
 
           -- grab the in-scope type variables
-      ; tyvars <- localTyVars
+      ; tyvars <- localTyCoVars
 
           -- collect and vectorise all /local/ free variables
       ; vfvs <- readLEnv $ \env ->
@@ -1208,6 +1208,7 @@ maybeParrTy ty
       then return True 
       else or <$> mapM maybeParrTy ts
     }
+  -- must be a Named ForAllTy because anon ones respond to splitTyConApp_maybe
 maybeParrTy (ForAllTy _ ty) = maybeParrTy ty
 maybeParrTy _               = return False
 

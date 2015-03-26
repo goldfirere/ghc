@@ -5,14 +5,18 @@
 module TcEvidence (
 
   -- HsWrapper
-  HsWrapper(..),
-  (<.>), mkWpTyApps, mkWpEvApps, mkWpEvVarApps, mkWpTyLams, mkWpLams, mkWpLet, mkWpCast,
+  HsWrapper(..), 
+  (<.>), mkWpTyEvApps,
+  mkWpTyApps, mkWpEvApps, mkWpEvVarApps, mkWpTyLams, mkWpLams, mkWpLet, mkWpCast,
   mkWpFun, idHsWrapper, isIdHsWrapper, pprHsWrapper,
 
   -- Evidence bindings
-  TcEvBinds(..), EvBindsVar(..),
-  EvBindMap(..), emptyEvBindMap, extendEvBinds, lookupEvBind, evBindMapBinds,
+  TcEvBinds(..), EvBindsVar(..), 
+  EvBindMap(..), emptyEvBindMap, extendEvBinds, dropEvBind,
+  lookupEvBind, evBindMapBinds,
   EvBind(..), emptyTcEvBinds, isEmptyTcEvBinds,
+  evBindsVars, evBindsSubst, evBindsSubstX, evBindsCvSubstEnv,
+  sccEvBinds, evBindVar,
   EvTerm(..), mkEvCast, evVarsOfTerm,
   EvLit(..), evTermCoercion,
 
@@ -22,18 +26,27 @@ module TcEvidence (
   mkTcTyConAppCo, mkTcAppCo, mkTcAppCos, mkTcFunCo,
   mkTcAxInstCo, mkTcUnbranchedAxInstCo, mkTcForAllCo, mkTcForAllCos,
   mkTcSymCo, mkTcTransCo, mkTcNthCo, mkTcLRCo, mkTcSubCo, maybeTcSubCo,
-  tcDowngradeRole, mkTcTransAppCo,
-  mkTcAxiomRuleCo, mkTcPhantomCo,
-  tcCoercionKind, coVarsOfTcCo, isEqVar, mkTcCoVarCo,
+  tcDowngradeRole,
+  mkTcAxiomRuleCo, mkTcCoherenceLeftCo, mkTcCoherenceRightCo, mkTcPhantomCo,
+  castTcCoercionKind, mkTcKindCo, mkTcKindAppCo, mkTcCoercion, mkTcCoercionArg,
+  tcCoercionKind, coVarsOfTcCo, tyCoVarsOfTcCo,
+  isEqVar, mkTcCoVarCo,
   isTcReflCo, getTcCoVar_maybe,
-  tcCoercionRole, eqVarRole
+  tcCoercionRole, eqVarRole,
+  tcCoercionToCoercion
   ) where
 #include "HsVersions.h"
+
+import {-# SOURCE #-} TcRnTypes ( CtLoc )
+-- TODO (RAE): Remove this boot file.
+-- I think it can be done by storing a (Bag EvBind) in HsSyn and then
+-- augmenting TcEvBinds (which would be defined in TcRnTypes) to store
+-- locations.
+    
 
 import Var
 import Coercion
 import PprCore ()   -- Instance OutputableBndr TyVar
-import TypeRep  -- Knows type representation
 import TcType
 import Type
 import TyCon
@@ -44,16 +57,20 @@ import VarSet
 import Name
 
 import Util
+import BasicTypes ( Boxity(..), isBoxed )
 import Bag
 import Pair
+import Digraph
 import Control.Applicative
 #if __GLASGOW_HASKELL__ < 709
 import Data.Traversable (traverse, sequenceA)
 #endif
-import qualified Data.Data as Data
+import qualified Data.Data as Data 
 import Outputable
+import ListSetOps
 import FastString
 import Data.IORef( IORef )
+import Data.List ( mapAccumL )
 
 {-
 Note [TcCoercions]
@@ -68,17 +85,11 @@ boxed type (a ~ b). After we are done with typechecking the
 desugarer finds the free variables, unboxes them, and creates a
 resulting real Coercion with kosher free variables.
 
-We can use most of the Coercion "smart constructors" to build TcCoercions.
-However, mkCoVarCo will not work! The equivalent is mkTcCoVarCo.
-
 The data type is similar to Coercion.Coercion, with the following
 differences
   * Most important, TcLetCo adds let-bindings for coercions.
     This is what lets us unify two for-all types and generate
     equality constraints underneath
-
-  * The kind of a TcCoercion is  t1 ~  t2  (resp. Coercible t1 t2)
-             of a Coercion   is  t1 ~# t2  (resp. t1 ~#R t2)
 
   * UnsafeCo aren't required, but we do have TcPhantomCo
 
@@ -88,69 +99,64 @@ differences
      - TcSubCo is not applied as deep as done with mkSubCo
     Reason: they'll get established when we desugar to Coercion
 
-  * TcAxiomInstCo has a [TcCoercion] parameter, and not a [Type] parameter.
-    This differs from the formalism, but corresponds to AxiomInstCo (see
-    [Coercion axioms applied to coercions]).
+See also Note [TcCoercion kinds]
 
-Note [mkTcTransAppCo]
-~~~~~~~~~~~~~~~~~~~~~
-Suppose we have
+Note [TcCoercion kinds]
+~~~~~~~~~~~~~~~~~~~~~~~
+TcCoercions can be classified either by (t1 ~ t2) OR by (t1 ~# t2).
+This is a direct consequence of the fact that both (~) and (~#) are considered
+pred-types by classifyPredType. This is all necessary so that the solver can
+work with both lifted equality and unlifted equality, which in turn is
+necessary because lifted equality can't be used in types.
 
-  co1 :: a ~R Maybe
-  co2 :: b ~R Int
+The way this works out is that the desugarer checks the type of any coercion
+variables used in a TcCoercion. Any lifted equality variables get unboxed;
+any unlifted ones are left alone. See dsTcCoercion.
 
-and we want
+Then, because equality should always be lifted in terms, dsEvTerm calls
+mkEqBox appropriately. On the other hand, because equality should always
+be unlifted in types, no extra processing is done there.
 
-  co3 :: a b ~R Maybe Int
+tcCoercionKind returns a (Pair Type), so it's not affected by this ambiguity.
 
-This seems sensible enough. But, we can't let (co3 = co1 co2), because
-that's ill-roled! Note that mkTcAppCo requires a *nominal* second coercion.
+Note [TcAxiomInstCo takes TcCoercions]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Why does TcAxiomInstCo take a list of TcCoercions? Because AxiomInstCo does,
+of course! Generally, we think of axioms as being applied to a list of types.
+The only reason for coercions in AxiomInstCo is to allow for coercion
+optimization -- see Note [Coercion axioms applied to coercions] in TyCoRep.
+But, of course, we don't want to fiddle with
+CoCoArgs in the type-checker, so we ensure that all CoCoArgs are actually
+reflexive and then we can proceed.
 
-The way around this is to use transitivity:
-
-  co3 = (co1 <b>_N) ; (Maybe co2) :: a b ~R Maybe Int
-
-Or, it's possible everything is the other way around:
-
-  co1' :: Maybe ~R a
-  co2' :: Int   ~R b
-
-and we want
-
-  co3' :: Maybe Int ~R a b
-
-then
-
-  co3' = (Maybe co2') ; (co1' <b>_N)
-
-This is exactly what `mkTcTransAppCo` builds for us. Information for all
-the arguments tends to be to hand at call sites, so it's quicker than
-using, say, tcCoercionKind.
 -}
 
-data TcCoercion
+data TcCoercion 
   = TcRefl Role TcType
   | TcTyConAppCo Role TyCon [TcCoercion]
-  | TcAppCo TcCoercion TcCoercion
-  | TcForAllCo TyVar TcCoercion
+  | TcAppCo TcCoercion TcCoercion TcCoercion
+  | TcForAllCo TyCoVar TcCoercion 
   | TcCoVarCo EqVar
-  | TcAxiomInstCo (CoAxiom Branched) Int [TcCoercion] -- Int specifies branch number
-                                                      -- See [CoAxiom Index] in Coercion.lhs
+  | TcAxiomInstCo (CoAxiom Branched) BranchIndex [TcCoercion]
+          -- See Note [TcAxiomInstCo takes TcCoercions]
   -- This is number of types and coercions are expected to match to CoAxiomRule
   -- (i.e., the CoAxiomRules are always fully saturated)
   | TcAxiomRuleCo CoAxiomRule [TcType] [TcCoercion]
-  | TcPhantomCo TcType TcType
+  | TcPhantomCo TcCoercion TcType TcType
   | TcSymCo TcCoercion
   | TcTransCo TcCoercion TcCoercion
   | TcNthCo Int TcCoercion
   | TcLRCo LeftOrRight TcCoercion
   | TcSubCo TcCoercion
   | TcCastCo TcCoercion TcCoercion     -- co1 |> co2
+  | TcCoherenceCo TcCoercion Coercion
+  | TcKindCo TcCoercion
+  | TcKindAppCo TcCoercion
   | TcLetCo TcEvBinds TcCoercion
-  | TcCoercion Coercion            -- embed a Core Coercion
+  | TcCoercion CoercionArg             -- embed a Core Coercion
   deriving (Data.Data, Data.Typeable)
 
-isEqVar :: Var -> Bool
+isEqVar :: Var -> Bool 
 -- Is lifted coercion variable (only!)
 isEqVar v = case tyConAppTyCon_maybe (varType v) of
                Just tc -> tc `hasKey` eqTyConKey
@@ -183,7 +189,7 @@ mkTcFunCo role co1 co2 = mkTcTyConAppCo role funTyCon [co1, co2]
 mkTcTyConAppCo :: Role -> TyCon -> [TcCoercion] -> TcCoercion
 mkTcTyConAppCo role tc cos -- No need to expand type synonyms
                            -- See Note [TcCoercions]
-  | Just tys <- traverse isTcReflCo_maybe cos
+  | Just tys <- traverse isTcReflCo_maybe cos 
   = TcRefl role (mkTyConApp tc tys)  -- See Note [Refl invariant]
 
   | otherwise = TcTyConAppCo role tc cos
@@ -226,22 +232,7 @@ maybeTcSubCo NomEq  = id
 maybeTcSubCo ReprEq = mkTcSubCo
 
 mkTcAxInstCo :: Role -> CoAxiom br -> Int -> [TcType] -> TcCoercion
-mkTcAxInstCo role ax index tys
-  | ASSERT2( not (role == Nominal && ax_role == Representational) , ppr (ax, tys) )
-    arity == n_tys = tcDowngradeRole role ax_role $
-                     TcAxiomInstCo ax_br index rtys
-  | otherwise      = ASSERT( arity < n_tys )
-                     tcDowngradeRole role ax_role $
-                     foldl TcAppCo (TcAxiomInstCo ax_br index (take arity rtys))
-                                   (drop arity rtys)
-  where
-    n_tys     = length tys
-    ax_br     = toBranchedAxiom ax
-    branch    = coAxiomNthBranch ax_br index
-    arity     = length $ coAxBranchTyVars branch
-    ax_role   = coAxiomRole ax
-    arg_roles = coAxBranchRoles branch
-    rtys      = zipWith mkTcReflCo (arg_roles ++ repeat Nominal) tys
+mkTcAxInstCo role ax index tys = mkTcCoercion $ mkAxInstCo role ax index tys
 
 mkTcAxiomRuleCo :: CoAxiomRule -> [TcType] -> [TcCoercion] -> TcCoercion
 mkTcAxiomRuleCo = TcAxiomRuleCo
@@ -250,64 +241,11 @@ mkTcUnbranchedAxInstCo :: Role -> CoAxiom Unbranched -> [TcType] -> TcCoercion
 mkTcUnbranchedAxInstCo role ax tys
   = mkTcAxInstCo role ax 0 tys
 
-mkTcAppCo :: TcCoercion -> TcCoercion -> TcCoercion
+mkTcAppCo :: TcCoercion -> TcCoercion -> TcCoercion -> TcCoercion
 -- No need to deal with TyConApp on the left; see Note [TcCoercions]
--- Second coercion *must* be nominal
-mkTcAppCo (TcRefl r ty1) (TcRefl _ ty2) = TcRefl r (mkAppTy ty1 ty2)
-mkTcAppCo co1 co2                       = TcAppCo co1 co2
-
--- | Like `mkTcAppCo`, but allows the second coercion to be other than
--- nominal. See Note [mkTcTransAppCo]. Role r3 cannot be more stringent
--- than either r1 or r2.
-mkTcTransAppCo :: Role           -- ^ r1
-               -> TcCoercion     -- ^ co1 :: ty1a ~r1 ty1b
-               -> TcType         -- ^ ty1a
-               -> TcType         -- ^ ty1b
-               -> Role           -- ^ r2
-               -> TcCoercion     -- ^ co2 :: ty2a ~r2 ty2b
-               -> TcType         -- ^ ty2a
-               -> TcType         -- ^ ty2b
-               -> Role           -- ^ r3
-               -> TcCoercion     -- ^ :: ty1a ty2a ~r3 ty1b ty2b
-mkTcTransAppCo r1 co1 ty1a ty1b r2 co2 ty2a ty2b r3
--- How incredibly fiddly! Is there a better way??
-  = case (r1, r2, r3) of
-      (_,                _,                Phantom)
-        -> mkTcPhantomCo (mkAppTy ty1a ty2a) (mkAppTy ty1b ty2b)
-      (_,                _,                Nominal)
-        -> ASSERT( r1 == Nominal && r2 == Nominal )
-           mkTcAppCo co1 co2
-      (Nominal,          Nominal,          Representational)
-        -> mkTcSubCo (mkTcAppCo co1 co2)
-      (_,                Nominal,          Representational)
-        -> ASSERT( r1 == Representational )
-           mkTcAppCo co1 co2
-      (Nominal,          Representational, Representational)
-        -> go (mkTcSubCo co1)
-      (_               , _,                Representational)
-        -> ASSERT( r1 == Representational && r2 == Representational )
-           go co1
-  where
-    go co1_repr
-      | Just (tc1b, tys1b) <- tcSplitTyConApp_maybe ty1b
-      , nextRole ty1b == r2
-      = (co1_repr `mkTcAppCo` mkTcNomReflCo ty2a) `mkTcTransCo`
-        (mkTcTyConAppCo Representational tc1b
-           (zipWith mkTcReflCo (tyConRolesX Representational tc1b) tys1b
-            ++ [co2]))
-
-      | Just (tc1a, tys1a) <- tcSplitTyConApp_maybe ty1a
-      , nextRole ty1a == r2
-      = (mkTcTyConAppCo Representational tc1a
-           (zipWith mkTcReflCo (tyConRolesX Representational tc1a) tys1a
-            ++ [co2]))
-        `mkTcTransCo`
-        (co1_repr `mkTcAppCo` mkTcNomReflCo ty2b)
-
-      | otherwise
-      = pprPanic "mkTcTransAppCo" (vcat [ ppr r1, ppr co1, ppr ty1a, ppr ty1b
-                                        , ppr r2, ppr co2, ppr ty2a, ppr ty2b
-                                        , ppr r3 ])
+-- Third coercion *must* be nominal; other two must match roles
+mkTcAppCo (TcRefl r ty1) _ (TcRefl _ ty2) = TcRefl r (mkAppTy ty1 ty2)
+mkTcAppCo co1 h co2                       = TcAppCo co1 h co2
 
 mkTcSymCo :: TcCoercion -> TcCoercion
 mkTcSymCo co@(TcRefl {})  = co
@@ -320,27 +258,28 @@ mkTcTransCo co (TcRefl {}) = co
 mkTcTransCo co1 co2        = TcTransCo co1 co2
 
 mkTcNthCo :: Int -> TcCoercion -> TcCoercion
-mkTcNthCo n (TcRefl r ty) = TcRefl r (tyConAppArgN n ty)
+mkTcNthCo n (TcRefl r ty) = TcRefl (nthRole r tc n) (args `getNth` n)
+  where (tc, args) = splitTyConApp ty
 mkTcNthCo n co            = TcNthCo n co
 
 mkTcLRCo :: LeftOrRight -> TcCoercion -> TcCoercion
 mkTcLRCo lr (TcRefl r ty) = TcRefl r (pickLR lr (tcSplitAppTy ty))
 mkTcLRCo lr co            = TcLRCo lr co
 
-mkTcPhantomCo :: TcType -> TcType -> TcCoercion
+mkTcPhantomCo :: TcCoercion -> TcType -> TcType -> TcCoercion
 mkTcPhantomCo = TcPhantomCo
 
-mkTcAppCos :: TcCoercion -> [TcCoercion] -> TcCoercion
-mkTcAppCos co1 tys = foldl mkTcAppCo co1 tys
+mkTcAppCos :: TcCoercion -> [(TcCoercion, TcCoercion)] -> TcCoercion
+mkTcAppCos co1 tys = foldl (uncurry2 mkTcAppCo) co1 tys
 
-mkTcForAllCo :: Var -> TcCoercion -> TcCoercion
--- note that a TyVar should be used here, not a CoVar (nor a TcTyVar)
-mkTcForAllCo tv (TcRefl r ty) = ASSERT( isTyVar tv ) TcRefl r (mkForAllTy tv ty)
-mkTcForAllCo tv  co           = ASSERT( isTyVar tv ) TcForAllCo tv co
+mkTcForAllCo :: TyCoVar -> TcCoercion -> TcCoercion
+-- note that a TyVar or CoVar should be used here, not a TcTyVar
+mkTcForAllCo tv (TcRefl r ty) = TcRefl r (mkNamedForAllTy tv Invisible ty)  -- TODO (RAE): Check.
+mkTcForAllCo tv  co           = TcForAllCo tv co
 
-mkTcForAllCos :: [Var] -> TcCoercion -> TcCoercion
-mkTcForAllCos tvs (TcRefl r ty) = ASSERT( all isTyVar tvs ) TcRefl r (mkForAllTys tvs ty)
-mkTcForAllCos tvs co            = ASSERT( all isTyVar tvs ) foldr TcForAllCo co tvs
+mkTcForAllCos :: [TyCoVar] -> TcCoercion -> TcCoercion
+mkTcForAllCos tvs (TcRefl r ty) = TcRefl r (mkInvForAllTys tvs ty)  -- TODO (RAE): Check.
+mkTcForAllCos tvs co            = foldr TcForAllCo co tvs
 
 mkTcCoVarCo :: EqVar -> TcCoercion
 -- ipv :: s ~ t  (the boxed equality type) or Coercible s t (the boxed representational equality type)
@@ -351,25 +290,63 @@ mkTcCoVarCo ipv = TcCoVarCo ipv
   -- evidence variables as it goes.  In any case, the optimisation
   -- will be done in the later zonking phase
 
+-- | Cast the left type in a coercion. The second coercion must be
+-- Representational.
+mkTcCoherenceLeftCo :: TcCoercion -> Coercion -> TcCoercion
+mkTcCoherenceLeftCo co g = TcCoherenceCo co g
+
+-- | Cast the right type in a coercion. The second coercion must be
+-- Representational.
+mkTcCoherenceRightCo :: TcCoercion -> Coercion -> TcCoercion
+mkTcCoherenceRightCo c1 c2 = mkTcSymCo (mkTcCoherenceLeftCo (mkTcSymCo c1) c2)
+
+-- | Cast both types in a coercion. The second and third coercions must be
+-- Representational.
+castTcCoercionKind :: TcCoercion -> Coercion -> Coercion -> TcCoercion
+castTcCoercionKind g h1 h2
+  = g `mkTcCoherenceLeftCo` h1 `mkTcCoherenceRightCo` h2
+
+mkTcKindCo :: TcCoercion -> TcCoercion
+mkTcKindCo = TcKindCo
+
+mkTcKindAppCo :: TcCoercion -> TcCoercion
+mkTcKindAppCo = TcKindAppCo
+
+-- | Convert a Coercion to a TcCoercion.
+mkTcCoercion :: Coercion -> TcCoercion
+mkTcCoercion co
+  | Just (ty, r) <- isReflCo_maybe co = TcRefl r ty
+  | otherwise                         = TcCoercion (mkTyCoArg co)
+
+-- | Convert a CoercionArg to a TcCoercion
+mkTcCoercionArg :: CoercionArg -> TcCoercion
+mkTcCoercionArg co
+  | Just ty <- isReflLike_maybe co = TcRefl (coercionArgRole co) ty
+  | otherwise                      = TcCoercion co
+
 tcCoercionKind :: TcCoercion -> Pair Type
-tcCoercionKind co = go co
-  where
+tcCoercionKind co = go co 
+  where 
     go (TcRefl _ ty)          = Pair ty ty
     go (TcLetCo _ co)         = go co
     go (TcCastCo _ co)        = case getEqPredTys (pSnd (go co)) of
                                    (ty1,ty2) -> Pair ty1 ty2
+    go (TcCoherenceCo co g)   = pLiftFst (`mkCastTy` g) (go co)
+    go (TcKindCo co)          = typeKind <$> go co
+    go (TcKindAppCo co)       = typeKind <$> (snd <$> (splitAppTy <$> go co))
     go (TcTyConAppCo _ tc cos)= mkTyConApp tc <$> (sequenceA $ map go cos)
-    go (TcAppCo co1 co2)      = mkAppTy <$> go co1 <*> go co2
-    go (TcForAllCo tv co)     = mkForAllTy tv <$> go co
+    go (TcAppCo co1 _ co2)    = mkAppTy <$> go co1 <*> go co2
+    go (TcForAllCo tv co)     = mkNamedForAllTy tv Invisible <$> go co
+       -- TODO (RAE): Check above.
     go (TcCoVarCo cv)         = eqVarKind cv
     go (TcAxiomInstCo ax ind cos)
       = let branch = coAxiomNthBranch ax ind
-            tvs = coAxBranchTyVars branch
+            tvs = coAxBranchTyCoVars branch
             Pair tys1 tys2 = sequenceA (map go cos)
         in ASSERT( cos `equalLength` tvs )
            Pair (substTyWith tvs tys1 (coAxNthLHS ax ind))
                 (substTyWith tvs tys2 (coAxBranchRHS branch))
-    go (TcPhantomCo ty1 ty2)  = Pair ty1 ty2
+    go (TcPhantomCo _ ty1 ty2)= Pair ty1 ty2
     go (TcSymCo co)           = swap (go co)
     go (TcTransCo co1 co2)    = Pair (pFst (go co1)) (pSnd (go co2))
     go (TcNthCo d co)         = tyConAppArgN d <$> go co
@@ -379,28 +356,33 @@ tcCoercionKind co = go co
        case coaxrProves ax ts (map tcCoercionKind cs) of
          Just res -> res
          Nothing -> panic "tcCoercionKind: malformed TcAxiomRuleCo"
-    go (TcCoercion co)        = coercionKind co
+    go (TcCoercion co)        = coercionArgKind co
 
 eqVarRole :: EqVar -> Role
 eqVarRole cv = getEqPredRole (varType cv)
 
 eqVarKind :: EqVar -> Pair Type
 eqVarKind cv
- | Just (tc, [_kind,ty1,ty2]) <- tcSplitTyConApp_maybe (varType cv)
- = ASSERT(tc `hasKey` eqTyConKey)
+ | Just (tc, [_kind,ty1,ty2]) <- split_ty
+ = ASSERT(tc `hasKey` eqTyConKey || tc `hasKey` coercibleTyConKey)
+   Pair ty1 ty2
+ | Just (tc, [_k1, _k2, ty1, ty2]) <- split_ty
+ = ASSERT(tc `hasKey` eqPrimTyConKey || tc `hasKey` eqReprPrimTyConKey)
    Pair ty1 ty2
  | otherwise = pprPanic "eqVarKind, non coercion variable" (ppr cv <+> dcolon <+> ppr (varType cv))
+  where
+    split_ty = tcSplitTyConApp_maybe (varType cv)
 
 tcCoercionRole :: TcCoercion -> Role
 tcCoercionRole = go
   where
     go (TcRefl r _)           = r
     go (TcTyConAppCo r _ _)   = r
-    go (TcAppCo co _)         = go co
+    go (TcAppCo co _ _)       = go co
     go (TcForAllCo _ co)      = go co
     go (TcCoVarCo cv)         = eqVarRole cv
     go (TcAxiomInstCo ax _ _) = coAxiomRole ax
-    go (TcPhantomCo _ _)      = Phantom
+    go (TcPhantomCo _ _ _)    = Phantom
     go (TcSymCo co)           = go co
     go (TcTransCo co1 _)      = go co1 -- same as go co2
     go (TcNthCo n co)         = let Pair ty1 _ = tcCoercionKind co
@@ -410,44 +392,129 @@ tcCoercionRole = go
     go (TcSubCo _)            = Representational
     go (TcAxiomRuleCo c _ _)  = coaxrRole c
     go (TcCastCo c _)         = go c
+    go (TcCoherenceCo co _)   = go co
+    go (TcKindCo _)           = Representational
+    go (TcKindAppCo co)       = go co
     go (TcLetCo _ c)          = go c
-    go (TcCoercion co)        = coercionRole co
+    go (TcCoercion co)        = coercionArgRole co
 
-
-coVarsOfTcCo :: TcCoercion -> VarSet
--- Only works on *zonked* coercions, because of TcLetCo
-coVarsOfTcCo tc_co
-  = go tc_co
+tyCoVarsOfTcCo :: TcCoercion -> VarSet
+tyCoVarsOfTcCo = go
   where
-    go (TcRefl _ _)              = emptyVarSet
+    go (TcRefl _ t)              = tyCoVarsOfType t
     go (TcTyConAppCo _ _ cos)    = mapUnionVarSet go cos
-    go (TcAppCo co1 co2)         = go co1 `unionVarSet` go co2
+    go (TcAppCo co1 h co2)       = go co1 `unionVarSet` go h `unionVarSet` go co2
     go (TcCastCo co1 co2)        = go co1 `unionVarSet` go co2
+    go (TcCoherenceCo co g)      = go co `unionVarSet` tyCoVarsOfCo g
+    go (TcKindCo co)             = go co
+    go (TcKindAppCo co)          = go co
     go (TcForAllCo _ co)         = go co
     go (TcCoVarCo v)             = unitVarSet v
     go (TcAxiomInstCo _ _ cos)   = mapUnionVarSet go cos
-    go (TcPhantomCo _ _)         = emptyVarSet
+    go (TcPhantomCo h t1 t2)     = unionVarSets [ go h
+                                                , tyCoVarsOfType t1
+                                                , tyCoVarsOfType t2 ]
     go (TcSymCo co)              = go co
     go (TcTransCo co1 co2)       = go co1 `unionVarSet` go co2
     go (TcNthCo _ co)            = go co
     go (TcLRCo  _ co)            = go co
     go (TcSubCo co)              = go co
     go (TcLetCo (EvBinds bs) co) = foldrBag (unionVarSet . go_bind) (go co) bs
-                                   `minusVarSet` get_bndrs bs
+                                   `minusVarSet` evBindsVars bs
     go (TcLetCo {}) = emptyVarSet    -- Harumph. This does legitimately happen in the call
                                      -- to evVarsOfTerm in the DEBUG check of setEvBind
     go (TcAxiomRuleCo _ _ cos)   = mapUnionVarSet go cos
-    go (TcCoercion co)           = -- the use of coVarsOfTcCo in dsTcCoercion will
-                                   -- fail if there are any proper, unlifted covars
-                                   ASSERT( isEmptyVarSet (coVarsOfCo co) )
-                                   emptyVarSet
+    go (TcCoercion co)           = tyCoVarsOfCoArg co
 
-    -- We expect only coercion bindings, so use evTermCoercion
+    -- We expect only coercion bindings, so use evTermCoercion 
     go_bind :: EvBind -> VarSet
-    go_bind (EvBind _ tm) = go (evTermCoercion tm)
+    go_bind (EvBind { evb_term = tm }) = go (evTermCoercion tm)
 
-    get_bndrs :: Bag EvBind -> VarSet
-    get_bndrs = foldrBag (\ (EvBind b _) bs -> extendVarSet bs b) emptyVarSet
+coVarsOfTcCo :: TcCoercion -> VarSet
+-- Only works on *zonked* coercions, because of TcLetCo
+coVarsOfTcCo tc_co
+  = go tc_co
+  where
+    go (TcRefl _ t)              = coVarsOfType t
+    go (TcTyConAppCo _ _ cos)    = mapUnionVarSet go cos
+    go (TcAppCo co1 h co2)       = go co1 `unionVarSet` go h `unionVarSet` go co2
+    go (TcCastCo co1 co2)        = go co1 `unionVarSet` go co2
+    go (TcCoherenceCo co g)      = go co `unionVarSet` coVarsOfCo g
+    go (TcKindCo co)             = go co
+    go (TcKindAppCo co)          = go co
+    go (TcForAllCo _ co)         = go co
+    go (TcCoVarCo v)             = unitVarSet v
+    go (TcAxiomInstCo _ _ cos)   = mapUnionVarSet go cos
+    go (TcPhantomCo h t1 t2)     = go h `unionVarSet`
+                                   coVarsOfType t1 `unionVarSet` coVarsOfType t2
+    go (TcSymCo co)              = go co
+    go (TcTransCo co1 co2)       = go co1 `unionVarSet` go co2
+    go (TcNthCo _ co)            = go co
+    go (TcLRCo  _ co)            = go co
+    go (TcSubCo co)              = go co
+    go (TcLetCo (EvBinds bs) co) = foldrBag (unionVarSet . go_bind) (go co) bs
+                                   `minusVarSet` evBindsVars bs
+    go (TcLetCo {}) = emptyVarSet    -- Harumph. This does legitimately happen in the call
+                                     -- to evVarsOfTerm in the DEBUG check of setEvBind
+    go (TcAxiomRuleCo _ _ cos)   = mapUnionVarSet go cos
+    go (TcCoercion co)           = coVarsOfCoArg co
+
+    -- We expect only coercion bindings, so use evTermCoercion 
+    go_bind :: EvBind -> VarSet
+    go_bind (EvBind { evb_term = tm }) = go (evTermCoercion tm)
+
+-- | Converts a TcCoercion to a Coercion, substituting for covars as it goes.
+-- All covars in the TcCoercion must be mapped for this to succeed, as covars
+-- in a TcCoercion are different than those in a Coercion. A covar might not
+-- be mapped if, for example, there is an unsolved equality constraint, so
+-- failure here shouldn't be a panic.
+tcCoercionToCoercion :: TCvSubst -> TcCoercion -> Maybe Coercion
+-- If the incoming TcCoercion if of type (a ~ b)   (resp.  Coercible a b)
+--                 the result is of type (a ~# b)  (reps.  a ~# b)
+tcCoercionToCoercion subst tc_co
+  = go tc_co
+  where
+    go (TcRefl r ty)            = Just $ mkReflCo r (Type.substTy subst ty)
+    go (TcTyConAppCo r tc cos)  = mkTyConAppCo r tc <$> mapM go_arg cos
+    go (TcAppCo co1 h co2)      = mkAppCo <$> go co1 <*> go h <*> go_arg co2
+    go co@(TcForAllCo {})       = go_forall [] co
+    go (TcAxiomInstCo ax ind cos)
+                                = mkAxiomInstCo ax ind <$> mapM go_arg cos
+    go (TcPhantomCo h ty1 ty2)  = mkPhantomCo <$> go h <*> pure (substTy subst ty1)
+                                                       <*> pure (substTy subst ty2)
+    go (TcSymCo co)             = mkSymCo <$> go co
+    go (TcTransCo co1 co2)      = mkTransCo <$> go co1 <*> go co2
+    go (TcNthCo n co)           = mkNthCo n <$> go co
+    go (TcLRCo lr co)           = mkLRCo lr <$> go co
+    go (TcSubCo co)             = mkSubCo <$> go co
+    go (TcLetCo bs co)          = tcCoercionToCoercion (ds_co_binds bs) co
+    go (TcCastCo co1 co2)       = mkCoCast <$> go co1 <*> go co2
+    go (TcCoherenceCo tco1 co2) = mkCoherenceCo <$> go tco1 <*> pure (substCo subst co2)
+    go (TcKindCo co)            = mkKindCo <$> go co
+    go (TcKindAppCo co)         = mkKindAppCo <$> go co
+    go (TcCoVarCo v)            = lookupCoVar subst v
+    go (TcAxiomRuleCo co ts cs) = mkAxiomRuleCo co (map (Type.substTy subst) ts) <$> (mapM go cs)
+    go (TcCoercion co)          = stripTyCoArg <$> Just (substCoArg subst co)
+
+    go_arg (TcCoercion arg)     = Just (substCoArg subst arg)
+    go_arg tc_co                = mkTyCoArg <$> go tc_co
+
+    go_forall tvs (TcForAllCo tv co) = go_forall (tv:tvs) co
+    go_forall tvs co = foldr mkForAllCo <$> tcCoercionToCoercion subst' co
+                                        <*> pure cobndrs'
+      where
+        role               = tcCoercionRole co  -- TODO (RAE): make more efficient?
+        in_scope           = mkInScopeSet $ tyCoVarsOfTcCo co
+        (_, cobndrs)       = mapAccumL mk_cobndr in_scope tvs
+        (subst', cobndrs') = mapAccumL substForAllCoBndr subst (reverse cobndrs)
+        
+        mk_cobndr is tv = (is', cobndr)
+          where cobndr = mkHomoCoBndr is role tv
+                is'    = is `extendInScopeSetList` coBndrVars cobndr
+
+    ds_co_binds :: TcEvBinds -> TCvSubst
+    ds_co_binds (EvBinds bs)      = evBindsSubstX subst bs
+    ds_co_binds eb@(TcEvBinds {}) = pprPanic "ds_co_binds" (ppr eb)
 
 -- Pretty printing
 
@@ -467,12 +534,19 @@ ppr_co p co@(TcTyConAppCo _ tc [_,_])
 ppr_co p (TcTyConAppCo r tc cos) = pprTcApp   p ppr_co tc cos <> ppr_role r
 ppr_co p (TcLetCo bs co)         = maybeParen p TopPrec $
                                    sep [ptext (sLit "let") <+> braces (ppr bs), ppr co]
-ppr_co p (TcAppCo co1 co2)       = maybeParen p TyConPrec $
+ppr_co p (TcAppCo co1 _ co2)     = maybeParen p TyConPrec $
                                    pprTcCo co1 <+> ppr_co TyConPrec co2
+                                   -- TODO (RAE): Printing TcCastCo like this is terrible.
 ppr_co p (TcCastCo co1 co2)      = maybeParen p FunPrec $
                                    ppr_co FunPrec co1 <+> ptext (sLit "|>") <+> ppr_co FunPrec co2
+ppr_co p (TcCoherenceCo co g)    = maybeParen p FunPrec $
+                                   ppr_co FunPrec co <+> text "|>>" <+> ppr g
+ppr_co p (TcKindCo co)           = maybeParen p FunPrec $
+                                   text "kind" <+> ppr_co FunPrec co
+ppr_co p (TcKindAppCo co)        = maybeParen p FunPrec $
+                                   text "kapp" <+> ppr_co FunPrec co
 ppr_co p co@(TcForAllCo {})      = ppr_forall_co p co
-
+                     
 ppr_co _ (TcCoVarCo cv)          = parenSymOcc (getOccName cv) (ppr cv)
 
 ppr_co p (TcAxiomInstCo con ind cos)
@@ -482,7 +556,7 @@ ppr_co p (TcTransCo co1 co2) = maybeParen p FunPrec $
                                ppr_co FunPrec co1
                                <+> ptext (sLit ";")
                                <+> ppr_co FunPrec co2
-ppr_co p (TcPhantomCo t1 t2)  = pprPrefixApp p (ptext (sLit "PhantomCo")) [pprParendType t1, pprParendType t2]
+ppr_co p (TcPhantomCo _ t1 t2)= pprPrefixApp p (ptext (sLit "PhantomCo")) [pprParendType t1, pprParendType t2]
 ppr_co p (TcSymCo co)         = pprPrefixApp p (ptext (sLit "Sym")) [pprParendTcCo co]
 ppr_co p (TcNthCo n co)       = pprPrefixApp p (ptext (sLit "Nth:") <+> int n) [pprParendTcCo co]
 ppr_co p (TcLRCo lr co)       = pprPrefixApp p (ppr lr) [pprParendTcCo co]
@@ -495,7 +569,7 @@ ppr_tc_axiom_rule_co :: CoAxiomRule -> [TcType] -> [TcCoercion] -> SDoc
 ppr_tc_axiom_rule_co co ts ps = ppr (coaxrName co) <> ppTs ts $$ nest 2 (ppPs ps)
   where
   ppTs []   = Outputable.empty
-  ppTs [t]  = ptext (sLit "@") <> ppr_type TopPrec t
+  ppTs [t]  = ptext (sLit "@") <> pprType t
   ppTs ts   = ptext (sLit "@") <>
                 parens (hsep $ punctuate comma $ map pprType ts)
 
@@ -524,15 +598,15 @@ ppr_fun_co p co = pprArrowChain p (split co)
 ppr_forall_co :: TyPrec -> TcCoercion -> SDoc
 ppr_forall_co p ty
   = maybeParen p FunPrec $
-    sep [pprForAll tvs, ppr_co TopPrec rho]
+    sep [pprForAllImplicit tvs, ppr_co TopPrec rho]
   where
     (tvs,  rho) = split1 [] ty
     split1 tvs (TcForAllCo tv ty) = split1 (tv:tvs) ty
     split1 tvs ty                 = (reverse tvs, ty)
 
 {-
-************************************************************************
-*                                                                      *
+%************************************************************************
+%*                                                                      *
                   HsWrapper
 *                                                                      *
 ************************************************************************
@@ -561,9 +635,10 @@ data HsWrapper
 
         -- Evidence abstraction and application
         -- (both dictionaries and coercions)
-  | WpEvLam  EvVar               -- \d. []       the 'd' is an evidence variable
-  | WpEvApp  EvTerm              -- [] d         the 'd' is evidence for a constraint
-
+  | WpEvLam EvVar               -- \d. []       the 'd' is an evidence variable
+  | WpEvApp EvTerm              -- [] d         the 'd' is evidence for a constraint
+  | WpEvPrimApp TcCoercion      -- [] @~ d      the 'd' will be an *unboxed* coercion
+    
         -- Kind and Type abstraction and application
   | WpTyLam TyVar       -- \a. []  the 'a' is a type/kind variable (not coercion var)
   | WpTyApp KindOrType  -- [] t    the 't' is a type (not coercion)
@@ -592,14 +667,30 @@ mkWpCast co
   | otherwise     = ASSERT2(tcCoercionRole co == Representational, ppr co)
                     WpCast co
 
+-- | Make a wrapper from the list of types returned by a tcInstTyCoVars. This
+-- list of types contains only type and coercion variables.
+mkWpTyEvApps :: [Type] -> HsWrapper
+mkWpTyEvApps tys = mk_co_app_fn wp_ty_or_ev_app tys
+  where wp_ty_or_ev_app ty
+          | Just co <- isCoercionTy_maybe ty
+          = WpEvPrimApp (mkTcCoercion co)
+
+          | otherwise
+          = WpTyApp ty
+
 mkWpTyApps :: [Type] -> HsWrapper
 mkWpTyApps tys = mk_co_app_fn WpTyApp tys
 
-mkWpEvApps :: [EvTerm] -> HsWrapper
-mkWpEvApps args = mk_co_app_fn WpEvApp args
+mkWpEvApps :: [Boxity] -> [EvTerm] -> HsWrapper
+mkWpEvApps boxities args = mk_co_app_fn wp_ev_app (zip (map isBoxed boxities) args)
+
+wp_ev_app :: (Bool, EvTerm) -> HsWrapper
+wp_ev_app (True,  evterm) = WpEvApp evterm
+wp_ev_app (False, evterm) = WpEvPrimApp (evTermCoercion evterm)
 
 mkWpEvVarApps :: [EvVar] -> HsWrapper
-mkWpEvVarApps vs = mkWpEvApps (map EvId vs)
+mkWpEvVarApps vs = mk_co_app_fn wp_ev_app (zip (map (not . isUnLiftedType . varType) vs)
+                                               (map EvId vs))
 
 mkWpTyLams :: [TyVar] -> HsWrapper
 mkWpTyLams ids = mk_co_lam_fn WpTyLam ids
@@ -646,7 +737,8 @@ data TcEvBinds
   deriving( Data.Typeable )
 
 data EvBindsVar = EvBindsVar (IORef EvBindMap) Unique
-     -- The Unique is only for debug printing
+     -- The Unique is for debug printing and the ability to roll back
+     -- changes in tryTcS
 
 instance Data.Data TcEvBinds where
   -- Placeholder; we can't travers into TcEvBinds
@@ -655,28 +747,40 @@ instance Data.Data TcEvBinds where
   dataTypeOf _ = Data.mkNoRepType "TcEvBinds"
 
 -----------------
-newtype EvBindMap
-  = EvBindMap {
+newtype EvBindMap 
+  = EvBindMap { 
        ev_bind_varenv :: VarEnv EvBind
     }       -- Map from evidence variables to evidence terms
 
 emptyEvBindMap :: EvBindMap
 emptyEvBindMap = EvBindMap { ev_bind_varenv = emptyVarEnv }
 
-extendEvBinds :: EvBindMap -> EvVar -> EvTerm -> EvBindMap
-extendEvBinds bs v t
-  = EvBindMap { ev_bind_varenv = extendVarEnv (ev_bind_varenv bs) v (EvBind v t) }
+extendEvBinds :: EvBindMap -> EvVar -> EvTerm -> CtLoc -> EvBindMap
+extendEvBinds bs v t l
+  = EvBindMap { ev_bind_varenv = extendVarEnv (ev_bind_varenv bs) v
+                                              (EvBind { evb_var  = v
+                                                      , evb_term = t
+                                                      , evb_loc  = l}) }
+
+dropEvBind :: EvBindMap -> EvVar -> EvBindMap
+dropEvBind bs v
+  = EvBindMap { ev_bind_varenv = delVarEnv (ev_bind_varenv bs) v }
 
 lookupEvBind :: EvBindMap -> EvVar -> Maybe EvBind
 lookupEvBind bs = lookupVarEnv (ev_bind_varenv bs)
 
 evBindMapBinds :: EvBindMap -> Bag EvBind
-evBindMapBinds bs
+evBindMapBinds bs 
   = foldVarEnv consBag emptyBag (ev_bind_varenv bs)
 
 -----------------
 -- All evidence is bound by EvBinds; no side effects
-data EvBind = EvBind EvVar EvTerm
+data EvBind = EvBind { evb_var  :: EvVar
+                     , evb_term :: EvTerm
+                     , evb_loc  :: CtLoc }
+
+evBindVar :: EvBind -> EvVar
+evBindVar = evb_var
 
 data EvTerm
   = EvId EvId                    -- Any sort of evidence Id, including coercions
@@ -723,14 +827,14 @@ A "coercion evidence term" takes one of these forms
 We do quite often need to get a TcCoercion from an EvTerm; see
 'evTermCoercion'.
 
-INVARIANT: The evidence for any constraint with type (t1~t2) is
+INVARIANT: The evidence for any constraint with type (t1~t2) is 
 a coercion evidence term.  Consider for example
     [G] d :: F Int a
 If we have
     ax7 a :: F Int a ~ (a ~ Bool)
 then we do NOT generate the constraint
     [G] (d |> ax7 a) :: a ~ Bool
-because that does not satisfy the invariant (d is not a coercion variable).
+because that does not satisfy the invariant (d is not a coercion variable).  
 Instead we make a binding
     g1 :: a~Bool = g |> ax7 a
 and the constraint
@@ -839,6 +943,54 @@ evVarsOfTerm (EvLit _)            = emptyVarSet
 evVarsOfTerms :: [EvTerm] -> VarSet
 evVarsOfTerms = mapUnionVarSet evVarsOfTerm
 
+-- | Do SCC analysis on a bag of 'EvBind's.
+sccEvBinds :: Bag EvBind -> [SCC EvBind]
+sccEvBinds bs = stronglyConnCompFromEdgedVertices edges
+  where
+    edges :: [(EvBind, EvVar, [EvVar])]
+    edges = foldrBag ((:) . mk_node) [] bs 
+
+    mk_node :: EvBind -> (EvBind, EvVar, [EvVar])
+    mk_node b@(EvBind { evb_var = var, evb_term = term })
+      = (b, var, varSetElems (evVarsOfTerm term `unionVarSet`
+                              coVarsOfType (varType var)))
+
+-- | Get the set of EvVars bound in a bag of EvBinds.
+evBindsVars :: Bag EvBind -> VarSet
+evBindsVars = foldrBag (\ (EvBind { evb_var = b }) bs -> extendVarSet bs b)
+                       emptyVarSet 
+
+-- | Create a coercion substitution from a bunch of EvBinds.
+evBindsSubst :: Bag EvBind -> TCvSubst
+evBindsSubst = evBindsSubstX emptyTCvSubst
+
+-- | Extends a coercion substitution from a bunch of EvBinds. For EvBinds
+-- that don't map to a coercion, just don't include the mapping.
+evBindsSubstX :: TCvSubst -> Bag EvBind -> TCvSubst
+evBindsSubstX subst = foldl combine subst . sccEvBinds
+  where
+    combine env (AcyclicSCC (EvBind { evb_var = v, evb_term = ev_term }))
+      | Just co <- convert env ev_term
+      = extendTCvSubstAndInScope env v (mkCoercionTy co)
+    combine env _
+      = env
+
+    convert env (EvCoercion tc_co) = tcCoercionToCoercion env tc_co
+    convert env (EvId v)
+      | Just co <- lookupCoVar env v = Just co
+      | isCoVar v                    = Just $ mkCoVarCo v
+      | otherwise                    = Nothing
+    convert env (EvCast tm1 tc_co2)
+      | Just co1 <- convert env tm1
+      = mkCoCast co1 <$> tcCoercionToCoercion env tc_co2
+      | otherwise
+      = Nothing
+    convert _ _ = Nothing  -- this can happen with superclass equalities!
+
+-- | Get a mapping from covars to coercions induced by an EvBinds
+evBindsCvSubstEnv :: Bag EvBind -> CvSubstEnv
+evBindsCvSubstEnv = getCvSubstEnv . evBindsSubst
+
 {-
 ************************************************************************
 *                                                                      *
@@ -854,7 +1006,9 @@ pprHsWrapper :: SDoc -> HsWrapper -> SDoc
 -- In debug mode, print the wrapper
 -- otherwise just print what's inside
 pprHsWrapper doc wrap
-  = getPprStyle (\ s -> if debugStyle s then (help (add_parens doc) wrap False) else doc)
+  = getPprStyle (\ s -> if (dumpStyle s && debugIsOn) || debugStyle s
+                        then (help (add_parens doc) wrap False)
+                        else doc )
   where
     help :: (Bool -> SDoc) -> HsWrapper -> Bool -> SDoc
     -- True  <=> appears in function application position
@@ -866,6 +1020,7 @@ pprHsWrapper doc wrap
     help it (WpCast co)   = add_parens $ sep [it False, nest 2 (ptext (sLit "|>")
                                               <+> pprParendTcCo co)]
     help it (WpEvApp id)    = no_parens  $ sep [it True, nest 2 (ppr id)]
+    help it (WpEvPrimApp co)= no_parens  $ sep [it True, text "@~" <+> nest 2 (ppr co)]
     help it (WpTyApp ty)    = no_parens  $ sep [it True, ptext (sLit "@") <+> pprParendType ty]
     help it (WpEvLam id)    = add_parens $ sep [ ptext (sLit "\\") <> pp_bndr id, it False]
     help it (WpTyLam tv)    = add_parens $ sep [ptext (sLit "/\\") <> pp_bndr tv, it False]
@@ -885,8 +1040,12 @@ instance Outputable TcEvBinds where
 instance Outputable EvBindsVar where
   ppr (EvBindsVar _ u) = ptext (sLit "EvBindsVar") <> angleBrackets (ppr u)
 
+instance Uniquable EvBindsVar where
+  getUnique (EvBindsVar _ u) = u
+
 instance Outputable EvBind where
-  ppr (EvBind v e)   = sep [ ppr v, nest 2 $ equals <+> ppr e ]
+  ppr (EvBind { evb_var = v, evb_term = e })
+    = sep [ ppr v, nest 2 $ equals <+> ppr e ]
    -- We cheat a bit and pretend EqVars are CoVars for the purposes of pretty printing
 
 instance Outputable EvTerm where
@@ -898,7 +1057,7 @@ instance Outputable EvTerm where
   ppr (EvSuperClass d n) = ptext (sLit "sc") <> parens (ppr (d,n))
   ppr (EvDFunApp df tys ts) = ppr df <+> sep [ char '@' <> ppr tys, ppr ts ]
   ppr (EvLit l)          = ppr l
-  ppr (EvDelayedError ty msg) =     ptext (sLit "error")
+  ppr (EvDelayedError ty msg) =     ptext (sLit "error") 
                                 <+> sep [ char '@' <> ppr ty, ppr msg ]
 
 instance Outputable EvLit where

@@ -19,6 +19,7 @@ import Demand   -- All of it
 import CoreSyn
 import Outputable
 import VarEnv
+import Var              ( isCoVar )
 import BasicTypes
 import FastString
 import Data.List
@@ -30,7 +31,7 @@ import Type
 import FamInstEnv
 import Util
 import Maybes           ( isJust )
-import TysWiredIn       ( unboxedPairDataCon )
+import TysWiredIn
 import TysPrim          ( realWorldStatePrimTy )
 import ErrUtils         ( dumpIfSet_dyn )
 import Name             ( getName, stableNameCmp )
@@ -352,8 +353,8 @@ dmdAnalAlt env dmd (con,bndrs,rhs)
         -- In that case we should not evaluate y before the call to 'foo'.
         -- Hackish solution: spot the IO-like situation and add a virtual branch,
         -- as if we had
-        --      case foo x s of
-        --         (# s, r #) -> y
+        --      case foo x s of 
+        --         (# s, r #) -> y 
         --         other      -> return ()
         -- So the 'y' isn't necessarily going to be evaluated
         --
@@ -362,9 +363,9 @@ dmdAnalAlt env dmd (con,bndrs,rhs)
         --         ; when (...) (exitWith ExitSuccess)
         --         ; print len }
 
-        io_hack_reqd = con == DataAlt unboxedPairDataCon &&
+        io_hack_reqd = con == DataAlt (tupleCon UnboxedTuple 2) &&
                        idType (head bndrs) `eqType` realWorldStatePrimTy
-    in
+    in  
     (final_alt_ty, (con, bndrs', rhs'))
 
 {-
@@ -436,8 +437,15 @@ addDataConPatDmds (DataAlt con) bndrs dmd_ty
     add bndr dmd_ty = addVarDmd dmd_ty bndr seqDmd
     str_bndrs = [ b | (b,s) <- zipEqual "addDataConPatBndrs"
                                    (filter isId bndrs)
-                                   (dataConRepStrictness con)
+                                   all_strictness
                     , isMarkedStrict s ]
+
+      -- all existential covars are *also* strict
+    all_strictness = [ MarkedStrict
+                     | ex_var <- dataConExTyCoVars con
+                     , isCoVar ex_var ]
+                     ++ dataConRepStrictness con
+                     
 
 {-
 Note [Add demands for strict constructors]

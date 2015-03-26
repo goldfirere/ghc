@@ -6,13 +6,14 @@
 module VarEnv (
         -- * Var, Id and TyVar environments (maps)
         VarEnv, IdEnv, TyVarEnv, CoVarEnv,
-
+        
         -- ** Manipulating these environments
         emptyVarEnv, unitVarEnv, mkVarEnv,
-        elemVarEnv, varEnvElts, varEnvKeys,
-        extendVarEnv, extendVarEnv_C, extendVarEnv_Acc, extendVarEnvList,
+        elemVarEnv, varEnvElts, varEnvKeys, varEnvToList,
+        extendVarEnv, extendVarEnv_C, extendVarEnv_Acc, extendVarEnv_Directly,
+        extendVarEnvList,
         plusVarEnv, plusVarEnv_C, plusVarEnv_CD, alterVarEnv,
-        delVarEnvList, delVarEnv,
+        delVarEnvList, delVarEnv, delVarEnv_Directly,
         minusVarEnv, intersectsVarEnv,
         lookupVarEnv, lookupVarEnv_NF, lookupWithDefaultVarEnv,
         mapVarEnv, zipVarEnv,
@@ -32,16 +33,17 @@ module VarEnv (
         unionInScope, elemInScopeSet, uniqAway,
 
         -- * The RnEnv2 type
-        RnEnv2,
-
+        RnEnv2, 
+        
         -- ** Operations on RnEnv2s
-        mkRnEnv2, rnBndr2, rnBndrs2,
+        mkRnEnv2, rnBndr2, rnBndrs2, rnBndr2_var,
         rnOccL, rnOccR, inRnEnvL, inRnEnvR, rnOccL_maybe, rnOccR_maybe,
-        rnBndrL, rnBndrR, nukeRnEnvL, nukeRnEnvR,
+        rnBndrL, rnBndrR, nukeRnEnvL, nukeRnEnvR, rnSwap,
         delBndrL, delBndrR, delBndrsL, delBndrsR,
         addRnInScopeSet,
         rnEtaL, rnEtaR,
         rnInScope, rnInScopeSet, lookupRnInScope,
+        rnEnvL, rnEnvR,
 
         -- * TidyEnv and its operation
         TidyEnv,
@@ -215,6 +217,14 @@ rnInScope x env = x `elemInScopeSet` in_scope env
 rnInScopeSet :: RnEnv2 -> InScopeSet
 rnInScopeSet = in_scope
 
+-- | Retrieve the left mapping
+rnEnvL :: RnEnv2 -> VarEnv Var
+rnEnvL = envL
+
+-- | Retrieve the right mapping
+rnEnvR :: RnEnv2 -> VarEnv Var
+rnEnvR = envR
+
 rnBndrs2 :: RnEnv2 -> [Var] -> [Var] -> RnEnv2
 -- ^ Applies 'rnBndr2' to several variables: the two variable lists must be of equal length
 rnBndrs2 env bsL bsR = foldl2 rnBndr2 env bsL bsR
@@ -224,10 +234,15 @@ rnBndr2 :: RnEnv2 -> Var -> Var -> RnEnv2
 --                       and binder @bR@ in the Right term.
 -- It finds a new binder, @new_b@,
 -- and returns an environment mapping @bL -> new_b@ and @bR -> new_b@
-rnBndr2 (RV2 { envL = envL, envR = envR, in_scope = in_scope }) bL bR
-  = RV2 { envL     = extendVarEnv envL bL new_b   -- See Note
-        , envR     = extendVarEnv envR bR new_b   -- [Rebinding]
-        , in_scope = extendInScopeSet in_scope new_b }
+rnBndr2 env bL bR = fst $ rnBndr2_var env bL bR
+
+rnBndr2_var :: RnEnv2 -> Var -> Var -> (RnEnv2, Var)
+-- ^ Similar to 'rnBndr2' but returns the new variable as well as the
+-- new environment
+rnBndr2_var (RV2 { envL = envL, envR = envR, in_scope = in_scope }) bL bR
+  = (RV2 { envL            = extendVarEnv envL bL new_b   -- See Note
+         , envR            = extendVarEnv envR bR new_b   -- [Rebinding]
+         , in_scope = extendInScopeSet in_scope new_b }, new_b)
   where
         -- Find a new binder not in scope in either term
     new_b | not (bL `elemInScopeSet` in_scope) = bL
@@ -317,6 +332,11 @@ nukeRnEnvL, nukeRnEnvR :: RnEnv2 -> RnEnv2
 nukeRnEnvL env = env { envL = emptyVarEnv }
 nukeRnEnvR env = env { envR = emptyVarEnv }
 
+rnSwap :: RnEnv2 -> RnEnv2
+-- ^ swap the meaning of left and right
+rnSwap (RV2 { envL = envL, envR = envR, in_scope = in_scope })
+  = RV2 { envL = envR, envR = envL, in_scope = in_scope }
+
 {-
 Note [Eta expansion]
 ~~~~~~~~~~~~~~~~~~~~
@@ -368,11 +388,13 @@ alterVarEnv       :: (Maybe a -> Maybe a) -> VarEnv a -> Var -> VarEnv a
 extendVarEnv      :: VarEnv a -> Var -> a -> VarEnv a
 extendVarEnv_C    :: (a->a->a) -> VarEnv a -> Var -> a -> VarEnv a
 extendVarEnv_Acc  :: (a->b->b) -> (a->b) -> VarEnv b -> Var -> a -> VarEnv b
+extendVarEnv_Directly :: VarEnv a -> Unique -> a -> VarEnv a
 plusVarEnv        :: VarEnv a -> VarEnv a -> VarEnv a
 extendVarEnvList  :: VarEnv a -> [(Var, a)] -> VarEnv a
 
 lookupVarEnv_Directly :: VarEnv a -> Unique -> Maybe a
 filterVarEnv_Directly :: (Unique -> a -> Bool) -> VarEnv a -> VarEnv a
+delVarEnv_Directly    :: VarEnv a -> Unique -> VarEnv a
 partitionVarEnv   :: (a -> Bool) -> VarEnv a -> (VarEnv a, VarEnv a)
 restrictVarEnv    :: VarEnv a -> VarSet -> VarEnv a
 delVarEnvList     :: VarEnv a -> [Var] -> VarEnv a
@@ -385,6 +407,7 @@ mapVarEnv         :: (a -> b) -> VarEnv a -> VarEnv b
 modifyVarEnv      :: (a -> a) -> VarEnv a -> Var -> VarEnv a
 varEnvElts        :: VarEnv a -> [a]
 varEnvKeys        :: VarEnv a -> [Unique]
+varEnvToList      :: VarEnv a -> [(Unique, a)]
 
 isEmptyVarEnv     :: VarEnv a -> Bool
 lookupVarEnv      :: VarEnv a -> Var -> Maybe a
@@ -401,6 +424,7 @@ alterVarEnv      = alterUFM
 extendVarEnv     = addToUFM
 extendVarEnv_C   = addToUFM_C
 extendVarEnv_Acc = addToUFM_Acc
+extendVarEnv_Directly = addToUFM_Directly
 extendVarEnvList = addListToUFM
 plusVarEnv_C     = plusUFM_C
 plusVarEnv_CD    = plusUFM_CD
@@ -417,11 +441,13 @@ mkVarEnv         = listToUFM
 emptyVarEnv      = emptyUFM
 varEnvElts       = eltsUFM
 varEnvKeys       = keysUFM
+varEnvToList     = ufmToList
 unitVarEnv       = unitUFM
 isEmptyVarEnv    = isNullUFM
 foldVarEnv       = foldUFM
 lookupVarEnv_Directly = lookupUFM_Directly
 filterVarEnv_Directly = filterUFM_Directly
+delVarEnv_Directly    = delFromUFM_Directly
 partitionVarEnv       = partitionUFM
 
 restrictVarEnv env vs = filterVarEnv_Directly keep env

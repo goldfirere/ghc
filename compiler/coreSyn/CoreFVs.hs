@@ -20,7 +20,7 @@ module CoreFVs (
         exprSomeFreeVars, exprsSomeFreeVars,
 
         -- * Free variables of Rules, Vars and Ids
-        varTypeTyVars,
+        varTypeTyCoVars, 
         idUnfoldingVars, idFreeVars, idRuleAndUnfoldingVars,
         idRuleVars, idRuleRhsVars, stableUnfoldingVars,
         ruleRhsFreeVars, ruleFreeVars, rulesFreeVars,
@@ -161,7 +161,7 @@ someVars vars fv_cand in_scope
 
 addBndr :: CoreBndr -> FV -> FV
 addBndr bndr fv fv_cand in_scope
-  = someVars (varTypeTyVars bndr) fv_cand in_scope
+  = someVars (varTypeTyCoVars bndr) fv_cand in_scope
         -- Include type varibles in the binder's type
         --      (not just Ids; coercion variables too!)
     `unionVarSet`  fv fv_cand (in_scope `extendVarSet` bndr)
@@ -171,7 +171,7 @@ addBndrs bndrs fv = foldr addBndr fv bndrs
 
 expr_fvs :: CoreExpr -> FV
 
-expr_fvs (Type ty)       = someVars (tyVarsOfType ty)
+expr_fvs (Type ty)       = someVars (tyCoVarsOfType ty)
 expr_fvs (Coercion co)   = someVars (tyCoVarsOfCo co)
 expr_fvs (Var var)       = oneVar var
 expr_fvs (Lit _)         = noVars
@@ -181,7 +181,7 @@ expr_fvs (Lam bndr body) = addBndr bndr (expr_fvs body)
 expr_fvs (Cast expr co)  = expr_fvs expr `union` someVars (tyCoVarsOfCo co)
 
 expr_fvs (Case scrut bndr ty alts)
-  = expr_fvs scrut `union` someVars (tyVarsOfType ty) `union` addBndr bndr
+  = expr_fvs scrut `union` someVars (tyCoVarsOfType ty) `union` addBndr bndr
       (foldr (union . alt_fvs) noVars alts)
   where
     alt_fvs (_, bndrs, rhs) = addBndrs bndrs (expr_fvs rhs)
@@ -396,17 +396,17 @@ delBinderFV :: Var -> VarSet -> VarSet
 --                        where
 --                          bottom = bottom -- Never evaluated
 
-delBinderFV b s = (s `delVarSet` b) `unionFVs` varTypeTyVars b
+delBinderFV b s = (s `delVarSet` b) `unionFVs` varTypeTyCoVars b
         -- Include coercion variables too!
 
-varTypeTyVars :: Var -> TyVarSet
+varTypeTyCoVars :: Var -> TyCoVarSet
 -- Find the type/kind variables free in the type of the id/tyvar
-varTypeTyVars var = tyVarsOfType (varType var)
+varTypeTyCoVars var = tyCoVarsOfType (varType var)
 
 idFreeVars :: Id -> VarSet
 -- Type variables, rule variables, and inline variables
 idFreeVars id = ASSERT( isId id)
-                varTypeTyVars id `unionVarSet`
+                varTypeTyCoVars id `unionVarSet`
                 idRuleAndUnfoldingVars id
 
 bndrRuleAndUnfoldingVars ::Var -> VarSet
@@ -476,7 +476,7 @@ freeVars (App fun arg)
     arg2 = freeVars arg
 
 freeVars (Case scrut bndr ty alts)
-  = ((bndr `delBinderFV` alts_fvs) `unionFVs` freeVarsOf scrut2 `unionFVs` tyVarsOfType ty,
+  = ((bndr `delBinderFV` alts_fvs) `unionFVs` freeVarsOf scrut2 `unionFVs` tyCoVarsOfType ty,
      AnnCase scrut2 bndr ty alts2)
   where
     scrut2 = freeVars scrut
@@ -528,6 +528,6 @@ freeVars (Tick tickish expr)
     tickishFVs (Breakpoint _ ids) = mkVarSet ids
     tickishFVs _                  = emptyVarSet
 
-freeVars (Type ty) = (tyVarsOfType ty, AnnType ty)
+freeVars (Type ty) = (tyCoVarsOfType ty, AnnType ty)
 
 freeVars (Coercion co) = (tyCoVarsOfCo co, AnnCoercion co)

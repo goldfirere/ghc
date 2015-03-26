@@ -200,7 +200,7 @@ tcHsBootSigs (ValBindsOut binds sigs)
   where
     tc_boot_sig (TypeSig lnames ty _) = mapM f lnames
       where
-        f (L _ name) = do  { sigma_ty <- tcHsSigType (FunSigCtxt name) ty
+        f (L _ name) = do  { sigma_ty <- tcTopHsSigType (FunSigCtxt name) ty
                            ; return (mkVanillaGlobal name sigma_ty) }
         -- Notice that we make GlobalIds, not LocalIds
     tc_boot_sig s = pprPanic "tcHsBootSigs/tc_boot_sig" (ppr s)
@@ -241,7 +241,7 @@ tcLocalBinds (HsIPBinds (IPBinds ip_binds _)) thing_inside
         -- Consider     ?x = 4
         --              ?y = ?x + 1
     tc_ip_bind ipClass (IPBind (Left ip) expr)
-       = do { ty <- newFlexiTyVarTy openTypeKind
+       = do { ty <- newOpenFlexiTyVarTy
             ; let p = mkStrLitTy $ hsIPNameFS ip
             ; ip_id <- newDict ipClass [ p, ty ]
             ; expr' <- tcMonoExpr expr ty
@@ -318,7 +318,7 @@ tcValBinds top_lvl binds sigs thing_inside
                    ; patsyn_workers <- mapM tcPatSynBuilderBind patsyns
                    ; let extra_binds = [ (NonRecursive, worker) | worker <- patsyn_workers ]
                    ; return (extra_binds, thing) }
-             ; return (binds' ++ extra_binds', thing) }}
+            ; return (binds' ++ extra_binds', thing) }}
   where
     patsyns
       = [psb | (_, lbinds) <- binds, L _ (PatSynBind psb) <- bagToList lbinds]
@@ -585,8 +585,8 @@ tcPolyCheck rec_tc prag_fn
                         { abs_tvs = tvs
                         , abs_ev_vars = ev_vars, abs_ev_binds = ev_binds
                         , abs_exports = [export], abs_binds = binds' }
-             closed | isEmptyVarSet (tyVarsOfType (idType poly_id)) = TopLevel
-                    | otherwise                                     = NotTopLevel
+             closed | isEmptyVarSet (tyCoVarsOfType (idType poly_id)) = TopLevel
+                    | otherwise                                       = NotTopLevel
        ; return (unitBag abs_bind, [poly_id], closed) }
 
 tcPolyCheck _rec_tc _prag_fn sig _bind
@@ -612,7 +612,7 @@ tcPolyInfer rec_tc prag_fn tc_sig_fn mono closed bind_list
        ; (qtvs, givens, mr_bites, ev_binds)
                  <- simplifyInfer tclvl mono name_taus wanted
 
-       ; inferred_theta  <- zonkTcThetaType (map evVarPred givens)
+       ; let inferred_theta = map evVarPred givens
        ; exports <- checkNoErrs $ mapM (mkExport prag_fn qtvs inferred_theta)
                                        mono_infos
 
@@ -632,7 +632,7 @@ tcPolyInfer rec_tc prag_fn tc_sig_fn mono closed bind_list
 
 --------------
 mkExport :: PragFun
-         -> [TyVar] -> TcThetaType      -- Both already zonked
+         -> [TyCoVar] -> TcThetaType      -- Both already zonked
          -> MonoBindInfo
          -> TcM (ABExport Id)
 -- Only called for generalisation plan IferGen, not by CheckGen or NoGen
@@ -650,7 +650,6 @@ mkExport :: PragFun
 
 mkExport prag_fn qtvs inferred_theta (poly_name, mb_sig, mono_id)
   = do  { mono_ty <- zonkTcType (idType mono_id)
-
         ; poly_id <- case mb_sig of
               Nothing -> mkInferredPolyId poly_name qtvs inferred_theta mono_ty
               Just (TcPatSynInfo _) -> panic "mkExport"
@@ -665,7 +664,7 @@ mkExport prag_fn qtvs inferred_theta (poly_name, mb_sig, mono_id)
         ; spec_prags <- tcSpecPrags poly_id prag_sigs
                 -- tcPrags requires a zonked poly_id
 
-        ; let sel_poly_ty = mkSigmaTy qtvs inferred_theta mono_ty
+        ; let sel_poly_ty = mkInvSigmaTy qtvs inferred_theta mono_ty
         ; traceTc "mkExport: check sig"
                   (vcat [ ppr poly_name, ppr sel_poly_ty, ppr (idType poly_id) ])
 
@@ -676,10 +675,9 @@ mkExport prag_fn qtvs inferred_theta (poly_name, mb_sig, mono_id)
         -- closed (unless we are doing NoMonoLocalBinds in which case all bets
         -- are off)
         -- See Note [Impedence matching]
-        ; (wrap, wanted) <- addErrCtxtM (mk_bind_msg inferred True poly_name (idType poly_id)) $
-                            captureConstraints $
-                            tcSubType_NC sig_ctxt sel_poly_ty (idType poly_id)
-        ; ev_binds <- simplifyTop wanted
+        ; (wrap, ev_binds) <- addErrCtxtM (mk_bind_msg inferred True poly_name (idType poly_id)) $
+                              solveTopConstraints $
+                              tcSubType_NC sig_ctxt sel_poly_ty (idType poly_id)
 
         ; return (ABE { abe_wrap = mkWpLet (EvBinds ev_binds) <.> wrap
                       , abe_poly = poly_id
@@ -703,18 +701,17 @@ mkInferredPolyId poly_name qtvs theta mono_ty
                -- here to make it as uncomplicated as possible.
                -- Example: f :: [F Int] -> Bool
                -- should be rewritten to f :: [Char] -> Bool, if possible
-
-             my_tvs2 = closeOverKinds (growThetaTyVars theta (tyVarsOfType norm_mono_ty))
+             my_tvs2 = closeOverKinds (growThetaTyCoVars theta (tyCoVarsOfType norm_mono_ty))
                   -- Include kind variables!  Trac #7916
 
              my_tvs   = filter (`elemVarSet` my_tvs2) qtvs   -- Maintain original order
              my_theta = filter (quantifyPred my_tvs2) theta
-             inferred_poly_ty = mkSigmaTy my_tvs my_theta norm_mono_ty
+             inferred_poly_ty = mkInvSigmaTy my_tvs my_theta norm_mono_ty
 
        ; addErrCtxtM (mk_bind_msg True False poly_name inferred_poly_ty) $
          checkValidType (InfSigCtxt poly_name) inferred_poly_ty
 
-       ; return (mkLocalId poly_name inferred_poly_ty) }
+       ; return (mkLocalIdOrCoVar poly_name inferred_poly_ty) }
 
 mk_bind_msg :: Bool -> Bool -> Name -> TcType -> TidyEnv -> TcM (TidyEnv, SDoc)
 mk_bind_msg inferred want_ambig poly_name poly_ty tidy_env
@@ -742,8 +739,10 @@ completeTheta inferred_theta
                              , sig_extra_cts = mb_extra_cts
                              , sig_theta = annotated_theta })
   | Just loc <- mb_extra_cts
-  = do { annotated_theta <- zonkTcThetaType annotated_theta
-       ; let inferred_diff = minusList inferred_theta annotated_theta
+  = do { annotated_theta <- zonkTcTypes annotated_theta
+       ; let inferred_diff = [ pred
+                             | pred <- inferred_theta
+                             , all (not . (`eqType` pred)) annotated_theta ]
              final_theta   = annotated_theta ++ inferred_diff
        ; partial_sigs      <- xoptM Opt_PartialTypeSignatures
        ; warn_partial_sigs <- woptM Opt_WarnPartialTypeSignatures
@@ -755,7 +754,7 @@ completeTheta inferred_theta
        ; return final_theta }
 
   | otherwise
-  = zonkTcThetaType annotated_theta
+  = zonkTcTypes annotated_theta
     -- No extra-constraints wildcard means no extra constraints will be added
     -- to the context, so just return the possibly empty (zonked)
     -- annotated_theta.
@@ -894,7 +893,8 @@ tcSpec poly_id prag@(SpecSig fun_name hs_tys inl)
                  (ptext (sLit "SPECIALISE pragma for non-overloaded function")
                   <+> quotes (ppr fun_name))
                   -- Note [SPECIALISE pragmas]
-        ; wraps <- mapM (tcSubType sig_ctxt (idType poly_id)) spec_tys
+        ; wraps <- mapM (tcSubType sig_ctxt (Just poly_id)
+                                            (idType poly_id)) spec_tys
         ; return [ (SpecPrag poly_id wrap inl) | wrap <- wraps ] }
   where
     name      = idName poly_id
@@ -1060,10 +1060,10 @@ recoveryCode binder_names sig_fn
         | isJust (sig_fn name) = tcLookupId name        -- Had signature; look it up
         | otherwise            = return (mkLocalId name forall_a_a)    -- No signature
 
-    is_closed poly_id = isEmptyVarSet (tyVarsOfType (idType poly_id))
+    is_closed poly_id = isEmptyVarSet (tyCoVarsOfType (idType poly_id))
 
 forall_a_a :: TcType
-forall_a_a = mkForAllTy openAlphaTyVar (mkTyVarTy openAlphaTyVar)
+forall_a_a = mkInvForAllTys [levity1TyVar, openAlphaTyVar] openAlphaTy
 
 {-
 Note [SPECIALISE pragmas]
@@ -1138,7 +1138,9 @@ tcMonoBinds is_rec sig_fn no_gen
         -- e.g.         f = \(x::forall a. a->a) -> <body>
         --      We want to infer a higher-rank type for f
     setSrcSpan b_loc    $
-    do  { rhs_ty  <- newFlexiTyVarTy openTypeKind
+    do  { (rhs_tv, _) <- newOpenReturnTyVar
+                         -- use ReturnTv to allow impredicativity
+        ; let rhs_ty = mkOnlyTyVarTy rhs_tv
         ; mono_id <- newNoSigLetBndr no_gen name rhs_ty
         ; (co_fn, matches') <- tcExtendIdBndrs [TcIdBndr mono_id NotTopLevel] $
                                  -- We extend the error context even for a non-recursive
@@ -1200,12 +1202,12 @@ tcLhs sig_fn no_gen (FunBind { fun_id = L nm_loc name, fun_infix = inf, fun_matc
                          -- which gives rise to LetLclBndr.  It wouldn't make
                          -- sense to have a *polymorphic* function Id at this point
     do  { mono_name <- newLocalName name
-        ; let mono_id = mkLocalId mono_name (sig_tau sig)
+        ; let mono_id = mkLocalIdOrCoVar mono_name (sig_tau sig)
         ; addErrCtxt (typeSigCtxt name sig) $
           emitWildcardHoleConstraints (sig_nwcs sig)
         ; return (TcFunBind (name, Just sig, mono_id) nm_loc inf matches) }
   | otherwise
-  = do  { mono_ty <- newFlexiTyVarTy openTypeKind
+  = do  { mono_ty <- newOpenFlexiTyVarTy
         ; mono_id <- newNoSigLetBndr no_gen name mono_ty
         ; return (TcFunBind (name, Nothing, mono_id) nm_loc inf matches) }
 
@@ -1388,10 +1390,10 @@ tcTySig (L loc (PatSynSig (L _ name) (_, qtvs) prov req ty))
        ; req' <- tcHsContext req
        ; prov' <- tcHsContext prov
 
-       ; qtvs' <- mapM zonkQuantifiedTyVar qtvs'
+       ; qtvs' <- mapMaybeM zonkQuantifiedTyCoVar qtvs'
 
        ; let (_, pat_ty) = tcSplitFunTys ty'
-             univ_set = tyVarsOfType pat_ty
+             univ_set = tyCoVarsOfType pat_ty
              (univ_tvs, ex_tvs) = partition (`elemVarSet` univ_set) qtvs'
 
        ; traceTc "tcTySig }" $ ppr (ex_tvs, prov') $$ ppr (univ_tvs, req') $$ ppr ty'
@@ -1407,7 +1409,7 @@ tcTySig _ = return ([], [])
 instTcTySigFromId :: Id -> TcM TcSigInfo
 instTcTySigFromId id
   = do { let loc = getSrcSpan id
-       ; (tvs, theta, tau) <- tcInstType (tcInstSigTyVarsLoc loc)
+       ; (tvs, theta, tau) <- tcInstType (tcInstSigTyCoVarsLoc loc)
                                          (idType id)
        ; return (TcSigInfo { sig_id = id, sig_loc = loc
                            , sig_tvs = [(Nothing, tv) | tv <- tvs]
@@ -1421,8 +1423,8 @@ instTcTySig :: LHsType Name -> TcType    -- HsType and corresponding TcType
                                          -- wildcard is present at location loc.
             -> [(Name, TcTyVar)] -> Name -> TcM TcSigInfo
 instTcTySig hs_ty@(L loc _) sigma_ty extra_cts nwcs name
-  = do { (inst_tvs, theta, tau) <- tcInstType tcInstSigTyVars sigma_ty
-       ; return (TcSigInfo { sig_id  = mkLocalId name sigma_ty
+  = do { (inst_tvs, theta, tau) <- tcInstType tcInstSigTyCoVars sigma_ty
+       ; return (TcSigInfo { sig_id  = mkLocalIdOrCoVar name sigma_ty
                            , sig_loc = loc
                            , sig_tvs = findScopedTyVars hs_ty sigma_ty inst_tvs
                            , sig_nwcs = nwcs
@@ -1623,4 +1625,6 @@ typeSigCtxt name (TcSigInfo { sig_id = _id, sig_tvs = tvs
                             , sig_extra_cts = extra_cts })
   = sep [ text "In" <+> pprUserTypeCtxt (FunSigCtxt name) <> colon
         , nest 2 (pprSigmaTypeExtraCts (isJust extra_cts)
-                  (mkSigmaTy (map snd tvs) theta tau)) ]
+                    -- TODO (RAE): Should these always be invisible?
+                  (mkInvSigmaTy (map snd tvs) theta tau)) ]
+

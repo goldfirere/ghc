@@ -31,6 +31,8 @@ module DsMonad (
 
         DsMetaEnv, DsMetaVal(..), dsGetMetaEnv, dsLookupMetaEnv, dsExtendMetaEnv,
 
+        dsExtendCoEnv, dsGetCvSubstEnv,
+
         -- Warnings
         DsWarning, warnDs, failWithDs, discardWarningsDs,
 
@@ -54,6 +56,7 @@ import Bag
 import DataCon
 import TyCon
 import Id
+import Coercion
 import Module
 import Outputable
 import SrcLoc
@@ -61,6 +64,7 @@ import Type
 import UniqSupply
 import Name
 import NameEnv
+import VarEnv
 import DynFlags
 import ErrUtils
 import FastString
@@ -241,8 +245,9 @@ mkDsEnvs dflags mod rdr_env type_env fam_inst_env msg_var static_binds_var
                            , ds_parr_bi = panic "DsMonad: uninitialised ds_parr_bi"
                            , ds_static_binds = static_binds_var
                            }
-        lcl_env = DsLclEnv { dsl_meta = emptyNameEnv
-                           , dsl_loc  = noSrcSpan
+        lcl_env = DsLclEnv { dsl_meta  = emptyNameEnv
+                           , dsl_loc   = noSrcSpan
+                           , dsl_subst = emptyVarEnv
                            }
     in (gbl_env, lcl_env)
 
@@ -278,7 +283,7 @@ it easier to read debugging output.
 
 -- Make a new Id with the same print name, but different type, and new unique
 newUniqueId :: Id -> Type -> DsM Id
-newUniqueId id = mkSysLocalM (occNameFS (nameOccName (idName id)))
+newUniqueId id = mkSysLocalOrCoVarM (occNameFS (nameOccName (idName id)))
 
 duplicateLocalDs :: Id -> DsM Id
 duplicateLocalDs old_local
@@ -290,8 +295,8 @@ newPredVarDs pred
  = newSysLocalDs pred
 
 newSysLocalDs, newFailLocalDs :: Type -> DsM Id
-newSysLocalDs  = mkSysLocalM (fsLit "ds")
-newFailLocalDs = mkSysLocalM (fsLit "fail")
+newSysLocalDs  = mkSysLocalOrCoVarM (fsLit "ds")
+newFailLocalDs = mkSysLocalOrCoVarM (fsLit "fail")
 
 newSysLocalsDs :: [Type] -> DsM [Id]
 newSysLocalsDs tys = mapM newSysLocalDs tys
@@ -436,6 +441,14 @@ dsExtendMetaEnv :: DsMetaEnv -> DsM a -> DsM a
 dsExtendMetaEnv menv thing_inside
   = updLclEnv (\env -> env { dsl_meta = dsl_meta env `plusNameEnv` menv }) thing_inside
 
+-- | Brings a bound covar into scope
+dsExtendCoEnv :: CoVar -> Coercion -> DsM a -> DsM a
+dsExtendCoEnv cv co
+  = updLclEnv (\env -> env { dsl_subst = extendVarEnv (dsl_subst env) cv co })
+
+dsGetCvSubstEnv :: DsM CvSubstEnv
+dsGetCvSubstEnv = dsl_subst <$> getLclEnv
+
 -- | Gets a reference to the SPT entries created so far.
 dsGetStaticBindsVar :: DsM (IORef [(Fingerprint, (Id,CoreExpr))])
 dsGetStaticBindsVar = fmap ds_static_binds getGblEnv
@@ -453,3 +466,4 @@ discardWarningsDs thing_inside
         ; writeTcRef (ds_msgs env) old_msgs
 
         ; return result }
+

@@ -12,21 +12,23 @@
 module TysPrim(
         mkPrimTyConName, -- For implicit parameters in TysWiredIn only
 
-        tyVarList, alphaTyVars, betaTyVars, alphaTyVar, betaTyVar, gammaTyVar, deltaTyVar,
-        alphaTy, betaTy, gammaTy, deltaTy,
-        openAlphaTy, openBetaTy, openAlphaTyVar, openBetaTyVar, openAlphaTyVars,
+        tyVarList, alphaTyVars, alphaTyVar, betaTyVar, gammaTyVar, deltaTyVar,
+        alphaTys, alphaTy, betaTy, gammaTy, deltaTy,
+        levity1TyVar, levity2TyVar, levity1Ty, levity2Ty,
+        openAlphaTy, openBetaTy, openAlphaTyVar, openBetaTyVar,
         kKiVar,
 
         -- Kind constructors...
-        superKindTyCon, superKind, anyKindTyCon, liftedTypeKindTyCon,
-        openTypeKindTyCon, unliftedTypeKindTyCon, constraintKindTyCon,
+        liftedTypeKindTyCon,
+        tYPETyCon, unliftedTypeKindTyCon, constraintKindTyCon,
 
-        superKindTyConName, anyKindTyConName, liftedTypeKindTyConName,
-        openTypeKindTyConName, unliftedTypeKindTyConName,
+        liftedTypeKindTyConName,
+        tYPETyConName, unliftedTypeKindTyConName,
         constraintKindTyConName,
 
         -- Kinds
-        anyKind, liftedTypeKind, unliftedTypeKind, openTypeKind, constraintKind,
+        liftedTypeKind, unliftedTypeKind, constraintKind,
+        tYPE,
         mkArrowKind, mkArrowKinds,
 
         funTyCon, funTyConName,
@@ -71,6 +73,7 @@ module TysPrim(
 
         eqPrimTyCon,            -- ty1 ~# ty2
         eqReprPrimTyCon,        -- ty1 ~R# ty2  (at role Representational)
+        eqPhantPrimTyCon,       -- ty1 ~P# ty2  (at role Phantom)
 
         -- * Any
         anyTy, anyTyCon, anyTypeOfKind,
@@ -81,15 +84,18 @@ module TysPrim(
 
 #include "HsVersions.h"
 
+import {-# SOURCE #-} TysWiredIn ( levityTy, liftedDataConTy, unliftedDataConTy )
+
 import Var              ( TyVar, KindVar, mkTyVar )
 import Name             ( Name, BuiltInSyntax(..), mkInternalName, mkWiredInName )
 import OccName          ( mkTyVarOccFS, mkTcOccFS )
 import TyCon
-import TypeRep
 import SrcLoc
 import Unique           ( mkAlphaTyVarUnique )
 import PrelNames
 import FastString
+import TyCoRep   -- doesn't need special access, but this is easier to avoid
+                 -- import loops
 
 import Data.Char
 
@@ -136,13 +142,12 @@ primTyCons
     , anyTyCon
     , eqPrimTyCon
     , eqReprPrimTyCon
+    , eqPhantPrimTyCon
 
     , liftedTypeKindTyCon
     , unliftedTypeKindTyCon
-    , openTypeKindTyCon
+    , tYPETyCon
     , constraintKindTyCon
-    , superKindTyCon
-    , anyKindTyCon
 
 #include "primop-vector-tycons.hs-incl"
     ]
@@ -162,7 +167,7 @@ mkBuiltInPrimTc fs unique tycon
                   BuiltInSyntax
 
 
-charPrimTyConName, intPrimTyConName, int32PrimTyConName, int64PrimTyConName, wordPrimTyConName, word32PrimTyConName, word64PrimTyConName, addrPrimTyConName, floatPrimTyConName, doublePrimTyConName, statePrimTyConName, proxyPrimTyConName, realWorldTyConName, arrayPrimTyConName, arrayArrayPrimTyConName, smallArrayPrimTyConName, byteArrayPrimTyConName, mutableArrayPrimTyConName, mutableByteArrayPrimTyConName, mutableArrayArrayPrimTyConName, smallMutableArrayPrimTyConName, mutVarPrimTyConName, mVarPrimTyConName, tVarPrimTyConName, stablePtrPrimTyConName, stableNamePrimTyConName, bcoPrimTyConName, weakPrimTyConName, threadIdPrimTyConName, eqPrimTyConName, eqReprPrimTyConName, voidPrimTyConName :: Name
+charPrimTyConName, intPrimTyConName, int32PrimTyConName, int64PrimTyConName, wordPrimTyConName, word32PrimTyConName, word64PrimTyConName, addrPrimTyConName, floatPrimTyConName, doublePrimTyConName, statePrimTyConName, proxyPrimTyConName, realWorldTyConName, arrayPrimTyConName, arrayArrayPrimTyConName, smallArrayPrimTyConName, byteArrayPrimTyConName, mutableArrayPrimTyConName, mutableByteArrayPrimTyConName, mutableArrayArrayPrimTyConName, smallMutableArrayPrimTyConName, mutVarPrimTyConName, mVarPrimTyConName, tVarPrimTyConName, stablePtrPrimTyConName, stableNamePrimTyConName, bcoPrimTyConName, weakPrimTyConName, threadIdPrimTyConName, eqPrimTyConName, eqReprPrimTyConName, eqPhantPrimTyConName, voidPrimTyConName :: Name
 charPrimTyConName             = mkPrimTc (fsLit "Char#") charPrimTyConKey charPrimTyCon
 intPrimTyConName              = mkPrimTc (fsLit "Int#") intPrimTyConKey  intPrimTyCon
 int32PrimTyConName            = mkPrimTc (fsLit "Int32#") int32PrimTyConKey int32PrimTyCon
@@ -178,6 +183,7 @@ voidPrimTyConName             = mkPrimTc (fsLit "Void#") voidPrimTyConKey voidPr
 proxyPrimTyConName            = mkPrimTc (fsLit "Proxy#") proxyPrimTyConKey proxyPrimTyCon
 eqPrimTyConName               = mkPrimTc (fsLit "~#") eqPrimTyConKey eqPrimTyCon
 eqReprPrimTyConName           = mkBuiltInPrimTc (fsLit "~R#") eqReprPrimTyConKey eqReprPrimTyCon
+eqPhantPrimTyConName          = mkBuiltInPrimTc (fsLit "~P#") eqPhantPrimTyConKey eqPhantPrimTyCon
 realWorldTyConName            = mkPrimTc (fsLit "RealWorld") realWorldTyConKey realWorldTyCon
 arrayPrimTyConName            = mkPrimTc (fsLit "Array#") arrayPrimTyConKey arrayPrimTyCon
 byteArrayPrimTyConName        = mkPrimTc (fsLit "ByteArray#") byteArrayPrimTyConKey byteArrayPrimTyCon
@@ -209,8 +215,8 @@ alphaTyVars is a list of type variables for use in templates:
 
 tyVarList :: Kind -> [TyVar]
 tyVarList kind = [ mkTyVar (mkInternalName (mkAlphaTyVarUnique u)
-                                (mkTyVarOccFS (mkFastString name))
-                                noSrcSpan) kind
+                                           (mkTyVarOccFS (mkFastString name))
+                                           noSrcSpan) kind
                  | u <- [2..],
                    let name | c <= 'z'  = [c]
                             | otherwise = 't':show u
@@ -220,30 +226,32 @@ tyVarList kind = [ mkTyVar (mkInternalName (mkAlphaTyVarUnique u)
 alphaTyVars :: [TyVar]
 alphaTyVars = tyVarList liftedTypeKind
 
-betaTyVars :: [TyVar]
-betaTyVars = tail alphaTyVars
-
 alphaTyVar, betaTyVar, gammaTyVar, deltaTyVar :: TyVar
 (alphaTyVar:betaTyVar:gammaTyVar:deltaTyVar:_) = alphaTyVars
 
 alphaTys :: [Type]
-alphaTys = mkTyVarTys alphaTyVars
+alphaTys = mkOnlyTyVarTys alphaTyVars
 alphaTy, betaTy, gammaTy, deltaTy :: Type
 (alphaTy:betaTy:gammaTy:deltaTy:_) = alphaTys
 
-        -- openAlphaTyVar is prepared to be instantiated
-        -- to a lifted or unlifted type variable.  It's used for the
-        -- result type for "error", so that we can have (error Int# "Help")
-openAlphaTyVars :: [TyVar]
+levity1TyVar, levity2TyVar :: TyVar
+(levity1TyVar : levity2TyVar : _) = drop 21 (tyVarList levityTy)  -- selects 'v','w'
+
+levity1Ty, levity2Ty :: Type
+levity1Ty = mkOnlyTyVarTy levity1TyVar
+levity2Ty = mkOnlyTyVarTy levity2TyVar
+
 openAlphaTyVar, openBetaTyVar :: TyVar
-openAlphaTyVars@(openAlphaTyVar:openBetaTyVar:_) = tyVarList openTypeKind
+openAlphaTyVar = tyVarList (tYPE levity1Ty) !! 0
+openBetaTyVar  = tyVarList (tYPE levity2Ty) !! 1
 
 openAlphaTy, openBetaTy :: Type
-openAlphaTy = mkTyVarTy openAlphaTyVar
-openBetaTy  = mkTyVarTy openBetaTyVar
+openAlphaTy = mkOnlyTyVarTy openAlphaTyVar
+openBetaTy  = mkOnlyTyVarTy openBetaTyVar
 
 kKiVar :: KindVar
-kKiVar = (tyVarList superKind) !! 10
+kKiVar = (tyVarList liftedTypeKind) !! 10
+  -- the 10 selects the 11th letter in the alphabet: 'k'
 
 {-
 ************************************************************************
@@ -289,52 +297,65 @@ funTyCon = mkFunTyCon funTyConName $
 *                                                                      *
 ************************************************************************
 
-Note [SuperKind (BOX)]
-~~~~~~~~~~~~~~~~~~~~~~
-Kinds are classified by "super-kinds".  There is only one super-kind, namely BOX.
+Note [TYPE]
+~~~~~~~~~~~
+There are a few places where we wish to be able to deal interchangeably
+with kind * and kind #. unsafeCoerce#, error, and (->) are some of these
+places. The way we do this is to use kind polymorphism.
 
-Perhaps surprisingly we give BOX the kind BOX, thus   BOX :: BOX
-Reason: we want to have kind equalities, thus (without the kind applications)
-            keq :: * ~ * = Eq# <refl *>
-Remember that
-   (~)  :: forall (k:BOX). k -> k -> Constraint
-   (~#) :: forall (k:BOX). k -> k -> #
-   Eq#  :: forall (k:BOX). forall (a:k) (b:k). (~#) k a b -> (~) k a b
+We have (levityTyCon, liftedDataCon, unliftedDataCon)
 
-So the full defn of keq is
-   keq :: (~) BOX * * = Eq# BOX * * <refl *>
+    data Levity = Lifted | Unlifted
 
-So you can see it's convenient to have BOX:BOX
+and a magical constant (tYPETyCon)
+
+    TYPE :: Levity -> TYPE Lifted
+
+We then have synonyms (liftedTypeKindTyCon, unliftedTypeKindTyCon)
+
+    type * = TYPE Lifted
+    type # = TYPE Unlifted
+
+So, for example, we get
+
+    unsafeCoerce# :: forall (v1 :: Levity) (v2 :: Levity)
+                            (a :: TYPE v1) (b :: TYPE v2). a -> b
+
+This replaces the old sub-kinding machinery. We call variables `a` and `b`
+above "sort-polymorphic".
 -}
 
--- | See "Type#kind_subtyping" for details of the distinction between the 'Kind' 'TyCon's
-superKindTyCon, anyKindTyCon, liftedTypeKindTyCon,
-      openTypeKindTyCon, unliftedTypeKindTyCon,
+liftedTypeKindTyCon,
+      tYPETyCon, unliftedTypeKindTyCon,
       constraintKindTyCon
    :: TyCon
-superKindTyConName, anyKindTyConName, liftedTypeKindTyConName,
-      openTypeKindTyConName, unliftedTypeKindTyConName,
+liftedTypeKindTyConName,
+      tYPETyConName, unliftedTypeKindTyConName,
       constraintKindTyConName
    :: Name
 
-superKindTyCon        = mkKindTyCon superKindTyConName        superKind
-   -- See Note [SuperKind (BOX)]
+constraintKindTyCon   = mkKindTyCon constraintKindTyConName   liftedTypeKind []
+tYPETyCon = mkKindTyCon tYPETyConName
+                        (ForAllTy (Anon levityTy) liftedTypeKind)
+                        [Nominal]
 
-anyKindTyCon          = mkKindTyCon anyKindTyConName          superKind
-liftedTypeKindTyCon   = mkKindTyCon liftedTypeKindTyConName   superKind
-openTypeKindTyCon     = mkKindTyCon openTypeKindTyConName     superKind
-unliftedTypeKindTyCon = mkKindTyCon unliftedTypeKindTyConName superKind
-constraintKindTyCon   = mkKindTyCon constraintKindTyConName   superKind
+   -- See Note [TYPE]
+liftedTypeKindTyCon   = mkSynonymTyCon liftedTypeKindTyConName
+                                       liftedTypeKind
+                                       [] []
+                                       (tYPE liftedDataConTy)
+unliftedTypeKindTyCon = mkSynonymTyCon unliftedTypeKindTyConName
+                                       liftedTypeKind
+                                       [] []
+                                       (tYPE unliftedDataConTy)
 
 --------------------------
 -- ... and now their names
 
 -- If you edit these, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.lhs
-superKindTyConName      = mkPrimTyConName (fsLit "BOX") superKindTyConKey superKindTyCon
-anyKindTyConName          = mkPrimTyConName (fsLit "AnyK") anyKindTyConKey anyKindTyCon
 liftedTypeKindTyConName   = mkPrimTyConName (fsLit "*") liftedTypeKindTyConKey liftedTypeKindTyCon
-openTypeKindTyConName     = mkPrimTyConName (fsLit "OpenKind") openTypeKindTyConKey openTypeKindTyCon
+tYPETyConName             = mkPrimTyConName (fsLit "TYPE") tYPETyConKey tYPETyCon
 unliftedTypeKindTyConName = mkPrimTyConName (fsLit "#") unliftedTypeKindTyConKey unliftedTypeKindTyCon
 constraintKindTyConName   = mkPrimTyConName (fsLit "Constraint") constraintKindTyConKey constraintKindTyCon
 
@@ -349,19 +370,21 @@ mkPrimTyConName occ key tycon = mkWiredInName gHC_PRIM (mkTcOccFS occ)
 kindTyConType :: TyCon -> Type
 kindTyConType kind = TyConApp kind []   -- mkTyConApp isn't defined yet
 
--- | See "Type#kind_subtyping" for details of the distinction between these 'Kind's
-anyKind, liftedTypeKind, unliftedTypeKind, openTypeKind, constraintKind, superKind :: Kind
+-- | See Note [TYPE]
+liftedTypeKind, unliftedTypeKind, constraintKind :: Kind
 
-superKind        = kindTyConType superKindTyCon
-anyKind          = kindTyConType anyKindTyCon  -- See Note [Any kinds]
 liftedTypeKind   = kindTyConType liftedTypeKindTyCon
 unliftedTypeKind = kindTyConType unliftedTypeKindTyCon
-openTypeKind     = kindTyConType openTypeKindTyCon
 constraintKind   = kindTyConType constraintKindTyCon
+
+-----------------------------
+-- | Given a Levity, applies TYPE to it. See Note [TYPE].
+tYPE :: Type -> Type
+tYPE lev = TyConApp tYPETyCon [lev]
 
 -- | Given two kinds @k1@ and @k2@, creates the 'Kind' @k1 -> k2@
 mkArrowKind :: Kind -> Kind -> Kind
-mkArrowKind k1 k2 = FunTy k1 k2
+mkArrowKind k1 k2 = mkFunTy k1 k2
 
 -- | Iterated application of 'mkArrowKind'
 mkArrowKinds :: [Kind] -> Kind -> Kind
@@ -446,17 +469,16 @@ doublePrimTyCon = pcPrimTyCon0 doublePrimTyConName DoubleRep
 *                                                                      *
 ************************************************************************
 
-Note [The ~# TyCon)
+Note [The ~# TyCon]
 ~~~~~~~~~~~~~~~~~~~~
 There is a perfectly ordinary type constructor ~# that represents the type
 of coercions (which, remember, are values).  For example
-   Refl Int :: ~# * Int Int
+   Refl Int :: ~# * * Int Int
 
 It is a kind-polymorphic type constructor like Any:
-   Refl Maybe :: ~# (* -> *) Maybe Maybe
+   Refl Maybe :: ~# (* -> *) (* -> *) Maybe Maybe
 
-(~) only appears saturated. So we check that in CoreLint (and, in an
-assertion, in Kind.typeKind).
+(~) only appears saturated. So we check that in CoreLint.
 
 Note [The State# TyCon]
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -491,27 +513,52 @@ mkProxyPrimTy k ty = TyConApp proxyPrimTyCon [k, ty]
 
 proxyPrimTyCon :: TyCon
 proxyPrimTyCon = mkPrimTyCon proxyPrimTyConName kind [Nominal,Nominal] VoidRep
-  where kind = ForAllTy kv $ mkArrowKind k unliftedTypeKind
+  where kind = ForAllTy (Named kv Invisible) $
+               mkArrowKind k unliftedTypeKind
         kv   = kKiVar
-        k    = mkTyVarTy kv
+        k    = mkOnlyTyVarTy kv
 
 eqPrimTyCon :: TyCon  -- The representation type for equality predicates
                       -- See Note [The ~# TyCon]
-eqPrimTyCon  = mkPrimTyCon eqPrimTyConName kind [Nominal, Nominal, Nominal] VoidRep
-  where kind = ForAllTy kv $ mkArrowKinds [k, k] unliftedTypeKind
-        kv = kKiVar
-        k = mkTyVarTy kv
+eqPrimTyCon  = mkPrimTyCon eqPrimTyConName kind roles VoidRep
+  where kind = ForAllTy (Named kv1 Invisible) $
+               ForAllTy (Named kv2 Invisible) $
+               mkArrowKinds [k1, k2] unliftedTypeKind
+        kVars = tyVarList liftedTypeKind
+        kv1 : kv2 : _ = kVars
+        k1 = mkOnlyTyVarTy kv1
+        k2 = mkOnlyTyVarTy kv2
+        roles = [Representational, Representational, Nominal, Nominal]
 
 -- like eqPrimTyCon, but the type for *Representational* coercions
 -- this should only ever appear as the type of a covar. Its role is
 -- interpreted in coercionRole
 eqReprPrimTyCon :: TyCon
 eqReprPrimTyCon = mkPrimTyCon eqReprPrimTyConName kind
-                                  -- the roles really should be irrelevant!
-                              [Nominal, Representational, Representational] VoidRep
-  where kind = ForAllTy kv $ mkArrowKinds [k, k] unliftedTypeKind
-        kv = kKiVar
-        k  = mkTyVarTy kv
+                              (replicate 4 Representational)
+                              VoidRep
+  where kind = ForAllTy (Named kv1 Invisible) $
+               ForAllTy (Named kv2 Invisible) $
+               mkArrowKinds [k1, k2] unliftedTypeKind
+        kVars         = tyVarList liftedTypeKind
+        kv1 : kv2 : _ = kVars
+        k1            = mkOnlyTyVarTy kv1
+        k2            = mkOnlyTyVarTy kv2
+
+-- like eqPrimTyCon, but the type for *Phantom* coercions.
+-- This is only used to make higher-order equalities. Nothing
+-- should ever actually have this type!
+eqPhantPrimTyCon :: TyCon
+eqPhantPrimTyCon = mkPrimTyCon eqPhantPrimTyConName kind
+                               [Representational, Representational, Phantom, Phantom]
+                               VoidRep
+  where kind = ForAllTy (Named kv1 Invisible) $
+               ForAllTy (Named kv2 Invisible) $
+               mkArrowKinds [k1, k2] unliftedTypeKind
+        kVars         = tyVarList liftedTypeKind
+        kv1 : kv2 : _ = kVars
+        k1            = mkOnlyTyVarTy kv1
+        k2            = mkOnlyTyVarTy kv2
 
 {-
 RealWorld is deeply magical.  It is *primitive*, but it is not
@@ -723,19 +770,6 @@ The type constructor Any of kind forall k. k has these properties:
     For example         length Any []
     See Note [Strangely-kinded void TyCons]
 
-Note [Any kinds]
-~~~~~~~~~~~~~~~~
-
-The type constructor AnyK (of sort BOX) is used internally only to zonk kind
-variables with no constraints on them. It appears in similar circumstances to
-Any, but at the kind level. For example:
-
-  type family Length (l :: [k]) :: Nat
-  type instance Length [] = Zero
-
-Length is kind-polymorphic, and when applied to the empty (promoted) list it
-will have the kind Length AnyK [].
-
 Note [Strangely-kinded void TyCons]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 See Trac #959 for more examples
@@ -768,7 +802,7 @@ anyTyCon = mkFamilyTyCon anyTyConName kind [kKiVar]
                          AbstractClosedSynFamilyTyCon
                          NoParentTyCon
   where
-    kind = ForAllTy kKiVar (mkTyVarTy kKiVar)
+    kind = ForAllTy (Named kKiVar Invisible) (mkOnlyTyVarTy kKiVar)
 
 anyTypeOfKind :: Kind -> Type
 anyTypeOfKind kind = TyConApp anyTyCon [kind]

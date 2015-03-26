@@ -8,7 +8,7 @@ Typechecking class declarations
 
 {-# LANGUAGE CPP #-}
 
-module TcClassDcl ( tcClassSigs, tcClassDecl2,
+module TcClassDcl ( tcClassSigs, tcClassDecl2, 
                     findMethodBind, instantiateMethod, tcInstanceMethodBody,
                     tcClassMinimalDef,
                     HsSigFun, mkHsSigFun, lookupHsSig, emptyHsSigs,
@@ -58,7 +58,7 @@ of that class. So, for example:
 
 would implicitly declare
 
-        data CDict a = CDict (D a)
+        data CDict a = CDict (D a)      
                              (a -> a)
                              (forall b. Ord b => a -> b -> b)
 
@@ -74,7 +74,7 @@ generates
 
         newtype CDict a = CDict (forall b. a -> b -> b)
 
-Now DictTy in Type is just a form of type synomym:
+Now DictTy in Type is just a form of type synomym: 
         DictTy c t = TyConTy CDict `AppTy` t
 
 Death to "ExpandingDicts".
@@ -142,7 +142,7 @@ tcClassSigs clas sigs def_methods
 tcClassDecl2 :: LTyClDecl Name          -- The class declaration
              -> TcM (LHsBinds Id)
 
-tcClassDecl2 (L loc (ClassDecl {tcdLName = class_name, tcdSigs = sigs,
+tcClassDecl2 (L loc (ClassDecl {tcdLName = class_name, tcdSigs = sigs, 
                                 tcdMeths = default_binds}))
   = recoverM (return emptyLHsBinds)     $
     setSrcSpan loc                      $
@@ -160,13 +160,13 @@ tcClassDecl2 (L loc (ClassDecl {tcdLName = class_name, tcdSigs = sigs,
               (tyvars, _, _, op_items) = classBigSig clas
               prag_fn     = mkPragFun sigs default_binds
               sig_fn      = mkHsSigFun sigs
-              clas_tyvars = snd (tcSuperSkolTyVars tyvars)
-              pred        = mkClassPred clas (mkTyVarTys clas_tyvars)
+              clas_tyvars = snd (tcSuperSkolTyCoVars tyvars)
+              pred        = mkClassPred clas (mkTyCoVarTys clas_tyvars)
         ; this_dict <- newEvVar pred
 
         ; traceTc "TIM2" (ppr sigs)
         ; let tc_dm = tcDefMeth clas clas_tyvars
-                                this_dict default_binds
+                                this_dict default_binds 
                                 sig_fn prag_fn
 
         ; dm_binds <- tcExtendTyVarEnv clas_tyvars $
@@ -175,22 +175,22 @@ tcClassDecl2 (L loc (ClassDecl {tcdLName = class_name, tcdSigs = sigs,
         ; return (unionManyBags dm_binds) }
 
 tcClassDecl2 d = pprPanic "tcClassDecl2" (ppr d)
-
-tcDefMeth :: Class -> [TyVar] -> EvVar -> LHsBinds Name
+    
+tcDefMeth :: Class -> [TyCoVar] -> EvVar -> LHsBinds Name
           -> HsSigFun -> PragFun -> ClassOpItem
           -> TcM (LHsBinds TcId)
 -- Generate code for polymorphic default methods only (hence DefMeth)
 -- (Generic default methods have turned into instance decls by now.)
--- This is incompatible with Hugs, which expects a polymorphic
--- default method for every class op, regardless of whether or not
--- the programmer supplied an explicit default decl for the class.
+-- This is incompatible with Hugs, which expects a polymorphic 
+-- default method for every class op, regardless of whether or not 
+-- the programmer supplied an explicit default decl for the class.  
 -- (If necessary we can fix that, but we don't have a convenient Id to hand.)
 tcDefMeth clas tyvars this_dict binds_in hs_sig_fn prag_fn (sel_id, dm_info)
   = case dm_info of
       NoDefMeth          -> do { mapM_ (addLocM (badDmPrag sel_id)) prags
                                ; return emptyBag }
-      DefMeth dm_name    -> tc_dm dm_name
-      GenDefMeth dm_name -> tc_dm dm_name
+      DefMeth dm_name    -> tc_dm dm_name 
+      GenDefMeth dm_name -> tc_dm dm_name 
   where
     sel_name           = idName sel_id
     prags              = prag_fn sel_name
@@ -204,22 +204,23 @@ tcDefMeth clas tyvars this_dict binds_in hs_sig_fn prag_fn (sel_id, dm_info)
     -- The "local_dm_ty" is precisely the type in the above
     -- type signatures, ie with no "forall a. C a =>" prefix
 
-    tc_dm dm_name
+    tc_dm dm_name 
       = do { dm_id <- tcLookupId dm_name
            ; local_dm_name <- setSrcSpan bndr_loc (newLocalName sel_name)
              -- Base the local_dm_name on the selector name, because
              -- type errors from tcInstanceMethodBody come from here
 
            ; dm_id_w_inline <- addInlinePrags dm_id prags
-           ; spec_prags     <- tcSpecPrags dm_id prags
+           ; spec_prags     <- discardConstraints $
+                               tcSpecPrags dm_id prags
 
-           ; let local_dm_ty = instantiateMethod clas dm_id (mkTyVarTys tyvars)
-                 hs_ty       = lookupHsSig hs_sig_fn sel_name
+           ; let local_dm_ty = instantiateMethod clas dm_id (mkTyCoVarTys tyvars)
+                 hs_ty       = lookupHsSig hs_sig_fn sel_name 
                                `orElse` pprPanic "tc_dm" (ppr sel_name)
 
            ; local_dm_sig <- instTcTySig hs_ty local_dm_ty Nothing [] local_dm_name
            ; warnTc (not (null spec_prags))
-                    (ptext (sLit "Ignoring SPECIALISE pragmas on default method")
+                    (ptext (sLit "Ignoring SPECIALISE pragmas on default method") 
                      <+> quotes (ppr sel_name))
 
            ; tc_bind <- tcInstanceMethodBody (ClsSkol clas) tyvars [this_dict]
@@ -229,7 +230,7 @@ tcDefMeth clas tyvars this_dict binds_in hs_sig_fn prag_fn (sel_id, dm_info)
            ; return (unitBag tc_bind) }
 
 ---------------
-tcInstanceMethodBody :: SkolemInfo -> [TcTyVar] -> [EvVar]
+tcInstanceMethodBody :: SkolemInfo -> [TcTyCoVar] -> [EvVar]
                      -> Id -> TcSigInfo
                      -> HsWrapper  -- See Note [Instance method signatures] in TcInstDcls
                      -> TcSpecPrags -> LHsBind Name
@@ -243,7 +244,7 @@ tcInstanceMethodBody skol_info tyvars dfun_ev_vars
               lm_bind = L loc (bind { fun_id = L loc (idName local_meth_id) })
                              -- Substitute the local_meth_name for the binder
                              -- NB: the binding is always a FunBind
-        ; (ev_binds, (tc_bind, _, _))
+        ; (ev_binds, (tc_bind, _, _)) 
                <- checkConstraints skol_info tyvars dfun_ev_vars $
                   tcPolyCheck NonRecursive no_prag_fn local_meth_sig lm_bind
 
@@ -255,9 +256,9 @@ tcInstanceMethodBody skol_info tyvars dfun_ev_vars
                                    , abs_ev_binds = ev_binds
                                    , abs_binds    = tc_bind }
 
-        ; return (L loc full_bind) }
+        ; return (L loc full_bind) } 
   where
-    no_prag_fn  _ = []          -- No pragmas for local_meth_id;
+    no_prag_fn  _ = []          -- No pragmas for local_meth_id; 
                                 -- they are all for meth_id
 
 ---------------
@@ -274,7 +275,7 @@ tcClassMinimalDef _clas sigs op_info
                    (\bf -> addWarnTc (warningMinimalDefIncomplete bf))
         return mindef
   where
-    -- By default require all methods without a default
+    -- By default require all methods without a default 
     -- implementation whose names don't start with '_'
     defMindef :: ClassMinimalDef
     defMindef = mkAnd [ mkVar name
@@ -282,15 +283,15 @@ tcClassMinimalDef _clas sigs op_info
                       , not (startsWithUnderscore (getOccName name)) ]
 
 instantiateMethod :: Class -> Id -> [TcType] -> TcType
--- Take a class operation, say
+-- Take a class operation, say  
 --      op :: forall ab. C a => forall c. Ix c => (b,c) -> a
 -- Instantiate it at [ty1,ty2]
--- Return the "local method type":
+-- Return the "local method type": 
 --      forall c. Ix x => (ty2,c) -> ty1
 instantiateMethod clas sel_id inst_tys
   = ASSERT( ok_first_pred ) local_meth_ty
   where
-    (sel_tyvars,sel_rho) = tcSplitForAllTys (idType sel_id)
+    (sel_tyvars,sel_rho) = tcSplitNamedForAllTys (idType sel_id)
     rho_ty = ASSERT( length sel_tyvars == length inst_tys )
              substTyWith sel_tyvars inst_tys sel_rho
 
@@ -322,7 +323,7 @@ lookupHsSig = lookupNameEnv
 findMethodBind  :: Name                 -- Selector name
                 -> LHsBinds Name        -- A group of bindings
                 -> Maybe (LHsBind Name, SrcSpan)
-                -- Returns the binding, and the binding
+                -- Returns the binding, and the binding 
                 -- site of the method binder
 findMethodBind sel_name binds
   = foldlBag mplus Nothing (mapBag f binds)
@@ -353,7 +354,7 @@ When typechecking the binding 'op = e', we'll have a meth_id for op
 whose type is
       op :: forall c. Foo c => forall b. Ord b => [c] -> b -> b -> b
 
-So tcPolyBinds must be capable of dealing with nested polytypes;
+So tcPolyBinds must be capable of dealing with nested polytypes; 
 and so it is. See TcBinds.tcMonoBinds (with type-sig case).
 
 Note [Silly default-method bind]
@@ -376,7 +377,7 @@ This makes the error messages right.
 -}
 
 tcMkDeclCtxt :: TyClDecl Name -> SDoc
-tcMkDeclCtxt decl = hsep [ptext (sLit "In the"), pprTyClDeclFlavour decl,
+tcMkDeclCtxt decl = hsep [ptext (sLit "In the"), pprTyClDeclFlavour decl, 
                       ptext (sLit "declaration for"), quotes (ppr (tcdName decl))]
 
 tcAddDeclCtxt :: TyClDecl Name -> TcM a -> TcM a
@@ -385,12 +386,12 @@ tcAddDeclCtxt decl thing_inside
 
 badMethodErr :: Outputable a => a -> Name -> SDoc
 badMethodErr clas op
-  = hsep [ptext (sLit "Class"), quotes (ppr clas),
+  = hsep [ptext (sLit "Class"), quotes (ppr clas), 
           ptext (sLit "does not have a method"), quotes (ppr op)]
 
 badGenericMethod :: Outputable a => a -> Name -> SDoc
 badGenericMethod clas op
-  = hsep [ptext (sLit "Class"), quotes (ppr clas),
+  = hsep [ptext (sLit "Class"), quotes (ppr clas), 
           ptext (sLit "has a generic-default signature without a binding"), quotes (ppr op)]
 
 {-
@@ -402,20 +403,20 @@ badGenericInstanceType binds
 missingGenericInstances :: [Name] -> SDoc
 missingGenericInstances missing
   = ptext (sLit "Missing type patterns for") <+> pprQuotedList missing
-
+          
 dupGenericInsts :: [(TyCon, InstInfo a)] -> SDoc
 dupGenericInsts tc_inst_infos
   = vcat [ptext (sLit "More than one type pattern for a single generic type constructor:"),
           nest 2 (vcat (map ppr_inst_ty tc_inst_infos)),
           ptext (sLit "All the type patterns for a generic type constructor must be identical")
     ]
-  where
+  where 
     ppr_inst_ty (_,inst) = ppr (simpleInstInfoTy inst)
 -}
 badDmPrag :: Id -> Sig Name -> TcM ()
 badDmPrag sel_id prag
-  = addErrTc (ptext (sLit "The") <+> hsSigDoc prag <+> ptext (sLit "for default method")
-              <+> quotes (ppr sel_id)
+  = addErrTc (ptext (sLit "The") <+> hsSigDoc prag <+> ptext (sLit "for default method") 
+              <+> quotes (ppr sel_id) 
               <+> ptext (sLit "lacks an accompanying binding"))
 
 warningMinimalDefIncomplete :: ClassMinimalDef -> SDoc

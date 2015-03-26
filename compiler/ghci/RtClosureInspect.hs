@@ -15,7 +15,7 @@ module RtClosureInspect(
      Term(..),
      isTerm, isSuspension, isPrim, isFun, isFunLike, isNewtypeWrap,
      isFullyEvaluated, isFullyEvaluatedTerm,
-     termType, mapTermType, termTyVars,
+     termType, mapTermType, termTyCoVars,
      foldTerm, TermFold(..), foldTermM, TermFoldM(..), idTermFold,
      pprTerm, cPprTerm, cPprTermBase, CustomTermPrinter,
 
@@ -311,14 +311,14 @@ mapTermTypeM f = foldTermM TermFoldM {
           fNewtypeWrapM= \ty dc t -> f ty >>= \ty' -> return $ NewtypeWrap ty' dc t,
           fRefWrapM    = \ty t -> f ty >>= \ty' -> return $ RefWrap ty' t}
 
-termTyVars :: Term -> TyVarSet
-termTyVars = foldTerm TermFold {
+termTyCoVars :: Term -> TyCoVarSet
+termTyCoVars = foldTerm TermFold {
             fTerm       = \ty _ _ tt   ->
-                          tyVarsOfType ty `plusVarEnv` concatVarEnv tt,
-            fSuspension = \_ ty _ _ -> tyVarsOfType ty,
+                          tyCoVarsOfType ty `plusVarEnv` concatVarEnv tt,
+            fSuspension = \_ ty _ _ -> tyCoVarsOfType ty,
             fPrim       = \ _ _ -> emptyVarEnv,
-            fNewtypeWrap= \ty _ t -> tyVarsOfType ty `plusVarEnv` t,
-            fRefWrap    = \ty t -> tyVarsOfType ty `plusVarEnv` t}
+            fNewtypeWrap= \ty _ t -> tyCoVarsOfType ty `plusVarEnv` t,
+            fRefWrap    = \ty t -> tyCoVarsOfType ty `plusVarEnv` t}
     where concatVarEnv = foldr plusVarEnv emptyVarEnv
 
 ----------------------------------
@@ -601,12 +601,17 @@ liftTcM = id
 newVar :: Kind -> TR TcType
 newVar = liftTcM . newFlexiTyVarTy
 
-instTyVars :: [TyVar] -> TR (TvSubst, [TcTyVar])
+newOpenVar :: TR TcType
+newOpenVar = liftTcM newOpenFlexiTyVarTy
+
+instTyCoVars :: [TyCoVar] -> TR (TCvSubst, [TcTyCoVar])
 -- Instantiate fresh mutable type variables from some TyVars
 -- This function preserves the print-name, which helps error messages
-instTyVars = liftTcM . tcInstTyVars
+instTyCoVars tcvs
+  = liftTcM $ fst <$> captureConstraints (tcInstTyCoVars TypeLevel tcvs)
+    -- TODO (RAE): What about those constraints? Do we care???
 
-type RttiInstantiation = [(TcTyVar, TyVar)]
+type RttiInstantiation = [(TcTyCoVar, TyVar)]
    -- Associates the typechecker-world meta type variables
    -- (which are mutable and may be refined), to their
    -- debugger-world RuntimeUnk counterparts.
@@ -618,9 +623,9 @@ type RttiInstantiation = [(TcTyVar, TyVar)]
 --   mapping from new (instantiated) -to- old (skolem) type variables
 instScheme :: QuantifiedType -> TR (TcType, RttiInstantiation)
 instScheme (tvs, ty)
-  = liftTcM $ do { (subst, tvs') <- tcInstTyVars tvs
-                 ; let rtti_inst = [(tv',tv) | (tv',tv) <- tvs' `zip` tvs]
-                 ; return (substTy subst ty, rtti_inst) }
+  = do { (subst, tvs') <- instTyCoVars tvs
+       ; let rtti_inst = [(tv',tv) | (tv',tv) <- tvs' `zip` tvs]
+       ; return (substTy subst ty, rtti_inst) }
 
 applyRevSubst :: RttiInstantiation -> TR ()
 -- Apply the *reverse* substitution in-place to any un-filled-in
@@ -629,9 +634,9 @@ applyRevSubst :: RttiInstantiation -> TR ()
 applyRevSubst pairs = liftTcM (mapM_ do_pair pairs)
   where
     do_pair (tc_tv, rtti_tv)
-      = do { tc_ty <- zonkTcTyVar tc_tv
+      = do { tc_ty <- zonkTcTyCoVar tc_tv
            ; case tcGetTyVar_maybe tc_ty of
-               Just tv | isMetaTyVar tv -> writeMetaTyVar tv (mkTyVarTy rtti_tv)
+               Just tv | isMetaTyVar tv -> writeMetaTyVar tv (mkTyCoVarTy rtti_tv)
                _                        -> return () }
 
 -- Adds a constraint of the form t1 == t2
@@ -644,12 +649,12 @@ addConstraint actual expected = do
     traceTR (text "add constraint:" <+> fsep [ppr actual, equals, ppr expected])
     recoverTR (traceTR $ fsep [text "Failed to unify", ppr actual,
                                     text "with", ppr expected]) $
+      discardResult $
+      captureConstraints $
       do { (ty1, ty2) <- congruenceNewtypes actual expected
-         ; _  <- captureConstraints $ unifyType ty1 ty2
-         ; return () }
+         ; unifyType noThing ty1 ty2 }
      -- TOMDO: what about the coercion?
      -- we should consider family instances
-
 
 -- Type & Term reconstruction
 ------------------------------
@@ -659,7 +664,7 @@ cvObtainTerm hsc_env max_depth force old_ty hval = runTR hsc_env $ do
   -- as this is needed to be able to manipulate
   -- them properly
    let quant_old_ty@(old_tvs, old_tau) = quantifyType old_ty
-       sigma_old_ty = mkForAllTys old_tvs old_tau
+       sigma_old_ty = mkInvForAllTys old_tvs old_tau
    traceTR (text "Term reconstruction started with initial type " <> ppr old_ty)
    term <-
      if null old_tvs
@@ -669,7 +674,7 @@ cvObtainTerm hsc_env max_depth force old_ty hval = runTR hsc_env $ do
         return $ fixFunDictionaries $ expandNewtypes term'
       else do
               (old_ty', rev_subst) <- instScheme quant_old_ty
-              my_ty <- newVar openTypeKind
+              my_ty <- newOpenVar
               when (check1 quant_old_ty) (traceTR (text "check1 passed") >>
                                           addConstraint my_ty old_ty')
               term  <- go max_depth my_ty sigma_old_ty hval
@@ -689,7 +694,7 @@ cvObtainTerm hsc_env max_depth force old_ty hval = runTR hsc_env $ do
                       zterm' <- mapTermTypeM
                                  (\ty -> case tcSplitTyConApp_maybe ty of
                                            Just (tc, _:_) | tc /= funTyCon
-                                               -> newVar openTypeKind
+                                               -> newOpenVar
                                            _   -> return ty)
                                  term
                       zonkTerm zterm'
@@ -798,13 +803,14 @@ cvObtainTerm hsc_env max_depth force old_ty hval = runTR hsc_env $ do
 
 extractSubTerms :: (Type -> HValue -> TcM Term)
                 -> Closure -> [Type] -> TcM [Term]
-extractSubTerms recurse clos = liftM thirdOf3 . go 0 (nonPtrs clos)
+extractSubTerms recurse clos = liftM thdOf3 . go 0 (nonPtrs clos)
   where
     go ptr_i ws [] = return (ptr_i, ws, [])
     go ptr_i ws (ty:tys)
       | Just (tc, elem_tys) <- tcSplitTyConApp_maybe ty
       , isUnboxedTupleTyCon tc
-      = do (ptr_i, ws, terms0) <- go ptr_i ws elem_tys
+                -- See Note [Unboxed tuple levity vars] in TyCon
+      = do (ptr_i, ws, terms0) <- go ptr_i ws (drop (length elem_tys `div` 2) elem_tys)
            (ptr_i, ws, terms1) <- go ptr_i ws tys
            return (ptr_i, ws, unboxedTupleTerm ty terms0 : terms1)
       | otherwise
@@ -849,7 +855,7 @@ cvReconstructType hsc_env max_depth old_ty hval = runTR_maybe hsc_env $ do
         then return old_ty
         else do
           (old_ty', rev_subst) <- instScheme sigma_old_ty
-          my_ty <- newVar openTypeKind
+          my_ty <- newOpenVar
           when (check1 sigma_old_ty) (traceTR (text "check1 passed") >>
                                       addConstraint my_ty old_ty')
           search (isMonomorphic `fmap` zonkTcType my_ty)
@@ -941,8 +947,8 @@ findPtrTyss i tys = foldM step (i, []) tys
 -- improveType <base_type> <rtti_type>
 -- The types can contain skolem type variables, which need to be treated as normal vars.
 -- In particular, we want them to unify with things.
-improveRTTIType :: HscEnv -> RttiType -> RttiType -> Maybe TvSubst
-improveRTTIType _ base_ty new_ty = U.tcUnifyTy base_ty new_ty
+improveRTTIType :: HscEnv -> RttiType -> RttiType -> Maybe TCvSubst
+improveRTTIType _ base_ty new_ty = fst <$> U.tcUnifyTy base_ty new_ty
 
 getDataConArgTys :: DataCon -> Type -> TR [Type]
 -- Given the result type ty of a constructor application (D a b c :: ty)
@@ -955,7 +961,7 @@ getDataConArgTys dc con_app_ty
   = do { let UnaryRep rep_con_app_ty = repType con_app_ty
        ; traceTR (text "getDataConArgTys 1" <+> (ppr con_app_ty $$ ppr rep_con_app_ty
                    $$ ppr (tcSplitTyConApp_maybe rep_con_app_ty)))
-       ; (subst, _) <- instTyVars (univ_tvs ++ ex_tvs)
+       ; (subst, _) <- instTyCoVars (univ_tvs ++ ex_tvs)
        ; addConstraint rep_con_app_ty (substTy subst (dataConOrigResTy dc))
               -- See Note [Constructor arg types]
        ; let con_arg_tys = substTys subst (dataConRepArgTys dc)
@@ -963,7 +969,7 @@ getDataConArgTys dc con_app_ty
        ; return con_arg_tys }
   where
     univ_tvs = dataConUnivTyVars dc
-    ex_tvs   = dataConExTyVars dc
+    ex_tvs   = dataConExTyCoVars dc
 
 {- Note [Constructor arg types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1109,7 +1115,7 @@ If that is not the case, then we consider two conditions.
 check1 :: QuantifiedType -> Bool
 check1 (tvs, _) = not $ any isHigherKind (map tyVarKind tvs)
  where
-   isHigherKind = not . null . fst . splitKindFunTys
+   isHigherKind = not . null . fst . splitForAllTys
 
 check2 :: QuantifiedType -> QuantifiedType -> Bool
 check2 (_, rtti_ty) (_, old_ty)
@@ -1188,10 +1194,10 @@ congruenceNewtypes lhs rhs = go lhs rhs >>= \rhs' -> return (lhs,rhs')
             | otherwise = do
                traceTR (text "(Upgrade) upgraded " <> ppr ty <>
                         text " in presence of newtype evidence " <> ppr new_tycon)
-               (_, vars) <- instTyVars (tyConTyVars new_tycon)
-               let ty' = mkTyConApp new_tycon (mkTyVarTys vars)
+               (_, vars) <- instTyCoVars (tyConTyVars new_tycon)
+               let ty' = mkTyConApp new_tycon (mkTyCoVarTys vars)
                    UnaryRep rep_ty = repType ty'
-               _ <- liftTcM (unifyType ty rep_ty)
+               _ <- liftTcM (unifyType noThing ty rep_ty)
         -- assumes that reptype doesn't ^^^^ touch tyconApp args
                return ty'
 
@@ -1220,7 +1226,7 @@ zonkRttiType = zonkTcTypeToType (mkEmptyZonkEnv zonk_unbound_meta)
              -- otherwise-unconstrained unification variables are
              -- turned into RuntimeUnks as they leave the
              -- typechecker's monad
-           ; return (mkTyVarTy tv') }
+           ; return (mkTyCoVarTy tv') }
 
 --------------------------------------------------------------------------------
 -- Restore Class predicates out of a representation type
@@ -1232,7 +1238,7 @@ dictsView ty = ty
 isMonomorphic :: RttiType -> Bool
 isMonomorphic ty = noExistentials && noUniversals
  where (tvs, _, ty')  = tcSplitSigmaTy ty
-       noExistentials = isEmptyVarSet (tyVarsOfType ty')
+       noExistentials = isEmptyVarSet (tyCoVarsOfType ty')
        noUniversals   = null tvs
 
 -- Use only for RTTI types
@@ -1256,7 +1262,7 @@ tyConPhantomTyVars tc
   = tyConTyVars tc \\ dc_vars
 tyConPhantomTyVars _ = []
 
-type QuantifiedType = ([TyVar], Type)
+type QuantifiedType = ([TyCoVar], Type)
    -- Make the free type variables explicit
    -- The returned Type should have no top-level foralls (I believe)
 
@@ -1268,9 +1274,9 @@ quantifyType :: Type -> QuantifiedType
 -- Thus (quantifyType (forall a. a->[b]))
 -- returns ([a,b], a -> [b])
 
-quantifyType ty = (varSetElems (tyVarsOfType rho), rho)
+quantifyType ty = (varSetElems (tyCoVarsOfType rho), rho)
   where
-    (_tvs, rho) = tcSplitForAllTys ty
+    (_tvs, rho) = tcSplitNamedForAllTys ty
 
 unlessM :: Monad m => m Bool -> m () -> m ()
 unlessM condM acc = condM >>= \c -> unless c acc

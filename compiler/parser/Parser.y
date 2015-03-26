@@ -1447,6 +1447,7 @@ btype :: { LHsType RdrName }
 
 atype :: { LHsType RdrName }
         : ntgtycon                       { sL1 $1 (HsTyVar (unLoc $1)) }      -- Not including unit tuples
+        | '*'                            { sL1 $1 (HsTyVar (nameRdrName liftedTypeKindTyConName)) }
         | tyvar                          {% do { nwc <- namedWildcardsEnabled -- (See Note [Unit tuples])
                                                ; let tv@(Unqual name) = unLoc $1
                                                ; return $ if (startsWithUnderscore name && nwc)
@@ -1498,6 +1499,7 @@ atype :: { LHsType RdrName }
                                                  [mo $1, mj AnnComma $3,mc $5] }
         | INTEGER                     { sLL $1 $> $ HsTyLit $ HsNumTy $ getINTEGER $1 }
         | STRING                      { sLL $1 $> $ HsTyLit $ HsStrTy $ getSTRING  $1 }
+        | '*'                         { sL1 $1 $ HsTyVar (nameRdrName liftedTypeKindTyConName) }
         | '_'                         { sL1 $1 $ HsWildcardTy }
 
 -- An inst_type is what occurs in the head of an instance decl
@@ -1555,35 +1557,7 @@ varids0 :: { Located [RdrName] }
 -- Kinds
 
 kind :: { LHsKind RdrName }
-        : bkind                  { $1 }
-        | bkind '->' kind        {% ams (sLL $1 $> $ HsFunTy $1 $3)
-                                        [mj AnnRarrow $2] }
-
-bkind :: { LHsKind RdrName }
-        : akind                  { $1 }
-        | bkind akind            { sLL $1 $> $ HsAppTy $1 $2 }
-
-akind :: { LHsKind RdrName }
-        : '*'                    { sL1 $1 $ HsTyVar (nameRdrName liftedTypeKindTyConName) }
-        | '(' kind ')'           {% ams (sLL $1 $>  $ HsParTy $2)
-                                        [mo $1,mc $3] }
-        | pkind                  { $1 }
-        | tyvar                  { sL1 $1 $ HsTyVar (unLoc $1) }
-
-pkind :: { LHsKind RdrName }  -- promoted type, see Note [Promotion]
-        : qtycon                          { sL1 $1 $ HsTyVar $ unLoc $1 }
-        | '(' ')'                   {% ams (sLL $1 $> $ HsTyVar $ getRdrName unitTyCon)
-                                           [mo $1,mc $2] }
-        | '(' kind ',' comma_kinds1 ')'   {% ams (sLL $1 $> $ HsTupleTy HsBoxedTuple
-                                                                     ( $2 : $4))
-                                                 [mo $1,mj AnnComma $3,mc $5] }
-        | '[' kind ']'                    {% ams (sLL $1 $> $ HsListTy $2)
-                                                 [mo $1,mc $3] }
-
-comma_kinds1 :: { [LHsKind RdrName] }
-        : kind                         { [$1] }
-        | kind  ',' comma_kinds1       {% addAnnotation (gl $1) AnnComma (gl $2)
-                                          >> return ($1 : $3) }
+        : type                  { $1 }
 
 {- Note [Promotion]
    ~~~~~~~~~~~~~~~~
@@ -1595,12 +1569,6 @@ few reasons:
   1. we don't need quotes since we cannot define names in kinds
   2. if one day we merge types and kinds, tick would mean look in DataName
   3. we don't have a kind namespace anyway
-
-- Syntax of explicit kind polymorphism  (IA0_TODO: not yet implemented)
-Kind abstraction is implicit. We write
-> data SList (s :: k -> *) (as :: [k]) where ...
-because it looks like what we do in terms
-> id (x :: a) = x
 
 - Name resolution
 When the user write Zero instead of 'Zero in types, we parse it a
@@ -2621,7 +2589,6 @@ qtyconsym :: { Located RdrName }
 tyconsym :: { Located RdrName }
         : CONSYM                        { sL1 $1 $! mkUnqual tcClsName (getCONSYM $1) }
         | VARSYM                        { sL1 $1 $! mkUnqual tcClsName (getVARSYM $1) }
-        | '*'                           { sL1 $1 $! mkUnqual tcClsName (fsLit "*")    }
         | '-'                           { sL1 $1 $! mkUnqual tcClsName (fsLit "-")    }
 
 

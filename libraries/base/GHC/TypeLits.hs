@@ -33,7 +33,7 @@ module GHC.TypeLits
 
 
     -- * Functions on type literals
-  , type (<=), type (<=?), type (+), type (*), type (^), type (-)
+  , type (<=), type (<=?), type (+), Mult, type (^), type (-)
   , CmpNat, CmpSymbol
 
   ) where
@@ -160,7 +160,7 @@ type instance a == b = EqSymbol a b
 
 infix  4 <=?, <=
 infixl 6 +, -
-infixl 7 *
+infixl 7 `Mult`
 infixr 8 ^
 
 -- | Comparison of type-level naturals, as a constraint.
@@ -186,7 +186,7 @@ type family (m :: Nat) <=? (n :: Nat) :: Bool
 type family (m :: Nat) + (n :: Nat) :: Nat
 
 -- | Multiplication of type-level naturals.
-type family (m :: Nat) * (n :: Nat) :: Nat
+type family (m :: Nat) `Mult` (n :: Nat) :: Nat
 
 -- | Exponentiation of type-level naturals.
 type family (m :: Nat) ^ (n :: Nat) :: Nat

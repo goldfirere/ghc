@@ -8,8 +8,8 @@ Simple14.hs:8:8:
       ‘z’ is a rigid type variable bound by
           the type signature for eqE :: EQ_ x y -> ((x ~ y) => EQ_ z z) -> p
           at Simple14.hs:8:8
-    Expected type: EQ_ z0 z0
-      Actual type: EQ_ z z
+       Expected type: EQ_ z0 z0
+         Actual type: EQ_ z z
     In the ambiguity check for the type signature for ‘eqE’:
       eqE :: forall x y z p. EQ_ x y -> ((x ~ y) => EQ_ z z) -> p
     To defer the ambiguity check to use sites, enable AllowAmbiguousTypes

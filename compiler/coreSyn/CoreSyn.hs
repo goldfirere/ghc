@@ -16,22 +16,22 @@ module CoreSyn (
         -- ** 'Expr' construction
         mkLets, mkLams,
         mkApps, mkTyApps, mkCoApps, mkVarApps,
-
+        
         mkIntLit, mkIntLitInt,
         mkWordLit, mkWordLitWord,
         mkWord64LitWord64, mkInt64LitInt64,
         mkCharLit, mkStringLit,
         mkFloatLit, mkFloatLitFloat,
         mkDoubleLit, mkDoubleLitDouble,
-
+        
         mkConApp, mkConApp2, mkTyBind, mkCoBind,
         varToCoreExpr, varsToCoreExprs,
 
         isId, cmpAltCon, cmpAlt, ltAlt,
-
+        
         -- ** Simple 'Expr' access functions and predicates
-        bindersOf, bindersOfBinds, rhssOfBind, rhssOfAlts,
-        collectBinders, collectTyBinders, collectValBinders, collectTyAndValBinders,
+        bindersOf, bindersOfBinds, rhssOfBind, rhssOfAlts, 
+        collectBinders, collectTyAndValBinders,
         collectArgs, collectArgsTicks, flattenBinds,
 
         isValArg, isTypeArg, isTyCoArg, valArgCount, valBndrCount,
@@ -48,22 +48,22 @@ module CoreSyn (
         -- ** Constructing 'Unfolding's
         noUnfolding, evaldUnfolding, mkOtherCon,
         unSaturatedOk, needSaturated, boringCxtOk, boringCxtNotOk,
-
+        
         -- ** Predicates and deconstruction on 'Unfolding'
         unfoldingTemplate, expandUnfolding_maybe,
-        maybeUnfoldingTemplate, otherCons,
+        maybeUnfoldingTemplate, otherCons, 
         isValueUnfolding, isEvaldUnfolding, isCheapUnfolding,
         isExpandableUnfolding, isConLikeUnfolding, isCompulsoryUnfolding,
         isStableUnfolding, hasStableCoreUnfolding_maybe,
-        isClosedUnfolding, hasSomeUnfolding,
+        isClosedUnfolding, hasSomeUnfolding, 
         canUnfold, neverUnfoldGuidance, isStableSource,
 
         -- * Strictness
-        seqExpr, seqExprs, seqUnfolding,
+        seqExpr, seqExprs, seqUnfolding, 
 
         -- * Annotated expression data types
         AnnExpr, AnnExpr'(..), AnnBind(..), AnnAlt,
-
+        
         -- ** Operations on annotated expressions
         collectAnnArgs, collectAnnArgsTicks,
 
@@ -73,8 +73,8 @@ module CoreSyn (
         -- * Core rule data types
         CoreRule(..),   -- CoreSubst, CoreTidy, CoreFVs, PprCore only
         RuleName, RuleFun, IdUnfoldingFun, InScopeEnv,
-
-        -- ** Operations on 'CoreRule's
+        
+        -- ** Operations on 'CoreRule's 
         seqRules, ruleArity, ruleName, ruleIdName, ruleActivation,
         setRuleIdName,
         isBuiltinRule, isLocalRule, isAutoRule,
@@ -129,7 +129,7 @@ These data types are the heart of the compiler
 --    by the data type 'HsExpr.HsExpr' with the names being 'RdrName.RdrNames'
 --
 -- 2. This syntax tree is /renamed/, which attaches a 'Unique.Unique' to every 'RdrName.RdrName'
---    (yielding a 'Name.Name') to disambiguate identifiers which are lexically identical.
+--    (yielding a 'Name.Name') to disambiguate identifiers which are lexically identical. 
 --    For example, this program:
 --
 -- @
@@ -169,24 +169,24 @@ These data types are the heart of the compiler
 -- *  Recursive and non recursive @let@s. Operationally
 --    this corresponds to allocating a thunk for the things
 --    bound and then executing the sub-expression.
---
+--    
 --    #top_level_invariant#
 --    #letrec_invariant#
---
+--    
 --    The right hand sides of all top-level and recursive @let@s
 --    /must/ be of lifted type (see "Type#type_classification" for
 --    the meaning of /lifted/ vs. /unlifted/).
---
+--    
 --    See Note [CoreSyn let/app invariant]
 --
 --    #type_let#
 --    We allow a /non-recursive/ let to bind a type variable, thus:
---
+--    
 --    > Let (NonRec tv (Type ty)) body
---
+--    
 --    This can be very convenient for postponing type substitutions until
 --    the next run of the simplifier.
---
+--    
 --    At the moment, the rest of the compiler only deals with type-let
 --    in a Let expression, rather than at top level.  We may want to revist
 --    this choice.
@@ -195,43 +195,43 @@ These data types are the heart of the compiler
 --    the scrutinee (expression examined) to weak head normal form
 --    and then examining at most one level of resulting constructor (i.e. you
 --    cannot do nested pattern matching directly with this).
---
+--    
 --    The binder gets bound to the value of the scrutinee,
 --    and the 'Type' must be that of all the case alternatives
---
+--    
 --    #case_invariants#
---    This is one of the more complicated elements of the Core language,
+--    This is one of the more complicated elements of the Core language, 
 --    and comes with a number of restrictions:
---
---    1. The list of alternatives may be empty;
+--    
+--    1. The list of alternatives may be empty; 
 --       See Note [Empty case alternatives]
 --
---    2. The 'DEFAULT' case alternative must be first in the list,
+--    2. The 'DEFAULT' case alternative must be first in the list, 
 --       if it occurs at all.
---
---    3. The remaining cases are in order of increasing
+--    
+--    3. The remaining cases are in order of increasing 
 --         tag  (for 'DataAlts') or
 --         lit  (for 'LitAlts').
---       This makes finding the relevant constructor easy,
+--       This makes finding the relevant constructor easy, 
 --       and makes comparison easier too.
---
---    4. The list of alternatives must be exhaustive. An /exhaustive/ case
+--    
+--    4. The list of alternatives must be exhaustive. An /exhaustive/ case 
 --       does not necessarily mention all constructors:
---
+--    
 --       @
 --            data Foo = Red | Green | Blue
---       ... case x of
+--       ... case x of 
 --            Red   -> True
---            other -> f (case x of
+--            other -> f (case x of 
 --                            Green -> ...
 --                            Blue  -> ... ) ...
 --       @
---
---       The inner case does not need a @Red@ alternative, because @x@
+--    
+--       The inner case does not need a @Red@ alternative, because @x@ 
 --       can't be @Red@ at that program point.
 --
--- *  Cast an expression to a particular type.
---    This is used to implement @newtype@s (a @newtype@ constructor or
+-- *  Cast an expression to a particular type. 
+--    This is used to implement @newtype@s (a @newtype@ constructor or 
 --    destructor just becomes a 'Cast' in Core) and GADTs.
 --
 -- *  Notes. These allow general information to be added to expressions
@@ -272,14 +272,14 @@ type Alt b = (AltCon, [b], Expr b)
 
 -- If you edit this type, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.lhs
-data AltCon
+data AltCon 
   = DataAlt DataCon   --  ^ A plain data constructor: @case e of { Foo x -> ... }@.
                       -- Invariant: the 'DataCon' is always from a @data@ type, and never from a @newtype@
 
   | LitAlt  Literal   -- ^ A literal: @case e of { 1 -> ... }@
                       -- Invariant: always an *unlifted* literal
                       -- See Note [Literal alternatives]
-
+                      
   | DEFAULT           -- ^ Trivial alternative: @case e of { _ -> ... }@
    deriving (Eq, Ord, Data, Typeable)
 
@@ -382,7 +382,7 @@ The alternatives of a case expression should be exhaustive.  A case expression
 can have empty alternatives if (and only if) the scrutinee is bound to raise
 an exception or diverge.  So:
    Case (error Int "Hello") b Bool []
-is fine, and has type Bool.  This is one reason we need a type on
+is fine, and has type Bool.  This is one reason we need a type on 
 the case expression: if the alternatives are empty we can't get the type
 from the alternatives!  I'll write this
    case (error Int "Hello") of Bool {}
@@ -399,7 +399,7 @@ degnerate situation but we do NOT want to replace
    case x of Bool {}   -->   error Bool "Inaccessible case"
 because x might raise an exception, and *that*'s what we want to see!
 (Trac #6067 is an example.) To preserve semantics we'd have to say
-   x `seq` error Bool "Inaccessible case"
+   x `seq` error Bool "Inaccessible case"   
  but the 'seq' is just a case, so we are back to square 1.  Or I suppose
 we could say
    x |> UnsafeCoerce T Bool
@@ -411,7 +411,7 @@ one type to another.  For example
 
     f :: Int -> Int
     f n = error "urk"
-
+   
     g :: Int -> (# Char, Bool #)
     g x = case f x of { 0 -> ..., n -> ... }
 
@@ -421,7 +421,7 @@ and we can discard the alternatives since the scrutinee is bottom to give
     case (error Int "urk") of (# Char, Bool #) {}
 
 This is nicer than using an unsafe coerce between Int ~ (# Char,Bool #),
-if for no other reason that we don't need to instantiate the (~) at an
+if for no other reason that we don't need to instantiate the (~) at an 
 unboxed type.
 
 
@@ -716,7 +716,7 @@ but CoreFVs, Subst, PprCore, CoreTidy also inspect the representation.
 -- * \"Orphan\" if nothing on the LHS is defined in the same module
 --   as the rule itself
 data CoreRule
-  = Rule {
+  = Rule { 
         ru_name :: RuleName,            -- ^ Name of the rule, for communication with the user
         ru_act  :: Activation,          -- ^ When the rule is active
 
@@ -724,12 +724,12 @@ data CoreRule
         -- see comments with InstEnv.ClsInst( is_cls, is_rough )
         ru_fn    :: Name,               -- ^ Name of the 'Id.Id' at the head of this rule
         ru_rough :: [Maybe Name],       -- ^ Name at the head of each argument to the left hand side
-
+        
         -- Proper-matching stuff
         -- see comments with InstEnv.ClsInst( is_tvs, is_tys )
         ru_bndrs :: [CoreBndr],         -- ^ Variables quantified over
         ru_args  :: [CoreExpr],         -- ^ Left hand side arguments
-
+        
         -- And the right-hand side
         ru_rhs   :: CoreExpr,           -- ^ Right hand side of the rule
                                         -- Occurrence info is guaranteed correct
@@ -751,7 +751,7 @@ data CoreRule
 
   -- | Built-in rules are used for constant folding
   -- and suchlike.  They have no free variables.
-  | BuiltinRule {
+  | BuiltinRule {               
         ru_name  :: RuleName,   -- ^ As above
         ru_fn    :: Name,       -- ^ As above
         ru_nargs :: Int,        -- ^ Number of arguments that 'ru_try' consumes,
@@ -779,7 +779,7 @@ isAutoRule :: CoreRule -> Bool
 isAutoRule (BuiltinRule {}) = False
 isAutoRule (Rule { ru_auto = is_auto }) = is_auto
 
--- | The number of arguments the 'ru_fn' must be applied
+-- | The number of arguments the 'ru_fn' must be applied 
 -- to before the rule can match on it
 ruleArity :: CoreRule -> Int
 ruleArity (BuiltinRule {ru_nargs = n}) = n
@@ -847,7 +847,7 @@ data Unfolding
                        --
                        -- Here, @f@ gets an @OtherCon []@ unfolding.
 
-  | DFunUnfolding {     -- The Unfolding of a DFunId
+  | DFunUnfolding {     -- The Unfolding of a DFunId  
                         -- See Note [DFun unfoldings]
                         --     df = /\a1..am. \d1..dn. MkD t1 .. tk
                         --                                 (op1 a1..am d1..dn)
@@ -857,18 +857,18 @@ data Unfolding
         df_args  :: [CoreExpr]  -- Args of the data con: types, superclasses and methods,
     }                           -- in positional order
 
-  | CoreUnfolding {             -- An unfolding for an Id with no pragma,
+  | CoreUnfolding {             -- An unfolding for an Id with no pragma, 
                                 -- or perhaps a NOINLINE pragma
-                                -- (For NOINLINE, the phase, if any, is in the
+                                -- (For NOINLINE, the phase, if any, is in the 
                                 -- InlinePragInfo for this Id.)
         uf_tmpl       :: CoreExpr,        -- Template; occurrence info is correct
         uf_src        :: UnfoldingSource, -- Where the unfolding came from
         uf_is_top     :: Bool,          -- True <=> top level binding
-        uf_is_value   :: Bool,          -- exprIsHNF template (cached); it is ok to discard
+        uf_is_value   :: Bool,          -- exprIsHNF template (cached); it is ok to discard 
                                         --      a `seq` on this variable
         uf_is_conlike :: Bool,          -- True <=> applicn of constructor or CONLIKE function
                                         --      Cached version of exprIsConLike
-        uf_is_work_free :: Bool,                -- True <=> doesn't waste (much) work to expand
+        uf_is_work_free :: Bool,                -- True <=> doesn't waste (much) work to expand 
                                         --          inside an inlining
                                         --      Cached version of exprIsCheap
         uf_expandable :: Bool,          -- True <=> can expand in RULE matching
@@ -877,8 +877,8 @@ data Unfolding
     }
   -- ^ An unfolding with redundant cached information. Parameters:
   --
-  --  uf_tmpl: Template used to perform unfolding;
-  --           NB: Occurrence info is guaranteed correct:
+  --  uf_tmpl: Template used to perform unfolding; 
+  --           NB: Occurrence info is guaranteed correct: 
   --               see Note [OccInfo in unfoldings and rules]
   --
   --  uf_is_top: Is this a top level binding?
@@ -895,11 +895,11 @@ data Unfolding
 ------------------------------------------------
 data UnfoldingSource
   = -- See also Note [Historical note: unfoldings for wrappers]
-
+   
     InlineRhs          -- The current rhs of the function
                        -- Replace uf_tmpl each time around
 
-  | InlineStable       -- From an INLINE or INLINABLE pragma
+  | InlineStable       -- From an INLINE or INLINABLE pragma 
                        --   INLINE     if guidance is UnfWhen
                        --   INLINABLE  if guidance is UnfIfGoodArgs/UnfoldNever
                        -- (well, technically an INLINABLE might be made
@@ -917,7 +917,7 @@ data UnfoldingSource
                        -- See Note [InlineRules]
 
   | InlineCompulsory   -- Something that *has* no binding, so you *must* inline it
-                       -- Only a few primop-like things have this property
+                       -- Only a few primop-like things have this property 
                        -- (see MkId.lhs, calls to mkCompulsoryUnfolding).
                        -- Inline absolutely always, however boring the context.
 
@@ -927,7 +927,7 @@ data UnfoldingSource
 data UnfoldingGuidance
   = UnfWhen {   -- Inline without thinking about the *size* of the uf_tmpl
                 -- Used (a) for small *and* cheap unfoldings
-                --      (b) for INLINE functions
+                --      (b) for INLINE functions 
                 -- See Note [INLINE for small functions] in CoreUnfold
       ug_arity    :: Arity,             -- Number of value arguments expected
 
@@ -976,7 +976,7 @@ an Id, so, eg, substitutions need not traverse them.
 Note [DFun unfoldings]
 ~~~~~~~~~~~~~~~~~~~~~~
 The Arity in a DFunUnfolding is total number of args (type and value)
-that the DFun needs to produce a dictionary.  That's not necessarily
+that the DFun needs to produce a dictionary.  That's not necessarily 
 related to the ordinary arity of the dfun Id, esp if the class has
 one method, so the dictionary is represented by a newtype.  Example
 
@@ -987,7 +987,7 @@ The instance translates to
 
      $dfCList :: forall a. C a => C [a]  -- Arity 2!
      $dfCList = /\a.\d. $copList {a} d |> co
-
+ 
      $copList :: forall a. C a => [a] -> Int  -- Arity 2!
      $copList = /\a.\d.\xs. op {a} d (head xs)
 
@@ -1023,8 +1023,8 @@ mkOtherCon :: [AltCon] -> Unfolding
 mkOtherCon = OtherCon
 
 seqUnfolding :: Unfolding -> ()
-seqUnfolding (CoreUnfolding { uf_tmpl = e, uf_is_top = top,
-                uf_is_value = b1, uf_is_work_free = b2,
+seqUnfolding (CoreUnfolding { uf_tmpl = e, uf_is_top = top, 
+                uf_is_value = b1, uf_is_work_free = b2, 
                 uf_expandable = b3, uf_is_conlike = b4,
                 uf_guidance = g})
   = seqExpr e `seq` top `seq` b1 `seq` b2 `seq` b3 `seq` b4 `seq` seqGuidance g
@@ -1057,7 +1057,7 @@ maybeUnfoldingTemplate (DFunUnfolding { df_bndrs = bndrs, df_con = con, df_args 
 maybeUnfoldingTemplate _
   = Nothing
 
--- | The constructors that the unfolding could never be:
+-- | The constructors that the unfolding could never be: 
 -- returns @[]@ if no information is available
 otherCons :: Unfolding -> [AltCon]
 otherCons (OtherCon cons) = cons
@@ -1096,7 +1096,7 @@ isExpandableUnfolding (CoreUnfolding { uf_expandable = is_expable }) = is_expabl
 isExpandableUnfolding _                                              = False
 
 expandUnfolding_maybe :: Unfolding -> Maybe CoreExpr
--- Expand an expandable unfolding; this is used in rule matching
+-- Expand an expandable unfolding; this is used in rule matching 
 --   See Note [Expanding variables] in Rules.lhs
 -- The key point here is that CONLIKE things can be expanded
 expandUnfolding_maybe (CoreUnfolding { uf_expandable = True, uf_tmpl = rhs }) = Just rhs
@@ -1119,7 +1119,7 @@ isCompulsoryUnfolding (CoreUnfolding { uf_src = InlineCompulsory }) = True
 isCompulsoryUnfolding _                                             = False
 
 isStableUnfolding :: Unfolding -> Bool
--- True of unfoldings that should not be overwritten
+-- True of unfoldings that should not be overwritten 
 -- by a CoreUnfolding for the RHS of a let-binding
 isStableUnfolding (CoreUnfolding { uf_src = src }) = isStableSource src
 isStableUnfolding (DFunUnfolding {})               = True
@@ -1146,7 +1146,7 @@ canUnfold _                                   = False
 {-
 Note [InlineRules]
 ~~~~~~~~~~~~~~~~~
-When you say
+When you say 
       {-# INLINE f #-}
       f x = <rhs>
 you intend that calls (f e) are replaced by <rhs>[e/x] So we
@@ -1161,8 +1161,8 @@ which deforests well at the call site.
 So INLINE pragma gives rise to an InlineRule, which captures the original RHS.
 
 Moreover, it's only used when 'f' is applied to the
-specified number of arguments; that is, the number of argument on
-the LHS of the '=' sign in the original source definition.
+specified number of arguments; that is, the number of argument on 
+the LHS of the '=' sign in the original source definition. 
 For example, (.) is now defined in the libraries like this
    {-# INLINE (.) #-}
    (.) f g = \x -> f (g x)
@@ -1220,7 +1220,7 @@ cmpAltCon (DataAlt _)  DEFAULT      = GT
 cmpAltCon (LitAlt  l1) (LitAlt  l2) = l1 `compare` l2
 cmpAltCon (LitAlt _)   DEFAULT      = GT
 
-cmpAltCon con1 con2 = WARN( True, text "Comparing incomparable AltCons" <+>
+cmpAltCon con1 con2 = WARN( True, text "Comparing incomparable AltCons" <+> 
                                   ppr con1 <+> ppr con2 )
                       LT
 
@@ -1249,7 +1249,7 @@ a list of CoreBind
    on each Rec binding, and splits it into a sequence of smaller
    bindings where possible.  So the program typically starts life as a
    single giant Rec, which is then dependency-analysed into smaller
-   chunks.
+   chunks.  
 -}
 
 -- If you edit this type, you may need to update the GHC formalism
@@ -1333,13 +1333,18 @@ mkVarApps :: Expr b -> [Var] -> Expr b
 mkConApp      :: DataCon -> [Arg b] -> Expr b
 
 mkApps    f args = foldl App                       f args
-mkTyApps  f args = foldl (\ e a -> App e (Type a)) f args
 mkCoApps  f args = foldl (\ e a -> App e (Coercion a)) f args
 mkVarApps f vars = foldl (\ e a -> App e (varToCoreExpr a)) f vars
 mkConApp con args = mkApps (Var (dataConWorkId con)) args
 
+mkTyApps  f args = foldl (\ e a -> App e (typeOrCoercion a)) f args
+  where
+    typeOrCoercion ty
+      | Just co <- isCoercionTy_maybe ty = Coercion co
+      | otherwise                        = Type ty
+
 mkConApp2 :: DataCon -> [Type] -> [Var] -> Expr b
-mkConApp2 con tys arg_ids = Var (dataConWorkId con)
+mkConApp2 con tys arg_ids = Var (dataConWorkId con) 
                             `mkApps` map Type tys
                             `mkApps` map varToCoreExpr arg_ids
 
@@ -1424,7 +1429,7 @@ mkCoBind cv co      = NonRec cv (Coercion co)
 
 -- | Convert a binder into either a 'Var' or 'Type' 'Expr' appropriately
 varToCoreExpr :: CoreBndr -> Expr b
-varToCoreExpr v | isTyVar v = Type (mkTyVarTy v)
+varToCoreExpr v | isTyVar v = Type (mkOnlyTyVarTy v)
                 | isCoVar v = Coercion (mkCoVarCo v)
                 | otherwise = ASSERT( isId v ) Var v
 
@@ -1467,13 +1472,11 @@ flattenBinds []                   = []
 -- | We often want to strip off leading lambdas before getting down to
 -- business. This function is your friend.
 collectBinders               :: Expr b -> ([b],         Expr b)
--- | Collect as many type bindings as possible from the front of a nested lambda
-collectTyBinders             :: CoreExpr -> ([TyVar],     CoreExpr)
--- | Collect as many value bindings as possible from the front of a nested lambda
-collectValBinders            :: CoreExpr -> ([Id],        CoreExpr)
--- | Collect type binders from the front of the lambda first,
--- then follow up by collecting as many value bindings as possible
--- from the resulting stripped expression
+-- | Collect type and value binders from nested lambdas, stopping
+-- right before any "forall"s within a non-forall. For example,
+-- forall (a :: *) (b :: Foo ~ Bar) (c :: *). Baz -> forall (d :: *). Blob
+-- will pull out the binders for a, b, c, and Baz, but not for d or anything
+-- within Blob. This is to coordinate with tcSplitSigmaTy.
 collectTyAndValBinders       :: CoreExpr -> ([TyVar], [Id], CoreExpr)
 
 collectBinders expr
@@ -1483,22 +1486,15 @@ collectBinders expr
     go bs e          = (reverse bs, e)
 
 collectTyAndValBinders expr
-  = (tvs, ids, body)
-  where
-    (tvs, body1) = collectTyBinders expr
-    (ids, body)  = collectValBinders body1
-
-collectTyBinders expr
-  = go [] expr
-  where
-    go tvs (Lam b e) | isTyVar b = go (b:tvs) e
-    go tvs e                     = (reverse tvs, e)
-
-collectValBinders expr
-  = go [] expr
-  where
-    go ids (Lam b e) | isId b = go (b:ids) e
-    go ids body               = (reverse ids, body)
+  = go_forall [] [] expr
+  where go_forall tvs ids (Lam b e)
+          | isTyVar b       = go_forall (b:tvs) ids e
+          | isCoVar b       = go_forall tvs (b:ids) e
+        go_forall tvs ids e = go_fun tvs ids e
+        
+        go_fun tvs ids (Lam b e)
+          | isId b          = go_fun tvs (b:ids) e
+        go_fun tvs ids e    = (reverse tvs, reverse ids, e)
 
 -- | Takes a nested application expression and returns the the function
 -- being applied and the arguments to which it is applied
@@ -1532,12 +1528,12 @@ collectArgsTicks skipTick expr
 At one time we optionally carried type arguments through to runtime.
 @isRuntimeVar v@ returns if (Lam v _) really becomes a lambda at runtime,
 i.e. if type applications are actual lambdas because types are kept around
-at runtime.  Similarly isRuntimeArg.
+at runtime.  Similarly isRuntimeArg.  
 -}
 
 -- | Will this variable exist at runtime?
 isRuntimeVar :: Var -> Bool
-isRuntimeVar = isId
+isRuntimeVar = isId 
 
 -- | Will this argument expression exist at runtime?
 isRuntimeArg :: CoreExpr -> Bool
@@ -1621,7 +1617,7 @@ seqAlts ((c,bs,e):alts) = c `seq` seqBndrs bs `seq` seqExpr e `seq` seqAlts alts
 
 seqRules :: [CoreRule] -> ()
 seqRules [] = ()
-seqRules (Rule { ru_bndrs = bndrs, ru_args = args, ru_rhs = rhs } : rules)
+seqRules (Rule { ru_bndrs = bndrs, ru_args = args, ru_rhs = rhs } : rules) 
   = seqBndrs bndrs `seq` seqExprs (rhs:args) `seq` seqRules rules
 seqRules (BuiltinRule {} : rules) = seqRules rules
 

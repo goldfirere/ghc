@@ -10,7 +10,7 @@ Haskell. [WDP 94/11])
 
 module IdInfo (
         -- * The IdDetails type
-        IdDetails(..), pprIdDetails, coVarDetails,
+        IdDetails(..), pprIdDetails, coVarDetails, isCoVarDetails,
 
         -- * The IdInfo type
         IdInfo,         -- Abstract
@@ -142,8 +142,17 @@ data IdDetails
        --                  implemented with a newtype, so it might be bad
        --                  to be strict on this dictionary
 
+  | CoVarId                    -- ^ A coercion variable
+
+-- | Just a synonym for 'CoVarId'. Written separately so it can be
+-- exported in the hs-boot file.
 coVarDetails :: IdDetails
-coVarDetails = VanillaId
+coVarDetails = CoVarId
+
+-- | Check if an 'IdDetails' says 'CoVarId'.
+isCoVarDetails :: IdDetails -> Bool
+isCoVarDetails CoVarId = True
+isCoVarDetails _       = False
 
 instance Outputable IdDetails where
     ppr = pprIdDetails
@@ -163,8 +172,9 @@ pprIdDetails other     = brackets (pp other)
                              <> ppWhen (ns /= 0) (brackets (int ns))
                              <> ppWhen nt (ptext (sLit "(nt)"))
    pp (RecSelId { sel_naughty = is_naughty })
-                         = brackets $ ptext (sLit "RecSel")
+                         = brackets $ ptext (sLit "RecSel") 
                             <> ppWhen is_naughty (ptext (sLit "(naughty)"))
+   pp CoVarId           = ptext (sLit "CoVarId")
 
 {-
 ************************************************************************

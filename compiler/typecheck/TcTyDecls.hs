@@ -12,25 +12,23 @@ files for imported data types.
 {-# LANGUAGE CPP #-}
 
 module TcTyDecls(
-        calcRecFlags, RecTyInfo(..),
+        calcRecFlags, RecTyInfo(..), 
         calcSynCycles, calcClassCycles,
         RoleAnnots, extractRoleAnnots, emptyRoleAnnots, lookupRoleAnnots
     ) where
 
 #include "HsVersions.h"
 
-import TypeRep
 import HsSyn
 import Class
 import Type
-import Kind
 import HscTypes
 import TyCon
 import DataCon
-import Var
 import Name
 import NameEnv
 import VarEnv
+import Var
 import VarSet
 import NameSet
 import Coercion ( ltRole )
@@ -152,7 +150,7 @@ We want definitions such as:
 
 to be accepted, even though a naive acyclicity check would reject the
 program as having a cycle between D and its superclass.  Why? Because
-when we instantiate
+when we instantiate 
      D ty1
 we get the superclas
      C D ty1
@@ -167,8 +165,8 @@ Where expand is defined as follows:
 
 (1)  expand(a ty1 ... tyN) = expand(ty1) \union ... \union expand(tyN)
 
-(2)  expand(D ty1 ... tyN) = {D}
-                             \union sup_D[ty1/x1, ..., tyP/xP]
+(2)  expand(D ty1 ... tyN) = {D} 
+                             \union sup_D[ty1/x1, ..., tyP/xP] 
                              \union expand(ty(P+1)) ... \union expand(tyN)
            where (D x1 ... xM) is a class, P = min(M,N)
 
@@ -184,8 +182,8 @@ Furthermore, expand always looks through type synonyms.
 -}
 
 calcClassCycles :: Class -> [[TyCon]]
-calcClassCycles cls
-  = nubBy eqAsCycle $
+calcClassCycles cls 
+  = nubBy eqAsCycle $ 
     expandTheta (unitUniqSet cls) [classTyCon cls] (classSCTheta cls) []
   where
     -- The last TyCon in the cycle is always the same as the first
@@ -203,17 +201,31 @@ calcClassCycles cls
     expandTheta _    _    []           = id
     expandTheta seen path (pred:theta) = expandType seen path pred . expandTheta seen path theta
 
-    expandType seen path (TyConApp tc tys)
+    expandType seen path ty = analyzeType analysis ty
+      where
+        analysis = TypeAnalysis
+          { ta_tyvar    = const id
+          , ta_tyconapp = expandTyConApp seen path
+          , ta_fun      = expand_2_types
+          , ta_app      = expand_2_types
+          , ta_forall   = \tv _vis inner -> expand_2_types (tyVarKind tv) inner
+          , ta_lit      = const id
+          , ta_cast     = \ty _co -> expandType seen path ty
+          , ta_coercion = const id }
+
+        expand_2_types t1 t2 = expandType seen path t1 . expandType seen path t2
+
+    expandTyConApp seen path tc tys
       -- Expand unsaturated classes to their superclass theta if they are yet unseen.
       -- If they have already been seen then we have detected an error!
       | Just cls <- tyConClass_maybe tc
       , let (env, remainder) = papp (classTyVars cls) tys
             rest_tys = either (const []) id remainder
       = if cls `elementOfUniqSet` seen
-         then (reverse (classTyCon cls:path):)
+         then (reverse (classTyCon cls:path):) 
               . flip (foldr (expandType seen path)) tys
-         else expandTheta (addOneToUniqSet seen cls) (tc:path)
-                          (substTys (mkTopTvSubst env) (classSCTheta cls))
+         else expandTheta (addOneToUniqSet seen cls) (tc:path) 
+                          (substTys (mkTopTCvSubst env) (classSCTheta cls))
               . flip (foldr (expandType seen path)) rest_tys
 
       -- For synonyms, try to expand them: some arguments might be
@@ -222,18 +234,12 @@ calcClassCycles cls
       | Just (tvs, rhs) <- synTyConDefn_maybe tc
       , let (env, remainder) = papp tvs tys
             rest_tys = either (const []) id remainder
-      = expandType seen (tc:path) (substTy (mkTopTvSubst env) rhs)
+      = expandType seen (tc:path) (substTy (mkTopTCvSubst env) rhs) 
         . flip (foldr (expandType seen path)) rest_tys
 
       -- For non-class, non-synonyms, just check the arguments
       | otherwise
       = flip (foldr (expandType seen path)) tys
-
-    expandType _    _    (TyVarTy {})     = id
-    expandType _    _    (LitTy {})       = id
-    expandType seen path (AppTy t1 t2)    = expandType seen path t1 . expandType seen path t2
-    expandType seen path (FunTy t1 t2)    = expandType seen path t1 . expandType seen path t2
-    expandType seen path (ForAllTy _tv t) = expandType seen path t
 
     papp :: [TyVar] -> [Type] -> ([(TyVar, Type)], Either [TyVar] [Type])
     papp []       tys      = ([], Right tys)
@@ -355,8 +361,7 @@ recursiveness, because we need only look at the type decls in the module being
 compiled, plus the outer structure of directly-mentioned types.
 -}
 
-data RecTyInfo = RTI { rti_promotable :: Bool
-                     , rti_roles      :: Name -> [Role]
+data RecTyInfo = RTI { rti_roles      :: Name -> [Role]
                      , rti_is_rec     :: Name -> RecFlag }
 
 calcRecFlags :: ModDetails -> Bool  -- hs-boot file?
@@ -364,16 +369,12 @@ calcRecFlags :: ModDetails -> Bool  -- hs-boot file?
 -- The 'boot_names' are the things declared in M.hi-boot, if M is the current module.
 -- Any type constructors in boot_names are automatically considered loop breakers
 calcRecFlags boot_details is_boot mrole_env tyclss
-  = RTI { rti_promotable = is_promotable
-        , rti_roles      = roles
+  = RTI { rti_roles      = roles
         , rti_is_rec     = is_rec }
   where
-    rec_tycon_names = mkNameSet (map tyConName all_tycons)
     all_tycons = mapMaybe getTyCon tyclss
                    -- Recursion of newtypes/data types can happen via
                    -- the class TyCon, so tyclss includes the class tycons
-
-    is_promotable = all (isPromotableTyCon rec_tycon_names) all_tycons
 
     roles = inferRoles is_boot mrole_env all_tycons
 
@@ -399,7 +400,7 @@ calcRecFlags boot_details is_boot mrole_env tyclss
 
     single_con_tycons = [ tc | tc <- all_tycons
                              , not (tyConName tc `elemNameSet` boot_name_set)
-                                 -- Remove the boot_name_set because they are
+                                 -- Remove the boot_name_set because they are 
                                  -- going to be loop breakers regardless.
                              , isSingleton (tyConDataCons tc) ]
         -- Both newtypes and data types, with exactly one data constructor
@@ -463,69 +464,8 @@ findLoopBreakers deps
                  name <- tyConName tc : go edges']
 
 {-
-************************************************************************
-*                                                                      *
-                  Promotion calculation
-*                                                                      *
-************************************************************************
-
-See Note [Checking whether a group is promotable]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We only want to promote a TyCon if all its data constructors
-are promotable; it'd be very odd to promote some but not others.
-
-But the data constructors may mention this or other TyCons.
-
-So we treat the recursive uses as all OK (ie promotable) and
-do one pass to check that each TyCon is promotable.
-
-Currently type synonyms are not promotable, though that
-could change.
--}
-
-isPromotableTyCon :: NameSet -> TyCon -> Bool
-isPromotableTyCon rec_tycons tc
-  =  isAlgTyCon tc    -- Only algebraic; not even synonyms
-                     -- (we could reconsider the latter)
-  && ok_kind (tyConKind tc)
-  && case algTyConRhs tc of
-       DataTyCon { data_cons = cs } -> all ok_con cs
-       NewTyCon { data_con = c }    -> ok_con c
-       AbstractTyCon {}             -> False
-       DataFamilyTyCon {}           -> False
-
-  where
-    ok_kind kind = all isLiftedTypeKind args && isLiftedTypeKind res
-            where  -- Checks for * -> ... -> * -> *
-              (args, res) = splitKindFunTys kind
-
-    -- See Note [Promoted data constructors] in TyCon
-    ok_con con = all (isLiftedTypeKind . tyVarKind) ex_tvs
-              && null eq_spec   -- No constraints
-              && null theta
-              && all (isPromotableType rec_tycons) orig_arg_tys
-       where
-         (_, ex_tvs, eq_spec, theta, orig_arg_tys, _) = dataConFullSig con
-
-
-isPromotableType :: NameSet -> Type -> Bool
--- Must line up with DataCon.promoteType
--- But the function lives here because we must treat the
--- *recursive* tycons as promotable
-isPromotableType rec_tcs con_arg_ty
-  = go con_arg_ty
-  where
-    go (TyConApp tc tys) =  tys `lengthIs` tyConArity tc
-                         && (tyConName tc `elemNameSet` rec_tcs
-                             || isJust (promotableTyCon_maybe tc))
-                         && all go tys
-    go (FunTy arg res)   = go arg && go res
-    go (TyVarTy {})      = True
-    go _                 = False
-
-{-
-************************************************************************
-*                                                                      *
+%************************************************************************
+%*                                                                      *
         Role annotations
 *                                                                      *
 ************************************************************************
@@ -644,6 +584,14 @@ so we need to take into account
   * the arguments:   (F a) and (a->a)
   * the context:     C a b
   * the result type: (G a)   -- this is in the eq_spec
+
+
+Note [Coercions in role inference]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Is (t |> co1) representationally equal to (t |> co2)? Of course they are! Changing
+the kind of a type is totally irrelevant to the representation of that type. So,
+we want to totally ignore coercions when doing role inference. This includes omitting
+any type variables that appear in nominal positions but only within coercions.
 -}
 
 type RoleEnv    = NameEnv [Role]        -- from tycon names to roles
@@ -665,24 +613,32 @@ initialRoleEnv is_boot annots = extendNameEnvList emptyNameEnv .
 
 initialRoleEnv1 :: Bool -> RoleAnnots -> TyCon -> (Name, [Role])
 initialRoleEnv1 is_boot annots_env tc
-  | isFamilyTyCon tc      = (name, map (const Nominal) tyvars)
+  | isFamilyTyCon tc      = (name, map (const Nominal) bndrs)
   | isAlgTyCon tc         = (name, default_roles)
   | isTypeSynonymTyCon tc = (name, default_roles)
   | otherwise             = pprPanic "initialRoleEnv1" (ppr tc)
   where name         = tyConName tc
-        tyvars       = tyConTyVars tc
-        (kvs, tvs)   = span isKindVar tyvars
+        bndrs        = tyConBinders tc
+        visflags     = map binderVisibility bndrs
+        num_exps     = count (== Visible) visflags
 
           -- if the number of annotations in the role annotation decl
           -- is wrong, just ignore it. We check this in the validity check.
         role_annots
           = case lookupNameEnv annots_env name of
               Just (L _ (RoleAnnotDecl _ annots))
-                | annots `equalLength` tvs -> map unLoc annots
-              _                            -> map (const Nothing) tvs
-        default_roles = map (const Nominal) kvs ++
-                        zipWith orElse role_annots (repeat default_role)
+                | annots `lengthIs` num_exps -> map unLoc annots
+              _                              -> replicate num_exps Nothing
+        default_roles = build_default_roles visflags role_annots
 
+        build_default_roles (Invisible : viss) ras
+          = Nominal : build_default_roles viss ras
+        build_default_roles (Visible : viss) (m_annot : ras)
+          = (m_annot `orElse` default_role) : build_default_roles viss ras
+        build_default_roles [] [] = []
+        build_default_roles _ _ = pprPanic "initialRoleEnv1 (2)"
+                                           (vcat [ppr tc, ppr role_annots])
+        
         default_role
           | isClassTyCon tc = Nominal
           | is_boot         = Representational
@@ -733,31 +689,55 @@ irClass tc_name cls
 irDataCon :: Name -> DataCon -> RoleM ()
 irDataCon tc_name datacon
   = addRoleInferenceInfo tc_name univ_tvs $
-    mapM_ (irType ex_var_set) (eqSpecPreds eq_spec ++ theta ++ arg_tys)
-      -- See Note [Role-checking data constructor arguments]
+    mapM_ (irType ex_var_set)
+          (map tyVarKind ex_tvs ++ eqSpecPreds eq_spec ++ theta ++ arg_tys)
+      -- See Note [Role-checking data constructor arguments] 
   where
-    (univ_tvs, ex_tvs, eq_spec, theta, arg_tys, _res_ty) = dataConFullSig datacon
+    (univ_tvs, ex_tvs, _dep_eq_spec, eq_spec, theta, arg_tys, _res_ty)
+      = dataConFullSig datacon
     ex_var_set = mkVarSet ex_tvs
 
 irType :: VarSet -> Type -> RoleM ()
-irType = go
+irType lcls = analyzeType analysis
   where
-    go lcls (TyVarTy tv) = unless (tv `elemVarSet` lcls) $
-                           updateRole Representational tv
-    go lcls (AppTy t1 t2) = go lcls t1 >> mark_nominal lcls t2
-    go lcls (TyConApp tc tys)
-      = do { roles <- lookupRolesX tc
-           ; zipWithM_ (go_app lcls) roles tys }
-    go lcls (FunTy t1 t2) = go lcls t1 >> go lcls t2
-    go lcls (ForAllTy tv ty) = go (extendVarSet lcls tv) ty
-    go _    (LitTy {}) = return ()
-
+    analysis = TypeAnalysis
+      { ta_tyvar    = \tv -> unless (tv `elemVarSet` lcls) $
+                             updateRole Representational tv
+      , ta_tyconapp = \tc tys -> do { roles <- lookupRolesX tc
+                                    ; zipWithM_ (go_app lcls) roles tys }
+      , ta_fun      = \arg res -> irType lcls arg >> irType lcls res
+      , ta_app      = \t1 t2 -> irType lcls t1 >> mark_nominal lcls t2
+           -- TODO (RAE): Is the following right??
+      , ta_forall   = \tv _vis inner -> irType lcls (tyVarKind tv) >>
+                                        irType (extendVarSet lcls tv) inner
+      , ta_lit      = const $ return ()
+      -- See Note [Coercions in role inference]
+      , ta_cast     = \ty _ -> irType lcls ty
+      , ta_coercion = const $ return () }
+    
     go_app _ Phantom _ = return ()                 -- nothing to do here
     go_app lcls Nominal ty = mark_nominal lcls ty  -- all vars below here are N
-    go_app lcls Representational ty = go lcls ty
+    go_app lcls Representational ty = irType lcls ty
 
-    mark_nominal lcls ty = let nvars = tyVarsOfType ty `minusVarSet` lcls in
+    mark_nominal lcls ty = let nvars = get_ty_vars ty `minusVarSet` lcls in
                            mapM_ (updateRole Nominal) (varSetElems nvars)
+
+     -- get_ty_vars gets all the tyvars (no covars!) from a type *without*
+     -- recurring into coercions. Recall: coercions are totally ignored during
+     -- role inference. See [Coercions in role inference]
+    get_ty_vars = analyzeType get_ty_vars_analysis
+    get_ty_vars_analysis = TypeAnalysis
+      { ta_tyvar    = unitVarSet
+      , ta_tyconapp = \_tc -> mapUnionVarSet get_ty_vars
+      , ta_fun      = get_ty_vars_twice
+      , ta_app      = get_ty_vars_twice
+      , ta_forall   = \tv _ inner -> get_ty_vars inner `delVarSet` tv
+                                     `unionVarSet` get_ty_vars (tyVarKind tv)
+      , ta_lit      = const emptyVarSet
+      , ta_cast     = \ty _ -> get_ty_vars ty
+      , ta_coercion = const emptyVarSet }
+
+    get_ty_vars_twice t1 t2 = get_ty_vars t1 `unionVarSet` get_ty_vars t2
 
 -- like lookupRoles, but with Nominal tags at the end for oversaturated TyConApps
 lookupRolesX :: TyCon -> RoleM [Role]
@@ -777,11 +757,10 @@ lookupRoles tc
 updateRole :: Role -> TyVar -> RoleM ()
 updateRole role tv
   = do { var_ns <- getVarNs
+       ; name <- getTyConName
        ; case lookupVarEnv var_ns tv of
-       { Nothing -> pprPanic "updateRole" (ppr tv)
-       ; Just n  -> do
-       { name <- getTyConName
-       ; updateRoleEnv name n role }}}
+           Nothing -> pprPanic "updateRole" (ppr name $$ ppr tv $$ ppr var_ns)
+           Just n  -> updateRoleEnv name n role }
 
 -- the state in the RoleM monad
 data RoleInferenceState = RIS { role_env  :: RoleEnv
@@ -811,7 +790,7 @@ instance Monad RoleM where
 
 runRoleM :: RoleEnv -> RoleM () -> (RoleEnv, Bool)
 runRoleM env thing = (env', update)
-  where RIS { role_env = env', update = update } = snd $ unRM thing Nothing state
+  where RIS { role_env = env', update = update } = snd $ unRM thing Nothing state 
         state = RIS { role_env  = env, update    = False }
 
 addRoleInferenceInfo :: Name -> [TyVar] -> RoleM a -> RoleM a

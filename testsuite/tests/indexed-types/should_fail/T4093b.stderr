@@ -1,5 +1,5 @@
 
-T4093b.hs:31:13:
+T4093b.hs:31:14:
     Could not deduce (e ~ C)
     from the context (EitherCO e (A C O n) (A O O n) ~ A e O n,
                       EitherCO x (A C C n) (A C O n) ~ A C x n)
@@ -14,8 +14,6 @@ T4093b.hs:31:13:
                                 EitherCO x (A C C n) (A C O n) ~ A C x n) =>
                                Block n e x -> A e x n
           at T4093b.hs:20:12
-    Expected type: EitherCO e (A C O n) (A O O n)
-      Actual type: (MaybeC C (n C O), MaybeC O (n O C))
     Relevant bindings include
       f :: n C O
            -> EitherCO e (A C O n) (A O O n) -> EitherCO e (A C O n) (A O O n)
@@ -25,17 +23,6 @@ T4093b.hs:31:13:
         (bound at T4093b.hs:34:5)
       b :: Block n e x (bound at T4093b.hs:25:17)
       blockToNodeList :: Block n e x -> A e x n (bound at T4093b.hs:25:1)
+    In the expression: JustC n
     In the expression: (JustC n, NothingC)
     In an equation for ‘f’: f n _ = (JustC n, NothingC)
-    In an equation for ‘blockToNodeList’:
-        blockToNodeList b
-          = foldBlockNodesF (f, l) b z
-          where
-              z ::
-                EitherCO e (EitherCO e (A C O n) (A O O n)) (EitherCO e (A C O n) (A O O n))
-              z = undefined
-              f ::
-                n C O
-                -> EitherCO e (A C O n) (A O O n) -> EitherCO e (A C O n) (A O O n)
-              f n _ = (JustC n, NothingC)
-              ....

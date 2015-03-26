@@ -31,7 +31,7 @@ import Literal          ( litIsLifted )
 import HscTypes         ( ModGuts(..) )
 import WwLib            ( mkWorkerArgs )
 import DataCon
-import Coercion         hiding( substTy, substCo )
+import Coercion         hiding( substCo )
 import Rules
 import Type             hiding ( substTy )
 import TyCon            ( isRecursiveTyCon, tyConName )
@@ -941,7 +941,7 @@ ignoreTyCon env tycon
   = lookupUFM (sc_annotations env) tycon == Just NoSpecConstr
 #endif /* GHCI */
 
-forceSpecBndr env var = forceSpecFunTy env . snd . splitForAllTys . varType $ var
+forceSpecBndr env var = forceSpecFunTy env . snd . splitNamedForAllTys . varType $ var
 
 forceSpecFunTy :: ScEnv -> Type -> Bool
 forceSpecFunTy env = any (forceSpecArgTy env) . fst . splitFunTys
@@ -1605,7 +1605,7 @@ spec_one env fn arg_bndrs body (call_pat@(qvars, pats), rule_number)
 --        return ()
 
                 -- And build the results
-        ; let spec_id    = mkLocalId spec_name (mkPiTypes spec_lam_args body_ty)
+        ; let spec_id    = mkLocalIdOrCoVar spec_name (mkPiTypes spec_lam_args body_ty)
                              -- See Note [Transfer strictness]
                              `setIdStrictness` spec_str
                              `setIdArity` count isId spec_lam_args
@@ -1940,7 +1940,7 @@ argToPat _env _in_scope _val_env arg _arg_occ
 wildCardPat :: Type -> UniqSM (Bool, CoreArg)
 wildCardPat ty
   = do { uniq <- getUniqueM
-       ; let id = mkSysLocal (fsLit "sc") uniq ty
+       ; let id = mkSysLocalOrCoVar (fsLit "sc") uniq ty
        ; return (False, varToCoreExpr id) }
 
 argsToPats :: ScEnv -> InScopeSet -> ValueEnv

@@ -21,7 +21,7 @@ module InstEnv (
 
         InstEnvs(..), VisibleOrphanModules, InstEnv,
         emptyInstEnv, extendInstEnv, deleteFromInstEnv, identicalClsInstHead,
-        extendInstEnvList, lookupUniqueInstEnv, lookupInstEnv', lookupInstEnv, instEnvElts,
+        extendInstEnvList, lookupUniqueInstEnv, lookupInstEnv, instEnvElts,
         memberInstEnv, instIsVisible,
         classInstances, orphNamesOfClsInst, instanceBindFun,
         instanceCantMatch, roughMatchTcs
@@ -67,7 +67,7 @@ data ClsInst
              , is_tcs  :: [Maybe Name]  -- Top of type args
 
                 -- Used for "proper matching"; see Note [Proper-match fields]
-             , is_tvs  :: [TyVar]       -- Fresh template tyvars for full match
+             , is_tvs  :: [TyCoVar]     -- Fresh template tyvars for full match
                                         -- See Note [Template tyvars are fresh]
              , is_cls  :: Class         -- The real class
              , is_tys  :: [Type]        -- Full arg types (mentioning is_tvs)
@@ -193,7 +193,7 @@ pprInstanceHdr (ClsInst { is_flag = flag, is_dfun = dfun })
         theta_to_print = drop (dfunNSilent dfun) theta
           -- See Note [Silent superclass arguments] in TcInstDcls
         ty_to_print | debugStyle sty = dfun_ty
-                    | otherwise      = mkSigmaTy tvs theta_to_print res_ty
+                    | otherwise      = mkInvSigmaTy tvs theta_to_print res_ty
     in ptext (sLit "instance") <+> ppr flag <+> pprSigmaType ty_to_print
 
 pprInstances :: [ClsInst] -> SDoc
@@ -206,12 +206,12 @@ instanceHead (ClsInst { is_tvs = tvs, is_tys = tys, is_dfun = dfun })
    where
      (_, _, cls, _) = tcSplitDFunTy (idType dfun)
 
-instanceSig :: ClsInst -> ([TyVar], [Type], Class, [Type])
+instanceSig :: ClsInst -> ([TyCoVar], [Type], Class, [Type])
 -- Decomposes the DFunId
 instanceSig ispec = tcSplitDFunTy (idType (is_dfun ispec))
 
 mkLocalInstance :: DFunId -> OverlapFlag
-                -> [TyVar] -> Class -> [Type]
+                -> [TyCoVar] -> Class -> [Type]
                 -> ClsInst
 -- Used for local instances, where we can safely pull on the DFunId
 mkLocalInstance dfun oflag tvs cls tys
@@ -272,9 +272,10 @@ mkImportedInstance cls_nm mb_tcs dfun oflag orphan
 roughMatchTcs :: [Type] -> [Maybe Name]
 roughMatchTcs tys = map rough tys
   where
-    rough ty = case tcSplitTyConApp_maybe ty of
-                  Just (tc,_) -> Just (tyConName tc)
-                  Nothing     -> Nothing
+    rough ty
+      | Just (ty', _) <- tcSplitCastTy_maybe ty = rough ty'
+      | Just (tc,_) <- tcSplitTyConApp_maybe ty = Just (tyConName tc)
+      | otherwise                               = Nothing
 
 instanceCantMatch :: [Maybe Name] -> [Maybe Name] -> Bool
 -- (instanceCantMatch tcs1 tcs2) returns True if tcs1 cannot
@@ -758,7 +759,6 @@ where the 'Nothing' indicates that 'b' can be freely instantiated.
 -- |Look up an instance in the given instance environment. The given class application must match exactly
 -- one instance and the match may not contain any flexi type variables.  If the lookup is unsuccessful,
 -- yield 'Left errorMessage'.
---
 lookupUniqueInstEnv :: InstEnvs
                     -> Class -> [Type]
                     -> Either MsgDoc (ClsInst, [Type])
@@ -776,7 +776,7 @@ lookupUniqueInstEnv instEnv cls tys
 lookupInstEnv' :: InstEnv          -- InstEnv to look in
                -> VisibleOrphanModules   -- But filter against this
                -> Class -> [Type]  -- What we are looking for
-               -> ([InstMatch],    -- Successful matches
+               -> ([InstMatch],    -- Successful matches 
                    [ClsInst])     -- These don't match but do unify
 -- The second component of the result pair happens when we look up
 --      Foo [a]
@@ -793,6 +793,7 @@ lookupInstEnv' ie vis_mods cls tys
   where
     rough_tcs  = roughMatchTcs tys
     all_tvs    = all isNothing rough_tcs
+
     --------------
     lookup env = case lookupUFM env cls of
                    Nothing -> ([],[])   -- No instances for this class
@@ -809,7 +810,11 @@ lookupInstEnv' ie vis_mods cls tys
       | instanceCantMatch rough_tcs mb_tcs
       = find ms us rest
 
-      | Just subst <- tcMatchTys tpl_tv_set tpl_tys tys
+        -- The second return value from tcMatchTys is a coercion. This
+        -- will only be non-reflexive if a kind changes. But, every
+        -- fully-applied dictionary type is of kind Constraint, so we
+        -- don't worry about kind changes among individual type args.
+      | Just (subst, _) <- tcMatchTys tpl_tv_set tpl_tys tys
       = find ((item, map (lookup_tv subst) tpl_tvs) : ms) us rest
 
         -- Does not match, so next check whether the things unify
@@ -818,7 +823,7 @@ lookupInstEnv' ie vis_mods cls tys
       = find ms us rest
 
       | otherwise
-      = ASSERT2( tyVarsOfTypes tys `disjointVarSet` tpl_tv_set,
+      = ASSERT2( tyCoVarsOfTypes tys `disjointVarSet` tpl_tv_set,
                  (ppr cls <+> ppr tys <+> ppr all_tvs) $$
                  (ppr tpl_tvs <+> ppr tpl_tys)
                 )
@@ -832,9 +837,9 @@ lookupInstEnv' ie vis_mods cls tys
         tpl_tv_set = mkVarSet tpl_tvs
 
     ----------------
-    lookup_tv :: TvSubst -> TyVar -> DFunInstType
+    lookup_tv :: TCvSubst -> TyVar -> DFunInstType
         -- See Note [DFunInstType: instantiating types]
-    lookup_tv subst tv = case lookupTyVar subst tv of
+    lookup_tv subst tv = case lookupVar subst tv of
                                 Just ty -> Just ty
                                 Nothing -> Nothing
 
@@ -1000,7 +1005,7 @@ incoherent instances as long as there are are others.
 ************************************************************************
 -}
 
-instanceBindFun :: TyVar -> BindFlag
+instanceBindFun :: TyCoVar -> BindFlag
 instanceBindFun tv | isTcTyVar tv && isOverlappableTyVar tv = Skolem
                    | otherwise                              = BindMe
    -- Note [Binding when looking up instances]

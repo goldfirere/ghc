@@ -3,8 +3,8 @@ NoMatchErr.hs:19:7:
     Couldn't match type ‘Memo d’ with ‘Memo d0’
     NB: ‘Memo’ is a type function, and may not be injective
     The type variable ‘d0’ is ambiguous
-    Expected type: Memo d a -> Memo d a
-      Actual type: Memo d0 a -> Memo d0 a
+       Expected type: Memo d a -> Memo d a
+         Actual type: Memo d0 a0 -> Memo d0 a0
     In the ambiguity check for the type signature for ‘f’:
       f :: forall d a. Fun d => Memo d a -> Memo d a
     To defer the ambiguity check to use sites, enable AllowAmbiguousTypes

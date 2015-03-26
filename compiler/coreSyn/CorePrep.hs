@@ -665,7 +665,7 @@ cpeApp env expr
 
     collect_args (App fun arg@(Type arg_ty)) depth
       = do { (fun',hd,fun_ty,floats,ss) <- collect_args fun depth
-           ; return (App fun' arg, hd, applyTy fun_ty arg_ty, floats, ss) }
+           ; return (App fun' arg, hd, piResultTy fun_ty arg_ty, floats, ss) }
 
     collect_args (App fun arg@(Coercion arg_co)) depth
       = do { (fun',hd,fun_ty,floats,ss) <- collect_args fun depth
@@ -1243,7 +1243,7 @@ newVar :: Type -> UniqSM Id
 newVar ty
  = seqType ty `seq` do
      uniq <- getUniqueM
-     return (mkSysLocal (fsLit "sat") uniq ty)
+     return (mkSysLocalOrCoVar (fsLit "sat") uniq ty)
 
 
 ------------------------------------------------------------------------------

@@ -12,21 +12,19 @@ This module exports some utility functions of no great interest.
 
 -- | Utility functions for constructing Core syntax, principally for desugaring
 module DsUtils (
-        EquationInfo(..),
+        EquationInfo(..), 
         firstPat, shiftEqns,
 
         MatchResult(..), CanItFail(..), CaseAlt(..),
         cantFailMatchResult, alwaysFailMatchResult,
-        extractMatchResult, combineMatchResults,
+        extractMatchResult, combineMatchResults, 
         adjustMatchResult,  adjustMatchResultDs,
-        mkCoLetMatchResult, mkViewMatchResult, mkGuardedMatchResult,
+        mkCoLetMatchResult, mkViewMatchResult, mkGuardedMatchResult, 
         matchCanFail, mkEvalMatchResult,
         mkCoPrimCaseMatchResult, mkCoAlgCaseMatchResult, mkCoSynCaseMatchResult,
         wrapBind, wrapBinds,
 
         mkErrorAppDs, mkCoreAppDs, mkCoreAppsDs,
-
-        seqVar,
 
         -- LHs tuples
         mkLHsVarPatTup, mkLHsPatTup, mkVanillaTuplePat,
@@ -35,7 +33,11 @@ module DsUtils (
         mkSelectorBinds,
 
         selectSimpleMatchVarL, selectMatchVars, selectMatchVar,
-        mkOptTickBox, mkBinaryTickBox
+        mkOptTickBox, mkBinaryTickBox,
+
+        DsType, DsCoercion, DsVar, DsId, DsTyVar, DsEvVar, DsIdSet,
+        dsVar, dsVars, dsType, dsExportTypes,
+        dsTickish, dsCoercionType
     ) where
 
 #include "HsVersions.h"
@@ -59,11 +61,15 @@ import ConLike
 import DataCon
 import PatSyn
 import Type
+import Coercion
 import TysPrim
 import TysWiredIn
 import BasicTypes
 import UniqSet
 import UniqSupply
+import Var              ( updateVarTypeM, EvVar )
+import VarEnv           ( mkInScopeSet, varEnvElts )
+import VarSet           ( unionVarSet, TyCoVarSet, IdSet )
 import Module
 import PrelNames
 import Outputable
@@ -89,7 +95,7 @@ hand, which should indeed be bound to the pattern as a whole, then use it;
 otherwise, make one up.
 -}
 
-selectSimpleMatchVarL :: LPat Id -> DsM Id
+selectSimpleMatchVarL :: LPat Id -> DsM DsId
 selectSimpleMatchVarL pat = selectMatchVar (unLoc pat)
 
 -- (selectMatchVars ps tys) chooses variables of type tys
@@ -108,16 +114,17 @@ selectSimpleMatchVarL pat = selectMatchVar (unLoc pat)
 --    Then we must not choose (x::Int) as the matching variable!
 -- And nowadays we won't, because the (x::Int) will be wrapped in a CoPat
 
-selectMatchVars :: [Pat Id] -> DsM [Id]
+selectMatchVars :: [Pat Id] -> DsM [DsId]
 selectMatchVars ps = mapM selectMatchVar ps
 
-selectMatchVar :: Pat Id -> DsM Id
+selectMatchVar :: Pat Id -> DsM DsId
 selectMatchVar (BangPat pat) = selectMatchVar (unLoc pat)
 selectMatchVar (LazyPat pat) = selectMatchVar (unLoc pat)
 selectMatchVar (ParPat pat)  = selectMatchVar (unLoc pat)
-selectMatchVar (VarPat var)  = return (localiseId var)  -- Note [Localise pattern binders]
-selectMatchVar (AsPat var _) = return (unLoc var)
-selectMatchVar other_pat     = newSysLocalDs (hsPatType other_pat)
+selectMatchVar (VarPat var)  = dsVar (localiseId var)  -- Note [Localise pattern binders]
+selectMatchVar (AsPat var _) = dsVar (unLoc var)
+selectMatchVar other_pat     = do { ty' <- dsType (hsPatType other_pat)
+                                  ; newSysLocalDs ty' }
                                   -- OK, better make up one...
 
 {-
@@ -140,7 +147,7 @@ different *unique* by then (the simplifier is good about maintaining
 proper scoping), but it's BAD to have two top-level bindings with the
 External Name M.a, because that turns into two linker symbols for M.a.
 It's quite rare for this to actually *happen* -- the only case I know
-of is tc003 compiled with the 'hpc' way -- but that only makes it
+of is tc003 compiled with the 'hpc' way -- but that only makes it 
 all the more annoying.
 
 To avoid this, we craftily call 'localiseId' in the desugarer, which
@@ -220,41 +227,37 @@ adjustMatchResultDs :: (CoreExpr -> DsM CoreExpr) -> MatchResult -> MatchResult
 adjustMatchResultDs encl_fn (MatchResult can_it_fail body_fn)
   = MatchResult can_it_fail (\fail -> encl_fn =<< body_fn fail)
 
-wrapBinds :: [(Var,Var)] -> CoreExpr -> CoreExpr
+wrapBinds :: [(DsVar,DsVar)] -> CoreExpr -> CoreExpr
 wrapBinds [] e = e
 wrapBinds ((new,old):prs) e = wrapBind new old (wrapBinds prs e)
 
-wrapBind :: Var -> Var -> CoreExpr -> CoreExpr
+wrapBind :: DsVar -> DsVar -> CoreExpr -> CoreExpr
 wrapBind new old body   -- NB: this function must deal with term
   | new==old    = body  -- variables, type variables or coercion variables
   | otherwise   = Let (NonRec new (varToCoreExpr old)) body
-
-seqVar :: Var -> CoreExpr -> CoreExpr
-seqVar var body = Case (Var var) var (exprType body)
-                        [(DEFAULT, [], body)]
 
 mkCoLetMatchResult :: CoreBind -> MatchResult -> MatchResult
 mkCoLetMatchResult bind = adjustMatchResult (mkCoreLet bind)
 
 -- (mkViewMatchResult var' viewExpr var mr) makes the expression
 -- let var' = viewExpr var in mr
-mkViewMatchResult :: Id -> CoreExpr -> Id -> MatchResult -> MatchResult
-mkViewMatchResult var' viewExpr var =
+mkViewMatchResult :: DsId -> CoreExpr -> DsId -> MatchResult -> MatchResult
+mkViewMatchResult var' viewExpr var = 
     adjustMatchResult (mkCoreLet (NonRec var' (mkCoreAppDs viewExpr (Var var))))
 
-mkEvalMatchResult :: Id -> Type -> MatchResult -> MatchResult
+mkEvalMatchResult :: DsId -> DsType -> MatchResult -> MatchResult
 mkEvalMatchResult var ty
-  = adjustMatchResult (\e -> Case (Var var) var ty [(DEFAULT, [], e)])
+  = adjustMatchResult (\e -> Case (Var var) var ty [(DEFAULT, [], e)]) 
 
 mkGuardedMatchResult :: CoreExpr -> MatchResult -> MatchResult
 mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
   = MatchResult CanFail (\fail -> do body <- body_fn fail
                                      return (mkIfThenElse pred_expr body fail))
 
-mkCoPrimCaseMatchResult :: Id                           -- Scrutinee
-                    -> Type                             -- Type of the case
-                    -> [(Literal, MatchResult)]         -- Alternatives
-                    -> MatchResult                      -- Literals are all unlifted
+mkCoPrimCaseMatchResult :: DsId                      -- Scrutinee
+                        -> DsType                    -- Type of the case
+                        -> [(Literal, MatchResult)]  -- Alternatives
+                        -> MatchResult               -- Literals are all unlifted
 mkCoPrimCaseMatchResult var ty match_alts
   = MatchResult CanFail mk_case
   where
@@ -269,17 +272,17 @@ mkCoPrimCaseMatchResult var ty match_alts
             return (LitAlt lit, [], body)
 
 data CaseAlt a = MkCaseAlt{ alt_pat :: a,
-                            alt_bndrs :: [CoreBndr],
+                            alt_bndrs :: [DsVar],
                             alt_wrapper :: HsWrapper,
                             alt_result :: MatchResult }
 
-mkCoAlgCaseMatchResult
+mkCoAlgCaseMatchResult 
   :: DynFlags
-  -> Id                 -- Scrutinee
-  -> Type               -- Type of exp
+  -> DsId               -- Scrutinee
+  -> DsType             -- Type of exp
   -> [CaseAlt DataCon]  -- Alternatives (bndrs *include* tyvars, dicts)
   -> MatchResult
-mkCoAlgCaseMatchResult dflags var ty match_alts
+mkCoAlgCaseMatchResult dflags var ty match_alts 
   | isNewtype  -- Newtype case; use a let
   = ASSERT( null (tail match_alts) && null (tail arg_ids1) )
     mkCoLetMatchResult (NonRec arg_id1 newtype_rhs) match_result1
@@ -291,7 +294,7 @@ mkCoAlgCaseMatchResult dflags var ty match_alts
   where
     isNewtype = isNewTyCon (dataConTyCon (alt_pat alt1))
 
-        -- [Interesting: because of GADTs, we can't rely on the type of
+        -- [Interesting: because of GADTs, we can't rely on the type of 
         --  the scrutinised Id to be sufficiently refined to have a TyCon in it]
 
     alt1@MkCaseAlt{ alt_bndrs = arg_ids1, alt_result = match_result1 }
@@ -331,13 +334,13 @@ mkCoAlgCaseMatchResult dflags var ty match_alts
         _              -> panic "DsUtils: you may not mix `[:...:]' with `PArr' patterns"
     isPArrFakeAlts [] = panic "DsUtils: unexpectedly found an empty list of PArr fake alternatives"
 
-mkCoSynCaseMatchResult :: Id -> Type -> CaseAlt PatSyn -> MatchResult
+mkCoSynCaseMatchResult :: DsId -> DsType -> CaseAlt PatSyn -> MatchResult
 mkCoSynCaseMatchResult var ty alt = MatchResult CanFail $ mkPatSynCase var ty alt
 
 sort_alts :: [CaseAlt DataCon] -> [CaseAlt DataCon]
 sort_alts = sortWith (dataConTag . alt_pat)
 
-mkPatSynCase :: Id -> Type -> CaseAlt PatSyn -> CoreExpr -> DsM CoreExpr
+mkPatSynCase :: DsId -> DsType -> CaseAlt PatSyn -> CoreExpr -> DsM CoreExpr
 mkPatSynCase var ty alt fail = do
     matcher <- dsLExpr $ mkLHsWrap wrapper $ nlHsTyApp matcher [ty]
     let MatchResult _ mkCont = match_result
@@ -355,7 +358,7 @@ mkPatSynCase var ty alt fail = do
     ensure_unstrict cont | needs_void_lam = Lam voidArgId cont
                          | otherwise      = cont
 
-mkDataConCase :: Id -> Type -> [CaseAlt DataCon] -> MatchResult
+mkDataConCase :: DsId -> DsType -> [CaseAlt DataCon] -> MatchResult
 mkDataConCase _   _  []            = panic "mkDataConCase: no alternatives"
 mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
   where
@@ -409,7 +412,7 @@ mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
 --   parallel arrays, which are introduced by `tidy1' in the `PArrPat'
 --   case
 --
-mkPArrCase :: DynFlags -> Id -> Type -> [CaseAlt DataCon] -> CoreExpr -> DsM CoreExpr
+mkPArrCase :: DynFlags -> DsId -> DsType -> [CaseAlt DataCon] -> CoreExpr -> DsM CoreExpr
 mkPArrCase dflags var ty sorted_alts fail = do
     lengthP <- dsDPHBuiltin lengthPVar
     alt <- unboxAlt
@@ -453,8 +456,8 @@ mkPArrCase dflags var ty sorted_alts fail = do
 ************************************************************************
 -}
 
-mkErrorAppDs :: Id              -- The error function
-             -> Type            -- Type to which it should be applied
+mkErrorAppDs :: DsId            -- The error function
+             -> DsType          -- Type to which it should be applied
              -> SDoc            -- The error message string to pass
              -> DsM CoreExpr
 
@@ -465,7 +468,7 @@ mkErrorAppDs err_id ty msg = do
         full_msg = showSDoc dflags (hcat [ppr src_loc, text "|", msg])
         core_msg = Lit (mkMachString full_msg)
         -- mkMachString returns a result of type String#
-    return (mkApps (Var err_id) [Type ty, core_msg])
+    return (mkApps (Var err_id) [Type (getLevity "mkErrorAppDs" ty), Type ty, core_msg])
 
 {-
 'mkCoreAppDs' and 'mkCoreAppsDs' hand the special-case desugaring of 'seq'.
@@ -474,13 +477,13 @@ Note [Desugaring seq (1)]  cf Trac #1031
 ~~~~~~~~~~~~~~~~~~~~~~~~~
    f x y = x `seq` (y `seq` (# x,y #))
 
-The [CoreSyn let/app invariant] means that, other things being equal, because
+The [CoreSyn let/app invariant] means that, other things being equal, because 
 the argument to the outer 'seq' has an unlifted type, we'll use call-by-value thus:
 
    f x y = case (y `seq` (# x,y #)) of v -> x `seq` v
 
-But that is bad for two reasons:
-  (a) we now evaluate y before x, and
+But that is bad for two reasons: 
+  (a) we now evaluate y before x, and 
   (b) we can't bind v to an unboxed pair
 
 Seq is very, very special!  So we recognise it right here, and desugar to
@@ -524,15 +527,15 @@ So we desugar our example to:
 And now all is well.
 
 The reason it's a hack is because if you define mySeq=seq, the hack
-won't work on mySeq.
+won't work on mySeq.  
 
 Note [Desugaring seq (3)] cf Trac #2409
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The isLocalId ensures that we don't turn
+The isLocalId ensures that we don't turn 
         True `seq` e
 into
         case True of True { ... }
-which stupidly tries to bind the datacon 'True'.
+which stupidly tries to bind the datacon 'True'. 
 -}
 
 mkCoreAppDs  :: CoreExpr -> CoreExpr -> CoreExpr
@@ -585,12 +588,12 @@ OR (B)       t = case e of p -> (x,y)
              x = case t of (x,_) -> x
              y = case t of (_,y) -> y
 
-We do (A) when
+We do (A) when 
  * Matching the pattern is cheap so we don't mind
-   doing it twice.
+   doing it twice.  
  * Or if the pattern binds only one variable (so we'll only
    match once)
- * AND the pattern can't fail (else we tiresomely get two inexhaustive
+ * AND the pattern can't fail (else we tiresomely get two inexhaustive 
    pattern warning messages)
 
 Otherwise we do (B).  Really (A) is just an optimisation for very common
@@ -599,26 +602,28 @@ cases like
      (p,q) = e
 -}
 
-mkSelectorBinds :: [[Tickish Id]] -- ticks to add, possibly
-                -> LPat Id      -- The pattern
-                -> CoreExpr     -- Expression to which the pattern is bound
-                -> DsM [(Id,CoreExpr)]
+mkSelectorBinds :: [[Tickish DsId]] -- ticks to add, possibly
+                -> LPat Id          -- The pattern
+                -> CoreExpr         -- Expression to which the pattern is bound
+                -> DsM [(DsId,CoreExpr)]
 
 mkSelectorBinds ticks (L _ (VarPat v)) val_expr
-  = return [(v, case ticks of
-                  [t] -> mkOptTickBox t val_expr
-                  _   -> val_expr)]
+  = do { v' <- dsVar v
+       ; return [(v', case ticks of
+                        [t] -> mkOptTickBox t val_expr
+                        _   -> val_expr)] }
 
 mkSelectorBinds ticks pat val_expr
-  | null binders
+  | null binders 
   = return []
 
   | isSingleton binders || is_simple_lpat pat
     -- See Note [mkSelectorBinds]
-  = do { val_var <- newSysLocalDs (hsLPatType pat)
+  = do { pat_ty <- dsType (hsLPatType pat)
+       ; val_var <- newSysLocalDs pat_ty
         -- Make up 'v' in Note [mkSelectorBinds]
         -- NB: give it the type of *pattern* p, not the type of the *rhs* e.
-        -- This does not matter after desugaring, but there's a subtle
+        -- This does not matter after desugaring, but there's a subtle 
         -- issue with implicit parameters. Consider
         --      (x,y) = ?i
         -- Then, ?i is given type {?i :: Int}, a PredType, which is opaque
@@ -633,7 +638,7 @@ mkSelectorBinds ticks pat val_expr
         -- But we need it at different types, so we make it polymorphic:
         --     err_var = /\a. iRREFUT_PAT_ERR a "blah blah blah"
        ; err_app <- mkErrorAppDs iRREFUT_PAT_ERROR_ID alphaTy (ppr pat)
-       ; err_var <- newSysLocalDs (mkForAllTy alphaTyVar alphaTy)
+       ; err_var <- newSysLocalDs (mkInvForAllTys [alphaTyVar] alphaTy)
        ; binds   <- zipWithM (mk_bind val_var err_var) ticks' binders
        ; return ( (val_var, val_expr) :
                   (err_var, Lam alphaTyVar err_app) :
@@ -693,7 +698,7 @@ which is whey they are not in HsUtils.
 mkLHsPatTup :: [LPat Id] -> LPat Id
 mkLHsPatTup []     = noLoc $ mkVanillaTuplePat [] Boxed
 mkLHsPatTup [lpat] = lpat
-mkLHsPatTup lpats  = L (getLoc (head lpats)) $
+mkLHsPatTup lpats  = L (getLoc (head lpats)) $ 
                      mkVanillaTuplePat lpats Boxed
 
 mkLHsVarPatTup :: [Id] -> LPat Id
@@ -794,10 +799,10 @@ When we make a failure point we ensure that it
 does not look like a thunk. Example:
 
    let fail = \rw -> error "urk"
-   in case x of
+   in case x of 
         [] -> fail realWorld#
         (y:ys) -> case ys of
-                    [] -> fail realWorld#
+                    [] -> fail realWorld#  
                     (z:zs) -> (y,z)
 
 Reason: we know that a failure point is always a "join point" and is
@@ -807,12 +812,12 @@ CPR-friendly.  This matters a lot: if you don't get it right, you lose
 the tail call property.  For example, see Trac #3403.
 -}
 
-mkOptTickBox :: [Tickish Id] -> CoreExpr -> CoreExpr
+mkOptTickBox :: [Tickish DsId] -> CoreExpr -> CoreExpr
 mkOptTickBox = flip (foldr Tick)
 
 mkBinaryTickBox :: Int -> Int -> CoreExpr -> DsM CoreExpr
 mkBinaryTickBox ixT ixF e = do
-       uq <- newUnique
+       uq <- newUnique  
        this_mod <- getModule
        let bndr1 = mkSysLocal (fsLit "t1") uq boolTy
        let
@@ -823,3 +828,57 @@ mkBinaryTickBox ixT ixF e = do
                        [ (DataAlt falseDataCon, [], falseBox)
                        , (DataAlt trueDataCon,  [], trueBox)
                        ]
+
+{-
+************************************************************************
+*                                                                      *
+    Applying the DS coercion substitution
+*                                                                      *
+************************************************************************
+
+See also Note [No top-level coercions] in DsBinds
+-}
+
+type DsType     = Type
+type DsCoercion = Coercion
+type DsId       = Id
+type DsVar      = Var
+type DsTyVar    = TyVar
+type DsEvVar    = EvVar
+type DsIdSet    = IdSet
+
+ds_mk_subst :: TyCoVarSet -> DsM TCvSubst
+ds_mk_subst fvs
+  = do { cv_env <- dsGetCvSubstEnv
+       ; let in_scope = mkInScopeSet $
+                        fvs `unionVarSet` tyCoVarsOfCos (varEnvElts cv_env)
+       ; return $ mkTCvSubst in_scope (emptyTvSubstEnv, cv_env) }
+
+dsType :: Type -> DsM DsType
+dsType ty
+  = do { subst <- ds_mk_subst (tyCoVarsOfType ty)
+       ; return (substTy subst ty) }
+
+dsCoercionType :: Coercion -> DsM DsCoercion
+dsCoercionType co
+  = do { subst <- ds_mk_subst (tyCoVarsOfCo co)
+       ; return (substCo subst co) }
+
+dsVar :: Var -> DsM DsVar
+dsVar = updateVarTypeM dsType
+
+dsVars :: [Var] -> DsM [DsVar]
+dsVars = mapM (updateVarTypeM dsType)
+
+dsExportTypes :: ABExport Id -> DsM (ABExport DsId)
+dsExportTypes exp@(ABE { abe_mono = mono, abe_poly = poly })
+  = do { mono' <- dsVar mono
+       ; poly' <- dsVar poly
+       ; return (exp { abe_mono = mono', abe_poly = poly' }) }
+
+dsTickish :: Tickish Id -> DsM (Tickish DsId)
+dsTickish t@(Breakpoint { breakpointFVs = fvs })
+  = do { fvs' <- dsVars fvs
+       ; return $ t { breakpointFVs = fvs' } }
+    
+dsTickish t = return t

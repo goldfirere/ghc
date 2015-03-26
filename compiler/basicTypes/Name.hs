@@ -73,7 +73,7 @@ module Name (
         module OccName
     ) where
 
-import {-# SOURCE #-} TypeRep( TyThing )
+import {-# SOURCE #-} TyCoRep( TyThing )
 import {-# SOURCE #-} PrelNames( liftedTypeKindTyConKey )
 
 import OccName
@@ -586,7 +586,7 @@ an operator, it is really a special case.
 This pprPrefixName stuff is really only used when printing HsSyn,
 which has to be polymorphic in the name type, and hence has to go via
 the overloaded function pprPrefixOcc.  It's easier where we know the
-type being pretty printed; eg the pretty-printing code in TypeRep.
+type being pretty printed; eg the pretty-printing code in TyCoRep.
 
 See Trac #7645, which led to this.
 -}

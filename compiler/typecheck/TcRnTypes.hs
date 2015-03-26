@@ -54,14 +54,16 @@ module TcRnTypes(
         isCDictCan_Maybe, isCFunEqCan_maybe,
         isCIrredEvCan, isCNonCanonical, isWantedCt, isDerivedCt,
         isGivenCt, isHoleCt, isTypedHoleCt, isPartialTypeSigCt,
-        ctEvidence, ctLoc, ctPred, ctFlavour, ctEqRel,
+        ctEvidence, ctLoc, ctPred, ctFlavour, ctEqRel, mkTcEqPredLikeEv,
         mkNonCanonical, mkNonCanonicalCt,
         ctEvPred, ctEvLoc, ctEvEqRel,
         ctEvTerm, ctEvCoercion, ctEvId, ctEvCheckDepth,
+        ctEvCoherence, evTermCoherence,
+        tyCoVarsOfCt, tyCoVarsOfCts, evBindWanted,
 
         WantedConstraints(..), insolubleWC, emptyWC, isEmptyWC,
         andWC, unionsWC, addSimples, addImplics, mkSimpleWC, addInsols,
-        dropDerivedWC,
+        dropDerivedWC, tyCoVarsOfWC,
 
         Implication(..),
         SubGoalCounter(..),
@@ -70,15 +72,16 @@ module TcRnTypes(
         CtLoc(..), ctLocSpan, ctLocEnv, ctLocOrigin,
         ctLocDepth, bumpCtLocDepth,
         setCtLocOrigin, setCtLocEnv, setCtLocSpan,
-        CtOrigin(..), pprCtOrigin,
+        CtOrigin(..), ErrorThing(..), mkErrorThing, TypeOrKind(..),
+        pprCtOrigin, ctOriginTypeOrKind,
         pushErrCtxt, pushErrCtxtSameOrigin,
 
         SkolemInfo(..),
 
         CtEvidence(..),
-        mkGivenLoc,
+        mkGivenLoc, mkKindLoc,
         isWanted, isGiven, isDerived,
-        ctEvRole,
+        ctEvRole, ctEvBoxity,
 
         -- Constraint solver plugins
         TcPlugin(..), TcPluginResult(..), TcPluginSolver,
@@ -106,6 +109,7 @@ import Type
 import CoAxiom  ( Role )
 import Class    ( Class )
 import TyCon    ( TyCon )
+import Coercion ( buildCoherenceCo, Coercion )
 import ConLike  ( ConLike(..) )
 import DataCon  ( DataCon, dataConUserType, dataConOrigArgTys )
 import PatSyn   ( PatSyn, patSynType )
@@ -134,6 +138,7 @@ import DynFlags
 import Outputable
 import ListSetOps
 import FastString
+import Maybes     ( expectJust )
 import GHC.Fingerprint
 
 import Data.Set (Set)
@@ -241,7 +246,6 @@ data IfLclEnv
                 -- plus which bit is currently being examined
 
         if_tv_env  :: UniqFM TyVar,     -- Nested tyvar bindings
-                                        -- (and coercions)
         if_id_env  :: UniqFM Id         -- Nested id binding
     }
 
@@ -298,7 +302,10 @@ instance ContainsModule DsGblEnv where
 
 data DsLclEnv = DsLclEnv {
         dsl_meta    :: DsMetaEnv,        -- Template Haskell bindings
-        dsl_loc     :: SrcSpan           -- to put in pattern-matching error msgs
+        dsl_loc     :: SrcSpan,          -- to put in pattern-matching error msgs
+        dsl_subst   :: IdEnv Coercion    -- inlining top-level coercions
+                                         -- See Note [No top-level coercions] in
+                                         -- DsBinds
      }
 
 -- Inside [| |] brackets, the desugarer looks
@@ -1094,16 +1101,17 @@ data Ct
        --   * tv not in tvs(rhs)   (occurs check)
        --   * If tv is a TauTv, then rhs has no foralls
        --       (this avoids substituting a forall for the tyvar in other types)
-       --   * typeKind ty `subKind` typeKind tv
-       --       See Note [Kind orientation for CTyEqCan]
-       --   * rhs is not necessarily function-free,
+       --   * typeKind ty `tcEqKind` typeKind tv
+       --   * rhs may have at most one top-level cast
+       --   * rhs (perhaps under the one cast) is not necessarily function-free,
        --       but it has no top-level function.
        --     E.g. a ~ [F b]  is fine
        --     but  a ~ F b    is not
        --   * If the equality is representational, rhs has no top-level newtype
        --     See Note [No top-level newtypes on RHS of representational
        --     equalities] in TcCanonical
-       --   * If rhs is also a tv, then it is oriented to give best chance of
+       --   * If rhs (perhaps under the cast) is also a tv, then it is oriented
+       --     to give best chance of
        --     unification happening; eg if rhs is touchable then lhs is too
       cc_ev     :: CtEvidence, -- See Note [Ct/evidence invariant]
       cc_tyvar  :: TcTyVar,
@@ -1131,7 +1139,7 @@ data Ct
         -- See Note [The flattening story] in TcFlatten
     }
 
-  | CNonCanonical {        -- See Note [NonCanonical Semantics]
+  | CNonCanonical {        -- See Note [NonCanonical Semantics] in TcSMonad
       cc_ev  :: CtEvidence
     }
 
@@ -1147,51 +1155,6 @@ data HoleSort = ExprHole  -- ^ A hole in an expression (TypedHoles)
               | TypeHole  -- ^ A hole in a type (PartialTypeSignatures)
 
 {-
-Note [Kind orientation for CTyEqCan]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Given an equality (t:* ~ s:Open), we can't solve it by updating t:=s,
-ragardless of how touchable 't' is, because the kinds don't work.
-
-Instead we absolutely must re-orient it. Reason: if that gets into the
-inert set we'll start replacing t's by s's, and that might make a
-kind-correct type into a kind error.  After re-orienting,
-we may be able to solve by updating s:=t.
-
-Hence in a CTyEqCan, (t:k1 ~ xi:k2) we require that k2 is a subkind of k1.
-
-If the two have incompatible kinds, we just don't use a CTyEqCan at all.
-See Note [Equalities with incompatible kinds] in TcCanonical
-
-We can't require *equal* kinds, because
-     * wanted constraints don't necessarily have identical kinds
-               eg   alpha::? ~ Int
-     * a solved wanted constraint becomes a given
-
-Note [Kind orientation for CFunEqCan]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-For (F xis ~ rhs) we require that kind(lhs) is a subkind of kind(rhs).
-This really only maters when rhs is an Open type variable (since only type
-variables have Open kinds):
-   F ty ~ (a:Open)
-which can happen, say, from
-      f :: F a b
-      f = undefined   -- The a:Open comes from instantiating 'undefined'
-
-Note that the kind invariant is maintained by rewriting.
-Eg wanted1 rewrites wanted2; if both were compatible kinds before,
-   wanted2 will be afterwards.  Similarly givens.
-
-Caveat:
-  - Givens from higher-rank, such as:
-          type family T b :: * -> * -> *
-          type instance T Bool = (->)
-
-          f :: forall a. ((T a ~ (->)) => ...) -> a -> ...
-          flop = f (...) True
-     Whereas we would be able to apply the type instance, we would not be able to
-     use the given (T Bool ~ (->)) in the body of 'flop'
-
-
 Note [CIrredEvCan constraints]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 CIrredEvCan constraints are used for constraints that are "stuck"
@@ -1238,6 +1201,18 @@ ctPred :: Ct -> PredType
 -- See Note [Ct/evidence invariant]
 ctPred ct = ctEvPred (cc_ev ct)
 
+-- | Makes a new equality predicate with the same boxity and role as the given
+-- evidence.
+mkTcEqPredLikeEv :: CtEvidence -> TcType -> TcType -> TcType
+mkTcEqPredLikeEv ev
+  = case (getEqPredBoxity pred, predTypeEqRel pred) of
+      (Boxed,   NomEq)  -> mkTcEqPred
+      (Boxed,   ReprEq) -> mkTcReprEqPred
+      (Unboxed, NomEq)  -> mkPrimEqPred
+      (Unboxed, ReprEq) -> mkReprPrimEqPred
+  where
+    pred = ctEvPred ev
+
 -- | Get the flavour of the given 'Ct'
 ctFlavour :: Ct -> CtFlavour
 ctFlavour = ctEvFlavour . ctEvidence
@@ -1251,6 +1226,43 @@ dropDerivedWC :: WantedConstraints -> WantedConstraints
 dropDerivedWC wc@(WC { wc_simple = simples })
   = wc { wc_simple  = filterBag isWantedCt simples }
     -- The wc_impl implications are already (recursively) filtered
+
+{-
+************************************************************************
+*                                                                      *
+        Simple functions over evidence variables
+*                                                                      *
+************************************************************************
+-}
+
+---------------- Getting free tyvars -------------------------
+tyCoVarsOfCt :: Ct -> TcTyVarSet
+tyCoVarsOfCt (CTyEqCan { cc_tyvar = tv, cc_rhs = xi })     = extendVarSet (tyCoVarsOfType xi) tv `unionVarSet` tyCoVarsOfType (tyVarKind tv)
+tyCoVarsOfCt (CFunEqCan { cc_tyargs = tys, cc_fsk = fsk }) = extendVarSet (tyCoVarsOfTypes tys) fsk `unionVarSet` tyCoVarsOfType (tyVarKind fsk)
+tyCoVarsOfCt (CDictCan { cc_tyargs = tys })                = tyCoVarsOfTypes tys
+tyCoVarsOfCt (CIrredEvCan { cc_ev = ev })                  = tyCoVarsOfType (ctEvPred ev)
+tyCoVarsOfCt (CHoleCan { cc_ev = ev })                     = tyCoVarsOfType (ctEvPred ev)
+tyCoVarsOfCt (CNonCanonical { cc_ev = ev })                = tyCoVarsOfType (ctEvPred ev)
+
+tyCoVarsOfCts :: Cts -> TcTyVarSet
+tyCoVarsOfCts = foldrBag (unionVarSet . tyCoVarsOfCt) emptyVarSet
+
+tyCoVarsOfWC :: WantedConstraints -> TyVarSet
+-- Only called on *zonked* things, hence no need to worry about flatten-skolems
+tyCoVarsOfWC (WC { wc_simple = simple, wc_impl = implic, wc_insol = insol })
+  = tyCoVarsOfCts simple `unionVarSet`
+    tyCoVarsOfBag tyCoVarsOfImplic implic `unionVarSet`
+    tyCoVarsOfCts insol
+
+tyCoVarsOfImplic :: Implication -> TyCoVarSet
+-- Only called on *zonked* things, hence no need to worry about flatten-skolems
+tyCoVarsOfImplic (Implic { ic_skols = skols
+                         , ic_given = givens, ic_wanted = wanted })
+  = (tyCoVarsOfWC wanted `unionVarSet` tyCoVarsOfTypes (map evVarPred givens))
+    `delVarSetList` skols `unionVarSet` tyCoVarsOfTypes (map tyVarKind skols)
+
+tyCoVarsOfBag :: (a -> TyVarSet) -> Bag a -> TyVarSet
+tyCoVarsOfBag tvs_of = foldrBag (unionVarSet . tvs_of) emptyVarSet
 
 {-
 Note [Dropping derived constraints]
@@ -1463,7 +1475,7 @@ data Implication
       ic_tclvl :: TcLevel, -- TcLevel: unification variables
                                 -- free in the environment
 
-      ic_skols  :: [TcTyVar],    -- Introduced skolems
+      ic_skols  :: [TcTyCoVar],  -- Introduced skolems
       ic_info  :: SkolemInfo,    -- See Note [Skolems in an implication]
                                  -- See Note [Shadowing in a constraint]
 
@@ -1492,7 +1504,7 @@ instance Outputable Implication where
               , ic_binds = binds, ic_info = info })
    = hang (ptext (sLit "Implic") <+> lbrace)
         2 (sep [ ptext (sLit "TcLevel =") <+> ppr tclvl
-               , ptext (sLit "Skolems =") <+> pprTvBndrs skols
+               , ptext (sLit "Skolems =") <+> pprTCvBndrs skols
                , ptext (sLit "No-eqs =") <+> ppr no_eqs
                , ptext (sLit "Insol =") <+> ppr insol
                , hang (ptext (sLit "Given ="))  2 (pprEvVars given)
@@ -1617,6 +1629,14 @@ ctEvEqRel = predTypeEqRel . ctEvPred
 ctEvRole :: CtEvidence -> Role
 ctEvRole = eqRelRole . ctEvEqRel
 
+-- | Get the boxity for a 'CtEvidence'
+ctEvBoxity :: CtEvidence -> Boxity
+ctEvBoxity ev
+  | isUnLiftedType pred = Unboxed
+  | otherwise           = Boxed
+  where
+    pred = ctEvPred ev
+
 ctEvTerm :: CtEvidence -> EvTerm
 ctEvTerm (CtGiven   { ctev_evtm = tm }) = tm
 ctEvTerm (CtWanted  { ctev_evar = ev }) = EvId ev
@@ -1633,6 +1653,10 @@ ctEvCoercion ctev@(CtDerived {}) = pprPanic "ctEvCoercion: derived constraint ca
 ctEvId :: CtEvidence -> TcId
 ctEvId (CtWanted  { ctev_evar = ev }) = ev
 ctEvId ctev = pprPanic "ctEvId:" (ppr ctev)
+
+evBindWanted :: EvBind -> CtEvidence
+evBindWanted (EvBind { evb_var = evar, evb_loc = loc })
+  = CtWanted { ctev_pred = varType evar, ctev_evar = evar, ctev_loc = loc }
 
 instance Outputable CtEvidence where
   ppr fl = case fl of
@@ -1652,6 +1676,26 @@ isGiven _ = False
 isDerived :: CtEvidence -> Bool
 isDerived (CtDerived {}) = True
 isDerived _              = False
+
+-- | @ctEvCoherence ev1 ty2@ produces a variant of the 'EvTerm' in @ev1@
+-- that precisely matches
+-- the predicate @ty2@. Precondition: the erased predicate of @ev1@ must
+-- match that of @ty2@. This is useful after an inert lookup via erased types.
+-- See also Note [Use loose types in inert set] in TcSMonad.
+ctEvCoherence :: CtEvidence -> TcPredType -> EvTerm
+ctEvCoherence from_this = evTermCoherence (ctEvPred from_this) (ctEvTerm from_this)
+
+-- | Like 'ctEvCoherence', but with arguments split out of a 'CtEvidence'
+evTermCoherence :: PredType -> EvTerm -> TcPredType -> EvTerm
+evTermCoherence from_pred from_term solve_pred
+  | from_pred `eqType` solve_pred
+  = from_term
+
+  | otherwise
+  = EvCast from_term (mkTcSubCo $
+                      mkTcCoercion $
+                      expectJust "evTermCoherence" $
+                      buildCoherenceCo from_pred solve_pred)
 
 {-
 %************************************************************************
@@ -1819,6 +1863,9 @@ mkGivenLoc tclvl skol_info env
           , ctl_env    = env { tcl_tclvl = tclvl }
           , ctl_depth  = initialSubGoalDepth }
 
+mkKindLoc :: TcType -> TcType -> CtLoc -> CtLoc
+mkKindLoc s1 s2 loc = setCtLocOrigin loc (KindEqOrigin s1 s2 (ctLocOrigin loc))
+
 ctLocEnv :: CtLoc -> TcLclEnv
 ctLocEnv = ctl_env
 
@@ -1906,7 +1953,7 @@ data SkolemInfo
   | BracketSkol         -- Template Haskell bracket
 
   | UnifyForAllSkol     -- We are unifying two for-all types
-       [TcTyVar]        -- The instantiated skolem variables
+       [TcTyCoVar]      -- The instantiated skolem variables
        TcType           -- The instantiated type *inside* the forall
 
   | UnkSkol             -- Unhelpful info (until I improve it)
@@ -1945,7 +1992,7 @@ pprSkolInfo (PatSkol cl mc) = case cl of
 pprSkolInfo (InferSkol ids) = sep [ ptext (sLit "the inferred type of")
                                   , vcat [ ppr name <+> dcolon <+> ppr ty
                                          | (name,ty) <- ids ]]
-pprSkolInfo (UnifyForAllSkol tvs ty) = ptext (sLit "the type") <+> ppr (mkForAllTys tvs ty)
+pprSkolInfo (UnifyForAllSkol tvs ty) = ptext (sLit "the type") <+> ppr (mkInvForAllTys tvs ty)
 
 -- UnkSkol
 -- For type variables the others are dealt with by pprSkolTvBinding.
@@ -1970,7 +2017,12 @@ data CtOrigin
   | SpecPragOrigin Name         -- Specialisation pragma for identifier
 
   | TypeEqOrigin { uo_actual   :: TcType
-                 , uo_expected :: TcType }
+                 , uo_expected :: TcType
+                 , uo_thing    :: Maybe ErrorThing
+                                  -- ^ The thing that has type "actual"
+                 , uo_level    :: TypeOrKind
+                 }
+    
   | KindEqOrigin
       TcType TcType             -- A kind equality arising from unifying these two types
       CtOrigin                  -- originally arising from this
@@ -2020,6 +2072,32 @@ data CtOrigin
   | UnboundOccurrenceOf RdrName
   | ListOrigin          -- An overloaded list
   | StaticOrigin        -- A static form
+  | ImpossibleOrigin    -- An origin that should never be printed to
+                        -- the user  (TODO (RAE): Remove?)
+
+-- | A thing that can be stored for error message generation only.
+-- It is stored with a function to zonk and tidy the thing.
+data ErrorThing
+  = forall a. Outputable a => ErrorThing a (TidyEnv -> a -> TcM (TidyEnv, a))
+
+-- | Flag to see whether we're type-checking terms or kind-checking types
+data TypeOrKind = TypeLevel | KindLevel
+  deriving Eq
+
+-- | Make an 'ErrorThing' that doesn't need tidying or zonking
+mkErrorThing :: Outputable a => a -> ErrorThing
+mkErrorThing thing = ErrorThing thing (\env x -> return (env, x))
+
+ctOriginTypeOrKind :: CtOrigin -> TypeOrKind
+ctOriginTypeOrKind (TypeEqOrigin { uo_level = t_or_k }) = t_or_k
+ctOriginTypeOrKind (KindEqOrigin {})                    = KindLevel
+ctOriginTypeOrKind _                                    = TypeLevel
+
+instance Outputable CtOrigin where
+  ppr = pprCtOrigin
+
+instance Outputable ErrorThing where
+  ppr (ErrorThing thing _) = ppr thing
 
 ctoHerald :: SDoc
 ctoHerald = ptext (sLit "arising from")
@@ -2092,11 +2170,17 @@ pprCtO DefaultOrigin         = ptext (sLit "a 'default' declaration")
 pprCtO DoOrigin              = ptext (sLit "a do statement")
 pprCtO MCompOrigin           = ptext (sLit "a statement in a monad comprehension")
 pprCtO ProcOrigin            = ptext (sLit "a proc expression")
-pprCtO (TypeEqOrigin t1 t2)  = ptext (sLit "a type equality") <+> sep [ppr t1, char '~', ppr t2]
+pprCtO (TypeEqOrigin t1 t2 _ _)
+                             = ptext (sLit "a type equality") <+> sep [ppr t1, char '~', ppr t2]
 pprCtO AnnOrigin             = ptext (sLit "an annotation")
 pprCtO HoleOrigin            = ptext (sLit "a use of") <+> quotes (ptext $ sLit "_")
 pprCtO ListOrigin            = ptext (sLit "an overloaded list")
 pprCtO StaticOrigin          = ptext (sLit "a static form")
+
+-- don't panic here, so that we can print debugging output
+pprCtO ImpossibleOrigin      = ptext (sLit "a check that should never fail") $$
+  ptext (sLit "Please report this as a GHC bug:  http://www.haskell.org/ghc/reportabug")
+
 pprCtO _                     = panic "pprCtOrigin"
 
 {-

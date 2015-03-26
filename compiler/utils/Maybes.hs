@@ -14,6 +14,7 @@ module Maybes (
         firstJust, firstJusts,
         whenIsJust,
         expectJust,
+        maybeSecond,
 
         MaybeT(..)
     ) where
@@ -22,6 +23,7 @@ import Control.Applicative
 #endif
 import Control.Monad
 import Data.Maybe
+import Control.Arrow  ( second )
 
 infixr 4 `orElse`
 
@@ -53,6 +55,13 @@ whenIsJust Nothing  _ = return ()
 -- | Flipped version of @fromMaybe@, useful for chaining.
 orElse :: Maybe a -> a -> a
 orElse = flip fromMaybe
+
+-- | The type says it all. This is useful when working with
+-- environment-enhancing functions.
+maybeSecond :: (a -> b -> (a, b)) -> a -> Maybe b -> (a, Maybe b)
+maybeSecond _ a Nothing  = (a, Nothing)
+maybeSecond f a (Just b) = second Just $ f a b
+-- TODO (RAE): Remove after removing CoercionArgs?
 
 {-
 ************************************************************************

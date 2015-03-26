@@ -1,46 +1,37 @@
-The Glasgow Haskell Compiler
-============================
+Dependent Types Branch of GHC
+=============================
 
-[![Build Status](https://api.travis-ci.org/ghc/ghc.svg?branch=master)](http://travis-ci.org/ghc/ghc)
+This is a fork of GHC, with work toward supporting dependent types.
+Anyone is welcome to download and play with this implementation,
+and I am happy to receive feedback and issue reports on GitHub.
 
-This is the source tree for [GHC][1], a compiler and interactive
-environment for the Haskell functional programming language.
+This code should build, but I have tested it only on `DEBUG` settings;
+I recommend using build style `devel2` in `build.mk`.
 
-For more information, visit [GHC's web site][1].
+Here is a minimal script you can follow to build this at home;
+see the [GHC Building Guide] [3] for more info.
+
+~~~
+git clone https://github.com/goldfirere/ghc.git
+cd ghc
+git checkout nokinds
+git remote set-url origin git://git.haskell.org/ghc.git   # so submodules work
+git submodule update --init
+cd mk
+cp build.mk.sample build.mk
+## edit build.mk to uncomment the line to choose the `devel2` configuration
+cd ..
+perl boot
+./configure
+make
+~~~
+
+Check out the `testsuite/tests/dependent/should_compile` directory for
+a few sample programs that should compile on this fork of GHC.
+
+For more information about GHC, visit [GHC's web site][1].
 
 Information for developers of GHC can be found on the [GHC Trac][2].
-
-
-Getting the Source
-==================
-
-There are two ways to get a source tree:
-
- 1. *Download source tarballs*
-
-  Download the GHC source distribution:
-
-        ghc-<version>-src.tar.bz2
-
-  which contains GHC itself and the "boot" libraries.
-
- 2. *Check out the source code from git*
-
-  The official mirror for GHC on GitHub is located at https://github.com/ghc/ghc.
-
-        $ git clone git://github.com/ghc/ghc.git
-        $ cd ghc
-        $ ./sync-all get
-
-  If you want to clone your own fork instead, add an argument to `sync-all` to
-  tell it where it can find the other repositories it needs.
-
-        $ git clone <your preferred github.com GHC fork URL> ghc
-        $ cd ghc
-        $ ./sync-all -r git://github.com/ghc get
-
-  **DO NOT submit pull request directly to the github repo.**
-  *See the GHC developer team's working conventions re [contributing patches](http://ghc.haskell.org/trac/ghc/wiki/WorkingConventions/Git#Contributingpatches "ghc.haskell.org/trac/ghc/wiki/WorkingConventions/Git#Contributingpatches").*
 
 
 Building & Installing

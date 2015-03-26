@@ -20,15 +20,7 @@ import Coercion   ( Role(..) )
 import TcRnTypes  ( Xi )
 import CoAxiom    ( CoAxiomRule(..), BuiltInSynFamily(..) )
 import Name       ( Name, BuiltInSyntax(..) )
-import TysWiredIn ( typeNatKind, typeSymbolKind
-                  , mkWiredInTyConName
-                  , promotedBoolTyCon
-                  , promotedFalseDataCon, promotedTrueDataCon
-                  , promotedOrderingTyCon
-                  , promotedLTDataCon
-                  , promotedEQDataCon
-                  , promotedGTDataCon
-                  )
+import TysWiredIn
 import TysPrim    ( tyVarList, mkArrowKinds )
 import PrelNames  ( gHC_TYPELITS
                   , typeNatAddTyFamNameKey
@@ -88,7 +80,7 @@ typeNatMulTyCon = mkTypeNatFunTyCon2 name
     , sfInteractInert = interactInertMul
     }
   where
-  name = mkWiredInTyConName UserSyntax gHC_TYPELITS (fsLit "*")
+  name = mkWiredInTyConName UserSyntax gHC_TYPELITS (fsLit "Mult")
             typeNatMulTyFamNameKey typeNatMulTyCon
 
 typeNatExpTyCon :: TyCon
@@ -105,7 +97,7 @@ typeNatExpTyCon = mkTypeNatFunTyCon2 name
 typeNatLeqTyCon :: TyCon
 typeNatLeqTyCon =
   mkFamilyTyCon name
-    (mkArrowKinds [ typeNatKind, typeNatKind ] boolKind)
+    (mkArrowKinds [ typeNatKind, typeNatKind ] boolTy)
     (take 2 $ tyVarList typeNatKind)
     (BuiltInSynFamTyCon ops)
     NoParentTyCon
@@ -306,9 +298,6 @@ x === y = Pair x y
 num :: Integer -> Type
 num = mkNumLitTy
 
-boolKind :: Kind
-boolKind = mkTyConApp promotedBoolTyCon []
-
 bool :: Bool -> Type
 bool b = if b then mkTyConApp promotedTrueDataCon []
               else mkTyConApp promotedFalseDataCon []
@@ -322,7 +311,7 @@ isBoolLitTy tc =
          | otherwise                   -> Nothing
 
 orderingKind :: Kind
-orderingKind = mkTyConApp promotedOrderingTyCon []
+orderingKind = mkTyConApp orderingTyCon []
 
 ordering :: Ordering -> Type
 ordering o =

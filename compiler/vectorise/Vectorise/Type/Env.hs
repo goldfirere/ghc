@@ -395,7 +395,7 @@ vectDataConWorkers orig_tc vect_tc arr_tc
         }
   where
     tyvars   = tyConTyVars vect_tc
-    var_tys  = mkTyVarTys tyvars
+    var_tys  = mkOnlyTyVarTys tyvars
     ty_args  = map Type var_tys
     res_ty   = mkTyConApp vect_tc var_tys
 

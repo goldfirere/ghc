@@ -440,7 +440,7 @@ newName occ
        ; loc  <- getSrcSpanM
        ; return (mkInternalName uniq occ loc) }
 
-newSysName :: OccName -> TcM Name
+newSysName :: OccName -> TcRnIf gbl lcl Name
 newSysName occ
   = do { uniq <- newUnique
        ; return (mkSystemName uniq occ) }
@@ -448,12 +448,12 @@ newSysName occ
 newSysLocalId :: FastString -> TcType -> TcRnIf gbl lcl TcId
 newSysLocalId fs ty
   = do  { u <- newUnique
-        ; return (mkSysLocal fs u ty) }
+        ; return (mkSysLocalOrCoVar fs u ty) }
 
 newSysLocalIds :: FastString -> [TcType] -> TcRnIf gbl lcl [TcId]
 newSysLocalIds fs tys
   = do  { us <- newUniqueSupply
-        ; return (zipWith (mkSysLocal fs) (uniqsFromSupply us) tys) }
+        ; return (zipWith (mkSysLocalOrCoVar fs) (uniqsFromSupply us) tys) }
 
 instance MonadUnique (IOEnv (Env gbl lcl)) where
         getUniqueM = newUnique
@@ -999,11 +999,20 @@ checkTc :: Bool -> MsgDoc -> TcM ()         -- Check that the boolean is true
 checkTc True  _   = return ()
 checkTc False err = failWithTc err
 
---         Warnings have no 'M' variant, nor failure
+checkTcM :: Bool -> (TidyEnv, MsgDoc) -> TcM ()
+checkTcM True  _   = return ()
+checkTcM False err = failWithTcM err
+
+--         Warnings have no failure
 
 warnTc :: Bool -> MsgDoc -> TcM ()
 warnTc warn_if_true warn_msg
   | warn_if_true = addWarnTc warn_msg
+  | otherwise    = return ()
+
+warnTcM :: Bool -> (TidyEnv, MsgDoc) -> TcM ()
+warnTcM warn_if_true warn_msg
+  | warn_if_true = addWarnTcM warn_msg
   | otherwise    = return ()
 
 addWarnTc :: MsgDoc -> TcM ()
@@ -1039,6 +1048,15 @@ tcInitTidyEnv :: TcM TidyEnv
 tcInitTidyEnv
   = do  { lcl_env <- getLclEnv
         ; return (tcl_tidy lcl_env) }
+
+-- | Get a 'TidyEnv' that includes mappings for all vars free in the given
+-- type. Useful when tidying open types.
+tcInitOpenTidyEnv :: TyCoVarSet -> TcM TidyEnv
+tcInitOpenTidyEnv tvs
+  = do { env1 <- tcInitTidyEnv
+       ; let env2 = tidyFreeTyCoVars env1 tvs
+       ; return env2 }
+
 
 {-
 -----------------------------------
@@ -1094,18 +1112,38 @@ newTcEvBinds = do { ref <- newTcRef emptyEvBindMap
                   ; uniq <- newUnique
                   ; return (EvBindsVar ref uniq) }
 
-addTcEvBind :: EvBindsVar -> EvVar -> EvTerm -> TcM ()
+addTcEvBind :: EvBindsVar -> EvVar -> EvTerm -> CtLoc -> TcM ()
 -- Add a binding to the TcEvBinds by side effect
-addTcEvBind (EvBindsVar ev_ref _) ev_id ev_tm
-  = do { traceTc "addTcEvBind" $ vcat [ text "ev_id =" <+> ppr ev_id
+addTcEvBind (EvBindsVar ev_ref u) ev_id ev_tm loc
+  = do { traceTc "addTcEvBind" $ vcat [ text "unique =" <+> ppr u
+                                      , text "ev_id =" <+> ppr ev_id
                                       , text "ev_tm =" <+> ppr ev_tm ]
        ; bnds <- readTcRef ev_ref
-       ; writeTcRef ev_ref (extendEvBinds bnds ev_id ev_tm) }
+       ; writeTcRef ev_ref (extendEvBinds bnds ev_id ev_tm loc) }
+
+-- | Remove an EvBind from an EvBindsVar
+dropTcEvBind :: EvBindsVar -> EvVar -> TcM ()
+dropTcEvBind (EvBindsVar ev_ref u) ev_id
+  = do { traceTc "dropTcEvBind" $ vcat [ text "unique =" <+> ppr u
+                                       , text "ev_id =" <+> ppr ev_id
+                                         <+> dcolon <+> ppr (varType ev_id) ]
+       ; bnds <- readTcRef ev_ref
+       ; writeTcRef ev_ref (dropEvBind bnds ev_id) }
 
 getTcEvBinds :: EvBindsVar -> TcM (Bag EvBind)
 getTcEvBinds (EvBindsVar ev_ref _)
   = do { bnds <- readTcRef ev_ref
        ; return (evBindMapBinds bnds) }
+
+getTcEvBindsMap :: EvBindsVar -> TcM EvBindMap
+getTcEvBindsMap (EvBindsVar ev_ref _)
+  = readTcRef ev_ref
+
+-- | Change the 'EvBindMap' in an 'EvBindsVar'
+setTcEvBindsMap :: EvBindsVar -> EvBindMap -> TcM ()
+setTcEvBindsMap ebv@(EvBindsVar ev_ref _) ebm
+  = do { traceTc "Setting EvBindsVar" (ppr ebv)
+       ; writeTcRef ev_ref ebm }
 
 chooseUniqueOccTc :: (OccSet -> OccName) -> TcM OccName
 chooseUniqueOccTc fn =
@@ -1153,6 +1191,10 @@ emitInsoluble ct
          updTcRef lie_var (`addInsols` unitBag ct) ;
          v <- readTcRef lie_var ;
          traceTc "emitInsoluble" (ppr v) }
+
+-- | Throw out any constraints emitted by the thing_inside
+discardConstraints :: TcM a -> TcM a
+discardConstraints thing_inside = fst <$> captureConstraints thing_inside
 
 captureConstraints :: TcM a -> TcM (a, WantedConstraints)
 -- (captureConstraints m) runs m, and returns the type constraints it generates
@@ -1215,8 +1257,8 @@ emitWildcardHoleConstraints wcs
   = do { ctLoc <- getCtLoc HoleOrigin
        ; forM_ wcs $ \(name, tv) -> do {
        ; let ctLoc' = setCtLocSpan ctLoc (nameSrcSpan name)
-             ty     = mkTyVarTy tv
-             ev     = mkLocalId name ty
+             ty     = mkOnlyTyVarTy tv
+             ev     = mkLocalIdOrCoVar name ty
              can    = CHoleCan { cc_ev   = CtWanted ty ev ctLoc'
                                , cc_occ  = occName name
                                , cc_hole = TypeHole }

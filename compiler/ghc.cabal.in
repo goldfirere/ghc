@@ -426,7 +426,7 @@ Library
         CoAxiom
         Kind
         Type
-        TypeRep
+        TyCoRep
         Unify
         Bag
         Binary

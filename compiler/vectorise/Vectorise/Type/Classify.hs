@@ -23,11 +23,10 @@ import UniqSet
 import UniqFM
 import DataCon
 import TyCon
-import TypeRep
-import Type hiding (tyConsOfType)
+import TyCoRep
+import qualified Type
 import PrelNames
 import Digraph
-
 
 -- |From a list of type constructors, extract those that can be vectorised, returning them in two
 -- sets, where the first result list /must be/ vectorised and the second result list /need not be/
@@ -120,18 +119,6 @@ tyConsOfTypes = unionManyUniqSets . map tyConsOfType
 -- |Collect the set of TyCons that occur in this type.
 --
 tyConsOfType :: Type -> UniqSet TyCon
-tyConsOfType ty
-  | Just ty' <- coreView ty    = tyConsOfType ty'
-tyConsOfType (TyVarTy _)       = emptyUniqSet
-tyConsOfType (TyConApp tc tys) = extend (tyConsOfTypes tys)
-  where
-    extend |  isUnLiftedTyCon tc
-           || isTupleTyCon   tc = id
+tyConsOfType ty = filterUniqSet not_tuple_or_unlifted $ Type.tyConsOfType ty
+  where not_tuple_or_unlifted tc = not (isUnLiftedTyCon tc || isTupleTyCon tc)
 
-           | otherwise          = (`addOneToUniqSet` tc)
-
-tyConsOfType (AppTy a b)       = tyConsOfType a `unionUniqSets` tyConsOfType b
-tyConsOfType (FunTy a b)       = (tyConsOfType a `unionUniqSets` tyConsOfType b)
-                                 `addOneToUniqSet` funTyCon
-tyConsOfType (LitTy _)         = emptyUniqSet
-tyConsOfType (ForAllTy _ ty)   = tyConsOfType ty

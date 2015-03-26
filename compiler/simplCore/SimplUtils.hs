@@ -52,7 +52,7 @@ import Var
 import Demand
 import SimplMonad
 import Type     hiding( substTy )
-import Coercion hiding( substCo, substTy )
+import Coercion hiding( substCo )
 import DataCon          ( dataConWorkId )
 import VarSet
 import BasicTypes
@@ -246,11 +246,11 @@ instance Outputable ArgSpec where
 
 addValArgTo :: ArgInfo -> OutExpr -> ArgInfo
 addValArgTo ai arg = ai { ai_args = ValArg arg : ai_args ai
-                        , ai_type = funResultTy (ai_type ai) }
+                        , ai_type = applyTypeToArg (ai_type ai) arg }
 
 addTyArgTo :: ArgInfo -> OutType -> ArgInfo
 addTyArgTo ai arg_ty = ai { ai_args = arg_spec : ai_args ai
-                          , ai_type = applyTy poly_fun_ty arg_ty }
+                          , ai_type = piResultTy poly_fun_ty arg_ty }
   where
     poly_fun_ty = ai_type ai
     arg_spec    = TyArg { as_arg_ty = arg_ty, as_hole_ty = poly_fun_ty }
@@ -523,7 +523,8 @@ mkArgInfo fun rules n_val_args call_cont
     -- But beware primops/datacons with no strictness
     add_type_str _ [] = []
     add_type_str fun_ty strs            -- Look through foralls
-        | Just (_, fun_ty') <- splitForAllTy_maybe fun_ty       -- Includes coercions
+        | Just (bndr, fun_ty') <- splitForAllTy_maybe fun_ty       -- Includes coercions
+        , isNamedBinder bndr
         = add_type_str fun_ty' strs
     add_type_str fun_ty (str:strs)      -- Add strict-type info
         | Just (arg_ty, fun_ty') <- splitFunTy_maybe fun_ty
@@ -1443,7 +1444,7 @@ abstractFloats main_tvs body_env body
            ; return (subst', (NonRec poly_id poly_rhs)) }
       where
         rhs' = CoreSubst.substExpr (text "abstract_floats2") subst rhs
-        tvs_here = varSetElemsKvsFirst (main_tv_set `intersectVarSet` exprSomeFreeVars isTyVar rhs')
+        tvs_here = varSetElemsWellScoped (main_tv_set `intersectVarSet` exprSomeFreeVars isTyVar rhs')
 
                 -- Abstract only over the type variables free in the rhs
                 -- wrt which the new binding is abstracted.  But the naive
@@ -1487,10 +1488,10 @@ abstractFloats main_tvs body_env body
     mk_poly tvs_here var
       = do { uniq <- getUniqueM
            ; let  poly_name = setNameUnique (idName var) uniq           -- Keep same name
-                  poly_ty   = mkForAllTys tvs_here (idType var) -- But new type of course
+                  poly_ty   = mkInvForAllTys tvs_here (idType var) -- But new type of course
                   poly_id   = transferPolyIdInfo var tvs_here $ -- Note [transferPolyIdInfo] in Id.lhs
-                              mkLocalId poly_name poly_ty
-           ; return (poly_id, mkTyApps (Var poly_id) (mkTyVarTys tvs_here)) }
+                              mkLocalIdOrCoVar poly_name poly_ty
+           ; return (poly_id, mkTyApps (Var poly_id) (mkTyCoVarTys tvs_here)) }
                 -- In the olden days, it was crucial to copy the occInfo of the original var,
                 -- because we were looking at occurrence-analysed but as yet unsimplified code!
                 -- In particular, we mustn't lose the loop breakers.  BUT NOW we are looking
@@ -1658,7 +1659,7 @@ combineIdenticalAlts case_bndr ((_con1,bndrs1,rhs1) : con_alts)
     cheapEqTicked e1 e2 = cheapEqExpr' tickishFloatable e1 e2
     identical_to_alt1 (_con,bndrs,rhs)
       = all isDeadBinder bndrs && rhs `cheapEqTicked` rhs1
-    tickss = map (fst . stripTicks tickishFloatable . thirdOf3) eliminated_alts
+    tickss = map (fst . stripTicks tickishFloatable . thdOf3) eliminated_alts
 
 combineIdenticalAlts _ alts = return alts
 
@@ -1755,7 +1756,7 @@ mkCase1 _dflags scrut case_bndr _ alts@((_,_,rhs1) : _)      -- Identity case
   = do { tick (CaseIdentity case_bndr)
        ; return (mkTicks ticks $ re_cast scrut rhs1) }
   where
-    ticks = concatMap (fst . stripTicks tickishFloatable . thirdOf3) (tail alts)
+    ticks = concatMap (fst . stripTicks tickishFloatable . thdOf3) (tail alts)
     identity_alt (con, args, rhs) = check_eq rhs con args
 
     check_eq (Cast rhs co) con        args

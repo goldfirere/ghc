@@ -1,6 +1,24 @@
 
+T8616.hs:8:16:
+    Couldn't match representation of kind ‘k2’ with that of ‘*’
+      ‘k2’ is a rigid type variable bound by
+           the type signature for withSomeSing :: Proxy kproxy
+           at T8616.hs:7:17
+    When matching types
+      Any :: k2
+      Proxy kproxy :: *
+       Expected type: Proxy kproxy
+         Actual type: Any
+    Relevant bindings include
+      withSomeSing :: Proxy kproxy (bound at T8616.hs:8:1)
+    In the expression: undefined :: (Any :: k)
+    In an equation for ‘withSomeSing’:
+        withSomeSing = undefined :: (Any :: k)
+
 T8616.hs:8:29:
-    Expected a type, but ‘Any’ has kind ‘k’
+    Expected a type, but ‘Any’ has kind ‘k1’
+    Relevant bindings include
+      withSomeSing :: Proxy kproxy (bound at T8616.hs:8:1)
     In an expression type signature: (Any :: k)
     In the expression: undefined :: (Any :: k)
     In an equation for ‘withSomeSing’:

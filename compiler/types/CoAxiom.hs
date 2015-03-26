@@ -18,7 +18,7 @@ module CoAxiom (
        coAxiomName, coAxiomArity, coAxiomBranches,
        coAxiomTyCon, isImplicitCoAxiom, coAxiomNumPats,
        coAxiomNthBranch, coAxiomSingleBranch_maybe, coAxiomRole,
-       coAxiomSingleBranch, coAxBranchTyVars, coAxBranchRoles,
+       coAxiomSingleBranch, coAxBranchTyCoVars, coAxBranchRoles,
        coAxBranchLHS, coAxBranchRHS, coAxBranchSpan, coAxBranchIncomps,
        placeHolderIncomps,
 
@@ -28,7 +28,7 @@ module CoAxiom (
        BuiltInSynFamily(..), trivialBuiltInFamily
        ) where
 
-import {-# SOURCE #-} TypeRep ( Type )
+import {-# SOURCE #-} TyCoRep ( Type )
 import {-# SOURCE #-} TyCon ( TyCon )
 import Outputable
 import FastString
@@ -62,9 +62,9 @@ type instance where
 
 This will give rise to this axiom:
 
-axF :: {                                           F [Int] ~ Bool
-       ; forall (a :: *).                          F [a]   ~ Double
-       ; forall (k :: BOX) (a :: k -> *) (b :: k). F (a b) ~ Char
+axF :: {                                         F [Int] ~ Bool
+       ; forall (a :: *).                        F [a]   ~ Double
+       ; forall (k :: *) (a :: k -> *) (b :: k). F (a b) ~ Char
        }
 
 The axiom is used with the AxiomInstCo constructor of Coercion. If we wish
@@ -250,7 +250,7 @@ data CoAxBranch
   = CoAxBranch
     { cab_loc      :: SrcSpan       -- Location of the defining equation
                                     -- See Note [CoAxiom locations]
-    , cab_tvs      :: [TyVar]       -- Bound type variables; not necessarily fresh
+    , cab_tvs      :: [TyCoVar]     -- Bound type variables; not necessarily fresh
                                     -- See Note [CoAxBranch type variables]
     , cab_roles    :: [Role]        -- See Note [CoAxBranch roles]
     , cab_lhs      :: [Type]        -- Type patterns to match against
@@ -301,8 +301,8 @@ coAxiomSingleBranch (CoAxiom { co_ax_branches = FirstBranch br }) = br
 coAxiomTyCon :: CoAxiom br -> TyCon
 coAxiomTyCon = co_ax_tc
 
-coAxBranchTyVars :: CoAxBranch -> [TyVar]
-coAxBranchTyVars = cab_tvs
+coAxBranchTyCoVars :: CoAxBranch -> [TyCoVar]
+coAxBranchTyCoVars = cab_tvs
 
 coAxBranchLHS :: CoAxBranch -> [Type]
 coAxBranchLHS = cab_lhs
@@ -424,6 +424,13 @@ instance Typeable br => Data.Data (CoAxiom br) where
     gunfold _ _  = error "gunfold"
     dataTypeOf _ = mkNoRepType "CoAxiom"
 
+instance Outputable CoAxBranch where
+  ppr (CoAxBranch { cab_loc = loc
+                  , cab_lhs = lhs
+                  , cab_rhs = rhs }) =
+    text "CoAxBranch" <+> parens (ppr loc) <> colon <+> ppr lhs <+>
+    text "=>" <+> ppr rhs
+
 {-
 ************************************************************************
 *                                                                      *
@@ -437,7 +444,7 @@ Roles are defined here to avoid circular dependencies.
 -- See Note [Roles] in Coercion
 -- defined here to avoid cyclic dependency with Coercion
 data Role = Nominal | Representational | Phantom
-  deriving (Eq, Data.Data, Data.Typeable)
+  deriving (Eq, Ord, Data.Data, Data.Typeable)
 
 -- These names are slurped into the parser code. Changing these strings
 -- will change the **surface syntax** that GHC accepts! If you want to

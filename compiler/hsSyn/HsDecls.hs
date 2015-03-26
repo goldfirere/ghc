@@ -38,7 +38,7 @@ module HsDecls (
   TyFamInstDecl(..), LTyFamInstDecl, instDeclDataFamInsts,
   DataFamInstDecl(..), LDataFamInstDecl, pprDataFamInstFlavour,
   TyFamEqn(..), TyFamInstEqn, LTyFamInstEqn, TyFamDefltEqn, LTyFamDefltEqn,
-  LClsInstDecl, ClsInstDecl(..),
+  LClsInstDecl, ClsInstDecl(..), HsTyPats,
 
   -- ** Standalone deriving declarations
   DerivDecl(..), LDerivDecl,

@@ -1,10 +1,10 @@
 
 tc168.hs:17:1:
-    Could not deduce (C a1 (a, b0))
-    from the context (C a1 (a, b))
-      bound by the inferred type for ‘g’: C a1 (a, b) => a1 -> a
+    Could not deduce (C a (r, _b))
+    from the context (C a (r, b))
+      bound by the inferred type for ‘g’: C a (r, b) => a -> r
       at tc168.hs:17:1-16
-    The type variable ‘b0’ is ambiguous
+    The type variable ‘_b’ is ambiguous
     When checking that ‘g’ has the inferred type
-      g :: forall a b a1. C a1 (a, b) => a1 -> a
+      g :: forall _r _b _a. C _a (_r, _b) => _a -> _r
     Probable cause: the inferred type is ambiguous

@@ -45,7 +45,6 @@ import Name
 import TyCon
 import Type
 import TcEvidence
-import Var
 import VarSet
 import VarEnv
 import TysWiredIn
@@ -190,9 +189,9 @@ tcExpr (HsIPVar x) res_ty
               type scheme.  We enforce this by creating a fresh
               type variable as its type.  (Because res_ty may not
               be a tau-type.) -}
-       ; ip_ty <- newFlexiTyVarTy openTypeKind
+       ; ip_ty <- newOpenFlexiTyVarTy
        ; let ip_name = mkStrLitTy (hsIPNameFS x)
-       ; ip_var <- emitWanted origin (mkClassPred ipClass [ip_name, ip_ty])
+       ; ip_var <- emitWantedEvVar origin (mkClassPred ipClass [ip_name, ip_ty])
        ; tcWrapResult (fromDict ipClass ip_name ip_ty (HsVar ip_var)) ip_ty res_ty }
   where
   -- Coerces a dictionary for `IP "x" t` into `t`.
@@ -296,7 +295,7 @@ was a language construct.
 See Note [seqId magic] in MkId, and
 -}
 
-tcExpr (OpApp arg1 op fix arg2) res_ty
+tcExpr expr@(OpApp arg1 op fix arg2) res_ty
   | (L loc (HsVar op_name)) <- op
   , op_name `hasKey` seqIdKey           -- Note [Typing rule for seq]
   = do { arg1_ty <- newFlexiTyVarTy liftedTypeKind
@@ -319,11 +318,11 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
          -- So: arg1_ty = arg2_ty -> op_res_ty
          -- where arg2_ty maybe polymorphic; that's the point
 
-       ; arg2' <- tcArg op (arg2, arg2_ty, 2)
-       ; co_b  <- unifyType op_res_ty res_ty    -- op_res ~ res
+       ; arg2'  <- tcArg op (arg2, arg2_ty, 2)
+       ; co_b   <- unifyType (Just expr) op_res_ty res_ty    -- op_res ~ res
 
        -- Make sure that the argument type has kind '*'
-       --    ($) :: forall (a2:*) (r:Open). (a2->r) -> a2 -> r
+       --   ($) :: forall (v:Levity) (a:*) (b:TYPE v). (a->b) -> a -> b
        -- Eg we do not want to allow  (D#  $  4.0#)   Trac #5570
        --    (which gives a seg fault)
        -- We do this by unifying with a MetaTv; but of course
@@ -332,11 +331,15 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
        -- The *result* type can have any kind (Trac #8739),
        -- so we don't need to check anything for that
        ; a2_tv <- newReturnTyVar liftedTypeKind
-       ; let a2_ty = mkTyVarTy a2_tv
-       ; co_a <- unifyType arg2_ty a2_ty     -- arg2 ~ a2
+       ; let a2_ty = mkOnlyTyVarTy a2_tv
+       ; co_a <- unifyType (Just arg2) arg2_ty a2_ty     -- arg2 ~ a2
 
        ; op_id  <- tcLookupId op_name
-       ; let op' = L loc (HsWrap (mkWpTyApps [a2_ty, res_ty]) (HsVar op_id))
+
+       ; let op' = L loc (HsWrap (mkWpTyApps [ getLevity "tcExpr ($)" res_ty
+                                             , a2_ty
+                                             , res_ty ])
+                                 (HsVar op_id))
        ; return $
          OpApp (mkLHsWrapCo (mkTcFunCo Nominal co_a co_b) $
                 mkLHsWrapCo co_arg1 arg1')
@@ -347,7 +350,7 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
   = do { traceTc "Non Application rule" (ppr op)
        ; (op', op_ty) <- tcInferFun op
        ; (co_fn, arg_tys, op_res_ty) <- unifyOpFunTysWrap op 2 op_ty
-       ; co_res <- unifyType op_res_ty res_ty
+       ; co_res <- unifyType (Just expr) op_res_ty res_ty
        ; [arg1', arg2'] <- tcArgs op [arg1, arg2] arg_tys
        ; return $ mkHsWrapCo co_res $
          OpApp arg1' (mkLHsWrapCo co_fn op') fix arg2' }
@@ -355,46 +358,51 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
 -- Right sections, equivalent to \ x -> x `op` expr, or
 --      \ x -> op x expr
 
-tcExpr (SectionR op arg2) res_ty
+tcExpr expr@(SectionR op arg2) res_ty
   = do { (op', op_ty) <- tcInferFun op
        ; (co_fn, [arg1_ty, arg2_ty], op_res_ty) <- unifyOpFunTysWrap op 2 op_ty
-       ; co_res <- unifyType (mkFunTy arg1_ty op_res_ty) res_ty
+       ; co_res <- unifyType (Just expr) (mkFunTy arg1_ty op_res_ty) res_ty
        ; arg2' <- tcArg op (arg2, arg2_ty, 2)
        ; return $ mkHsWrapCo co_res $
          SectionR (mkLHsWrapCo co_fn op') arg2' }
 
-tcExpr (SectionL arg1 op) res_ty
+tcExpr expr@(SectionL arg1 op) res_ty
   = do { (op', op_ty) <- tcInferFun op
        ; dflags <- getDynFlags      -- Note [Left sections]
        ; let n_reqd_args | xopt Opt_PostfixOperators dflags = 1
                          | otherwise                        = 2
 
        ; (co_fn, (arg1_ty:arg_tys), op_res_ty) <- unifyOpFunTysWrap op n_reqd_args op_ty
-       ; co_res <- unifyType (mkFunTys arg_tys op_res_ty) res_ty
+       ; co_res <- unifyType (Just expr) (mkFunTys arg_tys op_res_ty) res_ty
        ; arg1' <- tcArg op (arg1, arg1_ty, 1)
        ; return $ mkHsWrapCo co_res $
          SectionL arg1' (mkLHsWrapCo co_fn op') }
 
-tcExpr (ExplicitTuple tup_args boxity) res_ty
+tcExpr expr@(ExplicitTuple tup_args boxity) res_ty
   | all tupArgPresent tup_args
-  = do { let tup_tc = tupleTyCon (boxityNormalTupleSort boxity) (length tup_args)
+  = do { let arity  = length tup_args
+             tup_tc = tupleTyCon (boxityNormalTupleSort boxity) arity
        ; (coi, arg_tys) <- matchExpectedTyConApp tup_tc res_ty
-       ; tup_args1 <- tcTupArgs tup_args arg_tys
+                           -- Unboxed tuples have levity vars, which we
+                           -- don't care about here
+                           -- See Note [Unboxed tuple levity vars] in TyCon
+       ; let arg_tys' = case boxity of Unboxed -> drop arity arg_tys
+                                       Boxed   -> arg_tys
+       ; tup_args1 <- tcTupArgs tup_args arg_tys'
        ; return $ mkHsWrapCo coi (ExplicitTuple tup_args1 boxity) }
 
   | otherwise
   = -- The tup_args are a mixture of Present and Missing (for tuple sections)
-    do { let kind = case boxity of { Boxed   -> liftedTypeKind
-                                   ; Unboxed -> openTypeKind }
-             arity = length tup_args
-             tup_tc = tupleTyCon (boxityNormalTupleSort boxity) arity
+    do { let arity = length tup_args
 
-       ; arg_tys <- newFlexiTyVarTys (tyConArity tup_tc) kind
+       ; arg_tys <- case boxity of
+           { Boxed   -> newFlexiTyVarTys arity liftedTypeKind
+           ; Unboxed -> replicateM arity newOpenFlexiTyVarTy }
        ; let actual_res_ty
-               = mkFunTys [ty | (ty, L _ (Missing _)) <- arg_tys `zip` tup_args]
-                          (mkTyConApp tup_tc arg_tys)
+                 = mkFunTys [ty | (ty, (L _ (Missing _))) <- arg_tys `zip` tup_args]
+                            (mkTupleTy (boxityNormalTupleSort boxity) arg_tys)
 
-       ; coi <- unifyType actual_res_ty res_ty
+       ; coi <- unifyType (Just expr) actual_res_ty res_ty
 
        -- Handle tuple sections where
        ; tup_args1 <- tcTupArgs tup_args arg_tys
@@ -460,9 +468,9 @@ tcExpr (HsIf Nothing pred b1 b2) res_ty    -- Ordinary 'if'
        ; return (HsIf Nothing pred' b1' b2') }
 
 tcExpr (HsIf (Just fun) pred b1 b2) res_ty   -- Note [Rebindable syntax for if]
-  = do { pred_ty <- newFlexiTyVarTy openTypeKind
-       ; b1_ty   <- newFlexiTyVarTy openTypeKind
-       ; b2_ty   <- newFlexiTyVarTy openTypeKind
+  = do { pred_ty <- newOpenFlexiTyVarTy
+       ; b1_ty   <- newOpenFlexiTyVarTy
+       ; b2_ty   <- newOpenFlexiTyVarTy
        ; let if_ty = mkFunTys [pred_ty, b1_ty, b2_ty] res_ty
        ; fun'  <- tcSyntaxOp IfOrigin fun if_ty
        ; pred' <- tcMonoExpr pred pred_ty
@@ -500,7 +508,7 @@ tcExpr (HsStatic expr) res_ty
         -- the current implementation is as restrictive as future versions
         -- of the StaticPointers extension.
         ; typeableClass <- tcLookupClass typeableClassName
-        ; _ <- emitWanted StaticOrigin $
+        ; _ <- emitWantedEvVar StaticOrigin $
                   mkTyConApp (classTyCon typeableClass)
                              [liftedTypeKind, expr_ty]
         -- Insert the static form in a global list for later validation.
@@ -534,7 +542,7 @@ to support expressions like this:
 ************************************************************************
 -}
 
-tcExpr (RecordCon (L loc con_name) _ rbinds) res_ty
+tcExpr expr@(RecordCon (L loc con_name) _ rbinds) res_ty
   = do  { data_con <- tcLookupDataCon con_name
 
         -- Check for missing fields
@@ -545,7 +553,7 @@ tcExpr (RecordCon (L loc con_name) _ rbinds) res_ty
               (arg_tys, actual_res_ty) = tcSplitFunTysN con_tau arity
               con_id = dataConWrapId data_con
 
-        ; co_res <- unifyType actual_res_ty res_ty
+        ; co_res <- unifyType (Just expr) actual_res_ty res_ty
         ; rbinds' <- tcRecordBinds data_con arg_tys rbinds
         ; return $ mkHsWrapCo co_res $
           RecordCon (L loc con_id) con_expr rbinds' }
@@ -577,7 +585,7 @@ After all, upd should be equivalent to:
 
 So we need to give a completely fresh type to the result record,
 and then constrain it by the fields that are *not* updated ("p" above).
-We call these the "fixed" type variables, and compute them in getFixedTyVars.
+We call these the "fixed" type variables, and compute them in getFixedTyCoVars.
 
 Note that because MkT3 doesn't contain all the fields being updated,
 its RHS is simply an error, so it doesn't impose any type constraints.
@@ -653,7 +661,7 @@ In the outgoing (HsRecordUpd scrut binds cons in_inst_tys out_inst_tys):
         family example], in_inst_tys = [t1,t2], out_inst_tys = [t3,t2]
 -}
 
-tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
+tcExpr expr@(RecordUpd record_expr rbinds _ _ _) res_ty
   = ASSERT( notNull upd_fld_names )
     do  {
         -- STEP 0
@@ -683,9 +691,9 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
 
                 -- Take apart a representative constructor
               con1 = ASSERT( not (null relevant_cons) ) head relevant_cons
-              (con1_tvs, _, _, _, con1_arg_tys, _) = dataConFullSig con1
+              (con1_tvs, _, _, _, _, con1_arg_tys, _) = dataConFullSig con1
               con1_flds = dataConFieldLabels con1
-              con1_res_ty = mkFamilyTyConApp tycon (mkTyVarTys con1_tvs)
+              con1_res_ty = mkFamilyTyConApp tycon (mkOnlyTyVarTys con1_tvs)
 
         -- Step 2
         -- Check that at least one constructor has all the named fields
@@ -702,7 +710,7 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
               bad_upd_flds = filter bad_fld upd_flds1_w_tys
               con1_tv_set = mkVarSet con1_tvs
               bad_fld (fld, ty) = fld `elem` upd_fld_names &&
-                                      not (tyVarsOfType ty `subVarSet` con1_tv_set)
+                                      not (tyCoVarsOfType ty `subVarSet` con1_tv_set)
         ; checkTc (null bad_upd_flds) (badFieldTypes bad_upd_flds)
 
         -- STEP 4  Note [Type of a record update]
@@ -712,30 +720,30 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
         -- These are variables that appear in *any* arg of *any* of the
         -- relevant constructors *except* in the updated fields
         --
-        ; let fixed_tvs = getFixedTyVars con1_tvs relevant_cons
+        ; let fixed_tvs = getFixedTyCoVars con1_tvs relevant_cons
               is_fixed_tv tv = tv `elemVarSet` fixed_tvs
 
-              mk_inst_ty :: TvSubst -> (TKVar, TcType) -> TcM (TvSubst, TcType)
+              mk_inst_ty :: TCvSubst -> (TyVar, TcType) -> TcM (TCvSubst, TcType)
               -- Deals with instantiation of kind variables
-              --   c.f. TcMType.tcInstTyVars
+              --   c.f. TcMType.tcInstTyCoVars
               mk_inst_ty subst (tv, result_inst_ty)
                 | is_fixed_tv tv   -- Same as result type
-                = return (extendTvSubst subst tv result_inst_ty, result_inst_ty)
+                = return (extendTCvSubst subst tv result_inst_ty, result_inst_ty)
                 | otherwise        -- Fresh type, of correct kind
-                = do { new_ty <- newFlexiTyVarTy (TcType.substTy subst (tyVarKind tv))
-                     ; return (extendTvSubst subst tv new_ty, new_ty) }
+                = do { (subst', new_tv) <- tcInstTyCoVarX TypeLevel subst tv
+                     ; return (subst', mkTyCoVarTy new_tv) }
 
-        ; (result_subst, con1_tvs') <- tcInstTyVars con1_tvs
-        ; let result_inst_tys = mkTyVarTys con1_tvs'
+        ; (result_subst, con1_tvs') <- tcInstTyCoVars TypeLevel con1_tvs
+        ; let result_inst_tys = mkOnlyTyVarTys con1_tvs'
 
-        ; (scrut_subst, scrut_inst_tys) <- mapAccumLM mk_inst_ty emptyTvSubst
+        ; (scrut_subst, scrut_inst_tys) <- mapAccumLM mk_inst_ty emptyTCvSubst
                                                       (con1_tvs `zip` result_inst_tys)
 
         ; let rec_res_ty    = TcType.substTy result_subst con1_res_ty
               scrut_ty      = TcType.substTy scrut_subst  con1_res_ty
               con1_arg_tys' = map (TcType.substTy result_subst) con1_arg_tys
 
-        ; co_res <- unifyType rec_res_ty res_ty
+        ; co_res <- unifyType (Just expr) rec_res_ty res_ty
 
         -- STEP 5
         -- Typecheck the thing to be updated, and the bindings
@@ -758,15 +766,15 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
   where
     upd_fld_names = hsRecFields rbinds
 
-    getFixedTyVars :: [TyVar] -> [DataCon] -> TyVarSet
+    getFixedTyCoVars :: [TyCoVar] -> [DataCon] -> TyCoVarSet
     -- These tyvars must not change across the updates
-    getFixedTyVars tvs1 cons
+    getFixedTyCoVars tvs1 cons
       = mkVarSet [tv1 | con <- cons
                       , let (tvs, theta, arg_tys, _) = dataConSig con
                             flds = dataConFieldLabels con
-                            fixed_tvs = exactTyVarsOfTypes fixed_tys
+                            fixed_tvs = exactTyCoVarsOfTypes fixed_tys
                                     -- fixed_tys: See Note [Type of a record update]
-                                        `unionVarSet` tyVarsOfTypes theta
+                                        `unionVarSet` tyCoVarsOfTypes theta
                                     -- Universally-quantified tyvars that
                                     -- appear in any of the *implicit*
                                     -- arguments to the constructor are fixed
@@ -938,7 +946,8 @@ tcApp fun args res_ty
         -- Rather like tcWrapResult, but (perhaps for historical reasons)
         -- we do this before typechecking the arguments
         ; wrap_res <- addErrCtxtM (funResCtxt True (unLoc fun) actual_res_ty res_ty) $
-                      tcSubTypeDS_NC GenSigCtxt actual_res_ty res_ty
+                      tcSubTypeDS_NC GenSigCtxt (Just $ foldl mkHsApp fun args)
+                                     actual_res_ty res_ty
 
         -- Typecheck the arguments
         ; args1 <- tcArgs fun args expected_arg_tys
@@ -1126,8 +1135,8 @@ tc_infer_id orig id_name
        --   * No need to deeply instantiate because type has all foralls at top
        = do { let wrap_id           = dataConWrapId con
                   (tvs, theta, rho) = tcSplitSigmaTy (idType wrap_id)
-            ; (subst, tvs') <- tcInstTyVars tvs
-            ; let tys'   = mkTyVarTys tvs'
+            ; (subst, tvs') <- tcInstTyCoVars TypeLevel tvs
+            ; let tys'   = mkTyCoVarTys tvs'
                   theta' = substTheta subst theta
                   rho'   = substTy subst rho
             ; wrap <- instCall orig tys' theta'
@@ -1217,7 +1226,7 @@ tcTagToEnum loc fun_name arg res_ty
         ; let fun' = L loc (HsWrap (WpTyApp rep_ty) (HsVar fun))
               rep_ty = mkTyConApp rep_tc rep_args
 
-        ; return (mkHsWrapCoR (mkTcSymCo coi) $ HsApp fun' arg') }
+        ; return (mkHsWrapCoR (mkTcSymCo $ mkTcCoercion coi) $ HsApp fun' arg') }
                   -- coi is a Representational coercion
   where
     doc1 = vcat [ ptext (sLit "Specify the type by giving a type signature")
@@ -1438,12 +1447,6 @@ exprCtxt expr
 fieldCtxt :: Name -> SDoc
 fieldCtxt field_name
   = ptext (sLit "In the") <+> quotes (ppr field_name) <+> ptext (sLit "field of a record")
-
-funAppCtxt :: LHsExpr Name -> LHsExpr Name -> Int -> SDoc
-funAppCtxt fun arg arg_no
-  = hang (hsep [ ptext (sLit "In the"), speakNth arg_no, ptext (sLit "argument of"),
-                    quotes (ppr fun) <> text ", namely"])
-       2 (quotes (ppr arg))
 
 funResCtxt :: Bool  -- There is at least one argument
            -> HsExpr Name -> TcType -> TcType

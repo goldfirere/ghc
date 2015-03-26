@@ -334,8 +334,8 @@ tidyNPat _ over_lit mb_neg eq
 ************************************************************************
 -}
 
-matchLiterals :: [Id]
-              -> Type                   -- Type of the whole case expression
+matchLiterals :: [DsId]
+              -> DsType                 -- Type of the whole case expression
               -> [[EquationInfo]]       -- All PgLits
               -> DsM MatchResult
 
@@ -362,7 +362,7 @@ matchLiterals (var:vars) ty sub_groups
              match_result <- match vars ty (shiftEqns eqns)
              return (hsLitKey dflags hs_lit, match_result)
 
-    wrap_str_guard :: Id -> (Literal,MatchResult) -> DsM MatchResult
+    wrap_str_guard :: DsId -> (Literal,MatchResult) -> DsM MatchResult
         -- Equality check for string literals
     wrap_str_guard eq_str (MachStr s, mr)
         = do { -- We now have to convert back to FastString. Perhaps there
@@ -415,7 +415,7 @@ litValKey (HsIsString _ s) neg   = ASSERT( not neg) MachStr
 ************************************************************************
 -}
 
-matchNPats :: [Id] -> Type -> [EquationInfo] -> DsM MatchResult
+matchNPats :: [DsId] -> DsType -> [EquationInfo] -> DsM MatchResult
 matchNPats (var:vars) ty (eqn1:eqns)    -- All for the same literal
   = do  { let NPat lit mb_neg eq_chk = firstPat eqn1
         ; lit_expr <- dsOverLit lit
@@ -447,24 +447,26 @@ We generate:
 \end{verbatim}
 -}
 
-matchNPlusKPats :: [Id] -> Type -> [EquationInfo] -> DsM MatchResult
+matchNPlusKPats :: [DsId] -> DsType -> [EquationInfo] -> DsM MatchResult
 -- All NPlusKPats, for the *same* literal k
 matchNPlusKPats (var:vars) ty (eqn1:eqns)
   = do  { let NPlusKPat (L _ n1) lit ge minus = firstPat eqn1
         ; ge_expr     <- dsExpr ge
         ; minus_expr  <- dsExpr minus
         ; lit_expr    <- dsOverLit lit
+        ; n1'         <- dsVar n1
         ; let pred_expr   = mkApps ge_expr [Var var, lit_expr]
               minusk_expr = mkApps minus_expr [Var var, lit_expr]
-              (wraps, eqns') = mapAndUnzip (shift n1) (eqn1:eqns)
+        ; (wraps, eqns') <- mapAndUnzipM (shift n1') (eqn1:eqns)
         ; match_result <- match vars ty eqns'
         ; return  (mkGuardedMatchResult pred_expr               $
                    mkCoLetMatchResult (NonRec n1 minusk_expr)   $
                    adjustMatchResult (foldr1 (.) wraps)         $
                    match_result) }
   where
-    shift n1 eqn@(EqnInfo { eqn_pats = NPlusKPat (L _ n) _ _ _ : pats })
-        = (wrapBind n n1, eqn { eqn_pats = pats })
+    shift n1' eqn@(EqnInfo { eqn_pats = NPlusKPat (L _ n) _ _ _ : pats })
+        = do { n' <- dsVar n
+             ; return (wrapBind n' n1', eqn { eqn_pats = pats }) }
         -- The wrapBind is a no-op for the first equation
     shift _ e = pprPanic "matchNPlusKPats/shift" (ppr e)
 

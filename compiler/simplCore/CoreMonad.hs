@@ -18,12 +18,12 @@ module CoreMonad (
 
     -- * Counting
     SimplCount, doSimplTick, doFreeSimplTick, simplCountN,
-    pprSimplCount, plusSimplCount, zeroSimplCount,
+    pprSimplCount, plusSimplCount, zeroSimplCount, 
     isZeroSimplCount, hasDetailedCounts, Tick(..),
 
     -- * The monad
     CoreM, runCoreM,
-
+    
     -- ** Reading from the monad
     getHscEnv, getRuleBase, getModule,
     getDynFlags, getOrigNameCache, getPackageFamInstEnv,
@@ -31,22 +31,22 @@ module CoreMonad (
 
     -- ** Writing to the monad
     addSimplCount,
-
+    
     -- ** Lifting into the monad
     liftIO, liftIOWithCount,
     liftIO1, liftIO2, liftIO3, liftIO4,
-
+    
     -- ** Global initialization
     reinitializeGlobals,
-
+    
     -- ** Dealing with annotations
     getAnnotations, getFirstAnnotations,
 
     -- ** Screen output
-    putMsg, putMsgS, errorMsg, errorMsgS,
-    fatalErrorMsg, fatalErrorMsgS,
+    putMsg, putMsgS, errorMsg, errorMsgS, 
+    fatalErrorMsg, fatalErrorMsgS, 
     debugTraceMsg, debugTraceMsgS,
-    dumpIfSet_dyn,
+    dumpIfSet_dyn, 
 
 #ifdef GHCI
     -- * Getting 'Name's
@@ -61,7 +61,7 @@ import CoreSyn
 import HscTypes
 import Module
 import DynFlags
-import StaticFlags
+import StaticFlags      
 import Rules            ( RuleBase )
 import BasicTypes       ( CompilerPhase(..) )
 import Annotations
@@ -104,7 +104,6 @@ saveLinkerGlobals = return ()
 restoreLinkerGlobals :: () -> IO ()
 restoreLinkerGlobals () = return ()
 #endif
-
 
 {-
 ************************************************************************
@@ -171,7 +170,7 @@ instance Outputable CoreToDo where
   ppr (CoreDoPasses {})        = ptext (sLit "CoreDoPasses")
 
 pprPassDetails :: CoreToDo -> SDoc
-pprPassDetails (CoreDoSimplify n md) = vcat [ ptext (sLit "Max iterations =") <+> int n
+pprPassDetails (CoreDoSimplify n md) = vcat [ ptext (sLit "Max iterations =") <+> int n 
                                             , ppr md ]
 pprPassDetails _ = Outputable.empty
 
@@ -201,7 +200,7 @@ instance Outputable SimplifierMode where
 
 data FloatOutSwitches = FloatOutSwitches {
   floatOutLambdas   :: Maybe Int,  -- ^ Just n <=> float lambdas to top level, if
-                                   -- doing so will abstract over n or fewer
+                                   -- doing so will abstract over n or fewer 
                                    -- value variables
                                    -- Nothing <=> float all lambdas to top level,
                                    --             regardless of how many free variables
@@ -219,9 +218,9 @@ instance Outputable FloatOutSwitches where
     ppr = pprFloatOutSwitches
 
 pprFloatOutSwitches :: FloatOutSwitches -> SDoc
-pprFloatOutSwitches sw
+pprFloatOutSwitches sw 
   = ptext (sLit "FOS") <+> (braces $
-     sep $ punctuate comma $
+     sep $ punctuate comma $ 
      [ ptext (sLit "Lam =")    <+> ppr (floatOutLambdas sw)
      , ptext (sLit "Consts =") <+> ppr (floatOutConstants sw)
      , ptext (sLit "OverSatApps =")   <+> ppr (floatOutOverSatApps sw) ])
@@ -287,7 +286,7 @@ doSimplTick        :: DynFlags -> Tick -> SimplCount -> SimplCount
 doFreeSimplTick    ::             Tick -> SimplCount -> SimplCount
 plusSimplCount     :: SimplCount -> SimplCount -> SimplCount
 
-data SimplCount
+data SimplCount 
    = VerySimplCount !Int        -- Used when don't want detailed stats
 
    | SimplCount {
@@ -295,7 +294,7 @@ data SimplCount
         details :: !TickCounts, -- How many of each type
 
         n_log   :: !Int,        -- N
-        log1    :: [Tick],      -- Last N events; <= opt_HistorySize,
+        log1    :: [Tick],      -- Last N events; <= opt_HistorySize, 
                                 --   most recent first
         log2    :: [Tick]       -- Last opt_HistorySize events before that
                                 -- Having log1, log2 lets us accumulate the
@@ -323,9 +322,9 @@ isZeroSimplCount (SimplCount { ticks = n }) = n==0
 hasDetailedCounts (VerySimplCount {}) = False
 hasDetailedCounts (SimplCount {})     = True
 
-doFreeSimplTick tick sc@SimplCount { details = dts }
+doFreeSimplTick tick sc@SimplCount { details = dts } 
   = sc { details = dts `addTick` tick }
-doFreeSimplTick _ sc = sc
+doFreeSimplTick _ sc = sc 
 
 doSimplTick dflags tick
     sc@(SimplCount { ticks = tks, details = dts, n_log = nl, log1 = l1 })
@@ -337,7 +336,7 @@ doSimplTick dflags tick
 doSimplTick _ _ (VerySimplCount n) = VerySimplCount (n+1)
 
 
--- Don't use Map.unionWith because that's lazy, and we want to
+-- Don't use Map.unionWith because that's lazy, and we want to 
 -- be pretty strict here!
 addTick :: TickCounts -> Tick -> TickCounts
 addTick fm tick = case Map.lookup tick fm of
@@ -384,7 +383,7 @@ pprTickCounts counts
 pprTickGroup :: [(Tick, Int)] -> SDoc
 pprTickGroup group@((tick1,_):_)
   = hang (int (sum [n | (_,n) <- group]) <+> text (tickString tick1))
-       2 (vcat [ int n <+> pprTickCts tick
+       2 (vcat [ int n <+> pprTickCts tick  
                                     -- flip as we want largest first
                | (tick,n) <- sortBy (flip (comparing snd)) group])
 pprTickGroup [] = panic "pprTickGroup"
@@ -410,7 +409,7 @@ data Tick
   | CaseIdentity                Id      -- Case binder
   | FillInCaseDefault           Id      -- Case binder
 
-  | BottomFound
+  | BottomFound         
   | SimplifierDone              -- Ticked at each iteration of the simplifier
 
 instance Outputable Tick where
@@ -610,7 +609,7 @@ runCoreM hsc_env rule_base us mod print_unqual m = do
             cr_globals = glbls,
             cr_print_unqual = print_unqual
         }
-    state = CoreState {
+    state = CoreState { 
             cs_uniq_supply = us
         }
 

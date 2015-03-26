@@ -862,7 +862,7 @@ renameSig ctxt sig@(PatSynSig v (flag, qtvs) prov req ty)
             Explicit ->
                 do { let heading = ptext (sLit "In the pattern synonym type signature")
                                    <+> quotes (ppr sig)
-                   ; warnUnusedForAlls (heading $$ docOfHsDocContext doc) qtvs mentioned
+                   ; warnUnusedForAlls (heading $$ docOfHsDocContext doc) qtvs (tv_kvs ++ mentioned)
                    ; return qtvs }
             Qualified -> panic "renameSig: Qualified"
 

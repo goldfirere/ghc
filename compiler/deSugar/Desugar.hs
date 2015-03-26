@@ -32,6 +32,7 @@ import DsMonad
 import DsExpr
 import DsBinds
 import DsForeign
+import DsUtils
 import Module
 import NameSet
 import NameEnv
@@ -111,8 +112,8 @@ deSugar hsc_env
                               else return (binds, hpcInfo, emptyModBreaks)
 
         ; (msgs, mb_res) <- initDs hsc_env mod rdr_env type_env fam_inst_env $
-                       do { ds_ev_binds <- dsEvBinds ev_binds
-                          ; core_prs <- dsTopLHsBinds binds_cvr
+                            dsTopLevelEvBinds ev_binds $
+                       do { core_prs <- dsTopLHsBinds binds_cvr
                           ; (spec_prs, spec_rules) <- dsImpSpecs imp_specs
                           ; (ds_fords, foreign_prs) <- dsForeigns fords
                           ; ds_rules <- mapMaybeM dsRule rules
@@ -125,8 +126,7 @@ deSugar hsc_env
                                 -- Stub to insert the static entries of the
                                 -- module into the static pointer table
                                 spt_init = sptInitCode mod stBinds
-                          ; return ( ds_ev_binds
-                                   , foreign_prs `appOL` core_prs `appOL` spec_prs
+                          ; return ( foreign_prs `appOL` core_prs `appOL` spec_prs
                                                  `appOL` toOL (map snd stBinds)
                                    , spec_rules ++ ds_rules, ds_vects
                                    , ds_fords `appendStubC` hpc_init
@@ -134,7 +134,7 @@ deSugar hsc_env
 
         ; case mb_res of {
            Nothing -> return (msgs, Nothing) ;
-           Just (ds_ev_binds, all_prs, all_rules, vects0, ds_fords) -> do
+           Just ((all_prs, all_rules, vects0, ds_fords), ds_ev_binds) ->
 
      do {       -- Add export flags to bindings
           keep_alive <- readIORef keep_var
@@ -199,13 +199,13 @@ deSugar hsc_env
         ; return (msgs, Just mod_guts)
         }}}
 
-dsImpSpecs :: [LTcSpecPrag] -> DsM (OrdList (Id,CoreExpr), [CoreRule])
+dsImpSpecs :: [LTcSpecPrag] -> DsM (OrdList (DsId,CoreExpr), [CoreRule])
 dsImpSpecs imp_specs
  = do { spec_prs <- mapMaybeM (dsSpec Nothing) imp_specs
       ; let (spec_binds, spec_rules) = unzip spec_prs
       ; return (concatOL spec_binds, spec_rules) }
 
-combineEvBinds :: [CoreBind] -> [(Id,CoreExpr)] -> [CoreBind]
+combineEvBinds :: [CoreBind] -> [(DsId,CoreExpr)] -> [CoreBind]
 -- Top-level bindings can include coercion bindings, but not via superclasses
 -- See Note [Top-level evidence]
 combineEvBinds [] val_prs
@@ -262,7 +262,7 @@ deSugarExpr hsc_env tc_expr
 
 addExportFlagsAndRules
     :: HscTarget -> NameSet -> NameSet -> [CoreRule]
-    -> [(Id, t)] -> [(Id, t)]
+    -> [(DsId, t)] -> [(DsId, t)]
 addExportFlagsAndRules target exports keep_alive rules prs
   = mapFst add_one prs
   where
@@ -349,7 +349,7 @@ Reason
 dsRule :: LRuleDecl Id -> DsM (Maybe CoreRule)
 dsRule (L loc (HsRule name act vars lhs _tv_lhs rhs _fv_rhs))
   = putSrcSpanDs loc $
-    do  { let bndrs' = [var | L _ (RuleBndr (L _ var)) <- vars]
+    do  { bndrs' <- dsVars [var | L _ (RuleBndr (L _ var)) <- vars]
 
         ; lhs' <- unsetGOptM Opt_EnableRewriteRules $
                   unsetWOptM Opt_WarnIdentities $
@@ -403,7 +403,7 @@ dsRule (L loc (HsRule name act vars lhs _tv_lhs rhs _fv_rhs))
         } } }
 
 -- See Note [Desugaring coerce as cast]
-unfold_coerce :: [Id] -> CoreExpr -> CoreExpr -> DsM ([Var], CoreExpr, CoreExpr)
+unfold_coerce :: [DsId] -> CoreExpr -> CoreExpr -> DsM ([DsVar], CoreExpr, CoreExpr)
 unfold_coerce bndrs lhs rhs = do
     (bndrs', wrap) <- go bndrs
     return (bndrs', wrap lhs, wrap rhs)
@@ -411,10 +411,11 @@ unfold_coerce bndrs lhs rhs = do
     go :: [Id] -> DsM ([Id], CoreExpr -> CoreExpr)
     go []     = return ([], id)
     go (v:vs)
-        | Just (tc, args) <- splitTyConApp_maybe (idType v)
+        | Just (tc, [k,ty1,ty2]) <- splitTyConApp_maybe (idType v)
         , tc == coercibleTyCon = do
-            let ty' = mkTyConApp eqReprPrimTyCon args
-            v' <- mkDerivedLocalM mkRepEqOcc v ty'
+                -- remember: eqReprPrimTyCon is heterogeneous!
+            let ty' = mkTyConApp eqReprPrimTyCon [k,k,ty1,ty2]
+            v' <- mkDerivedLocalCoVarM mkRepEqOcc v ty'
 
             (bndrs, wrap) <- go vs
             return (v':bndrs, mkCoreLet (NonRec v (mkEqBox (mkCoVarCo v'))) . wrap)
@@ -464,11 +465,12 @@ by simpleOptExpr (for the LHS) resp. the simplifiers (for the RHS).
 dsVect :: LVectDecl Id -> DsM CoreVect
 dsVect (L loc (HsVect (L _ v) rhs))
   = putSrcSpanDs loc $
-    do { rhs' <- dsLExpr rhs
-       ; return $ Vect v rhs'
+    do { v'   <- dsVar v
+       ; rhs' <- dsLExpr rhs
+       ; return $ Vect v' rhs'
        }
 dsVect (L _loc (HsNoVect (L _ v)))
-  = return $ NoVect v
+  = NoVect <$> dsVar v
 dsVect (L _loc (HsVectTypeOut isScalar tycon rhs_tycon))
   = return $ VectType isScalar tycon' rhs_tycon
   where

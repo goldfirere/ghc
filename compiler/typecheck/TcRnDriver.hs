@@ -882,7 +882,7 @@ checkSuccess = Nothing
 ----------------
 checkBootTyCon :: TyCon -> TyCon -> Maybe SDoc
 checkBootTyCon tc1 tc2
-  | not (eqKind (tyConKind tc1) (tyConKind tc2))
+  | not (eqType (tyConKind tc1) (tyConKind tc2))
   = Just $ text "The types have different kinds"    -- First off, check the kind
 
   | Just c1 <- tyConClass_maybe tc1
@@ -891,7 +891,7 @@ checkBootTyCon tc1 tc2
           = classExtraBigSig c1
         (clas_tvs2, clas_fds2, sc_theta2, _, ats2, op_stuff2)
           = classExtraBigSig c2
-  , Just env <- eqTyVarBndrs emptyRnEnv2 clas_tvs1 clas_tvs2
+  , Just env <- eqTyCoVarBndrs emptyRnEnv2 clas_tvs1 clas_tvs2
   = let
        eqSig (id1, def_meth1) (id2, def_meth2)
          = check (name1 == name2)
@@ -908,9 +908,9 @@ checkBootTyCon tc1 tc2
           name2 = idName id2
           pname1 = quotes (ppr name1)
           pname2 = quotes (ppr name2)
-          (_, rho_ty1) = splitForAllTys (idType id1)
+          (_, rho_ty1) = splitNamedForAllTys (idType id1)
           op_ty1 = funResultTy rho_ty1
-          (_, rho_ty2) = splitForAllTys (idType id2)
+          (_, rho_ty2) = splitNamedForAllTys (idType id2)
           op_ty2 = funResultTy rho_ty2
 
        eqAT (ATI tc1 def_ats1) (ATI tc2 def_ats2)
@@ -924,8 +924,8 @@ checkBootTyCon tc1 tc2
        eqATDef _ _ = False
 
        eqFD (as1,bs1) (as2,bs2) =
-         eqListBy (eqTypeX env) (mkTyVarTys as1) (mkTyVarTys as2) &&
-         eqListBy (eqTypeX env) (mkTyVarTys bs1) (mkTyVarTys bs2)
+         eqListBy (eqTypeX env) (mkTyCoVarTys as1) (mkTyCoVarTys as2) &&
+         eqListBy (eqTypeX env) (mkTyCoVarTys bs1) (mkTyCoVarTys bs2)
     in
     check (roles1 == roles2) roles_msg `andThenCheck`
           -- Checks kind of class
@@ -933,14 +933,14 @@ checkBootTyCon tc1 tc2
           (text "The functional dependencies do not match") `andThenCheck`
     checkUnless (null sc_theta1 && null op_stuff1 && null ats1) $
                      -- Above tests for an "abstract" class
-    check (eqListBy (eqPredX env) sc_theta1 sc_theta2)
+    check (eqListBy (eqTypeX env) sc_theta1 sc_theta2)
           (text "The class constraints do not match") `andThenCheck`
     checkListBy eqSig op_stuff1 op_stuff2 (text "methods") `andThenCheck`
     checkListBy eqAT ats1 ats2 (text "associated types")
 
   | Just syn_rhs1 <- synTyConRhs_maybe tc1
   , Just syn_rhs2 <- synTyConRhs_maybe tc2
-  , Just env <- eqTyVarBndrs emptyRnEnv2 (tyConTyVars tc1) (tyConTyVars tc2)
+  , Just env <- eqTyCoVarBndrs emptyRnEnv2 (tyConTyVars tc1) (tyConTyVars tc2)
   = ASSERT(tc1 == tc2)
     check (roles1 == roles2) roles_msg `andThenCheck`
     check (eqTypeX env syn_rhs1 syn_rhs2) empty   -- nothing interesting to say
@@ -960,10 +960,10 @@ checkBootTyCon tc1 tc2
     check (eqFamFlav fam_flav1 fam_flav2) empty   -- nothing interesting to say
 
   | isAlgTyCon tc1 && isAlgTyCon tc2
-  , Just env <- eqTyVarBndrs emptyRnEnv2 (tyConTyVars tc1) (tyConTyVars tc2)
+  , Just env <- eqTyCoVarBndrs emptyRnEnv2 (tyConTyVars tc1) (tyConTyVars tc2)
   = ASSERT(tc1 == tc2)
     check (roles1 == roles2) roles_msg `andThenCheck`
-    check (eqListBy (eqPredX env)
+    check (eqListBy (eqTypeX env)
                      (tyConStupidTheta tc1) (tyConStupidTheta tc2))
           (text "The datatype contexts do not match") `andThenCheck`
     eqAlgRhs tc1 (algTyConRhs tc1) (algTyConRhs tc2)
@@ -1019,7 +1019,7 @@ checkBootTyCon tc1 tc2
 
     eqClosedFamilyBranch (CoAxBranch { cab_tvs = tvs1, cab_lhs = lhs1, cab_rhs = rhs1 })
                          (CoAxBranch { cab_tvs = tvs2, cab_lhs = lhs2, cab_rhs = rhs2 })
-      | Just env <- eqTyVarBndrs emptyRnEnv2 tvs1 tvs2
+      | Just env <- eqTyCoVarBndrs emptyRnEnv2 tvs1 tvs2
       = eqListBy (eqTypeX env) lhs1 lhs2 &&
         eqTypeX env rhs1 rhs2
 
@@ -1691,7 +1691,9 @@ tcGhciStmts stmts
                 -- if they were overloaded, since they aren't applied to anything.)
             ret_expr = nlHsApp (nlHsTyApp ret_id [ret_ty])
                        (noLoc $ ExplicitList unitTy Nothing (map mk_item ids)) ;
-            mk_item id = nlHsApp (nlHsTyApp unsafeCoerceId [idType id, unitTy])
+            mk_item id = let ty_args = [idType id, unitTy] in
+                         nlHsApp (nlHsTyApp unsafeCoerceId
+                                   (map (getLevity "tcGhciStmts") ty_args ++ ty_args))
                                  (nlHsVar id) ;
             stmts = tc_stmts ++ [noLoc (mkLastStmt ret_expr)]
         } ;
@@ -1710,8 +1712,8 @@ getGhciStepIO = do
 
         stepTy :: LHsType Name    -- Renamed, so needs all binders in place
         stepTy = noLoc $ HsForAllTy Implicit Nothing
-                            (HsQTvs { hsq_tvs = [noLoc (UserTyVar a_tv)]
-                                    , hsq_kvs = [] })
+                            (HsQTvs { hsq_explicit = [noLoc (UserTyVar a_tv)]
+                                    , hsq_implicit = [] })
                             (noLoc [])
                             (nlHsFunTy ghciM ioM)
         step   = noLoc $ ExprWithTySig (nlHsVar ghciStepIoMName) stepTy []
@@ -1765,7 +1767,7 @@ tcRnExpr hsc_env rdr_expr
     -- Ignore the dictionary bindings
     _ <- simplifyInteractive (andWC stWC lie_top) ;
 
-    let { all_expr_ty = mkForAllTys qtvs (mkPiTypes dicts res_ty) } ;
+    let { all_expr_ty = mkInvForAllTys qtvs (mkPiTypes dicts res_ty) } ;
     zonkTcType all_expr_ty
     }
 
@@ -1801,7 +1803,7 @@ tcRnType hsc_env normalise rdr_type
         -- Now kind-check the type
         -- It can have any rank or kind
        ; nwc_tvs <- mapM newWildcardVarMetaKind wcs
-       ; ty <- tcExtendTyVarEnv nwc_tvs $ tcHsSigType GhciCtxt rn_type
+       ; ty <- tcExtendTyVarEnv nwc_tvs $ tcTopHsSigType GhciCtxt rn_type
 
        ; ty' <- if normalise
                 then do { fam_envs <- tcGetFamInstEnvs

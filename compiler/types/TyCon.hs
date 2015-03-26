@@ -27,7 +27,6 @@ module TyCon(
         mkSynonymTyCon,
         mkFamilyTyCon,
         mkPromotedDataCon,
-        mkPromotedTyCon,
 
         -- ** Predicates on TyCons
         isAlgTyCon,
@@ -37,9 +36,7 @@ module TyCon(
         isTupleTyCon, isUnboxedTupleTyCon, isBoxedTupleTyCon,
         isTypeSynonymTyCon,
         isDecomposableTyCon,
-        isPromotedDataCon, isPromotedTyCon,
-        isPromotedDataCon_maybe, isPromotedTyCon_maybe,
-        promotableTyCon_maybe, promoteTyCon,
+        isPromotedDataCon, isPromotedDataCon_maybe, 
 
         isDataTyCon, isProductTyCon, isDataProductTyCon_maybe,
         isEnumerationTyCon,
@@ -93,7 +90,7 @@ module TyCon(
 
 #include "HsVersions.h"
 
-import {-# SOURCE #-} TypeRep ( Kind, Type, PredType )
+import {-# SOURCE #-} TyCoRep ( Kind, Type, PredType )
 import {-# SOURCE #-} DataCon ( DataCon, isVanillaDataCon )
 
 import Var
@@ -298,8 +295,19 @@ it's worth noting that (~#)'s parameters are at role N. Promoted data
 constructors' type arguments are at role R. All kind arguments are at role
 N.
 
-************************************************************************
-*                                                                      *
+Note [Unboxed tuple levity vars]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The contents of an unboxed tuple may be boxed or unboxed. Accordingly,
+the kind of the unboxed tuple constructor is sort-polymorphic. For example,
+
+   (#,#) :: forall (v :: Levity) (w :: Levity). TYPE v -> TYPE w -> #
+
+These extra tyvars (v and w) cause some delicate processing around tuples,
+where we used to be able to assume that the tycon arity and the
+datacon arity were the same.
+
+%************************************************************************
+%*                                                                      *
 \subsection{The data type}
 *                                                                      *
 ************************************************************************
@@ -398,12 +406,10 @@ data TyCon
         algTcRec    :: RecFlag,     -- ^ Tells us whether the data type is part
                                     -- of a mutually-recursive group or not
 
-        algTcParent :: TyConParent, -- ^ Gives the class or family declaration
+        algTcParent :: TyConParent  -- ^ Gives the class or family declaration
                                     -- 'TyCon' for derived 'TyCon's representing
                                     -- class or family instances, respectively.
                                     -- See also 'synTcParent'
-
-        tcPromoted  :: Maybe TyCon  -- ^ Promoted TyCon, if any
     }
 
   -- | Represents the infinite family of tuple type constructors,
@@ -430,10 +436,7 @@ data TyCon
                                     -- Invariant:
                                     -- length tyConTyVars = tyConArity
 
-        dataCon        :: DataCon,  -- ^ Corresponding tuple data constructor
-
-        tcPromoted     :: Maybe TyCon
-                                    -- ^ Nothing for unboxed tuples
+        dataCon        :: DataCon   -- ^ Corresponding tuple data constructor
     }
 
   -- | Represents type synonyms
@@ -539,16 +542,6 @@ data TyCon
         tcRoles     :: [Role], -- ^ Roles: N for kind vars, R for type vars
         dataCon     :: DataCon -- ^ Corresponding data constructor
     }
-
-  -- | Represents promoted type constructor.
-  | PromotedTyCon {
-        tyConUnique :: Unique, -- ^ Same Unique as the type constructor
-        tyConName   :: Name,   -- ^ Same Name as the type constructor
-        tyConArity  :: Arity,  -- ^ n if ty_con :: * -> ... -> *  n times
-        tyConKind   :: Kind,   -- ^ Always TysPrim.superKind
-        ty_con      :: TyCon   -- ^ Corresponding type constructor
-    }
-
   deriving Typeable
 
 -- | Names of the fields in an algebraic record type
@@ -650,7 +643,7 @@ data TyConParent
     NoParentTyCon
 
   -- | Type constructors representing a class dictionary.
-  -- See Note [ATyCon for classes] in TypeRep
+  -- See Note [ATyCon for classes] in TyCoRep
   | ClassTyCon
         Class           -- INVARIANT: the classTyCon of this Class is the
                         -- current tycon
@@ -744,8 +737,9 @@ Note [Closed type families]
 
 Note [Promoted data constructors]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+TODO (RAE): Update note.
 A data constructor can be promoted to become a type constructor,
-via the PromotedTyCon alternative in TyCon.
+via the PromotedDataCon alternative in TyCon.
 
 * Only data constructors with
      (a) no kind polymorphism
@@ -755,15 +749,6 @@ via the PromotedTyCon alternative in TyCon.
 * The TyCon promoted from a DataCon has the *same* Name and Unique as
   the DataCon.  Eg. If the data constructor Data.Maybe.Just(unique 78,
   say) is promoted to a TyCon whose name is Data.Maybe.Just(unique 78)
-
-* The *kind* of a promoted DataCon may be polymorphic.  Example:
-    type of DataCon           Just :: forall (a:*). a -> Maybe a
-    kind of (promoted) tycon  Just :: forall (a:box). a -> Maybe a
-  The kind is not identical to the type, because of the */box
-  kind signature on the forall'd variable; so the tyConKind field of
-  PromotedTyCon is not identical to the dataConUserType of the
-  DataCon.  But it's the same modulo changing the variable kinds,
-  done by DataCon.promoteType.
 
 * Small note: We promote the *user* type of the DataCon.  Eg
      data T = MkT {-# UNPACK #-} !(Bool, Bool)
@@ -1003,7 +988,7 @@ So we compromise, and move their Kind calculation to the call site.
 -}
 
 -- | Given the name of the function type constructor and it's kind, create the
--- corresponding 'TyCon'. It is reccomended to use 'TypeRep.funTyCon' if you want
+-- corresponding 'TyCon'. It is reccomended to use 'TyCoRep.funTyCon' if you want
 -- this functionality
 mkFunTyCon :: Name -> Kind -> TyCon
 mkFunTyCon name kind
@@ -1031,9 +1016,8 @@ mkAlgTyCon :: Name
            -> TyConParent
            -> RecFlag           -- ^ Is the 'TyCon' recursive?
            -> Bool              -- ^ Was the 'TyCon' declared with GADT syntax?
-           -> Maybe TyCon       -- ^ Promoted version
            -> TyCon
-mkAlgTyCon name kind tyvars roles cType stupid rhs parent is_rec gadt_syn prom_tc
+mkAlgTyCon name kind tyvars roles cType stupid rhs parent is_rec gadt_syn
   = AlgTyCon {
         tyConName        = name,
         tyConUnique      = nameUnique name,
@@ -1046,8 +1030,7 @@ mkAlgTyCon name kind tyvars roles cType stupid rhs parent is_rec gadt_syn prom_t
         algTcRhs         = rhs,
         algTcParent      = ASSERT2( okParent name parent, ppr name $$ ppr parent ) parent,
         algTcRec         = is_rec,
-        algTcGadtSyntax  = gadt_syn,
-        tcPromoted       = prom_tc
+        algTcGadtSyntax  = gadt_syn
     }
 
 -- | Simpler specialization of 'mkAlgTyCon' for classes
@@ -1056,7 +1039,6 @@ mkClassTyCon :: Name -> Kind -> [TyVar] -> [Role] -> AlgTyConRhs -> Class
 mkClassTyCon name kind tyvars roles rhs clas is_rec
   = mkAlgTyCon name kind tyvars roles Nothing [] rhs (ClassTyCon clas)
                is_rec False
-               Nothing    -- Class TyCons are not pormoted
 
 mkTupleTyCon :: Name
              -> Kind    -- ^ Kind of the resulting 'TyCon'
@@ -1064,9 +1046,8 @@ mkTupleTyCon :: Name
              -> [TyVar] -- ^ 'TyVar's scoped over: see 'tyConTyVars'
              -> DataCon
              -> TupleSort    -- ^ Whether the tuple is boxed or unboxed
-             -> Maybe TyCon  -- ^ Promoted version
              -> TyCon
-mkTupleTyCon name kind arity tyvars con sort prom_tc
+mkTupleTyCon name kind arity tyvars con sort
   = TupleTyCon {
         tyConUnique = nameUnique name,
         tyConName = name,
@@ -1074,8 +1055,7 @@ mkTupleTyCon name kind arity tyvars con sort prom_tc
         tyConArity = arity,
         tyConTupleSort = sort,
         tyConTyVars = tyvars,
-        dataCon = con,
-        tcPromoted = prom_tc
+        dataCon = con
     }
 
 -- | Create an unlifted primitive 'TyCon', such as @Int#@
@@ -1084,9 +1064,11 @@ mkPrimTyCon name kind roles rep
   = mkPrimTyCon' name kind roles rep True
 
 -- | Kind constructors
-mkKindTyCon :: Name -> Kind -> TyCon
-mkKindTyCon name kind
-  = mkPrimTyCon' name kind [] VoidRep True
+mkKindTyCon :: Name -> Kind -> [Role] -> TyCon
+mkKindTyCon name kind roles
+  = tc
+  where
+    tc = mkPrimTyCon' name kind roles VoidRep False
 
 -- | Create a lifted primitive 'TyCon' such as @RealWorld@
 mkLiftedPrimTyCon :: Name  -> Kind -> [Role] -> PrimRep -> TyCon
@@ -1149,19 +1131,6 @@ mkPromotedDataCon con name unique kind roles
   }
   where
     arity = length roles
-
--- | Create a promoted type constructor 'TyCon'
--- Somewhat dodgily, we give it the same Name
--- as the type constructor itself
-mkPromotedTyCon :: TyCon -> Kind -> TyCon
-mkPromotedTyCon tc kind
-  = PromotedTyCon {
-        tyConName   = getName tc,
-        tyConUnique = getUnique tc,
-        tyConArity  = tyConArity tc,
-        tyConKind   = kind,
-        ty_con      = tc
-  }
 
 isFunTyCon :: TyCon -> Bool
 isFunTyCon (FunTyCon {}) = True
@@ -1407,32 +1376,17 @@ tupleTyConSort tc = tyConTupleSort tc
 -- | Extract the arity of the given 'TyCon', if it is a 'TupleTyCon'.
 -- Panics otherwise
 tupleTyConArity :: TyCon -> Arity
-tupleTyConArity tc = tyConArity tc
+  -- we want the *tuple* arity, not the tycon arity. So, we must discard
+  -- the levity vars from unboxed tuples. See Note [Unboxed tuple levity vars]
+tupleTyConArity (TupleTyCon { tyConTupleSort = UnboxedTuple
+                            , tyConArity     = raw_arity }) = raw_arity `div` 2
+tupleTyConArity (TupleTyCon { tyConArity     = arity     }) = arity
+tupleTyConArity tc = pprPanic "tupleTyConArity" (ppr tc)
 
 -- | Is this a recursive 'TyCon'?
 isRecursiveTyCon :: TyCon -> Bool
 isRecursiveTyCon (AlgTyCon {algTcRec = Recursive}) = True
 isRecursiveTyCon _                                 = False
-
-promotableTyCon_maybe :: TyCon -> Maybe TyCon
-promotableTyCon_maybe (AlgTyCon { tcPromoted = prom })   = prom
-promotableTyCon_maybe (TupleTyCon { tcPromoted = prom }) = prom
-promotableTyCon_maybe _                                  = Nothing
-
-promoteTyCon :: TyCon -> TyCon
-promoteTyCon tc = case promotableTyCon_maybe tc of
-                    Just prom_tc -> prom_tc
-                    Nothing      -> pprPanic "promoteTyCon" (ppr tc)
-
--- | Is this a PromotedTyCon?
-isPromotedTyCon :: TyCon -> Bool
-isPromotedTyCon (PromotedTyCon {}) = True
-isPromotedTyCon _                  = False
-
--- | Retrieves the promoted TyCon if this is a PromotedTyCon;
-isPromotedTyCon_maybe :: TyCon -> Maybe TyCon
-isPromotedTyCon_maybe (PromotedTyCon { ty_con = tc }) = Just tc
-isPromotedTyCon_maybe _ = Nothing
 
 -- | Is this a PromotedDataCon?
 isPromotedDataCon :: TyCon -> Bool
@@ -1460,7 +1414,6 @@ isImplicitTyCon (FunTyCon {})        = True
 isImplicitTyCon (TupleTyCon {})      = True
 isImplicitTyCon (PrimTyCon {})       = True
 isImplicitTyCon (PromotedDataCon {}) = True
-isImplicitTyCon (PromotedTyCon {})   = True
 isImplicitTyCon (AlgTyCon { algTcParent = AssocFamilyTyCon {} })    = True
 isImplicitTyCon (AlgTyCon {})                                       = False
 isImplicitTyCon (FamilyTyCon { famTcParent = AssocFamilyTyCon {} }) = True
@@ -1503,9 +1456,9 @@ coreExpandTyCon_maybe tycon tys = tcExpandTyCon_maybe tycon tys
 
 
 ----------------
-expand  :: [TyVar] -> Type                 -- Template
-        -> [a]                             -- Args
-        -> Maybe ([(TyVar,a)], Type, [a])  -- Expansion
+expand  :: [TyCoVar] -> Type                   -- Template
+        -> [a]                                 -- Args
+        -> Maybe ([(TyCoVar,a)], Type, [a])    -- Expansion
 expand tvs rhs tys
   = case n_tvs `compare` length tys of
         LT -> Just (tvs `zip` tys, rhs, drop n_tvs tys)
@@ -1564,7 +1517,6 @@ tyConRoles tc
     ; FamilyTyCon {}                      -> const_role Nominal
     ; PrimTyCon { tcRoles = roles }       -> roles
     ; PromotedDataCon { tcRoles = roles } -> roles
-    ; PromotedTyCon {}                    -> const_role Nominal
     }
   where
     const_role r = replicate (tyConArity tc) r
@@ -1745,7 +1697,6 @@ instance Outputable TyCon where
 pprPromotionQuote :: TyCon -> SDoc
 pprPromotionQuote (PromotedDataCon {}) = char '\''   -- Quote promoted DataCons
                                                      -- in types
-pprPromotionQuote (PromotedTyCon {})   = ifPprDebug (char '\'')
 pprPromotionQuote _                    = empty -- However, we don't quote TyCons
                                                -- in kinds e.g.
                                                -- type family T a :: Bool -> *

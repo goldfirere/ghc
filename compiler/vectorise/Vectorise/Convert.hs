@@ -10,7 +10,7 @@ import Vectorise.Type.Type
 import CoreSyn
 import TyCon
 import Type
-import TypeRep
+import TyCoRep
 import NameSet
 import FastString
 import Outputable
@@ -44,7 +44,7 @@ fromVect ty expr
 
 -- For each function constructor in the original type we add an outer 
 -- lambda to bind the parameter variable, and an inner application of it.
-fromVect (FunTy arg_ty res_ty) expr
+fromVect (ForAllTy (Anon arg_ty) res_ty) expr
   = do
       arg     <- newLocalVar (fsLit "x") arg_ty
       varg    <- toVect arg_ty (Var arg)
@@ -81,11 +81,12 @@ identityConv (TyConApp tycon tys)
   = do { mapM_ identityConv tys
        ; identityConvTyCon tycon
        }
-identityConv (LitTy {})    = noV $ text "identityConv: not sure about literal types under vectorisation"
-identityConv (TyVarTy {})  = noV $ text "identityConv: type variable changes under vectorisation"
-identityConv (AppTy {})    = noV $ text "identityConv: type appl. changes under vectorisation"
-identityConv (FunTy {})    = noV $ text "identityConv: function type changes under vectorisation"
-identityConv (ForAllTy {}) = noV $ text "identityConv: quantified type changes under vectorisation"
+identityConv (LitTy {})      = noV $ text "identityConv: not sure about literal types under vectorisation"
+identityConv (TyVarTy {})    = noV $ text "identityConv: type variable changes under vectorisation"
+identityConv (AppTy {})      = noV $ text "identityConv: type appl. changes under vectorisation"
+identityConv (ForAllTy {})   = noV $ text "identityConv: quantified type changes under vectorisation"
+identityConv (CastTy {})     = noV $ text "identityConv: not sure about casted types under vectorisation"
+identityConv (CoercionTy {}) = noV $ text "identityConv: not sure about coercions under vectorisation"
 
 -- |Check that this type constructor is not changed by vectorisation — i.e., it does not embed any
 -- parallel arrays.

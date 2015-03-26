@@ -45,21 +45,21 @@ buildDataFamInst :: Name -> TyCon -> TyCon -> AlgTyConRhs -> VM FamInst
 buildDataFamInst name' fam_tc vect_tc rhs
  = do { axiom_name <- mkDerivedName mkInstTyCoOcc name'
 
-      ; (_, tyvars') <- liftDs $ tcInstSigTyVarsLoc (getSrcSpan name') tyvars
+      ; (_, tyvars') <- liftDs $ tcInstSigTyCoVarsLoc (getSrcSpan name') tyvars
       ; let ax       = mkSingleCoAxiom axiom_name tyvars' fam_tc pat_tys rep_ty
-            tys'     = mkTyVarTys tyvars'
+            tys'     = mkTyCoVarTys tyvars'
             rep_ty   = mkTyConApp rep_tc tys'
             pat_tys  = [mkTyConApp vect_tc tys']
-            rep_tc   = buildAlgTyCon name'
+            rep_tc   = mkAlgTyCon name'
+                           (mkPiTypesPreferFunTy tyvars' liftedTypeKind)
                            tyvars'
                            (map (const Nominal) tyvars')
                            Nothing
                            []          -- no stupid theta
                            rhs
-                           rec_flag    -- FIXME: is this ok?
-                           False       -- Not promotable
-                           False       -- not GADT syntax
                            (FamInstTyCon ax fam_tc pat_tys)
+                           rec_flag    -- FIXME: is this ok?
+                           False       -- not GADT syntax
       ; liftDs $ newFamInst (DataFamilyInst rep_tc) ax }
  where
     tyvars    = tyConTyVars vect_tc
@@ -86,7 +86,7 @@ buildPDataDataCon orig_name vect_tc repr_tc repr
                             []                     -- no eq spec
                             []                     -- no context
                             comp_tys
-                            (mkFamilyTyConApp repr_tc (mkTyVarTys tvs))
+                            (mkFamilyTyConApp repr_tc (mkOnlyTyVarTys tvs))
                             repr_tc
 
 
@@ -125,7 +125,7 @@ buildPDatasDataCon orig_name vect_tc repr_tc repr
                             []                     -- no eq spec
                             []                     -- no context
                             comp_tys
-                            (mkFamilyTyConApp repr_tc (mkTyVarTys tvs))
+                            (mkFamilyTyConApp repr_tc (mkOnlyTyVarTys tvs))
                             repr_tc
 
 
@@ -156,6 +156,6 @@ mkSumTys repr_selX_ty mkTc repr
 {-
 mk_fam_inst :: TyCon -> TyCon -> (TyCon, [Type])
 mk_fam_inst fam_tc arg_tc
-  = (fam_tc, [mkTyConApp arg_tc . mkTyVarTys $ tyConTyVars arg_tc])
+  = (fam_tc, [mkTyConApp arg_tc . mkOnlyTyVarTys $ tyConTyVars arg_tc])
 -}
 

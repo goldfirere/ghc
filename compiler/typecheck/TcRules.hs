@@ -20,6 +20,7 @@ import TcEvidence( TcEvBinds(..) )
 import Type
 import Id
 import Name
+import VarEnv
 import SrcLoc
 import Outputable
 import FastString
@@ -28,7 +29,7 @@ import Data.List( partition )
 {-
 Note [Typechecking rules]
 ~~~~~~~~~~~~~~~~~~~~~~~~~
-We *infer* the typ of the LHS, and use that type to *check* the type of
+We *infer* the typ of the LHS, and use that type to *check* the type of 
 the RHS.  That means that higher-rank rules work reasonably well. Here's
 an example (test simplCore/should_compile/rule2.hs) produced by Roman:
 
@@ -61,7 +62,7 @@ If we typecheck this expression we get constraints
 We do NOT want to "simplify" to the LHS
         forall x::a, y::a, z::a, d1::Ord a.
           f ((==) (eqFromOrd d1) x y) ((>) d1 y z) = ...
-Instead we want
+Instead we want 
         forall x::a, y::a, z::a, d1::Ord a, d2::Eq a.
           f ((==) d2 x y) ((>) d1 y z) = ...
 
@@ -76,7 +77,7 @@ because the scsel will mess up RULE matching.  Instead we want
         forall dIntegralInt, dNumInt.
           fromIntegral Int Int dIntegralInt dNumInt = id Int
 
-Even if we have
+Even if we have 
         g (x == y) (y == z) = ..
 where the two dictionaries are *identical*, we do NOT WANT
         forall x::a, y::a, z::a, d1::Eq a
@@ -85,7 +86,7 @@ because that will only match if the dict args are (visibly) equal.
 Instead we want to quantify over the dictionaries separately.
 
 In short, simplifyRuleLhs must *only* squash equalities, leaving
-all dicts unchanged, with absolutely no sharing.
+all dicts unchanged, with absolutely no sharing.  
 
 Also note that we can't solve the LHS constraints in isolation:
 Example   foo :: Ord a => a -> a
@@ -100,8 +101,8 @@ Consider
        f b True = ...
     #-}
 Here we *must* solve the wanted (Eq a) from the given (Eq a)
-resulting from skolemising the agument type of g.  So we
-revert to SimplCheck when going under an implication.
+resulting from skolemising the agument type of g.  So we 
+revert to SimplCheck when going under an implication.  
 
 
 ------------------------ So the plan is this -----------------------
@@ -136,6 +137,9 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
                   ; (rhs', rhs_wanted) <- captureConstraints (tcMonoExpr rhs rule_ty)
                   ; return (lhs', lhs_wanted, rhs', rhs_wanted, rule_ty) }
 
+       ; traceTc "tcRule 1" (vcat [ ppr name
+                                  , ppr lhs_wanted
+                                  , ppr rhs_wanted ])
        ; (lhs_evs, other_lhs_wanted) <- simplifyRule (unLoc name) lhs_wanted
                                                      rhs_wanted
 
@@ -151,21 +155,25 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
         -- the LHS, lest they otherwise get defaulted to Any; but we do that
         -- during zonking (see TcHsSyn.zonkRule)
 
-       ; let tpl_ids    = lhs_evs ++ id_bndrs
-             forall_tvs = tyVarsOfTypes (rule_ty : map idType tpl_ids)
+       ; let tpl_ids     = lhs_evs ++ id_bndrs
+             forall_tkvs = splitDepVarsOfTypes $
+                           rule_ty : map idType tpl_ids
        ; gbls  <- tcGetGlobalTyVars   -- Even though top level, there might be top-level
                                       -- monomorphic bindings from the MR; test tc111
-       ; qtkvs <- quantifyTyVars gbls forall_tvs
+                  -- TODO (RAE): We probably need to subst some covars here,
+                  -- but I don't know enough about RULES
+       ; qtkvs <- quantifyTyCoVars emptyVarEnv gbls forall_tkvs
        ; traceTc "tcRule" (vcat [ doubleQuotes (ftext $ unLoc name)
-                                , ppr forall_tvs
+                                , ppr forall_tkvs
                                 , ppr qtkvs
                                 , ppr rule_ty
-                                , vcat [ ppr id <+> dcolon <+> ppr (idType id) | id <- tpl_ids ]
+                                , vcat [ ppr id <+> dcolon <+> ppr (idType id) | id <- tpl_ids ] 
                   ])
 
            -- Simplify the RHS constraints
        ; lcl_env <- getLclEnv
        ; rhs_binds_var <- newTcEvBinds
+
        ; emitImplication $ Implic { ic_tclvl  = topTcLevel
                                   , ic_skols  = qtkvs
                                   , ic_no_eqs = False
@@ -180,6 +188,7 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
            -- (a) so that we report insoluble ones
            -- (b) so that we bind any soluble ones
        ; lhs_binds_var <- newTcEvBinds
+
        ; emitImplication $ Implic { ic_tclvl  = topTcLevel
                                   , ic_skols  = qtkvs
                                   , ic_no_eqs = False
@@ -199,7 +208,7 @@ tcRuleBndrs :: [LRuleBndr Name] -> TcM [Var]
 tcRuleBndrs []
   = return []
 tcRuleBndrs (L _ (RuleBndr (L _ name)) : rule_bndrs)
-  = do  { ty <- newFlexiTyVarTy openTypeKind
+  = do  { ty <- newOpenFlexiTyVarTy
         ; vars <- tcRuleBndrs rule_bndrs
         ; return (mkLocalId name ty : vars) }
 tcRuleBndrs (L _ (RuleBndrSig (L _ name) rn_ty) : rule_bndrs)
@@ -208,18 +217,18 @@ tcRuleBndrs (L _ (RuleBndrSig (L _ name) rn_ty) : rule_bndrs)
 --              a::*, x :: a->a
   = do  { let ctxt = RuleSigCtxt name
         ; (id_ty, tv_prs, _) <- tcHsPatSigType ctxt rn_ty
-        ; let id  = mkLocalId name id_ty
-              tvs = map snd tv_prs
+        ; let id  = mkLocalIdOrCoVar name id_ty
+              tvs = map snd tv_prs   
                     -- tcHsPatSigType returns (Name,TyVar) pairs
                     -- for for RuleSigCtxt their Names are not
                     -- cloned, so we get (n, tv-with-name-n) pairs
                     -- See Note [Pattern signature binders] in TcHsType
 
               -- The type variables scope over subsequent bindings; yuk
-        ; vars <- tcExtendTyVarEnv tvs $
-                  tcRuleBndrs rule_bndrs
+        ; vars <- tcExtendTyVarEnv tvs $ 
+                  tcRuleBndrs rule_bndrs 
         ; return (tvs ++ id : vars) }
 
 ruleCtxt :: FastString -> SDoc
-ruleCtxt name = ptext (sLit "When checking the transformation rule") <+>
+ruleCtxt name = ptext (sLit "When checking the transformation rule") <+> 
                 doubleQuotes (ftext name)

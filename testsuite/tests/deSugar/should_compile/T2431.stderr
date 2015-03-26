@@ -1,20 +1,12 @@
 
 ==================== Tidy Core ====================
-Result size of Tidy Core = {terms: 8, types: 19, coercions: 1}
-
-T2431.$WRefl [InlPrag=INLINE] :: forall a. a :~: a
-[GblId[DataConWrapper],
- Caf=NoCafRefs,
- Str=DmdType,
- Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
-         WorkFree=True, Expandable=True,
-         Guidance=ALWAYS_IF(arity=0,unsat_ok=False,boring_ok=False)
-         Tmpl= \ (@ a) -> T2431.Refl @ a @ a @~ <a>_N}]
-T2431.$WRefl = \ (@ a) -> T2431.Refl @ a @ a @~ <a>_N
+Result size of Tidy Core = {terms: 5, types: 14, coercions: 0}
 
 absurd :: forall a. Int :~: Bool -> a
 [GblId, Arity=1, Caf=NoCafRefs, Str=DmdType <L,U>b]
-absurd = \ (@ a) (x :: Int :~: Bool) -> case x of _ [Occ=Dead] { }
+absurd =
+  \ (@ a) (x :: Int :~: Bool) ->
+    case x of (wild [Occ=Dead] :: Int :~: Bool) { }
 
 
 

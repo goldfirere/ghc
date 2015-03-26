@@ -19,7 +19,7 @@ import Vectorise.Env
 import Vectorise.Vect
 import Vectorise.Type.Type
 import CoreSyn
-import Type
+import Type hiding ( lookupVar )
 import VarEnv
 import Id
 import FastString

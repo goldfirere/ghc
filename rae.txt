@@ -1,0 +1,437 @@
+stack:
+ - setCoBndrEta --> setCoBndrKindCo
+
+- flattening foralls is inadequate (though not quite wrong). The tyvar
+  kind isn't flattened. Also see go_bndr in flatten_co.
+
+- tcGetGlobalTyVars --> tcGetGlobalTyCoVars
+
+- do we need WpEvPrimApp?
+
+fix toHsType w.r.t. implicit parameters (typecheck/should_compile/T8565.hs)
+
+fix parser; then fix TypeLits.Mult --> *
+
+QUESTIONS:
+- Check decideQuantification!
+
+- Is it useful to keep vanilla skolems separate from ordinary tyvars? I think
+not.
+
+- Is the whole analyzeType thing paying its weight? Not sure. Antal thinks so.
+Perhaps using RecordWildCards for the construction of TypeAnalysis would ease
+some syntax annoyance. Anyway, keeping for now. If reverting, look for commits
+mentioning "reducing" and "TyCoRep"
+
+- Should TYPE / Levity / Lifted / Unlifted be in the Prelude? If not,
+how to deal with :info, which suppresses output that mentions un-imported things.
+Current sol'n: make these things BuiltInSyntax.
+- Deferred type errors seems to be working with unlifted equality. WHAT?!?
+
+- No anonymous dependent binders in case alternative patterns.
+
+- think about induction recursion
+- TH will need some updating -- in particular, its treatment of quantification
+  over kinds (quantification forbidden) and types (quantification required)
+  is problematic.
+
+- vectoriser code uses dataConRepArgTys. This value changed for Eq#, whose argument
+changed from a proper arg to an existential covar arg. Does this matter?
+(Other uses of dataConRepArgTys are OK.)
+
+- Writing a bogus GADT return type causes a panic. The problem is that
+checkValidDataCon is supposed to check if rejigConRes was valid. To do
+this, checkValidDataCon needs the user-specified result type. Normally,
+this is retrieved from dataConOrigResTy. The problem is that, now, 
+the dataConOrigResTy is substed by the kind substitution produced in
+rejigConRes. This is an ugly circular dependency. We could (1) store the
+original, unsubsted result ty in the DataCon for just this reason, or
+(2) install lots of ugly plumbing in TcTyClsDecls to carry the unsubsted
+result ty, or (3) do something else. I want SPJ's input, as both (1)
+and (2) are terrible.
+
+fix:
+  - Deferred kind errors! Right now, evBindsSubst just silently fails,
+    creating core-lint errors. Proposed solution: box the equality.
+    Then use the desugared, unpacked boxed equality in terms, but
+    use a UnivCo with a clear provenance in types. A bogus type
+    coercion can't, by itself, make a program go wrong.
+
+  - unifyWantedLikeEv handles coercions. But make sure other, similar scenarios
+    do too.
+
+  - Make sure coercions in types get optimised, too.
+
+  - The flattening story is subtler than I thought. Consider flattening
+    Proxy Age (3 |> sym axAge) (w.r.t. nominal equality). We'll get
+    the ill-typed Proxy Age 3! This is because, of course, (3 |> sym axAge)
+    and 3 are nominally equal. This is terrible. My best guess as to the
+    solution is to flatten the (3 |> sym axAge), and then to flatten
+    representationally the kind, and then repair the damage by transitivity.
+
+    (UPDATE: Maybe not. If we treated a TyConApp like nested AppTys, we
+    would get ((Proxy Age |> (axAge -> *)) 3), which is well-typed.
+    Errr... never mind. That new type isn't nominally equal to the original
+    type because it changes the kind of an application. Maybe this
+    is all a moot point because of that restriction. Or: it's a moot
+    point for AppTys, but not TyConApps. That's very silly. Think more
+    about it.)
+
+    And it gets worse. Let (T :: forall k1 k2. k1 k2 -> *), where
+    type role T rep nom nom.
+    Consider flattening representationally
+    (T MyMaybe Age (Just (3 |> sym axAge) |> sym axMyMaybe)). We want
+    to get (T Maybe Age (Just (3 |> sym axAge))). Nominally flattening
+    the third arg will yield (Just 3). The original 3rd kind is
+    MyMaybe Age. Rep flattening that will yield Maybe Int. And we somehow
+    have to figure out that the correct kind is Maybe Age! Maybe use
+    tcMatchTys to match the actual kind up with the template (from T's kind)?
+    Then, we can figure out the roles and flatten piece by piece.
+    This is painful.
+
+    And, the whole Note [Phantoms in the flattener] is bogus. This is
+    because a phantom's type might have been flattened, and so the phantom
+    itself must be flattened, too. It's safe just to nominally flatten
+    the phantom, because that will have the desired effect on the phantom's
+    type. Urgh.
+
+    And when fixing this, be careful about the fact that lots of the flattener
+    assumes that things aren't phantoms.
+
+    Search for "very wrong" in TcFlatten.
+
+    More thoughts: When flattening a telescope of arguments, we could track
+    the changes in earlier arguments and simply emit Wanted coercions for
+    the remaining ones. That is: flatten, and then stick on a cast by a
+    fresh wanted coercion, built from the changes made in the earlier,
+    dependent arguments.
+
+    Even more thought: Argh! This is much simpler than I thought. Just treat
+    TyConApps like nested AppTys, and all is well.
+
+  - I think we can remove TcCoercions, by adding a new EvTerm that contains
+    a TcEvBinds for local assumptions. The only point of TcCoercions is
+    TcLetCo, and I think this can be subsumed.
+  - look for uses of eqType. The typechecker should really stick to tcEqType!
+    BUT: consider making Constraint ~R *. Then, tcEqType & eqType are the same.
+  - when -fprint-explicit-coercions is on, make sure to print any types
+    of printed coboxes.
+  - have Core Lint check to make sure RHSs of `let (x :: foo ~# bar) = ...`
+    are really Coercions!
+  - make use of uo_thing in more error messages
+  - check out typecheck/should_compile/tc167.hs. It might be possible to
+    do better here. (About weird typing rule for (->))
+  - do we need to annotate kind variables to have a proper CUSK? I think so.
+    Here is Doel's example from Hac Phi of this problem at the term level:
+
+       type family Wat (t :: k) :: *
+       type instance Wat (t :: *) = Int
+       type instance Wat (t :: * -> *) = Double
+
+       data T (t :: k) = forall (t' :: k). T (Proxy t') (Wat t')
+
+       -- foo :: forall f. T f
+       foo = T (Proxy :: Proxy Maybe) 1.0
+
+  - should check to make sure a coercion isn't bound in a recursive let (!)
+  - mkExpectedActualMsg has a lot of backward-compatibility stuff
+  - after DeriveAnyClass is fixed (#9968), make sure that the use of looser
+    tcUnifyTys in deriveTyData isn't causing problems.
+  - add CoreLint checks for levity polymorphism used the right way. But, what exactly
+    is the right way??
+  - need an -fprint-explicit-coercions, which is off by default.
+- Are there uses of the `OrCoVar` functions that could be streamlined?
+  Also, look at uses of isCoercionType in module Id
+- figure out how to handle the range of equalities. In particular,
+  fix classifyPredType,
+  - consider re-engineering the boxity problems in solver. look for the "LikeEv" functions
+    then "ew" check in DsBinds, and Note [TcCoercion kinds] in DsBinds.
+
+  - Update formalism.
+     * NoSubKinds
+     * Π
+  - Do we need special rule for boxity of ($)? I don't think so, anymore. SPJ agrees. Maybe.
+  - consider merging Kind into Type
+  - there is tracking of type vs kind in RnTypes. Much can be removed, but
+    we want to preserve errors for silly kinds when extensions are off,
+    so it can't be taken out entirely. I posit that, absent extension tracking,
+    we wouldn't need to track types vs kinds here.
+  - pattern synonyms: they can have existential covars, now, right?
+            and: make sure they set givens correctly in TcPat (re dep_eq_spec)
+  - hsq_implict --> hsq_undeclared; hsq_explicit --> hsq_declared
+  - coreExpandTyCon_maybe and tcExpandTyCon_maybe must look at kinds.
+  - kind inference should use the "matchExpected..." functions;
+    merge matchExpectedFunKind with a type-level thing.
+  - APromotionErr (?)
+  - Remove TcRnTypes.hs-boot. See comment near top of TcEvidence.
+  - no check for silliness like `data T :: T -> *`.
+  - :kind in GHCi is unhappy with 
+    data Sg (s :: *) (t :: TyFun s * -> *) :: * where
+      (:&) :: Pi (fst :: s) -> t @@ fst -> Sg s t
+
+  - prevent dependent variables without -XStarInStar
+  - the kind-var finder in zonkRule only looks in tyvars. look in covars? how
+    to identify type-level covars? does this matter?
+  - add VisibilityFlag to Anon... see if we can sort out some constraint/* nonsense. Also, add relevance info to Anon, and work Binders into Lam and Case. This also allows us to get rid of DFunTy in iface/* stuff.
+  - The parsing story is terrible terrible. Fix!
+  - comments in DataCon. Are they still correct?
+  - sometimes, coercions might get printed in error messages. These should be suppressed unless enabled by a flag.
+  - no more deferred type errors for gadts... no more non-dependent gadt equalities, either
+  - perhaps change promoteCoercion --> promoteCoercion_maybe that fails if
+    it can't do any optimization.
+  - consider removing CoercionArg.
+  - changed newSigTyVar *not* to make a new unique. OK? This is necessary because
+    we need to be able to match up undeclared (but user-written) kind variables
+    before and after kind-checking.
+
+check out usages of:
+
+changed functions:
+
+removed functions:
+
+please remove:
+--------------------------------
+- tryTcS now rolls back calls to setTyVarBind and setEvBind. Why setEvBind? Because
+  there may be nested EvBindsVars that get twiddled.
+
+- Removed `instance Eq Type`.
+
+- zonking in TcHsSyn must be lazy in types, killing some optimizations and the use of setIdType. Is there a way forward?
+
+- Note [Flavours with boxities] in TcFlatten is interesting.
+
+- znokCtEvidence now does more zonking, because I needed that in simplifyInfer.
+
+- Test uses of unifyType_ and unifyKind to make sure that kind families are tolerated
+in those positions.
+
+- UNPACKing lifted equality in data constructors has become harder.
+  See comments in MkId.mk_pred_strict_mark.
+
+- Restored MaybeNew because we need to be able to use ctEvCoherence
+
+- It would seem that classes can't have (~#) superclasses. These superclasses
+would be encoded as existential variables on the datacon for the class, which
+is a Bad Thing. But, I don't think this restriction would bite in practice.
+
+- Somehow related to the last point (but I'm not sure exactly how), we also
+can't use superclass equalities "right away". E.g.:
+  class k1 ~ k2 => Foo (a :: k1) (b :: k2)
+  data SameKind (a :: k) (b :: k)
+  foo :: forall (a :: k1) (b :: k2). Foo a b => SameKind a b
+
+To get the above to be accepted, we would need to add a (k1 ~# k2) constraint,
+which should logically be implied by `Foo a b`. This will be confusing, but
+because we can't have superclass selectors in coercions, there isn't an easy
+fix here. (The problem, at its core, is that dictionaries can be bottom.)
+Perhaps Pi-quantify the dictionary somehow? Anyway, this is enough of a corner
+case to defer.
+
+- Also related: transSuperClasses emits a kind equality from a type equality.
+Otherwise, we get only representational equality when emitting deriveds during
+solving, which is too weak.
+
+- dataConWrappers now are rejigged w.r.t. GADTs. This is just simpler and
+  has no user effect.
+
+- I removed the "Do not float kind-incompatible equalities" check from
+floatEqualities. While the idea behind this check is still valid, the
+mechanics (a simple `eqType`) are not. If something breaks, I'll fix it.
+
+- I'm becoming uncomfortable with the unlifted evbinds stuff. Too much special-
+casing throughout DsBinds. For example, see dsTcCoercion and dsEvTermUnlifted.
+Is there a better design?
+
+- New HsWrapper WpEvPrimApp, for unboxed coercion application
+
+- uType now returns a Coercion, not a TcCoercion. unifyType still deals in
+TcCoercions.
+
+- TcCoercions can be hetero.
+
+- mkTcEqPred is sometime hetero. I think this is OK.
+
+- Loosened some roles. For example, the role on the eta coercion in the
+hetero forall coercions is now parametric, not N. And, the role on the
+type-cast coercion is R, not N. See also email *to* SCW (with no written response)
+on 7/14/14. The end of the discussion was to go with that email's Coherence1
+rule, which doesn't cause problems (other than some discomfort, as outlined
+in the email.)
+
+- The kind-role rejiggering. But, I think this is resolved now, and I'm happy
+  with it.
+
+- UnivCo --> PhantomCo and UnsafeCo, because phantom coercions should exist
+  only between types with representationally-equal kinds. Argh.
+
+- rejigConRes is *much* more involved than it was. But this seems reasonable.
+
+- Taken from kindGeneralize:
+                -- ToDo: remove the (filter isKindVar)
+                -- Any type variables in tkvs will be in scope,
+                -- and hence in gbl_tvs, so after removing gbl_tvs
+                -- we should only have kind variables left
+		--
+ 		-- BUT there is a smelly case (to be fixed when TH is reorganised)
+		--     f t = [| e :: $t |]
+                -- When typechecking the body of the bracket, we typecheck $t to a
+                -- unification variable 'alpha', with no biding forall.  We don't
+                -- want to kind-quantify it!
+
+- Is it bad to accept higher-rank kinds? For example, SPJ is worried that by allowing
+higher-rank kinds to exist, it may hamstring us later when extending the kind system.
+The current, rather simplistic higher-rank-kind algorithm critically depends on the
+lack of type-level lambdas.
+
+- instance (Typeable s, Typeable a) => Typeable (s a) now needs UndecidableInstances
+because of the appearance of a repeated kind variable on the left of the arrow.
+This actually looks legit.
+
+- Some interesting stuff is in TcHsType.splitTelescopeTvs, in particular see
+Note [Typechecking telescopes].
+
+- We are now instantiating tycons at application sites, not var sites. Very
+interesting from a theoretical standpoint.
+
+- There is a general assumption that all types are implicit in terms. This will have
+  to be revisited. In particular, all usages of the splitForAllTys functions will
+  need to be re-checked. Also, I think the following functions will need to be changed:
+   - mkLams
+   - tcInstType
+   - tcSplitDFunTy
+   - toIfaceClassOp
+
+- Why isn't CPush implemented near Simplify.lhs:1200?
+
+- Poly-kinded typeable goes to lengths to ensure that only *kind* variables
+  are around. This seems unnecessary. I've removed the code. Let's see if
+  anything breaks -- it should break rather obviously.
+
+- (Removed) Note [Do not create Given kind equalities] says
+  "But the Right Thing is to add kind equalities!"
+
+- Old check for TF termination omitted kind vars. New check does not.
+
+- sizeType (coercion) = 1, in TcValidity. check?
+
+- *ALL* types are now kinds (of course). Including things like Double and IO.
+
+- No kind unification algorithm (separate from that for types)
+
+- No two coercions of the same type are ever apart.
+
+- Promoted covar arguments in promoted datacons have role P.
+
+- flattening a coercion flattens the types it coerces.
+
+- I'm confused about roles in kinds.
+
+(old):
+- move promoteKind to Kind    
+- tcDataFamInstDecl seems to need more recursive information to get isPromotable right.
+- genGenericMetaTyCons makes unpromotable things. Why?
+
+After compiling:
+- consider adding full definition of lifting to core-spec.
+- use optType throughout code
+- revisit MatchM monad
+- consider removing typesCantMatch from Unify, in favor of apartness checking
+- consider rewriting match in terms of unify.
+- make CoVar constructor of Var
+- merge tcView and coreView??
+
+
+Notes:
+
+- Role inference ignores coercions. (But think about this more, perhaps.) Why?
+  Because a kind cast cannot affect a representation. But, I still don't quite
+  know what theorem should be maintained by the |-ctr judgment. In particular,
+  I'm worried that *any* replacement in kind coercions will lead to ill-typed
+  terms.
+
+ - the solver works over lifted equalities, which are homogeneous. This
+   rather limits the usefulness of hetero equalities, which are now
+   barred from ever seeing the inside of the inference engine. Is this
+   sensible?
+   A: NO!! Instead, just use Cast operator, as per Skype conversation with SCW
+      on July 30.
+   --> UPDATE: The Cast operator doesn't compose, because we won't be able to
+               build composite coercions in types. We could define T.F.s for
+               the different coercion constructors, but this won't work for
+               forall. And it's a bit icky.
+   Plan of record: Have solver deal with both lifted and unlifted equality. This
+   is actually not too difficult. We just need to take some care in desugaring.
+   But I'm not *very* happy with it.
+   NEW PLAN: Just rewrite the solver in terms of unlifted equality.
+
+BUGS:
+#9017
+
+----------------------------------------
+Stuff for implementing Π:
+
+RAE is taking a break.
+  - deeplySkolemise and its one use in tcGen have different types. Sort this out.
+  - deeplyInstantiate needs to be just like deeplySkolemise, but different.
+  - Phase information flows *up*, never *down*. That is, we always infer
+    phase information and then check when necessary. We don't try to check
+    phases top-down. This avoids the need for dependence meta-variables.
+  - How to deal with unifying Ids? This will be a problem in deeplyInstantiate.
+  - We'll need a new EvTerm (and possibly a new HsWrapper) which stores a tyvar
+    to be demoted.
+
+stack:
+     - iface stuff
+       - ForAllTy --> PiTy
+       - ForAllCo --> PiCo
+       - function coercions are now PiCo
+       - changes in PiCoBndr
+     - matchExpectedFunTys now returns DependenceFlags
+       - unifyOpFunTysWrap returns TcPhaseType
+       - tcMatchesCase takes TcArgType
+       - tcArg takes TcArgType
+       - tcArgs does too
+       - matchFunTys callback does
+       - tcSplitSigmaTy is strange: it separates dependent things from non-dependent ones in a weird way. Remove?
+       - newSysLocalIds --> newSysLocals
+     - liftCoSubstVarBndr --> liftCoSubstBinder
+     - fix Coercion.applyCo, which shouldn't be necessary
+     - coBndrBoundVars --> coBndrBinders
+     - normalise_tycovar_bndr --> normalise_binder
+     - coreFlattenVarBndr --> coreFlattenBinder
+     - optTyVarBndr --> optBinder
+     - substTyVarBndr[Callback] -->(?) substBinder[Callback]
+     - substTyCoVarBndr2 --> substBinder2
+     - ppr_forall_type --> ppr_pi_type
+     - tidyTyCoVarBndr --> tidyBinder
+     - mkForAllTy[s] --> mkPiTy[s]
+     - removed mkNamedForAllTy
+     - mkCoercionBinder now takes a BinderVar, not a CoVar
+     - splitForAllTys --> splitPiTys
+     - splitForAllTys[B] --> splitDepPiTys
+     - tcSplitNamedForAllTysB --> tcSplitDepPiTys
+     - isForAllTy --> isPiTy, and check usages
+     - isNamedForAllTy --> isDepPiTy
+     - splitForAllTy --> splitPiTy
+     - check usages of dropForAlls: it keeps dependent products!
+     - splitForAllTysInvisible --> splitPiTysInvis; now returns Binders
+     - write cmpBinderInfo
+     - use rnBinder2 instead of rnBinderVar2
+     - nonDependentType_maybe --> nonDependentBinder_maybe
+     - prefer nonDependentType_maybe over not (isDependentBinder
+     - paDictArgType should take a Binder
+     - abstractType takes Binders
+  - fixed Named/Anon
+  - write splitPiTy_maybe
+  - write promoteExpr_maybe
+  - TyVarTy can now contain Ids!
+  - Lam takes a Binder
+  - pattern arguments are Binders
+  - fix TyCoRep.pprForAll: very broken right now. Also, see Outputable BinderVar.
+
+
+  - will need to modify FloatIn.fiExpr#mk_arg_fvs to use splitPiType instead of
+    splitFunTy
+  - will need to update DmdAnal.addDataConPatDmds to deal with strictness on
+    dependent ids

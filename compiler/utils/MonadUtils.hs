@@ -12,7 +12,7 @@ module MonadUtils
         , liftIO1, liftIO2, liftIO3, liftIO4
 
         , zipWith3M, zipWith3M_, zipWithAndUnzipM
-        , mapAndUnzipM, mapAndUnzip3M, mapAndUnzip4M
+        , mapAndUnzipM, mapAndUnzip3M, mapAndUnzip4M, mapAndUnzip5M
         , mapAccumLM
         , mapSndM
         , concatMapM
@@ -100,6 +100,13 @@ mapAndUnzip4M f (x:xs) = do
     (r1,  r2,  r3,  r4)  <- f x
     (rs1, rs2, rs3, rs4) <- mapAndUnzip4M f xs
     return (r1:rs1, r2:rs2, r3:rs3, r4:rs4)
+
+mapAndUnzip5M :: Monad m => (a -> m (b,c,d,e,f)) -> [a] -> m ([b],[c],[d],[e],[f])
+mapAndUnzip5M _ [] = return ([],[],[],[],[])
+mapAndUnzip5M f (x:xs) = do
+    (r1, r2, r3, r4, r5)      <- f x
+    (rs1, rs2, rs3, rs4, rs5) <- mapAndUnzip5M f xs
+    return (r1:rs1, r2:rs2, r3:rs3, r4:rs4, r5:rs5)
 
 -- | Monadic version of mapAccumL
 mapAccumLM :: Monad m

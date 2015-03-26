@@ -42,7 +42,7 @@ buildPReprTyCon orig_tc vect_tc repr
       liftDs $ newFamInst SynFamilyInst axiom
   where
     tyvars = tyConTyVars vect_tc
-    instTys = [mkTyConApp vect_tc . mkTyVarTys $ tyConTyVars vect_tc]
+    instTys = [mkTyConApp vect_tc . mkOnlyTyVarTys $ tyConTyVars vect_tc]
 
 -- buildPAScAndMethods --------------------------------------------------------
 
@@ -98,7 +98,7 @@ buildToPRepr vect_tc repr_ax _ _ repr
 
       return $ Lam arg result
   where
-    ty_args        = mkTyVarTys (tyConTyVars vect_tc)
+    ty_args        = mkOnlyTyVarTys (tyConTyVars vect_tc)
 
     wrap_repr_inst = wrapTypeUnbranchedFamInstBody repr_ax ty_args
 
@@ -167,7 +167,7 @@ buildFromPRepr vect_tc repr_ax _ _ repr
                          repr
       return $ Lam arg result
   where
-    ty_args = mkTyVarTys (tyConTyVars vect_tc)
+    ty_args = mkOnlyTyVarTys (tyConTyVars vect_tc)
     res_ty  = mkTyConApp vect_tc ty_args
 
     from_sum _ EmptySum
@@ -217,8 +217,9 @@ buildToArrPRepr vect_tc repr_co pdata_tc _ r
       arg    <- newLocalVar (fsLit "xs") arg_ty
 
       pdata_co <- mkBuiltinCo pdataTyCon
-      let co           = mkAppCo pdata_co
-                       . mkSymCo
+      let co           = mkAppCo pdata_co (panic "buildToArrPRepr")
+                       . mkTyCoArg
+                       $ mkSymCo
                        $ mkUnbranchedAxInstCo Nominal repr_co ty_args
 
           scrut   = unwrapFamInstScrut pdata_tc ty_args (Var arg)
@@ -229,7 +230,7 @@ buildToArrPRepr vect_tc repr_co pdata_tc _ r
              $ mkWildCase scrut (mkTyConApp pdata_tc ty_args) res_ty
                [(DataAlt pdata_dc, vars, mkCast result co)]
   where
-    ty_args    = mkTyVarTys $ tyConTyVars vect_tc
+    ty_args    = mkOnlyTyVarTys $ tyConTyVars vect_tc
     el_ty      = mkTyConApp vect_tc ty_args
     [pdata_dc] = tyConDataCons pdata_tc
 
@@ -282,8 +283,8 @@ buildFromArrPRepr vect_tc repr_co pdata_tc _ r
       arg    <- newLocalVar (fsLit "xs") arg_ty
 
       pdata_co <- mkBuiltinCo pdataTyCon
-      let co           = mkAppCo pdata_co
-                       $ mkUnbranchedAxInstCo Nominal repr_co var_tys
+      let co           = mkAppCo pdata_co (panic "buildFromArrPRepr")
+                       $ mkTyCoArg $ mkUnbranchedAxInstCo Nominal repr_co var_tys
 
       let scrut        = mkCast (Var arg) co
 
@@ -297,7 +298,7 @@ buildFromArrPRepr vect_tc repr_co pdata_tc _ r
 
       return $ Lam arg expr
  where
-    var_tys     = mkTyVarTys $ tyConTyVars vect_tc
+    var_tys     = mkOnlyTyVarTys $ tyConTyVars vect_tc
     el_ty       = mkTyConApp vect_tc var_tys
     [pdata_con] = tyConDataCons pdata_tc
 
@@ -367,8 +368,9 @@ buildToArrPReprs vect_tc repr_co _ pdatas_tc r
 
     -- Coersion to case between the (PRepr a) type and its instance.
     pdatas_co <- mkBuiltinCo pdatasTyCon
-    let co           = mkAppCo pdatas_co
-                     . mkSymCo
+    let co           = mkAppCo pdatas_co (panic "buildToArrPReprs")
+                     . mkTyCoArg
+                     $ mkSymCo
                      $ mkUnbranchedAxInstCo Nominal repr_co ty_args
 
     let scrut        = unwrapFamInstScrut pdatas_tc ty_args (Var varg)
@@ -381,7 +383,7 @@ buildToArrPReprs vect_tc repr_co _ pdatas_tc r
  where
     -- The element type of the argument.
     --  eg: 'Tree a b'.
-    ty_args = mkTyVarTys $ tyConTyVars vect_tc
+    ty_args = mkOnlyTyVarTys $ tyConTyVars vect_tc
     el_ty   = mkTyConApp vect_tc ty_args
         
     -- PDatas data constructor
@@ -462,7 +464,8 @@ buildFromArrPReprs vect_tc repr_co _ pdatas_tc r
         
     -- Build the coercion between PRepr and the instance type
     pdatas_co <- mkBuiltinCo pdatasTyCon
-    let co           = mkAppCo pdatas_co
+    let co           = mkAppCo pdatas_co (panic "buildFromArrPReprs")
+                     $ mkTyCoArg
                      $ mkUnbranchedAxInstCo Nominal repr_co var_tys
 
     let scrut        = mkCast (Var varg) co
@@ -479,10 +482,10 @@ buildFromArrPReprs vect_tc repr_co _ pdatas_tc r
  where
     -- The element type of the argument.
     --  eg: 'Tree a b'.
-    ty_args      = mkTyVarTys $ tyConTyVars vect_tc
+    ty_args      = mkOnlyTyVarTys $ tyConTyVars vect_tc
     el_ty        = mkTyConApp vect_tc ty_args
 
-    var_tys      = mkTyVarTys $ tyConTyVars vect_tc
+    var_tys      = mkOnlyTyVarTys $ tyConTyVars vect_tc
     [pdatas_con] = tyConDataCons pdatas_tc
 
     from_sum res_ty res expr ss

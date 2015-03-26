@@ -39,6 +39,8 @@ import CoreUtils        ( exprType, eqExpr, mkTick, mkTicks,
                           stripTicksTopT, stripTicksTopE )
 import PprCore          ( pprRules )
 import Type             ( Type )
+import TyCoRep          ( CoercionArg(..) )  -- TODO (RAE): Remove this, along
+                                             -- with matching on coercions
 import TcType           ( tcSplitTyConApp_maybe )
 import Coercion
 import CoreTidy         ( tidyRules )
@@ -59,6 +61,7 @@ import Bag
 import Util
 import Data.List
 import Data.Ord
+import Control.Monad ( guard )
 
 {-
 Note [Overall plumbing for rules]
@@ -592,7 +595,8 @@ rvInScopeEnv :: RuleMatchEnv -> InScopeEnv
 rvInScopeEnv renv = (rnInScopeSet (rv_lcl renv), rv_unf renv)
 
 data RuleSubst = RS { rs_tv_subst :: TvSubstEnv   -- Range is the
-                    , rs_id_subst :: IdSubstEnv   --   template variables
+                    , rs_cv_subst :: CvSubstEnv   --   template variables
+                    , rs_id_subst :: IdSubstEnv   
                     , rs_binds    :: BindWrapper  -- Floated bindings
                     , rs_bndrs    :: VarSet       -- Variables bound by floated lets
                     }
@@ -602,7 +606,8 @@ type BindWrapper = CoreExpr -> CoreExpr
   -- we represent the floated bindings as a core-to-core function
 
 emptyRuleSubst :: RuleSubst
-emptyRuleSubst = RS { rs_tv_subst = emptyVarEnv, rs_id_subst = emptyVarEnv
+emptyRuleSubst = RS { rs_tv_subst = emptyVarEnv, rs_cv_subst = emptyVarEnv
+                    , rs_id_subst = emptyVarEnv
                     , rs_binds = \e -> e, rs_bndrs = emptyVarSet }
 
 --      At one stage I tried to match even if there are more
@@ -726,35 +731,39 @@ match_co :: RuleMatchEnv
          -> Coercion
          -> Coercion
          -> Maybe RuleSubst
-match_co renv subst (CoVarCo cv) co
-  = match_var renv subst cv (Coercion co)
-match_co renv subst (Refl r1 ty1) co
-  = case co of
-       Refl r2 ty2
-         | r1 == r2 -> match_ty renv subst ty1 ty2
-       _            -> Nothing
-match_co renv subst (TyConAppCo r1 tc1 cos1) co2
-  = case co2 of
-       TyConAppCo r2 tc2 cos2
-         | r1 == r2 && tc1 == tc2
-         -> match_cos renv subst cos1 cos2
-       _ -> Nothing
+match_co renv subst co1 co2
+  | Just cv <- getCoVar_maybe co1
+  = match_var renv subst cv (Coercion co2)
+  | Just (ty1, r1) <- isReflCo_maybe co1
+  = do { (ty2, r2) <- isReflCo_maybe co2
+       ; guard (r1 == r2)
+       ; match_ty renv subst ty1 ty2 }
+match_co renv subst co1 co2
+  | Just (tc1, cos1) <- splitTyConAppCo_maybe co1
+  = case splitTyConAppCo_maybe co2 of
+      Just (tc2, cos2)
+        |  tc1 == tc2
+        -> match_co_args renv subst cos1 cos2
+      _ -> Nothing
 match_co _ _ co1 co2
   = pprTrace "match_co: needs more cases" (ppr co1 $$ ppr co2) Nothing
     -- Currently just deals with CoVarCo, TyConAppCo and Refl
 
-match_cos :: RuleMatchEnv
-         -> RuleSubst
-         -> [Coercion]
-         -> [Coercion]
-         -> Maybe RuleSubst
-match_cos renv subst (co1:cos1) (co2:cos2) =
-    case match_co renv subst co1 co2 of
-       Just subst' -> match_cos renv subst' cos1 cos2
-       Nothing -> Nothing
-match_cos _ subst [] [] = Just subst
-match_cos _ _ cos1 cos2 = pprTrace "match_cos: not same length" (ppr cos1 $$ ppr cos2) Nothing
-
+match_co_args :: RuleMatchEnv
+              -> RuleSubst
+              -> [CoercionArg]
+              -> [CoercionArg]
+              -> Maybe RuleSubst
+match_co_args renv subst (TyCoArg co1 : args1) (TyCoArg co2 : args2)
+  = do { subst' <- match_co renv subst co1 co2
+       ; match_co_args renv subst' args1 args2 }
+match_co_args renv subst (CoCoArg _ _ co1l co1r : args1)
+                         (CoCoArg _ _ co2l co2r : args2)
+  = do { subst'  <- match_co renv subst co1l co2l
+       ; subst'' <- match_co renv subst' co1r co2r
+       ; match_co_args renv subst'' args1 args2 }
+match_co_args _ subst [] [] = Just subst
+match_co_args _ _ cos1 cos2 = pprTrace "match_co_args: not same length" (ppr cos1 $$ ppr cos2) Nothing
 
 -------------
 rnMatchBndr2 :: RuleMatchEnv -> RuleSubst -> Var -> Var -> RuleMatchEnv
@@ -875,10 +884,12 @@ match_ty :: RuleMatchEnv
 -- We only want to replace (f T) with f', not (f Int).
 
 match_ty renv subst ty1 ty2
-  = do  { tv_subst' <- Unify.ruleMatchTyX menv tv_subst ty1 ty2
-        ; return (subst { rs_tv_subst = tv_subst' }) }
+  = do  { (tv_subst', cv_subst')
+            <- Unify.ruleMatchTyX menv tv_subst cv_subst ty1 ty2
+        ; return (subst { rs_tv_subst = tv_subst', rs_cv_subst = cv_subst' }) }
   where
     tv_subst = rs_tv_subst subst
+    cv_subst = rs_cv_subst subst
     menv = ME { me_tmpls = rv_tmpls renv, me_env = rv_lcl renv }
 
 {-

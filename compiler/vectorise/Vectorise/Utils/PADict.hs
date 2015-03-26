@@ -15,7 +15,7 @@ import CoreUtils
 import FamInstEnv
 import Coercion
 import Type
-import TypeRep
+import TyCoRep
 import TyCon
 import CoAxiom
 import Var
@@ -30,17 +30,19 @@ import Control.Monad
 --
 -- > forall (a :: * -> *). (forall (b :: *). PA b -> PA (a b)) -> PA (v a)
 --
-paDictArgType :: TyVar -> VM (Maybe Type)
-paDictArgType tv = go (TyVarTy tv) (tyVarKind tv)
+paDictArgType :: TyCoVar -> VM (Maybe Type)
+paDictArgType tv = go (mkTyCoVarTy tv) (tyVarKind tv)
   where
-    go ty (FunTy k1 k2)
+    go ty (ForAllTy (Anon k1) k2)
       = do
-          tv   <- newTyVar (fsLit "a") k1
-          mty1 <- go (TyVarTy tv) k1
+          tv   <- if isCoercionType k1
+                  then newCoVar (fsLit "c") k1
+                  else newTyVar (fsLit "a") k1
+          mty1 <- go (mkTyCoVarTy tv) k1
           case mty1 of
             Just ty1 -> do
-                          mty2 <- go (AppTy ty (TyVarTy tv)) k2
-                          return $ fmap (ForAllTy tv . FunTy ty1) mty2
+                          mty2 <- go (mkAppTy ty (mkTyCoVarTy tv)) k2
+                          return $ fmap (mkNamedForAllTy tv Invisible . mkFunTy ty1) mty2
             Nothing  -> go ty k2
 
     go ty k
@@ -71,7 +73,7 @@ paDictOfType ty
       = do 
         { dfun <- maybeCantVectoriseM "No PA dictionary for type variable"
                                       (ppr tv <+> text "in" <+> ppr ty)
-                $ lookupTyVarPA tv
+                $ lookupTyCoVarPA tv
         ; dicts <- mapM paDictOfType ty_args
         ; return $ dfun `mkTyApps` ty_args `mkApps` dicts
         }
@@ -144,7 +146,8 @@ prDictOfPReprInstTyCon _ty prepr_ax prepr_args
       let rhs = mkUnbranchedAxInstRHS prepr_ax prepr_args
       dict <- prDictOfReprType' rhs
       pr_co <- mkBuiltinCo prTyCon
-      let co = mkAppCo pr_co
+      let co = mkAppCo pr_co (panic "prDictOfReprInstTyCon")
+             $ TyCoArg
              $ mkSymCo
              $ mkUnbranchedAxInstCo Nominal prepr_ax prepr_args
       return $ mkCast dict co
@@ -216,7 +219,7 @@ prDFunApply dfun tys
          $ fst
          $ splitFunTys
          $ snd
-         $ splitForAllTys
+         $ splitNamedForAllTys
          $ varType dfun
 
     dictionary dflags pa pr ty tycon

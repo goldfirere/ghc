@@ -5,7 +5,6 @@
 module FamInst (
         FamInstEnvs, tcGetFamInstEnvs,
         checkFamInstConsistency, tcExtendLocalFamInstEnv,
-        tcLookupFamInst,
         tcLookupDataFamInst, tcLookupDataFamInst_maybe,
         tcInstNewTyCon_maybe, tcTopNormaliseNewTypeTF_maybe,
         newFamInst
@@ -14,11 +13,12 @@ module FamInst (
 import HscTypes
 import FamInstEnv
 import InstEnv( roughMatchTcs )
-import Coercion    hiding ( substTy )
+import Coercion
 import TcEvidence
 import LoadIface
 import TcRnMonad
 import TyCon
+import TcType
 import CoAxiom
 import DynFlags
 import Module
@@ -30,7 +30,6 @@ import RdrName
 import DataCon ( dataConName )
 import Maybes
 import TcMType
-import TcType
 import Name
 import Control.Monad
 import Data.Map (Map)
@@ -60,7 +59,7 @@ newFamInst flavor axiom@(CoAxiom { co_ax_branches = FirstBranch branch
   | CoAxBranch { cab_tvs = tvs
                , cab_lhs = lhs
                , cab_rhs = rhs } <- branch
-  = do { (subst, tvs') <- freshenTyVarBndrs tvs
+  = do { (subst, tvs') <- freshenTyCoVarBndrs tvs
        ; return (FamInst { fi_fam      = tyConName fam_tc
                          , fi_flavor   = flavor
                          , fi_tcs      = roughMatchTcs lhs
@@ -81,7 +80,7 @@ check whether the instances in the two modules are consistent, *unless* we can
 be certain that the instances of the two modules have already been checked for
 consistency during the compilation of modules that we import.
 
-Why do we need to check?  Consider
+Why do we need to check?  Consider 
    module X1 where                module X2 where
     data T1                         data T2
     type instance F T1 b = Int      type instance F a T2 = Char
@@ -132,17 +131,17 @@ checkFamInstConsistency famInstMods directlyImpMods
 
        ; let { -- Fetch the iface of a given module.  Must succeed as
                -- all directly imported modules must already have been loaded.
-               modIface mod =
+               modIface mod = 
                  case lookupIfaceByModule dflags hpt (eps_PIT eps) mod of
                    Nothing    -> panic "FamInst.checkFamInstConsistency"
                    Just iface -> iface
 
              ; hmiModule     = mi_module . hm_iface
-             ; hmiFamInstEnv = extendFamInstEnvList emptyFamInstEnv
+             ; hmiFamInstEnv = extendFamInstEnvList emptyFamInstEnv 
                                . md_fam_insts . hm_details
-             ; hpt_fam_insts = mkModuleEnv [ (hmiModule hmi, hmiFamInstEnv hmi)
+             ; hpt_fam_insts = mkModuleEnv [ (hmiModule hmi, hmiFamInstEnv hmi) 
                                            | hmi <- eltsUFM hpt]
-             ; groups        = map (dep_finsts . mi_deps . modIface)
+             ; groups        = map (dep_finsts . mi_deps . modIface) 
                                    directlyImpMods
              ; okPairs       = listToSet $ concatMap allPairs groups
                  -- instances of okPairs are consistent
@@ -161,7 +160,7 @@ checkFamInstConsistency famInstMods directlyImpMods
     check hpt_fam_insts (ModulePair m1 m2)
       = do { env1 <- getFamInsts hpt_fam_insts m1
            ; env2 <- getFamInsts hpt_fam_insts m2
-           ; mapM_ (checkForConflicts (emptyFamInstEnv, env2))
+           ; mapM_ (checkForConflicts (emptyFamInstEnv, env2))   
                    (famInstEnvElts env1) }
 
 getFamInsts :: ModuleEnv FamInstEnv -> Module -> TcM FamInstEnv
@@ -181,35 +180,7 @@ getFamInsts hpt_fam_insts mod
 *                                                                      *
 ************************************************************************
 
-Look up the instance tycon of a family instance.
-
-The match may be ambiguous (as we know that overlapping instances have
-identical right-hand sides under overlapping substitutions - see
-'FamInstEnv.lookupFamInstEnvConflicts').  However, the type arguments used
-for matching must be equal to or be more specific than those of the family
-instance declaration.  We pick one of the matches in case of ambiguity; as
-the right-hand sides are identical under the match substitution, the choice
-does not matter.
-
-Return the instance tycon and its type instance.  For example, if we have
-
- tcLookupFamInst 'T' '[Int]' yields (':R42T', 'Int')
-
-then we have a coercion (ie, type instance of family instance coercion)
-
- :Co:R42T Int :: T [Int] ~ :R42T Int
-
-which implies that :R42T was declared as 'data instance T [a]'.
 -}
-
-tcLookupFamInst :: FamInstEnvs -> TyCon -> [Type] -> Maybe FamInstMatch
-tcLookupFamInst fam_envs tycon tys
-  | not (isOpenFamilyTyCon tycon)
-  = Nothing
-  | otherwise
-  = case lookupFamInstEnv fam_envs tycon tys of
-      match : _ -> Just match
-      []        -> Nothing
 
 -- | If @co :: T ts ~ rep_ty@ then:
 --
@@ -218,19 +189,19 @@ tcLookupFamInst fam_envs tycon tys
 -- Checks for a newtype, and for being saturated
 -- Just like Coercion.instNewTyCon_maybe, but returns a TcCoercion
 tcInstNewTyCon_maybe :: TyCon -> [TcType] -> Maybe (TcType, TcCoercion)
-tcInstNewTyCon_maybe tc tys = fmap (second TcCoercion) $
+tcInstNewTyCon_maybe tc tys = fmap (second mkTcCoercion) $
                               instNewTyCon_maybe tc tys
 
 -- | Like 'tcLookupDataFamInst_maybe', but returns the arguments back if
 -- there is no data family to unwrap.
 tcLookupDataFamInst :: FamInstEnvs -> TyCon -> [TcType]
-                    -> (TyCon, [TcType], TcCoercion)
+                    -> (TyCon, [TcType], Coercion)
 tcLookupDataFamInst fam_inst_envs tc tc_args
   | Just (rep_tc, rep_args, co)
       <- tcLookupDataFamInst_maybe fam_inst_envs tc tc_args
-  = (rep_tc, rep_args, TcCoercion co)
+  = (rep_tc, rep_args, co)
   | otherwise
-  = (tc, tc_args, mkTcRepReflCo (mkTyConApp tc tc_args))
+  = (tc, tc_args, mkRepReflCo (mkTyConApp tc tc_args))
 
 tcLookupDataFamInst_maybe :: FamInstEnvs -> TyCon -> [TcType]
                           -> Maybe (TyCon, [TcType], Coercion)
@@ -239,11 +210,12 @@ tcLookupDataFamInst_maybe :: FamInstEnvs -> TyCon -> [TcType]
 tcLookupDataFamInst_maybe fam_inst_envs tc tc_args
   | isDataFamilyTyCon tc
   , match : _ <- lookupFamInstEnv fam_inst_envs tc tc_args
-  , FamInstMatch { fim_instance = rep_fam
-                 , fim_tys      = rep_args } <- match
-  , let co_tc  = famInstAxiom rep_fam
-        rep_tc = dataFamInstRepTyCon rep_fam
-        co     = mkUnbranchedAxInstCo Representational co_tc rep_args
+  , FamInstMatch { fim_instance = rep_fam@(FamInst { fi_axiom = co_tc })
+                 , fim_tys      = rep_args
+                 , fim_coercion = match_co } <- match
+  , let rep_tc = dataFamInstRepTyCon rep_fam
+        co     = mkSubCo match_co `mkTransCo`
+                 mkUnbranchedAxInstCo Representational co_tc rep_args
   = Just (rep_tc, rep_args, co)
 
   | otherwise
@@ -265,7 +237,7 @@ tcTopNormaliseNewTypeTF_maybe :: FamInstEnvs
                               -> Maybe (TcCoercion, Type)
 tcTopNormaliseNewTypeTF_maybe faminsts rdr_env ty
 -- cf. FamInstEnv.topNormaliseType_maybe and Coercion.topNormaliseNewType_maybe
-  = fmap (first TcCoercion) $ topNormaliseTypeX_maybe stepper ty
+  = fmap (first mkTcCoercion) $ topNormaliseTypeX_maybe stepper ty
   where
     stepper
       = unwrap_newtype
@@ -304,7 +276,7 @@ tcTopNormaliseNewTypeTF_maybe faminsts rdr_env ty
 tcExtendLocalFamInstEnv :: [FamInst] -> TcM a -> TcM a
 tcExtendLocalFamInstEnv fam_insts thing_inside
  = do { env <- getGblEnv
-      ; (inst_env', fam_insts') <- foldlM addLocalFamInst
+      ; (inst_env', fam_insts') <- foldlM addLocalFamInst  
                                           (tcg_fam_inst_env env, tcg_fam_insts env)
                                           fam_insts
       ; let env' = env { tcg_fam_insts    = fam_insts'
@@ -374,7 +346,7 @@ conflictInstErr fam_inst conflictingMatch
   | (FamInstMatch { fim_instance = confInst }) : _ <- conflictingMatch
   = addFamInstsErr (ptext (sLit "Conflicting family instance declarations:"))
                    [fam_inst, confInst]
-  | otherwise
+  | otherwise 
   = panic "conflictInstErr"
 
 addFamInstsErr :: SDoc -> [FamInst] -> TcRn ()
@@ -396,6 +368,6 @@ addFamInstsErr herald insts
 tcGetFamInstEnvs :: TcM FamInstEnvs
 -- Gets both the external-package inst-env
 -- and the home-pkg inst env (includes module being compiled)
-tcGetFamInstEnvs
+tcGetFamInstEnvs 
   = do { eps <- getEps; env <- getGblEnv
        ; return (eps_fam_inst_env eps, tcg_fam_inst_env env) }

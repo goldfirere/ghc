@@ -6,3 +6,7 @@ T7959.hs:5:1:
 T7959.hs:6:17:
     Expected kind ‘k0 -> Constraint’, but ‘A’ has kind ‘Constraint’
     In the data declaration for ‘B’
+
+T7959.hs:6:17:
+    Illegal deriving item ‘A’
+    In the data declaration for ‘B’

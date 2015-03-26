@@ -62,7 +62,7 @@ mkClosureApp arg_ty res_ty (vclo, lclo) (varg, larg)
 -- /construction/.  In contrast, the closure environment and the arguments are passed during closure
 -- application.
 --
-buildClosures :: [TyVar]    -- ^ Type variables passed during closure construction.
+buildClosures :: [TyCoVar]  -- ^ Type variables passed during closure construction.
               -> [Var]      -- ^ Variables passed during closure construction.
               -> [VVar]     -- ^ Variables in the environment.
               -> [Type]     -- ^ Type of the arguments.
@@ -95,7 +95,7 @@ buildClosures tvs vars env (arg_ty : arg_tys) res_ty mk_body
 -- /construction/.  In contrast, the closure environment and the closure argument are passed during
 -- closure application.
 --
-buildClosure :: [TyVar]         -- ^Type variables passed during closure construction.
+buildClosure :: [TyCoVar]       -- ^Type variables passed during closure construction.
              -> [Var]           -- ^Variables passed during closure construction.
              -> [VVar]          -- ^Variables in the environment.
              -> Type            -- ^Type of the closure argument.

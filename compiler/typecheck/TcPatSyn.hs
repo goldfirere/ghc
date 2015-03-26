@@ -17,6 +17,7 @@ import TcRnMonad
 import TcEnv
 import TcMType
 import TysPrim
+import TysWiredIn  ( levityTy )
 import Name
 import SrcLoc
 import PatSyn
@@ -70,7 +71,7 @@ tcInferPatSynDecl PSB{ psb_id = lname@(L loc name), psb_args = details,
        ; (((lpat', (args, pat_ty)), tclvl), wanted)
             <- captureConstraints  $
                captureTcLevel      $
-               do { pat_ty <- newFlexiTyVarTy openTypeKind
+               do { pat_ty <- newOpenFlexiTyVarTy
                   ; tcPat PatSyn lpat pat_ty $
                do { args <- mapM tcLookupId arg_names
                   ; return (args, pat_ty) } }
@@ -85,11 +86,11 @@ tcInferPatSynDecl PSB{ psb_id = lname@(L loc name), psb_args = details,
              prov_theta = map evVarPred prov_dicts
              req_theta  = map evVarPred req_dicts
 
-       ; univ_tvs   <- mapM zonkQuantifiedTyVar univ_tvs
-       ; ex_tvs     <- mapM zonkQuantifiedTyVar ex_tvs
+       ; univ_tvs   <- mapMaybeM zonkQuantifiedTyCoVar univ_tvs
+       ; ex_tvs     <- mapMaybeM zonkQuantifiedTyCoVar ex_tvs
 
-       ; prov_theta <- zonkTcThetaType prov_theta
-       ; req_theta  <- zonkTcThetaType req_theta
+       ; prov_theta <- zonkTcTypes prov_theta
+       ; req_theta  <- zonkTcTypes req_theta
 
        ; pat_ty     <- zonkTcType pat_ty
        ; args       <- mapM zonkId args
@@ -97,7 +98,7 @@ tcInferPatSynDecl PSB{ psb_id = lname@(L loc name), psb_args = details,
        ; traceTc "tcInferPatSynDecl }" $ ppr name
        ; tc_patsyn_finish lname dir is_infix lpat'
                           (univ_tvs, req_theta, ev_binds, req_dicts)
-                          (ex_tvs, map mkTyVarTy ex_tvs, prov_theta, emptyTcEvBinds, prov_dicts)
+                          (ex_tvs, map mkTyCoVarTy ex_tvs, prov_theta, emptyTcEvBinds, prov_dicts)
                           (zip args $ repeat idHsWrapper)
                           pat_ty }
 
@@ -142,14 +143,14 @@ tcCheckPatSynDecl PSB{ psb_id = lname@(L loc name), psb_args = details,
            checkConstraints skol_info univ_tvs req_dicts $
            tcPat PatSyn lpat pat_ty $ do
            { ex_sigtvs <- mapM (\tv -> newSigTyVar (getName tv) (tyVarKind tv)) ex_tvs
-           ; let subst = mkTvSubst (mkInScopeSet (zipVarEnv ex_sigtvs ex_sigtvs)) $
-                         zipTyEnv ex_tvs (map mkTyVarTy ex_sigtvs)
-           ; let ex_tys = substTys subst $ map mkTyVarTy ex_tvs
+           ; let subst = mkTCvSubst (mkInScopeSet (zipVarEnv ex_sigtvs ex_sigtvs)) $
+                         zipTyCoEnv ex_tvs (map mkTyCoVarTy ex_sigtvs)
+           ; let ex_tys = substTys subst $ map mkTyCoVarTy ex_tvs
                  prov_theta' = substTheta subst prov_theta
            ; wrapped_args <- forM (zipEqual "tcCheckPatSynDecl" arg_names arg_tys) $ \(arg_name, arg_ty) -> do
                { arg <- tcLookupId arg_name
                ; let arg_ty' = substTy subst arg_ty
-               ; coi <- unifyType (varType arg) arg_ty'
+               ; coi <- unifyType (Just arg) (varType arg) arg_ty'
                ; return (setVarType arg arg_ty, coToHsWrapper coi) }
            ; return (ex_tys, prov_theta', wrapped_args) }
 
@@ -160,7 +161,7 @@ tcCheckPatSynDecl PSB{ psb_id = lname@(L loc name), psb_args = details,
        ; (prov_ev_binds, prov_dicts) <-
            checkConstraints skol_info ex_tvs_rhs prov_dicts_rhs $ do
            { let origin = PatOrigin -- TODO
-           ; emitWanteds origin prov_theta' }
+           ; emitWantedEvVars origin prov_theta' }
 
        ; traceTc "tcCheckPatSynDecl }" $ ppr name
        ; tc_patsyn_finish lname dir is_infix lpat'
@@ -233,17 +234,21 @@ tcPatSynMatcher (L loc name) lpat
                 (univ_tvs, req_theta, req_ev_binds, req_dicts)
                 (ex_tvs, ex_tys, prov_theta, prov_ev_binds, prov_dicts)
                 wrapped_args pat_ty
-  = do { uniq <- newUnique
-       ; let tv_name = mkInternalName uniq (mkTyVarOcc "r") loc
-             res_tv  = mkTcTyVar tv_name openTypeKind (SkolemTv False)
+  = do { lev_uniq <- newUnique
+       ; tv_uniq  <- newUnique
+       ; let lev_name = mkInternalName lev_uniq (mkTyVarOcc "rlev") loc
+             tv_name  = mkInternalName tv_uniq (mkTyVarOcc "r") loc
+             lev_tv   = mkTcTyVar lev_name levityTy   (SkolemTv False)
+             lev      = mkOnlyTyVarTy lev_tv
+             res_tv   = mkTcTyVar tv_name  (tYPE lev) (SkolemTv False)
              is_unlifted = null wrapped_args && null prov_dicts
-             res_ty = mkTyVarTy res_tv
+             res_ty = mkOnlyTyVarTy res_tv
              (cont_arg_tys, cont_args)
                | is_unlifted = ([voidPrimTy], [nlHsVar voidPrimId])
                | otherwise   = unzip [ (varType arg, mkLHsWrap wrap $ nlHsVar arg)
                                      | (arg, wrap) <- wrapped_args
                                      ]
-             cont_ty = mkSigmaTy ex_tvs prov_theta $
+             cont_ty = mkInvSigmaTy ex_tvs prov_theta $
                        mkFunTys cont_arg_tys res_ty
 
              fail_ty = mkFunTy voidPrimTy res_ty
@@ -254,7 +259,7 @@ tcPatSynMatcher (L loc name) lpat
        ; fail         <- newSysLocalId (fsLit "fail")  fail_ty
 
        ; let matcher_tau   = mkFunTys [pat_ty, cont_ty, fail_ty] res_ty
-             matcher_sigma = mkSigmaTy (res_tv:univ_tvs) req_theta matcher_tau
+             matcher_sigma = mkInvSigmaTy (res_tv:univ_tvs) req_theta matcher_tau
              matcher_id    = mkExportedLocalId VanillaId matcher_name matcher_sigma
                              -- See Note [Exported LocalIds] in Id
 
@@ -327,7 +332,7 @@ mkPatSynBuilderId dir  (L _ name) qtvs theta arg_tys pat_ty
   = return Nothing
   | otherwise
   = do { builder_name <- newImplicitBinder name mkBuilderOcc
-       ; let builder_sigma = mkSigmaTy qtvs theta (mkFunTys builder_arg_tys pat_ty)
+       ; let builder_sigma = mkInvSigmaTy qtvs theta (mkFunTys builder_arg_tys pat_ty)
              builder_id    = mkExportedLocalId VanillaId builder_name builder_sigma
                              -- See Note [Exported LocalIds] in Id
        ; return (Just (builder_id, need_dummy_arg)) }
@@ -517,7 +522,7 @@ tcPatToExpr args = go
     go1   (LitPat lit)             = return $ HsLit lit
     go1   (NPat n Nothing _)       = return $ HsOverLit n
     go1   (NPat n (Just neg) _)    = return $ noLoc neg `HsApp` noLoc (HsOverLit n)
-    go1   (SigPatIn pat (HsWB ty _ _ wcs))
+    go1   (SigPatIn pat (HsWB ty _ wcs))
       = do { expr <- go pat
            ; return $ ExprWithTySig expr ty wcs }
     go1   (ConPatOut{})            = panic "ConPatOut in output of renamer"

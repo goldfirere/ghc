@@ -35,7 +35,6 @@ import DataCon     ( dataConTag, dataConTyCon, dataConWorkId )
 import CoreUtils   ( cheapEqExpr, exprIsHNF )
 import CoreUnfold  ( exprIsConApp_maybe )
 import Type
-import TypeRep
 import OccName     ( occNameFS )
 import PrelNames
 import Maybes      ( orElse )
@@ -905,10 +904,9 @@ dataToTagRule = a `mplus` b
 -- seq# :: forall a s . a -> State# s -> (# State# s, a #)
 seqRule :: RuleM CoreExpr
 seqRule = do
-  [ty_a, Type ty_s, a, s] <- getArgs
+  [Type ty_a, Type ty_s, a, s] <- getArgs
   guard $ exprIsHNF a
-  return $ mkConApp (tupleCon UnboxedTuple 2)
-    [Type (mkStatePrimTy ty_s), ty_a, s, a]
+  return $ mkCoreUbxTup [mkStatePrimTy ty_s, ty_a] [s, a]
 
 -- spark# :: forall a s . a -> State# s -> (# State# s, a #)
 sparkRule :: RuleM CoreExpr
@@ -1157,8 +1155,8 @@ match_magicDict _ = Nothing
 match_IntToInteger :: RuleFun
 match_IntToInteger _ id_unf fn [xl]
   | Just (MachInt x) <- exprIsLiteral_maybe id_unf xl
-  = case idType fn of
-    FunTy _ integerTy ->
+  = case splitFunTy_maybe (idType fn) of
+    Just (_, integerTy) ->
         Just (Lit (LitInteger x integerTy))
     _ ->
         panic "match_IntToInteger: Id has the wrong type"
@@ -1167,8 +1165,8 @@ match_IntToInteger _ _ _ _ = Nothing
 match_WordToInteger :: RuleFun
 match_WordToInteger _ id_unf id [xl]
   | Just (MachWord x) <- exprIsLiteral_maybe id_unf xl
-  = case idType id of
-    FunTy _ integerTy ->
+  = case splitFunTy_maybe (idType id) of
+    Just (_, integerTy) ->
         Just (Lit (LitInteger x integerTy))
     _ ->
         panic "match_WordToInteger: Id has the wrong type"
@@ -1177,8 +1175,8 @@ match_WordToInteger _ _ _ _ = Nothing
 match_Int64ToInteger :: RuleFun
 match_Int64ToInteger _ id_unf id [xl]
   | Just (MachInt64 x) <- exprIsLiteral_maybe id_unf xl
-  = case idType id of
-    FunTy _ integerTy ->
+  = case splitFunTy_maybe (idType id) of
+    Just (_, integerTy) ->
         Just (Lit (LitInteger x integerTy))
     _ ->
         panic "match_Int64ToInteger: Id has the wrong type"
@@ -1187,8 +1185,8 @@ match_Int64ToInteger _ _ _ _ = Nothing
 match_Word64ToInteger :: RuleFun
 match_Word64ToInteger _ id_unf id [xl]
   | Just (MachWord64 x) <- exprIsLiteral_maybe id_unf xl
-  = case idType id of
-    FunTy _ integerTy ->
+  = case splitFunTy_maybe (idType id) of
+    Just (_, integerTy) ->
         Just (Lit (LitInteger x integerTy))
     _ ->
         panic "match_Word64ToInteger: Id has the wrong type"
@@ -1224,11 +1222,7 @@ match_Integer_divop_both divop _ id_unf _ [xl,yl]
   , Just (LitInteger y _) <- exprIsLiteral_maybe id_unf yl
   , y /= 0
   , (r,s) <- x `divop` y
-  = Just $ mkConApp (tupleCon UnboxedTuple 2)
-                    [Type t,
-                     Type t,
-                     Lit (LitInteger r t),
-                     Lit (LitInteger s t)]
+  = Just $ mkCoreUbxTup [t,t] [Lit (LitInteger r t), Lit (LitInteger s t)]
 match_Integer_divop_both _ _ _ _ _ = Nothing
 
 -- This helper is used for the quot and rem functions
@@ -1296,17 +1290,17 @@ match_rationalTo _ _ _ _ _ = Nothing
 match_decodeDouble :: RuleFun
 match_decodeDouble _ id_unf fn [xl]
   | Just (MachDouble x) <- exprIsLiteral_maybe id_unf xl
-  = case idType fn of
-    FunTy _ (TyConApp _ [integerTy, intHashTy]) ->
-        case decodeFloat (fromRational x :: Double) of
-        (y, z) ->
-            Just $ mkConApp (tupleCon UnboxedTuple 2)
-                            [Type integerTy,
-                             Type intHashTy,
-                             Lit (LitInteger y integerTy),
-                             Lit (MachInt (toInteger z))]
+  = case splitFunTy_maybe (idType fn) of
+    Just (_, res)
+      | Just [_lev1, _lev2, integerTy, intHashTy] <- tyConAppArgs_maybe res
+      -> case decodeFloat (fromRational x :: Double) of
+           (y, z) ->
+             Just $ mkCoreUbxTup [integerTy, intHashTy]
+                                 [Lit (LitInteger y integerTy),
+                                  Lit (MachInt (toInteger z))]
     _ ->
-        panic "match_decodeDouble: Id has the wrong type"
+        pprPanic "match_decodeDouble: Id has the wrong type"
+          (ppr fn <+> dcolon <+> ppr (idType fn))
 match_decodeDouble _ _ _ _ = Nothing
 
 match_XToIntegerToX :: Name -> RuleFun

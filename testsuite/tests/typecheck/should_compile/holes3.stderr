@@ -1,9 +1,9 @@
 
 holes3.hs:3:5:
-    Found hole ‘_’ with type: t
-    Where: ‘t’ is a rigid type variable bound by
-               the inferred type of f :: t at holes3.hs:3:1
-    Relevant bindings include f :: t (bound at holes3.hs:3:1)
+    Found hole ‘_’ with type: _r
+    Where: ‘_r’ is a rigid type variable bound by
+                the inferred type of f :: _r at holes3.hs:3:1
+    Relevant bindings include f :: _r (bound at holes3.hs:3:1)
     In the expression: _
     In an equation for ‘f’: f = _
 
@@ -23,8 +23,8 @@ holes3.hs:8:5:
     In an equation for ‘h’: h = _aa ++ "a"
 
 holes3.hs:11:15:
-    Found hole ‘_x’ with type: b0
-    Where: ‘b0’ is an ambiguous type variable
+    Found hole ‘_x’ with type: _b
+    Where: ‘_b’ is an ambiguous type variable
     Relevant bindings include
       y :: [a] (bound at holes3.hs:11:3)
       z :: [a] -> [a] (bound at holes3.hs:11:1)

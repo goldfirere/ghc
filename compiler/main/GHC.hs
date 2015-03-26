@@ -171,7 +171,7 @@ module GHC (
         -- ** Data constructors
         DataCon,
         dataConSig, dataConType, dataConTyCon, dataConFieldLabels,
-        dataConIsInfix, isVanillaDataCon, dataConUserType,
+        dataConIsInfix, isVanillaDataCon, dataConUserType, dataConWrapperType,
         dataConStrictMarks,  
         StrictnessMark(..), isMarkedStrict,
 
@@ -193,7 +193,7 @@ module GHC (
         pprParendType, pprTypeApp, 
         Kind,
         PredType,
-        ThetaType, pprForAll, pprThetaArrowTy,
+        ThetaType, pprForAll, pprForAllImplicit, pprThetaArrowTy,
 
         -- ** Entities
         TyThing(..), 
@@ -281,7 +281,6 @@ import RdrName
 import qualified HsSyn -- hack as we want to reexport the whole module
 import HsSyn
 import Type     hiding( typeKind )
-import Kind             ( synTyConResKind )
 import TcType           hiding( typeKind )
 import Id
 import TysPrim          ( alphaTyVars )
@@ -1156,7 +1155,8 @@ modInfoModBreaks = minf_modBreaks
 
 isDictonaryId :: Id -> Bool
 isDictonaryId id
-  = case tcSplitSigmaTy (idType id) of { (_tvs, _theta, tau) -> isDictTy tau }
+  = case tcSplitSigmaTy (idType id) of {
+      (_tvs, _theta, tau) -> isDictTy tau }
 
 -- | Looks up a global name: that is, any top-level name in any
 -- visible module.  Unlike 'lookupName', lookupGlobalName does not use

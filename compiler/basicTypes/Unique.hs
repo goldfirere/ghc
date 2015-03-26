@@ -23,7 +23,7 @@ module Unique (
         Unique, Uniquable(..),
 
         -- ** Constructors, desctructors and operations on 'Unique's
-        hasKey,
+        hasKey, cmpByUnique,
 
         pprUnique,
 
@@ -45,7 +45,7 @@ module Unique (
         mkTupleTyConUnique, mkTupleDataConUnique,
         mkPreludeMiscIdUnique, mkPreludeDataConUnique,
         mkPreludeTyConUnique, mkPreludeClassUnique,
-        mkPArrDataConUnique,
+        mkPArrDataConUnique, mkCoVarUnique,
 
     mkVarOccUnique, mkDataOccUnique, mkTvOccUnique, mkTcOccUnique,
         mkRegSingleUnique, mkRegPairUnique, mkRegClassUnique, mkRegSubUnique,
@@ -164,6 +164,9 @@ instance Uniquable FastString where
 
 instance Uniquable Int where
  getUnique i = mkUniqueGrimily i
+
+cmpByUnique :: Uniquable a => a -> a -> Ordering
+cmpByUnique x y = (getUnique x) `cmpUnique` (getUnique y)
 
 {-
 ************************************************************************
@@ -289,8 +292,10 @@ mkTupleDataConUnique   :: TupleSort -> Int -> Unique
 mkPrimOpIdUnique       :: Int -> Unique
 mkPreludeMiscIdUnique  :: Int -> Unique
 mkPArrDataConUnique    :: Int -> Unique
+mkCoVarUnique          :: Int -> Unique
 
 mkAlphaTyVarUnique i            = mkUnique '1' i
+mkCoVarUnique i                 = mkUnique 'g' i
 
 mkPreludeClassUnique i          = mkUnique '2' i
 

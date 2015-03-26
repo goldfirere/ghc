@@ -2,7 +2,7 @@ TYPE SIGNATURES
   bar :: Int -> Foo Bool () Int
 TYPE CONSTRUCTORS
   data Foo x y z = Foo x y z
-    Promotable
+    Kind: * -> * -> * -> *
 COERCION AXIOMS
 Dependent modules: []
 Dependent packages: [base-4.8.0.0, ghc-prim-0.3.1.0,

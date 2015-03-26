@@ -17,14 +17,12 @@ HsTypes: Abstract syntax: user-defined types
 
 module HsTypes (
         HsType(..), LHsType, HsKind, LHsKind,
-        HsTyOp,LHsTyOp,
-        HsTyVarBndr(..), LHsTyVarBndr,
+        HsTyVarBndr(..), LHsTyVarBndr, 
         LHsTyVarBndrs(..),
         HsWithBndrs(..),
         HsTupleSort(..), HsExplicitFlag(..),
         HsContext, LHsContext,
         HsQuasiQuote(..),
-        HsTyWrapper(..),
         HsTyLit(..),
         HsIPName(..), hsIPNameFS,
 
@@ -32,17 +30,18 @@ module HsTypes (
         getBangType, getBangStrictness,
 
         ConDeclField(..), LConDeclField, pprConDeclFields,
-
-        mkHsQTvs, hsQTvBndrs, isHsKindedTyVar, hsTvbAllKinded,
+        
+        mkHsQTvs, hsQTvExplicit, isHsKindedTyVar, hsTvbAllKinded,
         mkExplicitHsForAllTy, mkImplicitHsForAllTy, mkQualifiedHsForAllTy,
         hsExplicitTvs,
         hsTyVarName, mkHsWithBndrs, hsLKiTyVarNames,
-        hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
+        hsLTyVarName, hsLTyVarLocName, hsLTyVarLocNames,
         splitLHsInstDeclTy_maybe,
         splitHsClassTy_maybe, splitLHsClassTy_maybe,
         splitHsFunType,
         splitHsAppTys, hsTyGetAppHead_maybe, mkHsAppTys, mkHsOpTy,
         isWildcardTy, isNamedWildcardTy,
+        ftvLHsType, ftvHsType,
 
         -- Printing
         pprParendHsType, pprHsForAll, pprHsForAllExtra,
@@ -53,7 +52,8 @@ import {-# SOURCE #-} HsExpr ( HsSplice, pprUntypedSplice )
 
 import PlaceHolder ( PostTc,PostRn,DataId,PlaceHolder(..) )
 
-import Name( Name )
+import Name( Name, isTyVarName )
+import Var ( varName )
 import RdrName( RdrName )
 import DataCon( HsBang(..) )
 import TysPrim( funTyConName )
@@ -64,6 +64,8 @@ import SrcLoc
 import StaticFlags
 import Outputable
 import FastString
+import NameSet
+import UniqFM ( mapUFM )
 import Maybes( isJust )
 
 import Data.Data hiding ( Fixity )
@@ -143,42 +145,39 @@ type LHsKind name = Located (HsKind name)
 
 type LHsTyVarBndr name = Located (HsTyVarBndr name)
 
-data LHsTyVarBndrs name
-  = HsQTvs { hsq_kvs :: [Name]                  -- Kind variables
-           , hsq_tvs :: [LHsTyVarBndr name]     -- Type variables
+data LHsTyVarBndrs name 
+  = HsQTvs { hsq_implicit :: [name]               -- implicit (dependent) variables
+           , hsq_explicit :: [LHsTyVarBndr name]  -- explicit variables
              -- See Note [HsForAllTy tyvar binders]
     }
   deriving( Typeable )
 deriving instance (DataId name) => Data (LHsTyVarBndrs name)
 
-mkHsQTvs :: [LHsTyVarBndr RdrName] -> LHsTyVarBndrs RdrName
--- Just at RdrName because in the Name variant we should know just
--- what the kind-variable binders are; and we don't
--- We put an empty list (rather than a panic) for the kind vars so
--- that the pretty printer works ok on them.
-mkHsQTvs tvs = HsQTvs { hsq_kvs = [], hsq_tvs = tvs }
+mkHsQTvs :: [LHsTyVarBndr name] -> LHsTyVarBndrs name
+-- Usually, this will be called at RdrName, but sometimes we
+-- just need a LHsTyVarBndrs for impedance matching, and we don't
+-- care about the implicit / explicit distinction. So, we allow
+-- this to be called with any binder.
+mkHsQTvs tvs = HsQTvs { hsq_implicit = [], hsq_explicit = tvs }
 
-emptyHsQTvs :: LHsTyVarBndrs name   -- Use only when you know there are no kind binders
-emptyHsQTvs =  HsQTvs { hsq_kvs = [], hsq_tvs = [] }
+emptyHsQTvs :: LHsTyVarBndrs name   -- Use only when you know there are no implicit binders
+emptyHsQTvs =  HsQTvs { hsq_implicit = [], hsq_explicit = [] }
 
-hsQTvBndrs :: LHsTyVarBndrs name -> [LHsTyVarBndr name]
-hsQTvBndrs = hsq_tvs
+hsQTvExplicit :: LHsTyVarBndrs name -> [LHsTyVarBndr name]
+hsQTvExplicit = hsq_explicit
 
 data HsWithBndrs name thing
-  = HsWB { hswb_cts :: thing             -- Main payload (type or list of types)
-         , hswb_kvs :: PostRn name [Name] -- Kind vars
-         , hswb_tvs :: PostRn name [Name] -- Type vars
-         , hswb_wcs :: PostRn name [Name] -- Wildcards
-    }
+  = HsWB { hswb_cts  :: thing                 -- Main payload (type or list of types)
+         , hswb_vars :: PostRn name [Name]    -- Kind and type vars
+         , hswb_wcs  :: PostRn name [Name]    -- Wildcards
+    }                  
   deriving (Typeable)
-deriving instance (Data name, Data thing, Data (PostRn name [Name]))
-  => Data (HsWithBndrs name thing)
+deriving instance (DataId name, Data thing) => Data (HsWithBndrs name thing)
 
 mkHsWithBndrs :: thing -> HsWithBndrs RdrName thing
-mkHsWithBndrs x = HsWB { hswb_cts = x, hswb_kvs = PlaceHolder
-                                     , hswb_tvs = PlaceHolder
-                                     , hswb_wcs = PlaceHolder }
-
+mkHsWithBndrs x = HsWB { hswb_cts  = x
+                       , hswb_vars = PlaceHolder
+                       , hswb_wcs  = PlaceHolder }
 
 -- | These names are used early on to store the names of implicit
 -- parameters.  They completely disappear after type-checking.
@@ -216,7 +215,7 @@ isHsKindedTyVar (KindedTyVar {}) = True
 
 -- | Do all type variables in this 'LHsTyVarBndr' come with kind annotations?
 hsTvbAllKinded :: LHsTyVarBndrs name -> Bool
-hsTvbAllKinded = all (isHsKindedTyVar . unLoc) . hsQTvBndrs
+hsTvbAllKinded = all (isHsKindedTyVar . unLoc) . hsQTvExplicit
 
 -- | - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnDcolon',
 --            'ApiAnnotation.AnnTilde','ApiAnnotation.AnnRarrow',
@@ -254,7 +253,7 @@ data HsType name
   | HsTupleTy           HsTupleSort
                         [LHsType name]  -- Element types (length gives arity)
 
-  | HsOpTy              (LHsType name) (LHsTyOp name) (LHsType name)
+  | HsOpTy              (LHsType name) (Located name) (LHsType name)
 
   | HsParTy             (LHsType name)   -- See Note [Parens in HsSyn] in HsExpr
         -- Parenthesis preserved for the precedence re-arrangement in RnTypes
@@ -292,29 +291,19 @@ data HsType name
 
   | HsTyLit HsTyLit      -- A promoted numeric literal.
 
-  | HsWrapTy HsTyWrapper (HsType name)  -- only in typechecker output
-
   | HsWildcardTy           -- A type wildcard
 
   | HsNamedWildcardTy name -- A named wildcard
   deriving (Typeable)
 deriving instance (DataId name) => Data (HsType name)
 
-
 data HsTyLit
   = HsNumTy Integer
   | HsStrTy FastString
     deriving (Data, Typeable)
 
-data HsTyWrapper
-  = WpKiApps [Kind]  -- kind instantiation: [] k1 k2 .. kn
-  deriving (Data, Typeable)
-
-type LHsTyOp name = HsTyOp (Located name)
-type HsTyOp name = (HsTyWrapper, name)
-
 mkHsOpTy :: LHsType name -> Located name -> LHsType name -> HsType name
-mkHsOpTy ty1 op ty2 = HsOpTy ty1 (WpKiApps [], op) ty2
+mkHsOpTy ty1 op ty2 = HsOpTy ty1 op ty2
 
 {-
 Note [HsForAllTy tyvar binders]
@@ -334,7 +323,7 @@ Note [Context quantification] and Trac #4426.
 In GHC 7.12, Qualified will no longer bind variables
 and this will become an error.
 
-The kind variables bound in the hsq_kvs field come both
+The kind variables bound in the hsq_implicit field come both
   a) from the kind signatures on the kind vars (eg k1)
   b) from the scope of the forall (eg k2)
 Example:   f :: forall (a::k1) b. T a (b::k2)
@@ -464,7 +453,7 @@ mkHsForAllTy exp tvs ctxt     ty = HsForAllTy exp extra (mkHsQTvs tvs) cleanCtxt
 -- mk_forall_ty makes a pure for-all type (no context)
 mk_forall_ty :: HsExplicitFlag -> [LHsTyVarBndr RdrName] -> LHsType RdrName -> HsType RdrName
 mk_forall_ty exp1 tvs1 (L _ (HsForAllTy exp2 extra qtvs2 ctxt ty))
-  = addExtra $ mkHsForAllTy (exp1 `plus` exp2) (tvs1 ++ hsq_tvs qtvs2) ctxt ty
+  = addExtra $ mkHsForAllTy (exp1 `plus` exp2) (tvs1 ++ hsq_explicit qtvs2) ctxt ty
   where addExtra (HsForAllTy exp _ qtvs ctxt ty) = HsForAllTy exp extra qtvs ctxt ty
         addExtra ty = ty -- Impossible, as mkHsForAllTy always returns a HsForAllTy
 mk_forall_ty exp  tvs  (L _ (HsParTy ty)) = mk_forall_ty exp tvs ty
@@ -494,20 +483,16 @@ hsTyVarName (KindedTyVar n _) = n
 hsLTyVarName :: LHsTyVarBndr name -> name
 hsLTyVarName = hsTyVarName . unLoc
 
-hsLTyVarNames :: LHsTyVarBndrs name -> [name]
--- Type variables only
-hsLTyVarNames qtvs = map hsLTyVarName (hsQTvBndrs qtvs)
-
 hsLKiTyVarNames :: LHsTyVarBndrs Name -> [Name]
 -- Kind and type variables
-hsLKiTyVarNames (HsQTvs { hsq_kvs = kvs, hsq_tvs = tvs })
+hsLKiTyVarNames (HsQTvs { hsq_implicit = kvs, hsq_explicit = tvs })
   = kvs ++ map hsLTyVarName tvs
 
 hsLTyVarLocName :: LHsTyVarBndr name -> Located name
 hsLTyVarLocName = fmap hsTyVarName
 
 hsLTyVarLocNames :: LHsTyVarBndrs name -> [Located name]
-hsLTyVarLocNames qtvs = map hsLTyVarLocName (hsQTvBndrs qtvs)
+hsLTyVarLocNames qtvs = map hsLTyVarLocName (hsQTvExplicit qtvs)
 
 ---------------------
 isWildcardTy :: HsType a -> Bool
@@ -532,7 +517,7 @@ hsTyGetAppHead_maybe = go []
   where
     go tys (L _ (HsTyVar n))             = Just (n, tys)
     go tys (L _ (HsAppTy l r))           = go (r : tys) l
-    go tys (L _ (HsOpTy l (_, L _ n) r)) = Just (n, l : r : tys)
+    go tys (L _ (HsOpTy l (L _ n) r))    = Just (n, l : r : tys)
     go tys (L _ (HsParTy t))             = go tys t
     go tys (L _ (HsKindSig t _))         = go tys t
     go _   _                             = Nothing
@@ -581,7 +566,7 @@ splitLHsClassTy_maybe ty
     checkl (L l ty) args = case ty of
         HsTyVar t          -> Just (L l t, args)
         HsAppTy l r        -> checkl l (r:args)
-        HsOpTy l (_, tc) r -> checkl (fmap HsTyVar tc) (l:r:args)
+        HsOpTy l tc r      -> checkl (fmap HsTyVar tc) (l:r:args)
         HsParTy t          -> checkl t args
         HsKindSig ty _     -> checkl ty args
         _                  -> Nothing
@@ -612,6 +597,47 @@ splitHsFunType orig_ty@(L _ (HsAppTy t1 t2))
 
 splitHsFunType other = ([], other)
 
+-- | Get the free Names of type variables in a renamed HsType
+ftvLHsType :: LHsType Name -> NameSet
+ftvLHsType (L _ ty) = ftvHsType ty
+
+-- | Get the free Names of type variables in a renamed HsType
+ftvHsType :: HsType Name -> NameSet
+ftvHsType (HsForAllTy _ _ tvbs ctxt ty)
+  = (ftvLHsContext ctxt `unionNameSet` ftvLHsType ty)
+    `delListFromNameSet` hsLKiTyVarNames tvbs
+ftvHsType (HsTyVar n)               = ftvName n
+ftvHsType (HsAppTy t1 t2)           = ftvLHsType t1 `unionNameSet` ftvLHsType t2
+ftvHsType (HsFunTy t1 t2)           = ftvLHsType t1 `unionNameSet` ftvLHsType t2
+ftvHsType (HsListTy t)              = ftvLHsType t
+ftvHsType (HsPArrTy t)              = ftvLHsType t
+ftvHsType (HsTupleTy _ tys)         = unionNameSets $ map ftvLHsType tys
+ftvHsType (HsOpTy t1 (L _ op) t2)
+  = unionNameSets (ftvName op : map ftvLHsType [t1, t2])
+ftvHsType (HsParTy t)               = ftvLHsType t
+ftvHsType (HsIParamTy _ t)          = ftvLHsType t
+ftvHsType (HsEqTy t1 t2)            = ftvLHsType t1 `unionNameSet` ftvLHsType t2
+ftvHsType (HsKindSig t1 t2)         = ftvLHsType t1 `unionNameSet` ftvLHsType t2
+ftvHsType (HsQuasiQuoteTy {})       = panic "ftvHsType HsQuasiQuoteTy"
+ftvHsType (HsSpliceTy {})           = panic "ftvHsType HsSpliceTy"
+ftvHsType (HsDocTy t _)             = ftvLHsType t
+ftvHsType (HsBangTy _ t)            = ftvLHsType t
+ftvHsType (HsRecTy {})              = panic "ftvHsType HsRecTy"
+ftvHsType (HsCoreTy ty)             = mapUFM varName $ tyCoVarsOfType ty
+ftvHsType (HsExplicitListTy _ tys)  = unionNameSets $ map ftvLHsType tys
+ftvHsType (HsExplicitTupleTy _ tys) = unionNameSets $ map ftvLHsType tys
+ftvHsType (HsTyLit {})              = emptyNameSet
+ftvHsType HsWildcardTy              = panic "ftvHsType HsWildcardTy"
+ftvHsType (HsNamedWildcardTy n)     = ftvName n
+
+ftvLHsContext :: LHsContext Name -> NameSet
+ftvLHsContext (L _ ctxt) = unionNameSets $ map ftvLHsType ctxt
+
+ftvName :: Name -> NameSet
+ftvName n
+  | isTyVarName n = unitNameSet n
+  | otherwise     = emptyNameSet
+
 {-
 ************************************************************************
 *                                                                      *
@@ -627,8 +653,12 @@ instance Outputable HsTyLit where
     ppr = ppr_tylit
 
 instance (OutputableBndr name) => Outputable (LHsTyVarBndrs name) where
-    ppr (HsQTvs { hsq_kvs = kvs, hsq_tvs = tvs })
-      = sep [ ifPprDebug $ braces (interppSP kvs), interppSP tvs ]
+    ppr (HsQTvs { hsq_implicit = kvs, hsq_explicit = tvs }) 
+      = ppr_kvs <+> interppSP tvs
+      where
+        ppr_kvs
+          | [] <- kvs = empty
+          | otherwise = braces (interppSP kvs)
 
 instance (OutputableBndr name) => Outputable (HsTyVarBndr name) where
     ppr (UserTyVar n)     = ppr n
@@ -654,7 +684,7 @@ pprHsForAllExtra exp extra qtvs cxt
   where
     show_extra  = isJust extra
     show_forall =  opt_PprStyle_Debug
-                || (not (null (hsQTvBndrs qtvs)) && is_explicit)
+                || (not (null (hsQTvExplicit qtvs)) && is_explicit)
     is_explicit = case exp of {Explicit -> True; Implicit -> False; Qualified -> False}
     forall_part = forAllLit <+> ppr qtvs <> dot
 
@@ -744,20 +774,6 @@ ppr_mono_ty _    (HsTyLit t)         = ppr_tylit t
 ppr_mono_ty _    HsWildcardTy        = char '_'
 ppr_mono_ty _    (HsNamedWildcardTy name) = ppr name
 
-ppr_mono_ty ctxt_prec (HsWrapTy (WpKiApps _kis) ty)
-  = ppr_mono_ty ctxt_prec ty
--- We are not printing kind applications. If we wanted to do so, we should do
--- something like this:
-{-
-  = go ctxt_prec kis ty
-  where
-    go ctxt_prec [] ty = ppr_mono_ty ctxt_prec ty
-    go ctxt_prec (ki:kis) ty
-      = maybeParen ctxt_prec TyConPrec $
-        hsep [ go FunPrec kis ty
-             , ptext (sLit "@") <> pprParendKind ki ]
--}
-
 ppr_mono_ty ctxt_prec (HsEqTy ty1 ty2)
   = maybeParen ctxt_prec TyOpPrec $
     ppr_mono_lty TyOpPrec ty1 <+> char '~' <+> ppr_mono_lty TyOpPrec ty2
@@ -766,12 +782,10 @@ ppr_mono_ty ctxt_prec (HsAppTy fun_ty arg_ty)
   = maybeParen ctxt_prec TyConPrec $
     hsep [ppr_mono_lty FunPrec fun_ty, ppr_mono_lty TyConPrec arg_ty]
 
-ppr_mono_ty ctxt_prec (HsOpTy ty1 (_wrapper, L _ op) ty2)
+ppr_mono_ty ctxt_prec (HsOpTy ty1 (L _ op) ty2)
   = maybeParen ctxt_prec TyOpPrec $
     sep [ ppr_mono_lty TyOpPrec ty1
         , sep [pprInfixOcc op, ppr_mono_lty TyOpPrec ty2 ] ]
-    -- Don't print the wrapper (= kind applications)
-    -- c.f. HsWrapTy
 
 ppr_mono_ty _         (HsParTy ty)
   = parens (ppr_mono_lty TopPrec ty)

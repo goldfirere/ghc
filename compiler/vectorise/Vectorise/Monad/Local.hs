@@ -6,10 +6,10 @@ module Vectorise.Monad.Local
   , closedV
   , getBindName
   , inBind
-  , lookupTyVarPA
-  , defLocalTyVar
-  , defLocalTyVarWithPA
-  , localTyVars
+  , lookupTyCoVarPA
+  , defLocalTyCoVar
+  , defLocalTyCoVarWithPA
+  , localTyCoVars
   )
 where
   
@@ -77,28 +77,24 @@ inBind id p
        p
 
 -- |Lookup a PA tyvars from the local environment.
---
-lookupTyVarPA :: Var -> VM (Maybe CoreExpr)
-lookupTyVarPA tv 
-  = readLEnv $ \env -> lookupVarEnv (local_tyvar_pa env) tv
+lookupTyCoVarPA :: Var -> VM (Maybe CoreExpr)
+lookupTyCoVarPA tv 
+   = readLEnv $ \env -> lookupVarEnv (local_tycovar_pa env) tv
 
 -- |Add a tyvar to the local environment.
---
-defLocalTyVar :: TyVar -> VM ()
-defLocalTyVar tv = updLEnv $ \env ->
-  env { local_tyvars   = tv : local_tyvars env
-      , local_tyvar_pa = local_tyvar_pa env `delVarEnv` tv
+defLocalTyCoVar :: TyCoVar -> VM ()
+defLocalTyCoVar tv = updLEnv $ \env ->
+  env { local_tycovars   = tv : local_tycovars env
+      , local_tycovar_pa = local_tycovar_pa env `delVarEnv` tv
       }
 
 -- |Add mapping between a tyvar and pa dictionary to the local environment.
---
-defLocalTyVarWithPA :: TyVar -> CoreExpr -> VM ()
-defLocalTyVarWithPA tv pa = updLEnv $ \env ->
-  env { local_tyvars   = tv : local_tyvars env
-      , local_tyvar_pa = extendVarEnv (local_tyvar_pa env) tv pa
+defLocalTyCoVarWithPA :: TyCoVar -> CoreExpr -> VM ()
+defLocalTyCoVarWithPA tv pa = updLEnv $ \env ->
+  env { local_tycovars   = tv : local_tycovars env
+      , local_tycovar_pa = extendVarEnv (local_tycovar_pa env) tv pa
       }
 
 -- |Get the set of tyvars from the local environment.
---
-localTyVars :: VM [TyVar]
-localTyVars = readLEnv (reverse . local_tyvars)
+localTyCoVars :: VM [TyCoVar]
+localTyCoVars = readLEnv (reverse . local_tycovars)

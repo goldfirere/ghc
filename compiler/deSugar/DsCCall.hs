@@ -24,10 +24,10 @@ import DsMonad
 
 import CoreUtils
 import MkCore
-import Var
 import MkId
 import ForeignCall
 import DataCon
+import DsUtils
 
 import TcType
 import Type
@@ -39,7 +39,6 @@ import TysWiredIn
 import BasicTypes
 import Literal
 import PrelNames
-import VarSet
 import DynFlags
 import Outputable
 import Util
@@ -86,7 +85,7 @@ follows:
 dsCCall :: CLabelString -- C routine to invoke
         -> [CoreExpr]   -- Arguments (desugared)
         -> Safety       -- Safety of the call
-        -> Type         -- Type of the result: IO t
+        -> DsType       -- Type of the result: IO t
         -> DsM CoreExpr -- Result, of type ???
 
 dsCCall lbl args may_gc result_ty
@@ -101,8 +100,8 @@ dsCCall lbl args may_gc result_ty
        return (foldr ($) (res_wrapper the_prim_app) arg_wrappers)
 
 mkFCall :: DynFlags -> Unique -> ForeignCall
-        -> [CoreExpr]   -- Args
-        -> Type         -- Result type
+        -> [CoreExpr]     -- Args
+        -> DsType         -- Result type
         -> CoreExpr
 -- Construct the ccall.  The only tricky bit is that the ccall Id should have
 -- no free vars, so if any of the arg tys do we must give it a polymorphic type.
@@ -118,8 +117,8 @@ mkFCall dflags uniq the_fcall val_args res_ty
   where
     arg_tys = map exprType val_args
     body_ty = (mkFunTys arg_tys res_ty)
-    tyvars  = varSetElems (tyVarsOfType body_ty)
-    ty      = mkForAllTys tyvars body_ty
+    tyvars  = varSetElemsWellScoped (tyCoVarsOfType body_ty)
+    ty      = mkInvForAllTys tyvars body_ty
     the_fcall_id = mkFCallId dflags uniq the_fcall ty
 
 unboxArg :: CoreExpr                    -- The supplied argument
@@ -194,8 +193,8 @@ unboxArg arg
     maybe_arg3_tycon               = tyConAppTyCon_maybe data_con_arg_ty3
     Just arg3_tycon                = maybe_arg3_tycon
 
-boxResult :: Type
-          -> DsM (Type, CoreExpr -> CoreExpr)
+boxResult :: DsType
+          -> DsM (DsType, CoreExpr -> CoreExpr)
 
 -- Takes the result of the user-level ccall:
 --      either (IO t),
@@ -226,9 +225,9 @@ boxResult result_ty
                      _ -> []
 
               return_result state anss
-                = mkCoreConApps (tupleCon UnboxedTuple (2 + length extra_result_tys))
-                                (map Type (realWorldStatePrimTy : io_res_ty : extra_result_tys)
-                                 ++ (state : anss))
+                = mkCoreUbxTup
+                    (realWorldStatePrimTy : io_res_ty : extra_result_tys)
+                    (state : anss)
 
         ; (ccall_res_ty, the_alt) <- mk_alt return_result res
 
@@ -264,9 +263,9 @@ boxResult result_ty
     return_result _ _     = panic "return_result: expected single result"
 
 
-mk_alt :: (Expr Var -> [Expr Var] -> Expr Var)
-       -> (Maybe Type, Expr Var -> Expr Var)
-       -> DsM (Type, (AltCon, [Id], Expr Var))
+mk_alt :: (Expr DsVar -> [Expr DsVar] -> Expr DsVar)
+       -> (Maybe DsType, Expr DsVar -> Expr DsVar)
+       -> DsM (DsType, (AltCon, [DsId], Expr DsVar))
 mk_alt return_result (Nothing, wrap_result)
   = do -- The ccall returns ()
        state_id <- newSysLocalDs realWorldStatePrimTy
@@ -274,8 +273,8 @@ mk_alt return_result (Nothing, wrap_result)
              the_rhs = return_result (Var state_id)
                                      [wrap_result (panic "boxResult")]
 
-             ccall_res_ty = mkTyConApp unboxedSingletonTyCon [realWorldStatePrimTy]
-             the_alt      = (DataAlt unboxedSingletonDataCon, [state_id], the_rhs)
+             ccall_res_ty = mkTupleTy UnboxedTuple [realWorldStatePrimTy]
+             the_alt      = (DataAlt (tupleCon UnboxedTuple 1), [state_id], the_rhs)
 
        return (ccall_res_ty, the_alt)
 
@@ -290,8 +289,7 @@ mk_alt return_result (Just prim_res_ty, wrap_result)
     let
         the_rhs = return_result (Var state_id)
                                 (wrap_result (Var result_id) : map Var as)
-        ccall_res_ty = mkTyConApp (tupleTyCon UnboxedTuple arity)
-                                  (realWorldStatePrimTy : ls)
+        ccall_res_ty = mkTupleTy UnboxedTuple (realWorldStatePrimTy : ls)
         the_alt      = ( DataAlt (tupleCon UnboxedTuple arity)
                        , (state_id : args_ids)
                        , the_rhs
@@ -304,13 +302,13 @@ mk_alt return_result (Just prim_res_ty, wrap_result)
     let
         the_rhs = return_result (Var state_id)
                                 [wrap_result (Var result_id)]
-        ccall_res_ty = mkTyConApp unboxedPairTyCon [realWorldStatePrimTy, prim_res_ty]
-        the_alt      = (DataAlt unboxedPairDataCon, [state_id, result_id], the_rhs)
+        ccall_res_ty = mkTupleTy UnboxedTuple [realWorldStatePrimTy, prim_res_ty]
+        the_alt      = (DataAlt (tupleCon UnboxedTuple 2), [state_id, result_id], the_rhs)
     return (ccall_res_ty, the_alt)
 
 
-resultWrapper :: Type
-              -> DsM (Maybe Type,               -- Type of the expected result, if any
+resultWrapper :: DsType
+              -> DsM (Maybe DsType,             -- Type of the expected result, if any
                       CoreExpr -> CoreExpr)     -- Wrapper for the result
 -- resultWrapper deals with the result *value*
 -- E.g. foreign import foo :: Int -> IO T
@@ -341,7 +339,8 @@ resultWrapper result_ty
 
   -- The type might contain foralls (eg. for dummy type arguments,
   -- referring to 'Ptr a' is legal).
-  | Just (tyvar, rest) <- splitForAllTy_maybe result_ty
+  | Just (bndr, rest) <- splitForAllTy_maybe result_ty
+  , Just tyvar <- binderVar_maybe bndr
   = do (maybe_ty, wrapper) <- resultWrapper rest
        return (maybe_ty, \e -> Lam tyvar (wrapper e))
 

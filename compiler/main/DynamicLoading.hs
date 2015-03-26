@@ -38,8 +38,7 @@ import PrelNames        ( pluginTyConName )
 
 import HscTypes
 import BasicTypes       ( HValue )
-import TypeRep          ( mkTyConTy, pprTyThingCategory )
-import Type             ( Type, eqType )
+import Type             ( Type, eqType, mkTyConTy, pprTyThingCategory )
 import TyCon            ( TyCon )
 import Name             ( Name, nameModule_maybe )
 import Id               ( idType )

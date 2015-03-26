@@ -23,6 +23,7 @@ module GHC.Types (
         isTrue#,
         SPEC(..),
         Coercible,
+        Levity(..)
     ) where
 
 import GHC.Prim
@@ -237,3 +238,15 @@ isTrue# x = tagToEnum# x
 -- Libraries can specify this by using 'SPEC' data type to inform which
 -- loops should be aggressively specialized.
 data SPEC = SPEC | SPEC2
+
+-- | GHC divides all proper types (that is, types that can perhaps be
+-- inhabited, as distinct from type constructors or type-level data)
+-- into two worlds: lifted types and unlifted types. For example,
+-- @Int@ is lifted while @Int#@ is unlifted. Certain operations need
+-- to be polymorphic in this distinction. A classic example is 'unsafeCoerce#',
+-- which needs to be able to coerce between lifted and unlifted types.
+-- To achieve this, we use kind polymorphism: lifted types have kind
+-- @TYPE Lifted@ and unlifted ones have kind @TYPE Unlifted@. 'Levity'
+-- is the kind of 'Lifted' and 'Unlifted'. @*@ is a synonym for @TYPE Lifted@
+-- and @#@ is a synonym for @TYPE Unlifted@.
+data Levity = Lifted | Unlifted

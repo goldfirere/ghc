@@ -51,7 +51,6 @@ import TysPrim
 import TysWiredIn
 import Type
 import Class
-import TypeRep
 import VarSet
 import VarEnv
 import Module
@@ -1661,30 +1660,59 @@ functorLikeTraverse var (FT { ft_triv = caseTrivial,     ft_var = caseVar
        -> Type
        -> (a, Bool)   -- (result of type a, does type contain var)
 
-    go co ty | Just ty' <- coreView ty = go co ty'
-    go co (TyVarTy    v) | v == var = (if co then caseCoVar else caseVar,True)
-    go co (FunTy x y)  | isPredTy x = go co y
-                       | xc || yc   = (caseFun xr yr,True)
-        where (xr,xc) = go (not co) x
-              (yr,yc) = go co       y
-    go co (AppTy    x y) | xc = (caseWrongArg,   True)
-                         | yc = (caseTyApp x yr, True)
-        where (_, xc) = go co x
-              (yr,yc) = go co y
-    go co ty@(TyConApp con args)
-       | not (or xcs)     = (caseTrivial, False)   -- Variable does not occur
+    go co ty = analyzeType analysis ty
+      where
+        tyvar v | v == var  = (if co then caseCoVar else caseVar, True)
+                | otherwise = fallthrough
+                              
+        tyconapp con args
+          | not (or xcs)
+          = fallthrough -- Variable does not occur
        -- At this point we know that xrs, xcs is not empty,
        -- and at least one xr is True
-       | isTupleTyCon con = (caseTuple (tupleTyConSort con) xrs, True)
-       | or (init xcs)    = (caseWrongArg, True)         -- T (..var..)    ty
-       | otherwise        = case splitAppTy_maybe ty of  -- T (..no var..) ty
-                              Nothing -> (caseWrongArg, True)   -- Non-decomposable (eg type function)
-                              Just (fun_ty, _) -> (caseTyApp fun_ty (last xrs), True)
-       where
-         (xrs,xcs) = unzip (map (go co) args)
-    go co (ForAllTy v x) | v /= var && xc = (caseForAll v xr,True)
-        where (xr,xc) = go co x
-    go _ _ = (caseTrivial,False)
+          | isTupleTyCon con = (caseTuple (tupleTyConSort con) xrs, True)
+          | or (init xcs)    = (caseWrongArg, True)         -- T (..var..)   ty
+          | otherwise        = case splitAppTy_maybe ty of  -- T (..no var..) ty
+              Nothing -> (caseWrongArg, True) -- Non-decomposable
+              Just (fun_ty, _) -> (caseTyApp fun_ty (last xrs), True)
+          where
+            (xrs,xcs) = unzip (map (go co) args)
+
+        fun x y
+          | isPredTy x = go co y
+          | xc || yc   = (caseFun xr yr, True)
+          | otherwise  = fallthrough
+          where
+            (xr, xc) = go (not co) x
+            (yr, yc) = go co       y
+
+        app x y | xc        = (caseWrongArg,   True)
+                | yc        = (caseTyApp x yr, True)
+                | otherwise = fallthrough
+          where
+            (_,  xc) = go co x
+            (yr, yc) = go co y
+
+        forall v Invisible x
+          | v /= var && xc
+          = (caseForAll v xr, True)
+          | otherwise
+          = fallthrough
+          where (xr, xc) = go co x
+                
+        forall _ Visible _ = panic "unexpected visible binder"
+              -- TODO (RAE): Fix.
+
+        lit _      = fallthrough
+        cast _ _   = fallthrough
+        coercion _ = fallthrough
+
+        fallthrough = (caseTrivial, False)
+
+        analysis = TypeAnalysis { ta_tyvar = tyvar, ta_tyconapp = tyconapp
+                                , ta_fun = fun, ta_app = app, ta_forall = forall
+                                , ta_lit = lit, ta_cast = cast
+                                , ta_coercion = coercion }
 
 -- Return all syntactic subterms of ty that contain var somewhere
 -- These are the things that should appear in instance constraints
@@ -1698,7 +1726,7 @@ deepSubtypesContaining tv
             , ft_ty_app = (:)
             , ft_bad_app = panic "in other argument"
             , ft_co_var = panic "contravariant"
-            , ft_forall = \v xs -> filterOut ((v `elemVarSet`) . tyVarsOfType) xs })
+            , ft_forall = \v xs -> filterOut ((v `elemVarSet`) . tyCoVarsOfType) xs })
 
 
 foldDataConArgs :: FFoldType a -> DataCon -> [a]
@@ -1913,9 +1941,11 @@ mkCoerceClassMethEqn cls inst_tvs cls_tys rhs_ty id
   where
     cls_tvs = classTyVars cls
     in_scope = mkInScopeSet $ mkVarSet inst_tvs
-    lhs_subst = mkTvSubst in_scope (zipTyEnv cls_tvs cls_tys)
-    rhs_subst = mkTvSubst in_scope (zipTyEnv cls_tvs (changeLast cls_tys rhs_ty))
-    (_class_tvs, _class_constraint, user_meth_ty) = tcSplitSigmaTy (varType id)
+    lhs_subst = mkTCvSubst in_scope (zipTyCoEnv cls_tvs cls_tys)
+    rhs_subst = mkTCvSubst in_scope
+                        (zipTyCoEnv cls_tvs (changeLast cls_tys rhs_ty))
+    (_class_tvs, _class_constraint, user_meth_ty)
+      = tcSplitSigmaTy (varType id)
 
     changeLast :: [a] -> a -> [a]
     changeLast []     _  = panic "changeLast"
@@ -1979,7 +2009,8 @@ genAuxBindSpec loc (DerivCon2Tag tycon)
     rdr_name = con2tag_RDR tycon
 
     sig_ty = HsCoreTy $
-             mkSigmaTy (tyConTyVars tycon) (tyConStupidTheta tycon) $
+                 -- TODO (RAE): Check.
+             mkInvSigmaTy (tyConTyVars tycon) (tyConStupidTheta tycon) $
              mkParentType tycon `mkFunTy` intPrimTy
 
     lots_of_constructors = tyConFamilySize tycon > 8
@@ -2002,7 +2033,7 @@ genAuxBindSpec loc (DerivTag2Con tycon)
            nlHsApp (nlHsVar tagToEnum_RDR) a_Expr)],
      L loc (TypeSig [L loc rdr_name] (L loc sig_ty) PlaceHolder))
   where
-    sig_ty = HsCoreTy $ mkForAllTys (tyConTyVars tycon) $
+    sig_ty = HsCoreTy $ mkInvForAllTys (tyConTyVars tycon) $
              intTy `mkFunTy` mkParentType tycon
 
     rdr_name = tag2con_RDR tycon
@@ -2059,7 +2090,7 @@ mkParentType :: TyCon -> Type
 -- a use of its family constructor
 mkParentType tc
   = case tyConFamInst_maybe tc of
-       Nothing  -> mkTyConApp tc (mkTyVarTys (tyConTyVars tc))
+       Nothing  -> mkTyConApp tc (mkOnlyTyVarTys (tyConTyVars tc))
        Just (fam_tc,tys) -> mkTyConApp fam_tc tys
 
 {-

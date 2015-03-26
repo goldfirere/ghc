@@ -11,13 +11,13 @@ import Vectorise.Utils
 import Vectorise.Monad
 import Vectorise.Builtins
 import TcType
-import Type
-import TypeRep
+import Type     hiding ( lookupVar )
+import TyCoRep  hiding ( lookupVar )
 import TyCon
 import Control.Monad
 import Control.Applicative
 import Data.Maybe
-
+import Outputable
 
 -- |Vectorise a type constructor. Unless there is a vectorised version (stripped of embedded
 -- parallel arrays), the vectorised version is the same as the original.
@@ -40,7 +40,7 @@ vectAndLiftType ty
                  abstractType tyvars (padicts ++ theta) lmono_ty)
        }
   where
-    (tyvars, phiTy)  = splitForAllTys ty
+    (tyvars, phiTy)  = splitNamedForAllTys ty
     (theta, mono_ty) = tcSplitPhiTy phiTy 
 
 -- |Vectorise a type.
@@ -57,14 +57,14 @@ vectType (TyVarTy tv)      = return $ TyVarTy tv
 vectType (LitTy l)         = return $ LitTy l
 vectType (AppTy ty1 ty2)   = AppTy <$> vectType ty1 <*> vectType ty2
 vectType (TyConApp tc tys) = TyConApp <$> vectTyCon tc <*> mapM vectType tys
-vectType (FunTy ty1 ty2)   
+vectType (ForAllTy (Anon ty1) ty2)   
   | isPredTy ty1
-  = FunTy <$> vectType ty1 <*> vectType ty2   -- don't build a closure for dictionary abstraction
+  = mkFunTy <$> vectType ty1 <*> vectType ty2   -- don't build a closure for dictionary abstraction
   | otherwise
   = TyConApp <$> builtin closureTyCon <*> mapM vectType [ty1, ty2]
-vectType ty@(ForAllTy _ _)
+vectType ty@(ForAllTy {})
  = do {   -- strip off consecutive foralls
-      ; let (tyvars, tyBody) = splitForAllTys ty
+      ; let (tyvars, tyBody) = splitNamedForAllTys ty
 
           -- vectorise the body
       ; vtyBody <- vectType tyBody
@@ -75,8 +75,12 @@ vectType ty@(ForAllTy _ _)
           -- add the PA dictionaries after the foralls
       ; return $ abstractType tyvars dictsPA vtyBody
       }
+vectType ty@(CastTy {})
+  = pprSorry "Vectorise.Type.Type.vectType: CastTy" (ppr ty)
+vectType ty@(CoercionTy {})
+  = pprSorry "Vectorise.Type.Type.vectType: CoercionTy" (ppr ty)
 
 -- |Add quantified vars and dictionary parameters to the front of a type.
 --
-abstractType :: [TyVar] -> [Type] -> Type -> Type
-abstractType tyvars dicts = mkForAllTys tyvars . mkFunTys dicts
+abstractType :: [TyCoVar] -> [Type] -> Type -> Type
+abstractType tyvars dicts = mkInvForAllTys tyvars . mkFunTys dicts

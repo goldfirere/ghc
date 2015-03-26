@@ -55,7 +55,7 @@ import TcRnMonad  ( TcGblEnv, TcLclEnv, Ct, TcPluginM
                   , unsafeTcPluginTcM, liftIO, traceTc )
 import TcMType    ( TcTyVar, TcType )
 import TcEnv      ( TcTyThing )
-import TcEvidence ( TcCoercion )
+import TcEvidence ( TcCoercion, mkTcCoercion )
 
 import Module
 import Name
@@ -68,6 +68,7 @@ import Type
 import Id
 import InstEnv
 import FastString
+import Control.Arrow ( first )
 
 
 -- | Perform some IO, typically to interact with an external tool.
@@ -120,7 +121,8 @@ getFamInstEnvs :: TcPluginM (FamInstEnv, FamInstEnv)
 getFamInstEnvs = unsafeTcPluginTcM FamInst.tcGetFamInstEnvs
 
 matchFam :: TyCon -> [Type] -> TcPluginM (Maybe (TcCoercion, TcType))
-matchFam tycon args = unsafeTcPluginTcM $ TcSMonad.matchFamTcM tycon args
+matchFam tycon args = fmap (fmap (first mkTcCoercion)) $
+                      unsafeTcPluginTcM $ TcSMonad.matchFamTcM tycon args
 
 
 newFlexiTyVar :: Kind -> TcPluginM TcTyVar

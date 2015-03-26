@@ -145,7 +145,7 @@ mergeSATInfo l r = zipWith mergeSA l r
       | t `eqType` t' = Static (TypeApp t)
       | otherwise     = NotStatic
     mergeSA (Static (CoApp c)) (Static (CoApp c'))
-      | c `coreEqCoercion` c' = Static (CoApp c)
+      | c `eqCoercion` c' = Static (CoApp c)
       | otherwise             = NotStatic
     mergeSA _ _  = pprPanic "mergeSATInfo" $
                           ptext (sLit "Left:")
@@ -162,7 +162,7 @@ mergeIdSATInfos = foldl' mergeIdSATInfo emptyIdSATInfo
 bindersToSATInfo :: [Id] -> SATInfo
 bindersToSATInfo vs = map (Static . binderToApp) vs
     where binderToApp v | isId v    = VarApp v
-                        | isTyVar v = TypeApp $ mkTyVarTy v
+                        | isTyVar v = TypeApp $ mkOnlyTyVarTy v
                         | otherwise = CoApp $ mkCoVarCo v
 
 finalizeApp :: Maybe IdAppInfo -> IdSATInfo -> IdSATInfo

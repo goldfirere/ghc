@@ -19,7 +19,6 @@ import HsSyn
 import MkCore
 import CoreSyn
 import Var
-import Type
 
 import DsMonad
 import DsUtils
@@ -44,7 +43,7 @@ producing an expression with a runtime error in the corner if
 necessary.  The type argument gives the type of the @ei@.
 -}
 
-dsGuarded :: GRHSs Id (LHsExpr Id) -> Type -> DsM CoreExpr
+dsGuarded :: GRHSs Id (LHsExpr Id) -> DsType -> DsM CoreExpr
 
 dsGuarded grhss rhs_ty = do
     match_result <- dsGRHSs PatBindRhs [] grhss rhs_ty
@@ -55,7 +54,7 @@ dsGuarded grhss rhs_ty = do
 
 dsGRHSs :: HsMatchContext Name -> [Pat Id]      -- These are to build a MatchContext from
         -> GRHSs Id (LHsExpr Id)                -- Guarded RHSs
-        -> Type                                 -- Type of RHS
+        -> DsType                               -- Type of RHS
         -> DsM MatchResult
 dsGRHSs hs_ctx _ (GRHSs grhss binds) rhs_ty
   = ASSERT( notNull grhss )
@@ -65,7 +64,7 @@ dsGRHSs hs_ctx _ (GRHSs grhss binds) rhs_ty
                              -- NB: nested dsLet inside matchResult
        ; return match_result2 }
 
-dsGRHS :: HsMatchContext Name -> Type -> LGRHS Id (LHsExpr Id) -> DsM MatchResult
+dsGRHS :: HsMatchContext Name -> DsType -> LGRHS Id (LHsExpr Id) -> DsM MatchResult
 dsGRHS hs_ctx rhs_ty (L _ (GRHS guards rhs))
   = matchGuards (map unLoc guards) (PatGuard hs_ctx) rhs rhs_ty
 
@@ -80,7 +79,7 @@ dsGRHS hs_ctx rhs_ty (L _ (GRHS guards rhs))
 matchGuards :: [GuardStmt Id]       -- Guard
             -> HsStmtContext Name   -- Context
             -> LHsExpr Id           -- RHS
-            -> Type                 -- Type of RHS of guard
+            -> DsType               -- Type of RHS of guard
             -> DsM MatchResult
 
 -- See comments with HsExpr.Stmt re what a BodyStmt means
@@ -138,7 +137,9 @@ isTrueLHsExpr (L _ (HsVar v)) |  v `hasKey` otherwiseIdKey
         -- trueDataConId doesn't have the same unique as trueDataCon
 isTrueLHsExpr (L _ (HsTick tickish e))
     | Just ticks <- isTrueLHsExpr e
-    = Just (\x -> ticks x >>= return .  (Tick tickish))
+    = Just (\x -> do tickish' <- dsTickish tickish
+                     wrapped <- ticks x
+                     return (Tick tickish' wrapped))
    -- This encodes that the result is constant True for Hpc tick purposes;
    -- which is specifically what isTrueLHsExpr is trying to find out.
 isTrueLHsExpr (L _ (HsBinTick ixT _ e))

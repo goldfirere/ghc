@@ -5,6 +5,10 @@ drvfail009.hs:10:31:
       but ‘C’ has kind ‘* -> * -> Constraint’
     In the newtype declaration for ‘T1’
 
+drvfail009.hs:10:31:
+    Illegal deriving item ‘C’
+    In the newtype declaration for ‘T1’
+
 drvfail009.hs:13:31:
     Cannot derive well-kinded instance of form ‘Monad (T2 ...)’
       Class ‘Monad’ expects an argument of kind ‘* -> *’

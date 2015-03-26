@@ -7,7 +7,7 @@
 
 module VarSet (
         -- * Var, Id and TyVar set types
-        VarSet, IdSet, TyVarSet, CoVarSet,
+        VarSet, IdSet, TyVarSet, CoVarSet, TyCoVarSet,
 
         -- ** Manipulating these sets
         emptyVarSet, unitVarSet, mkVarSet,
@@ -17,14 +17,16 @@ module VarSet (
         intersectVarSet, intersectsVarSet, disjointVarSet,
         isEmptyVarSet, delVarSet, delVarSetList, delVarSetByKey,
         minusVarSet, foldVarSet, filterVarSet, fixVarSet,
-        lookupVarSet, mapVarSet, sizeVarSet, seqVarSet,
+        lookupVarSet, lookupVarSetByName,
+        mapVarSet, sizeVarSet, seqVarSet,
         elemVarSetByKey, partitionVarSet
     ) where
 
 #include "HsVersions.h"
 
-import Var      ( Var, TyVar, CoVar, Id )
+import Var      ( Var, TyVar, CoVar, TyCoVar, Id )
 import Unique
+import Name     ( Name )
 import UniqSet
 
 {-
@@ -39,6 +41,7 @@ type VarSet       = UniqSet Var
 type IdSet        = UniqSet Id
 type TyVarSet     = UniqSet TyVar
 type CoVarSet     = UniqSet CoVar
+type TyCoVarSet   = UniqSet TyCoVar
 
 emptyVarSet     :: VarSet
 intersectVarSet :: VarSet -> VarSet -> VarSet
@@ -62,6 +65,7 @@ foldVarSet      :: (Var -> a -> a) -> a -> VarSet -> a
 lookupVarSet    :: VarSet -> Var -> Maybe Var
                         -- Returns the set element, which may be
                         -- (==) to the argument, but not the same as
+lookupVarSetByName :: VarSet -> Name -> Maybe Var
 mapVarSet       :: (Var -> Var) -> VarSet -> VarSet
 sizeVarSet      :: VarSet -> Int
 filterVarSet    :: (Var -> Bool) -> VarSet -> VarSet
@@ -81,7 +85,7 @@ intersectVarSet = intersectUniqSets
 intersectsVarSet:: VarSet -> VarSet -> Bool     -- True if non-empty intersection
 disjointVarSet  :: VarSet -> VarSet -> Bool     -- True if empty intersection
 subVarSet       :: VarSet -> VarSet -> Bool     -- True if first arg is subset of second
-        -- (s1 `intersectsVarSet` s2) doesn't compute s2 if s1 is empty;
+        -- (s1 `intersectsVarSet` s2) doesn't compute s2 if s1 is empty; 
         -- ditto disjointVarSet, subVarSet
 
 unionVarSet     = unionUniqSets
@@ -95,6 +99,7 @@ isEmptyVarSet   = isEmptyUniqSet
 mkVarSet        = mkUniqSet
 foldVarSet      = foldUniqSet
 lookupVarSet    = lookupUniqSet
+lookupVarSetByName = lookupUniqSet
 mapVarSet       = mapUniqSet
 sizeVarSet      = sizeUniqSet
 filterVarSet    = filterUniqSet
@@ -112,7 +117,7 @@ subVarSet        s1 s2 = isEmptyVarSet (s1 `minusVarSet` s2)
 
 -- Iterate f to a fixpoint
 fixVarSet f s | new_s `subVarSet` s = s
-              | otherwise           = fixVarSet f new_s
+              | otherwise           = fixVarSet f new_s 
               where
                 new_s = f s
 

@@ -5,7 +5,8 @@
 \section{@Vars@: Variables}
 -}
 
-{-# LANGUAGE CPP, DeriveDataTypeable #-}
+{-# LANGUAGE CPP, DeriveDataTypeable, MultiWayIf #-}
+-- TODO (RAE): Remove MultiWayIf
 -- |
 -- #name_types#
 -- GHC uses several kinds of name internally:
@@ -19,8 +20,8 @@
 -- * 'Id.Id': see "Id#name_types"
 --
 -- * 'Var.Var' is a synonym for the 'Id.Id' type but it may additionally
---   potentially contain type variables, which have a 'TypeRep.Kind'
---   rather than a 'TypeRep.Type' and only contain some extra
+--   potentially contain type variables, which have a 'TyCoRep.Kind'
+--   rather than a 'TyCoRep.Type' and only contain some extra
 --   details during typechecking.
 --
 --   These 'Var.Var' names may either be global or local, see "Var#globalvslocal"
@@ -34,13 +35,14 @@
 module Var (
         -- * The main data type and synonyms
         Var, CoVar, Id, DictId, DFunId, EvVar, EqVar, EvId, IpId,
-        TyVar, TypeVar, KindVar, TKVar,
+        TyVar, TypeVar, KindVar, TKVar, TyCoVar,
 
         -- ** Taking 'Var's apart
         varName, varUnique, varType,
 
         -- ** Modifying 'Var's
-        setVarName, setVarUnique, setVarType,
+        setVarName, setVarUnique, setVarType, updateVarType,
+        updateVarTypeM,
 
         -- ** Constructing, taking apart, modifying 'Id's
         mkGlobalVar, mkLocalVar, mkExportedLocalVar, mkCoVar,
@@ -49,13 +51,13 @@ module Var (
         setIdExported, setIdNotExported,
 
         -- ** Predicates
-        isId, isTKVar, isTyVar, isTcTyVar,
-        isLocalVar, isLocalId,
+        isId, isTKVar, isTyVar, isTcTyVar, isTcTyCoVar,
+        isLocalVar, isLocalId, isCoVar, isTyCoVar,
         isGlobalId, isExportedId,
         mustHaveLocalBinding,
 
         -- ** Constructing 'TyVar's
-        mkTyVar, mkTcTyVar, mkKindVar,
+        mkTyVar, mkTcTyVar,
 
         -- ** Taking 'TyVar's apart
         tyVarName, tyVarKind, tcTyVarDetails, setTcTyVarDetails,
@@ -68,13 +70,14 @@ module Var (
 
 #include "HsVersions.h"
 
-import {-# SOURCE #-}   TypeRep( Type, Kind, SuperKind )
-import {-# SOURCE #-}   TcType( TcTyVarDetails, pprTcTyVarDetails )
-import {-# SOURCE #-}   IdInfo( IdDetails, IdInfo, coVarDetails, vanillaIdInfo, pprIdDetails )
+import {-# SOURCE #-}   TyCoRep( Type, Kind )
+import {-# SOURCE #-}   TcType( TcTyVarDetails, pprTcTyVarDetails, vanillaSkolemTv )
+import {-# SOURCE #-}   IdInfo( IdDetails, IdInfo, coVarDetails, isCoVarDetails, vanillaIdInfo, pprIdDetails )
 
 import Name hiding (varName)
 import Unique
 import Util
+import DynFlags
 import FastTypes
 import FastString
 import Outputable
@@ -109,6 +112,8 @@ type IpId   = EvId      -- A term-level implicit parameter
 type EqVar  = EvId      -- Boxed equality evidence
 
 type CoVar = Id         -- See Note [Evidence: EvIds and CoVars]
+
+type TyCoVar = Id       -- Type, kind, *or* coercion variable
 
 {-
 Note [Evidence: EvIds and CoVars]
@@ -161,12 +166,13 @@ data Var
  }
 
   | TcTyVar {                           -- Used only during type inference
-                                        -- Used for kind variables during
+                                        -- Used for kind variables during 
                                         -- inference, as well
         varName        :: !Name,
         realUnique     :: FastInt,
         varType        :: Kind,
-        tc_tv_details  :: TcTyVarDetails }
+        tc_tv_details  :: TcTyVarDetails
+  }
 
   | Id {
         varName    :: !Name,
@@ -181,7 +187,7 @@ data IdScope    -- See Note [GlobalId/LocalId]
   = GlobalId
   | LocalId ExportFlag
 
-data ExportFlag
+data ExportFlag 
   = NotExported -- ^ Not exported: may be discarded as dead code.
   | Exported    -- ^ Exported: kept alive
 
@@ -205,7 +211,26 @@ After CoreTidy, top-level LocalIds are turned into GlobalIds
 -}
 
 instance Outputable Var where
-  ppr var = ppr (varName var) <> getPprStyle (ppr_debug var)
+  ppr var = sdocWithDynFlags $ \dflags ->
+            getPprStyle $ \ppr_style ->
+            if |  debugStyle ppr_style && (not (gopt Opt_SuppressVarKinds dflags))
+                 -> parens (ppr (varName var) <+> ppr_debug var ppr_style <+>
+                          dcolon <+> ppr (tyVarKind var))
+               |  debugStyle ppr_style
+                 -> ppr (varName var) <+> ppr_debug var ppr_style
+               |  otherwise
+                 -> ppr (varName var)   
+
+{-  
+  ppr var = ppr (varName var) <+> ifPprDebug (brackets (ppr_debug var))
+-- Printing the type on every occurrence is too much!
+-- TODO (RAE): comment these next few lines out, which is the way
+-- I found it.
+            <+> (sdocWithDynFlags $ \dflags ->
+                if (not (gopt Opt_SuppressVarKinds dflags))
+                then ifPprDebug (text "::" <+> ppr (tyVarKind var) <+> text ")")
+                else empty)
+-}
 
 ppr_debug :: Var -> PprStyle -> SDoc
 ppr_debug (TyVar {}) sty
@@ -259,6 +284,13 @@ setVarName var new_name
 setVarType :: Id -> Type -> Id
 setVarType id ty = id { varType = ty }
 
+updateVarType :: (Type -> Type) -> Id -> Id
+updateVarType f id = id { varType = f (varType id) }
+
+updateVarTypeM :: Monad m => (Type -> m Type) -> Id -> m Id
+updateVarTypeM f id = do { ty' <- f (varType id)
+                         ; return (id { varType = ty' }) }
+
 {-
 ************************************************************************
 *                                                                      *
@@ -294,7 +326,7 @@ mkTyVar :: Name -> Kind -> TyVar
 mkTyVar name kind = TyVar { varName    = name
                           , realUnique = getKeyFastInt (nameUnique name)
                           , varType  = kind
-                        }
+                          }
 
 mkTcTyVar :: Name -> Kind -> TcTyVarDetails -> TyVar
 mkTcTyVar name kind details
@@ -307,22 +339,15 @@ mkTcTyVar name kind details
 
 tcTyVarDetails :: TyVar -> TcTyVarDetails
 tcTyVarDetails (TcTyVar { tc_tv_details = details }) = details
-tcTyVarDetails var = pprPanic "tcTyVarDetails" (ppr var)
+tcTyVarDetails (TyVar {})                            = vanillaSkolemTv
+tcTyVarDetails var = pprPanic "tcTyVarDetails" (ppr var <+> dcolon <+> ppr (tyVarKind var))
 
 setTcTyVarDetails :: TyVar -> TcTyVarDetails -> TyVar
 setTcTyVarDetails tv details = tv { tc_tv_details = details }
 
-mkKindVar :: Name -> SuperKind -> KindVar
--- mkKindVar take a SuperKind as argument because we don't have access
--- to superKind here.
-mkKindVar name kind = TyVar
-  { varName    = name
-  , realUnique = getKeyFastInt (nameUnique name)
-  , varType    = kind }
-
 {-
-************************************************************************
-*                                                                      *
+%************************************************************************
+%*                                                                      *
 \subsection{Ids}
 *                                                                      *
 ************************************************************************
@@ -407,9 +432,18 @@ isTcTyVar :: Var -> Bool
 isTcTyVar (TcTyVar {}) = True
 isTcTyVar _            = False
 
+isTcTyCoVar :: Var -> Bool
+isTcTyCoVar v = isTcTyVar v || isCoVar v
+
 isId :: Var -> Bool
 isId (Id {}) = True
 isId _       = False
+
+isTyCoVar :: Var -> Bool
+isTyCoVar v = isTyVar v || isCoVar v
+
+isCoVar :: Var -> Bool
+isCoVar v = isId v && isCoVarDetails (id_details v)
 
 isLocalId :: Var -> Bool
 isLocalId (Id { idScope = LocalId _ }) = True

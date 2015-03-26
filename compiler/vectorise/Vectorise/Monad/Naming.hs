@@ -10,6 +10,7 @@ module Vectorise.Monad.Naming
   , newLocalVars
   , newDummyVar
   , newTyVar
+  , newCoVar
   )
 where
 
@@ -69,7 +70,7 @@ mkVectId id ty
   = do { name <- mkLocalisedName mkVectOcc (getName id)
        ; let id' | isDFunId id     = MkId.mkDictFunId name tvs theta cls tys
                  | isExportedId id = Id.mkExportedLocalId VanillaId name ty
-                 | otherwise       = Id.mkLocalId         name ty
+                 | otherwise       = Id.mkLocalIdOrCoVar name ty
        ; return id'
        }
   where
@@ -101,7 +102,7 @@ newExportedVar occ_name ty
 newLocalVar :: FastString -> Type -> VM Var
 newLocalVar fs ty
  = do u <- liftDs newUnique
-      return $ mkSysLocal fs u ty
+      return $ mkSysLocalOrCoVar fs u ty
 
 -- |Make several fresh local variables with the given types.
 -- The variable's names are formed using the given string as the prefix.
@@ -121,3 +122,9 @@ newTyVar :: FastString -> Kind -> VM Var
 newTyVar fs k
  = do u <- liftDs newUnique
       return $ mkTyVar (mkSysTvName u fs) k
+
+-- |Mkae a fresh coercion variable with the given kind.
+newCoVar :: FastString -> Kind -> VM Var
+newCoVar fs k
+  = do u <- liftDs newUnique
+       return $ mkCoVar (mkSystemVarName u fs) k

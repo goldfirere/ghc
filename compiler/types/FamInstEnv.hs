@@ -37,13 +37,14 @@ import InstEnv
 import Unify
 import Type
 import TcType ( orphNamesOfTypes )
-import TypeRep
+import TyCoRep
 import TyCon
 import Coercion
 import CoAxiom
 import VarSet
 import VarEnv
 import Name
+import PrelNames ( eqPrimTyConKey )
 import UniqFM
 import Outputable
 import Maybes
@@ -189,7 +190,7 @@ pprFamInstHdr fi@(FamInst {fi_flavor = flavor})
             = getPprStyle $ \ sty ->
               if debugStyle sty
               then vanilla_pp_head   -- With -dppr-debug just show it as-is
-              else pprTypeApp fam_tc (etad_lhs_tys ++ mkTyVarTys extra_tvs)
+              else pprTypeApp fam_tc (etad_lhs_tys ++ mkOnlyTyVarTys extra_tvs)
                      -- Without -dppr-debug, eta-expand
                      -- See Trac #8674
                      -- (This is probably over the top now that we use this
@@ -386,8 +387,8 @@ identicalFamInstHead (FamInst { fi_axiom = ax1 }) (FamInst { fi_axiom = ax2 })
       =  isJust (tcMatchTys tvs1 lhs1 lhs2)
       && isJust (tcMatchTys tvs2 lhs2 lhs1)
       where
-        tvs1 = mkVarSet (coAxBranchTyVars br1)
-        tvs2 = mkVarSet (coAxBranchTyVars br2)
+        tvs1 = mkVarSet (coAxBranchTyCoVars br1)
+        tvs2 = mkVarSet (coAxBranchTyCoVars br2)
         lhs1 = coAxBranchLHS br1
         lhs2 = coAxBranchLHS br2
 
@@ -475,7 +476,7 @@ compatibleBranches (CoAxBranch { cab_lhs = lhs1, cab_rhs = rhs1 })
                    (CoAxBranch { cab_lhs = lhs2, cab_rhs = rhs2 })
   = case tcUnifyTysFG instanceBindFun lhs1 lhs2 of
       SurelyApart -> True
-      Unifiable subst
+      Unifiable (subst, _)
         | Type.substTy subst rhs1 `eqType` Type.substTy subst rhs2
         -> True
       _ -> False
@@ -514,9 +515,9 @@ Instead we must tidy those kind variables.  See Trac #7524.
 -}
 
 -- all axiom roles are Nominal, as this is only used with type families
-mkCoAxBranch :: [TyVar] -- original, possibly stale, tyvars
-             -> [Type]  -- LHS patterns
-             -> Type    -- RHS
+mkCoAxBranch :: [TyCoVar] -- original, possibly stale, tyvars
+             -> [Type]    -- LHS patterns
+             -> Type      -- RHS
              -> SrcSpan
              -> CoAxBranch
 mkCoAxBranch tvs lhs rhs loc
@@ -527,7 +528,7 @@ mkCoAxBranch tvs lhs rhs loc
                , cab_loc     = loc
                , cab_incomps = placeHolderIncomps }
   where
-    (env, tvs1) = tidyTyVarBndrs emptyTidyEnv tvs
+    (env, tvs1) = tidyTyCoVarBndrs emptyTidyEnv tvs
     -- See Note [Tidy axioms when we build them]
 
 -- all of the following code is here to avoid mutual dependencies with
@@ -591,6 +592,9 @@ we return the matching instance '(FamInst{.., fi_tycon = :R42T}, Int)'.
 -- and the list of types the axiom should be applied to
 data FamInstMatch = FamInstMatch { fim_instance :: FamInst
                                  , fim_tys      :: [Type]
+                                 , fim_coercion :: Coercion
+                                   -- from the type requested to the type found
+                                   -- nominal role
                                  }
   -- See Note [Over-saturated matches]
 
@@ -628,7 +632,7 @@ lookupFamInstEnvConflicts envs fam_inst@(FamInst { fi_axiom = new_axiom })
         -- In example above,   fam tys' = F [b]
 
     my_unify (FamInst { fi_axiom = old_axiom }) tpl_tvs tpl_tys _
-       = ASSERT2( tyVarsOfTypes tys `disjointVarSet` tpl_tvs,
+       = ASSERT2( tyCoVarsOfTypes tys `disjointVarSet` tpl_tvs,
                   (ppr fam <+> ppr tys) $$
                   (ppr tpl_tvs <+> ppr tpl_tys) )
                 -- Unification will break badly if the variables overlap
@@ -662,7 +666,8 @@ Note [Family instance overlap conflicts]
 type MatchFun =  FamInst                -- The FamInst template
               -> TyVarSet -> [Type]     --   fi_tvs, fi_tys of that FamInst
               -> [Type]                 -- Target to match against
-              -> Maybe TvSubst
+              -> Maybe (TCvSubst, [CoercionArg])
+                                        -- co_args :: substed fi_tys ~N target
 
 lookup_fam_inst_env'          -- The worker, local to this module
     :: MatchFun
@@ -684,9 +689,14 @@ lookup_fam_inst_env' match_fun ie fam match_tys
       = find rest
 
         -- Proper check
-      | Just subst <- match_fun item (mkVarSet tpl_tvs) tpl_tys match_tys1
+      | Just ~(subst, cos) <- match_fun item (mkVarSet tpl_tvs) tpl_tys match_tys1
+             -- NB: lazy match; conflict-checking puts a panic there!
       = (FamInstMatch { fim_instance = item
-                      , fim_tys      = substTyVars subst tpl_tvs `chkAppend` match_tys2 })
+                      , fim_tys      = substTyVars subst tpl_tvs `chkAppend` match_tys2
+                      , fim_coercion = mkTyConAppCo Nominal fam
+                                         (cos `chkAppend`
+                                          map mkNomReflCoArg match_tys2)
+                      })
         : find rest
 
         -- No match => try next
@@ -794,30 +804,34 @@ reduceTyFamApp_maybe :: FamInstEnvs
 --
 -- The TyCon can be oversaturated.
 -- Works on both open and closed families
-
+--
+-- Always returns a *homogeneous* coercion -- type family reductions are always
+-- homogeneous
 reduceTyFamApp_maybe envs role tc tys
   | Phantom <- role
   = Nothing
 
   | case role of
-       Representational -> isOpenFamilyTyCon    tc
-       _                -> isOpenTypeFamilyTyCon tc
+      Representational -> isOpenFamilyTyCon     tc
+      _                -> isOpenTypeFamilyTyCon tc
        -- If we seek a representational coercion
        -- (e.g. the call in topNormaliseType_maybe) then we can
        -- unwrap data families as well as type-synonym families;
        -- otherwise only type-synonym families
-  , FamInstMatch { fim_instance = fam_inst
-                 , fim_tys =      inst_tys } : _ <- lookupFamInstEnv envs tc tys
+  , FamInstMatch { fim_instance = FamInst { fi_axiom = ax }
+                 , fim_tys      = inst_tys
+                 , fim_coercion = match_co } : _ <- lookupFamInstEnv envs tc tys
       -- NB: Allow multiple matches because of compatible overlap
                                                     
-  = let ax     = famInstAxiom fam_inst
-        co     = mkUnbranchedAxInstCo role ax inst_tys
-        ty     = pSnd (coercionKind co)
+  = let co = downgradeRole role Nominal match_co
+             `mkTransCo` mkUnbranchedAxInstCo role ax inst_tys
+        ty = pSnd (coercionKind co)
     in Just (co, ty)
 
   | Just ax <- isClosedSynFamilyTyCon_maybe tc
-  , Just (ind, inst_tys) <- chooseBranch ax tys
-  = let co     = mkAxInstCo role ax ind inst_tys
+  , Just (ind, inst_tys, cos) <- chooseBranch ax tys
+  = let co     = downgradeRole role Nominal (mkTyConAppCo Nominal tc cos)
+                 `mkTransCo` mkAxInstCo role ax ind inst_tys
         ty     = pSnd (coercionKind co)
     in Just (co, ty)
 
@@ -830,28 +844,30 @@ reduceTyFamApp_maybe envs role tc tys
   = Nothing
 
 -- The axiom can be oversaturated. (Closed families only.)
-chooseBranch :: CoAxiom Branched -> [Type] -> Maybe (BranchIndex, [Type])
+chooseBranch :: CoAxiom Branched -> [Type] -> Maybe (BranchIndex, [Type], [CoercionArg])
 chooseBranch axiom tys
   = do { let num_pats = coAxiomNumPats axiom
              (target_tys, extra_tys) = splitAt num_pats tys
              branches = coAxiomBranches axiom
-       ; (ind, inst_tys) <- findBranch (fromBranchList branches) 0 target_tys
-       ; return (ind, inst_tys ++ extra_tys) }
+       ; (ind, inst_tys, cos) <- findBranch (fromBranchList branches) 0 target_tys
+       ; return ( ind, inst_tys `chkAppend` extra_tys
+                , cos `chkAppend` map mkNomReflCoArg extra_tys) }
 
 -- The axiom must *not* be oversaturated
 findBranch :: [CoAxBranch]             -- branches to check
            -> BranchIndex              -- index of current branch
            -> [Type]                   -- target types
-           -> Maybe (BranchIndex, [Type])
+           -> Maybe (BranchIndex, [Type], [CoercionArg])
+                 -- coercions relate requested types to returned axiom LHS at role N
 findBranch (CoAxBranch { cab_tvs = tpl_tvs, cab_lhs = tpl_lhs, cab_incomps = incomps }
               : rest) ind target_tys
   = case tcMatchTys (mkVarSet tpl_tvs) tpl_lhs target_tys of
-      Just subst -- matching worked. now, check for apartness.
+      Just (subst, cos) -- matching worked. now, check for apartness.
         |  all (isSurelyApart
                 . tcUnifyTysFG instanceBindFun flattened_target
                 . coAxBranchLHS) incomps
         -> -- matching worked & we're apart from all incompatible branches. success
-           Just (ind, substTyVars subst tpl_tvs)
+           Just (ind, substTyCoVars subst tpl_tvs, cos)
 
       -- failure. keep looking
       _ -> findBranch rest (ind+1) target_tys
@@ -861,7 +877,7 @@ findBranch (CoAxBranch { cab_tvs = tpl_tvs, cab_lhs = tpl_lhs, cab_incomps = inc
 
         flattened_target = flattenTys in_scope target_tys
         in_scope = mkInScopeSet (unionVarSets $
-                                 map (tyVarsOfTypes . coAxBranchLHS) incomps)
+                                 map (tyCoVarsOfTypes . coAxBranchLHS) incomps)
 
 -- fail if no branches left
 findBranch [] _ _ = Nothing
@@ -872,6 +888,93 @@ findBranch [] _ _ = Nothing
                 Looking up a family instance
 *                                                                      *
 ************************************************************************
+
+Note [Normalising types]
+~~~~~~~~~~~~~~~~~~~~~~~~
+The topNormaliseType function removes all occurrences of type families
+and newtypes from the top-level structure of a type. normaliseTcApp does
+the type family lookup and is fairly straightforward. normaliseType is
+a little more involved.
+
+The complication comes from the fact that a type family might be used in the
+kind of a variable bound in a forall. We wish to remove this type family
+application, but that means coming up with a fresh variable (with the new
+kind). Thus, we need a substitution to be built up as we recur through the
+type. However, an ordinary TCvSubst just won't do: when we hit a type variable
+whose kind has changed during normalisation, we need both the new type
+variable *and* the coercion. We could conjure up a new VarEnv with just this
+property, but a usable substitution environment already exists:
+LiftingContexts from the liftCoSubst family of functions, defined in Coercion.
+A LiftingContext maps a type variable to a coercion and a coercion variable to
+a pair of coercions. Let's ignore coercion variables for now. Because the
+coercion a type variable maps to contains the destination type (via
+coercionKind), we don't need to store that destination type separately. Thus,
+a LiftingContext has what we need: a map from type variables to (Coercion,
+Type) pairs.
+
+We also benefit because we can piggyback on the liftCoSubstVarBndr function to
+deal with binders. However, I had to modify that function to work with this
+application in two ways. Thus, we now how liftCoSubstVarBndrCallback that
+takes two customisations implementing the following differences with lifting:
+
+* liftCoSubstVarBndr has to process the kind of the binder. We don't wish
+to lift the kind, but instead normalise it. So, we pass in a callback function
+that processes the kind of the binder.
+
+* liftCoSubstVarBndr is happy to deal with heterogeneous coercions. But, we
+here require *homogeneous* coercions. Why? A normalisation is essentially a
+substitutive operation -- we need to be able to substitute a resultant type in
+the place where the original type appears. Thus, all coercions returned in
+normaliseType must be *homogeneous*, so the substitution type-checks. When
+liftCoSubstVarBndr discovers that the kind of the (type variable) binder
+(we'll call the type variable alpha) has changed (let's call the one with the
+new kind beta and the coercion between the kinds eta), it uses a hetero
+ForAllCoBndr, necessary to build a coercion between two ForAllTys whose (type)
+binders have different kinds. The last component of a ForAllCoBndr is a coercion
+variable (call it zeta) that witnesses the (heterogeneous) equality between
+the two type variables in question (i.e., zeta :: alpha ~# beta). In a lifting
+operation, alpha will be mapped to this coercion variable. In normalisation,
+this won't do, because zeta is a *heterogeneous* coercion. So, we homogenize
+zeta by casting the kind of its right-hand type to match that of its left-hand
+type. That is, we make the mapping
+  [alpha |-> zeta `mkCoherenceRightCo` (sym eta)]
+. Thus, alpha maps to a coercion with type (alpha ~# beta |> sym eta), which
+is *homogeneous*. Hurrah.
+
+After that brilliant explanation of all this, I'm sure you've forgotten the
+dangling reference to coercion variables. What do we do with those? Nothing at
+all. The point of normalising types is to remove type family applications, but
+there's no sense in removing these from coercions. We would just get back a
+new coercion witnessing the equality between the same types as the original
+coercion. Because coercions are irrelevant anyway, there is no point in doing
+this. So, whenever we encounter a coercion, we just say that it won't change.
+That's what the (CoCoArg co co) is doing in go_arg within normaliseType.
+
+There is still the possibility that the kind of a coercion variable mentions
+a type family and will change in normaliseTyCoVarBndr. So, we must perform
+the same sort of homogenisation that we did for type variables. Let's use
+the same names as before:
+  alpha is our original coercion variable, alpha :: s1 ~# t1
+  beta is our new coercion variable, beta :: s2 ~# t2
+  eta is the coercion between the kinds, eta :: (s1 ~# t1) ~# (s2 ~# t2)
+  zeta does not exist -- there is no coercion among coercions.
+We must form some coercion, not involving alpha, with type (s1 ~# t1). It
+should look something like this:
+  g1 ; beta ; g2 :: s1 ~# t1
+From this guess, we can see:
+  g1 :: s1 ~# s2
+  g2 :: t2 ~# t1
+It looks like we can extract those from eta. Let's rewrite eta's type:
+  eta :: ((~#) _ _ s1 t1) ~# ((~#) _ _ s2 t2)
+where those underscores are kinds that we don't care about. Now, it is
+easy to see that (nth:2 eta) :: s1 ~# s2 and (nth:3 eta) :: t1 ~# t2.
+So, we can derive:
+  g1 = nth:2 eta
+  g2 = nth:3 (sym eta)
+And, so we use the following mapping:
+  [alpha |-> (alpha, nth:2 eta ; beta ; nth:3 (sym eta))]
+Hurrah again. This last bit is implemented in liftCoSubstVarBndrCallback
+in Coercion.
 -}
 
 topNormaliseType :: FamInstEnvs -> Type -> Type
@@ -904,6 +1007,12 @@ topNormaliseType_maybe env ty
         `composeSteppers`
         \ rec_nts tc tys ->
         let (args_co, ntys) = normaliseTcArgs env Representational tc tys in
+          -- NB: It's OK to use normaliseTcArgs here instead of
+          -- normalise_tc_args (which takes the LiftingContext described
+          -- in Note [Normalising types]) because the reduceTyFamApp below
+          -- works only at top level. We'll never recur in this function
+          -- after reducing the kind of a bound tyvar.
+        
         case reduceTyFamApp_maybe env Representational tc ntys of
           Just (co, rhs) -> NS_Step rec_nts rhs (args_co `mkTransCo` co)
           Nothing        -> NS_Done
@@ -912,14 +1021,23 @@ topNormaliseType_maybe env ty
 normaliseTcApp :: FamInstEnvs -> Role -> TyCon -> [Type] -> (Coercion, Type)
 -- See comments on normaliseType for the arguments of this function
 normaliseTcApp env role tc tys
+  = normalise_tc_app env lc role tc tys
+  where
+    in_scope = mkInScopeSet (tyCoVarsOfTypes tys)
+    lc       = emptyLiftingContext in_scope
+
+-- See Note [Normalising types] about the LiftingContext
+normalise_tc_app :: FamInstEnvs -> LiftingContext -> Role
+                 -> TyCon -> [Type] -> (Coercion, Type)
+normalise_tc_app env lc role tc tys
   | isTypeSynonymTyCon tc
   , Just (tenv, rhs, ntys') <- tcExpandTyCon_maybe tc ntys
-  , (co2, ninst_rhs) <- normaliseType env role (Type.substTy (mkTopTvSubst tenv) rhs)
+  , (co2, ninst_rhs) <- normalise_type env lc role (substTy (mkTopTCvSubst tenv) rhs)
   = if isReflCo co2 then (args_co,                 mkTyConApp tc ntys)
                     else (args_co `mkTransCo` co2, mkAppTys ninst_rhs ntys')
 
   | Just (first_co, ty') <- reduceTyFamApp_maybe env role tc ntys
-  , (rest_co,nty) <- normaliseType env role ty'
+  , (rest_co,nty) <- normalise_type env lc role ty'
   = (args_co `mkTransCo` first_co `mkTransCo` rest_co, nty)
 
   | otherwise   -- No unique matching family instance exists;
@@ -927,47 +1045,109 @@ normaliseTcApp env role tc tys
   = (args_co, mkTyConApp tc ntys)
 
   where
-    (args_co, ntys) = normaliseTcArgs env role tc tys
-
+    (args_co, ntys) = normalise_tc_args env lc role tc tys
 
 ---------------
-normaliseTcArgs :: FamInstEnvs            -- environment with family instances
-                 -> Role                   -- desired role of output coercion
-                 -> TyCon -> [Type]        -- tc tys
-                 -> (Coercion, [Type])     -- (co, new_tys), where
-                                           -- co :: tc tys ~ tc new_tys
+-- | Normalise arguments to a tycon
+normaliseTcArgs :: FamInstEnvs          -- ^ env't with family instances
+                -> Role                 -- ^ desired role of output coercion
+                -> TyCon                -- ^ tc
+                -> [Type]               -- ^ tys
+                -> (Coercion, [Type])   -- ^ co :: tc tys ~ tc new_tys
 normaliseTcArgs env role tc tys
+  = normalise_tc_args env lc role tc tys
+  where
+    in_scope = mkInScopeSet (tyCoVarsOfTypes tys)
+    lc       = emptyLiftingContext in_scope
+
+normalise_tc_args :: FamInstEnvs            -- environment with family instances
+                  -> LiftingContext         -- See Note [Normalising types]
+                  -> Role                   -- desired role of output coercion
+                  -> TyCon -> [Type]        -- tc tys
+                  -> (Coercion, [Type])      -- (co, new_tys), where
+                                          -- co :: tc tys ~ tc new_tys
+normalise_tc_args env lc role tc tys
   = (mkTyConAppCo role tc cois, ntys)
   where
-    (cois, ntys) = zipWithAndUnzip (normaliseType env) (tyConRolesX role tc) tys
+    (cois, ntys) = zipWithAndUnzip (normalise_ty_arg env lc)
+                                   (tyConRolesX role tc) tys
 
 ---------------
-normaliseType :: FamInstEnvs            -- environment with family instances
-               -> Role                   -- desired role of output coercion
+normaliseType :: FamInstEnvs -> Role -> Type -> (Coercion, Type)
+normaliseType env role ty
+  = normalise_type env lc role ty
+  where
+    in_scope = mkInScopeSet (tyCoVarsOfType ty)
+    lc = emptyLiftingContext in_scope
+
+normalise_type :: FamInstEnvs            -- environment with family instances
+               -> LiftingContext         -- necessary because of kind coercions
+               -> Role                   -- desired role of coercion
                -> Type                   -- old type
                -> (Coercion, Type)       -- (coercion,new type), where
-                                        -- co :: old-type ~ new_type
+                                         -- co :: old-type ~ new_type
 -- Normalise the input type, by eliminating *all* type-function redexes
 -- but *not* newtypes (which are visible to the programmer)
 -- Returns with Refl if nothing happens
+-- Does nothing to newtypes
+-- The returned coercion *must* be *homogeneous*
+-- See Note [Normalising types]
 -- Try to not to disturb type syonyms if possible
 
-normaliseType env role (TyConApp tc tys)
-  = normaliseTcApp env role tc tys
-normaliseType _env role ty@(LitTy {}) = (mkReflCo role ty, ty)
-normaliseType env role (AppTy ty1 ty2)
-  = let (coi1,nty1) = normaliseType env role    ty1
-        (coi2,nty2) = normaliseType env Nominal ty2
-    in  (mkAppCo coi1 coi2, mkAppTy nty1 nty2)
-normaliseType env role (FunTy ty1 ty2)
-  = let (coi1,nty1) = normaliseType env role ty1
-        (coi2,nty2) = normaliseType env role ty2
-    in  (mkFunCo role coi1 coi2, mkFunTy nty1 nty2)
-normaliseType env role (ForAllTy tyvar ty1)
-  = let (coi,nty1) = normaliseType env role ty1
-    in  (mkForAllCo tyvar coi, ForAllTy tyvar nty1)
-normaliseType _  role ty@(TyVarTy _)
-  = (mkReflCo role ty,ty)
+normalise_type env lc
+  = go
+  where
+    go r (TyConApp tc tys) = normalise_tc_app env lc r tc tys
+    go r ty@(LitTy {})     = (mkReflCo r ty, ty)
+    go r (AppTy ty1 ty2)
+      = let (co,  nty1) = go r ty1
+            -- TODO (RAE): make more efficient
+            (kco, _)    = go r (typeKind ty2)
+            (arg, nty2) = normalise_ty_arg env lc Nominal ty2
+        in (mkAppCo co kco arg, mkAppTy nty1 nty2)
+    go r (ForAllTy (Anon ty1) ty2)
+      = let (co1, nty1) = go r ty1
+            (co2, nty2) = go r ty2
+        in (mkFunCo r co1 co2, mkFunTy nty1 nty2)
+    go r (ForAllTy (Named tyvar vis) ty)
+      = let (lc', cobndr) = normalise_tycovar_bndr env lc r tyvar
+            (co, nty)     = normalise_type env lc' r ty
+            Pair _ tyvar' = coBndrKind cobndr
+        in (mkForAllCo cobndr co, mkNamedForAllTy tyvar' vis nty)
+    go r (TyVarTy tv)    = normalise_tyvar lc r tv
+    go r (CastTy ty co)  =
+      let (nco, nty) = go r ty
+          co' = substRightCo lc co
+      in (castCoercionKind nco co co', mkCastTy nty co')
+    go _ (CoercionTy co) = pprPanic "normalise_type" (ppr co)
+
+normalise_ty_arg :: FamInstEnvs -> LiftingContext -> Role
+                 -> Type -> (CoercionArg, Type)
+normalise_ty_arg _ lc r (CoercionTy co)
+  = let right_co = substRightCo lc co in
+    ( CoCoArg r (liftCoSubst Representational lc (coercionType co))
+              co right_co
+    , CoercionTy right_co )
+normalise_ty_arg env lc r ty
+  = let (co, ty') = normalise_type env lc r ty in
+    (TyCoArg co, ty')
+
+normalise_tyvar :: LiftingContext -> Role -> TyVar -> (Coercion, Type)
+normalise_tyvar lc r tv
+  = ASSERT( isTyVar tv )
+    case liftCoSubstTyCoVar lc r tv of
+      Just (TyCoArg co) -> (co, pSnd $ coercionKind co)
+      Nothing           -> (mkReflCo r ty, ty)
+        where ty = mkOnlyTyVarTy tv
+      bad_news          -> pprPanic "normaliseTyVar" (ppr bad_news)
+
+normalise_tycovar_bndr :: FamInstEnvs -> LiftingContext -> Role -> TyCoVar
+                       -> (LiftingContext, ForAllCoBndr)
+normalise_tycovar_bndr env lc1 r1
+  = liftCoSubstVarBndrCallback (\lc r ty -> fst $ normalise_type env lc r ty) True
+    r1 lc1
+  -- the True there means that we want homogeneous coercions
+  -- See Note [Normalising types]
 
 {-
 ************************************************************************
@@ -989,11 +1169,20 @@ flatten to (Either c c), never (Either c d).
 Defined here because of module dependencies.
 -}
 
-type FlattenMap = TypeMap TyVar
+data FlattenEnv = FlattenEnv { fe_type_map :: TypeMap TyVar
+                             , fe_in_scope :: InScopeSet
+                             , fe_subst    :: TCvSubst }
+
+emptyFlattenEnv :: InScopeSet -> FlattenEnv
+emptyFlattenEnv in_scope
+  = FlattenEnv { fe_type_map = emptyTypeMap
+               , fe_in_scope = in_scope
+               , fe_subst    = mkTCvSubst in_scope ( emptyTvSubstEnv
+                                                   , emptyCvSubstEnv ) }
 
 -- See Note [Flattening]
 flattenTys :: InScopeSet -> [Type] -> [Type]
-flattenTys in_scope tys = snd $ coreFlattenTys all_in_scope emptyTypeMap tys
+flattenTys in_scope tys = snd $ coreFlattenTys env tys
   where
     -- when we hit a type function, we replace it with a fresh variable
     -- but, we need to make sure that this fresh variable isn't mentioned
@@ -1001,70 +1190,154 @@ flattenTys in_scope tys = snd $ coreFlattenTys all_in_scope emptyTypeMap tys
     -- a forall. That way, we can ensure consistency both within and outside
     -- of that forall.
     all_in_scope = in_scope `extendInScopeSetSet` allTyVarsInTys tys
+    env          = emptyFlattenEnv all_in_scope
 
-coreFlattenTys :: InScopeSet -> FlattenMap -> [Type] -> (FlattenMap, [Type])
-coreFlattenTys in_scope = go []
+coreFlattenTys :: FlattenEnv -> [Type] -> (FlattenEnv, [Type])
+coreFlattenTys = go []
   where
-    go rtys m []         = (m, reverse rtys)
-    go rtys m (ty : tys)
-      = let (m', ty') = coreFlattenTy in_scope m ty in
-        go (ty' : rtys) m' tys
+    go rtys env []         = (env, reverse rtys)
+    go rtys env (ty : tys)
+      = let (env', ty') = coreFlattenTy env ty in
+        go (ty' : rtys) env' tys
 
-coreFlattenTy :: InScopeSet -> FlattenMap -> Type -> (FlattenMap, Type)
-coreFlattenTy in_scope = go
+coreFlattenTy :: FlattenEnv -> Type -> (FlattenEnv, Type)
+coreFlattenTy = go
   where
-    go m ty@(TyVarTy {}) = (m, ty)
-    go m (AppTy ty1 ty2) = let (m1, ty1') = go m  ty1
-                               (m2, ty2') = go m1 ty2 in
-                           (m2, AppTy ty1' ty2')
-    go m (TyConApp tc tys)
+    go env (TyVarTy tv)    = (env, substTyVar (fe_subst env) tv)
+    go env (AppTy ty1 ty2) = let (env1, ty1') = go env  ty1
+                                 (env2, ty2') = go env1 ty2 in
+                             (env2, AppTy ty1' ty2')
+    go env (TyConApp tc tys)
       | isFamilyTyCon tc
-      = let (m', tv) = coreFlattenTyFamApp in_scope m tc tys in
-        (m', mkTyVarTy tv)
+      = let (env', tv) = coreFlattenTyFamApp env tc tys in
+        (env', mkOnlyTyVarTy tv)
 
       | otherwise
-      = let (m', tys') = coreFlattenTys in_scope m tys in
-        (m', mkTyConApp tc tys')
+      = let (env', tys') = coreFlattenTys env tys in
+        (env', mkTyConApp tc tys')
 
-    go m (FunTy ty1 ty2) = let (m1, ty1') = go m  ty1
-                               (m2, ty2') = go m1 ty2 in
-                           (m2, FunTy ty1' ty2')
+    go env (ForAllTy (Anon ty1) ty2) = let (env1, ty1') = go env  ty1
+                                           (env2, ty2') = go env1 ty2 in
+                                       (env2, mkFunTy ty1' ty2')
 
-      -- Note to RAE: this will have to be changed with kind families
-    go m (ForAllTy tv ty) = let (m', ty') = go m ty in
-                            (m', ForAllTy tv ty')
+    go env (ForAllTy (Named tv vis) ty)
+      = let (env1, tv') = coreFlattenVarBndr env tv
+            (env2, ty') = go env1 ty in
+        (env2, mkNamedForAllTy tv' vis ty')
 
-    go m ty@(LitTy {}) = (m, ty)
+    go env ty@(LitTy {}) = (env, ty)
 
-coreFlattenTyFamApp :: InScopeSet -> FlattenMap
+    go env (CastTy ty co) = let (env1, ty') = go env ty
+                                (env2, co') = coreFlattenCo env1 co in
+                            (env2, CastTy ty' co')
+
+    go env (CoercionTy co) = let (env', co') = coreFlattenCo env co in
+                             (env', CoercionTy co')
+
+-- when flattening, we don't care about the contents of coercions.
+-- so, just return a fresh variable of the right (flattened) type
+coreFlattenCo :: FlattenEnv -> Coercion -> (FlattenEnv, Coercion)
+coreFlattenCo env co
+  = (env2, mkCoVarCo covar)
+  where
+    (env1, kind') = coreFlattenTy env (coercionType co)
+    fresh_name    = mkFlattenFreshCoName
+    in_scope      = fe_in_scope env1
+    covar         = uniqAway in_scope $ mkCoVar fresh_name kind'
+    env2          = env1 { fe_in_scope = in_scope `extendInScopeSet` covar }
+
+coreFlattenVarBndr :: FlattenEnv -> TyCoVar -> (FlattenEnv, TyCoVar)
+coreFlattenVarBndr env tv
+  | kind' `eqType` kind
+  = ( env { fe_subst = extendTCvSubst old_subst tv (mkTyCoVarTy tv) }
+             -- override any previous binding for tv
+    , tv)
+  | otherwise
+  = let new_tv    = uniqAway (fe_in_scope env) (setTyVarKind tv kind')
+        new_subst = extendTCvSubst old_subst tv (mkTyCoVarTy new_tv)
+        new_is    = extendInScopeSet old_in_scope new_tv
+    in
+    (env' { fe_in_scope = new_is
+          , fe_subst    = new_subst }, new_tv)
+  where
+    kind          = tyVarKind tv
+    (env', kind') = coreFlattenTy env kind
+    old_subst     = fe_subst env
+    old_in_scope  = fe_in_scope env
+
+coreFlattenTyFamApp :: FlattenEnv
                     -> TyCon         -- type family tycon
                     -> [Type]        -- args
-                    -> (FlattenMap, TyVar)
-coreFlattenTyFamApp in_scope m fam_tc fam_args
-  = case lookupTypeMap m fam_ty of
-      Just tv -> (m, tv)
+                    -> (FlattenEnv, TyVar)
+coreFlattenTyFamApp env fam_tc fam_args
+  = case lookupTypeMap type_map fam_ty of
+      Just tv -> (env, tv)
               -- we need fresh variables here, but this is called far from
               -- any good source of uniques. So, we generate one from thin
               -- air, using the arbitrary prime number 71 as a seed
-      Nothing -> let tyvar_unique = deriveUnique (getUnique fam_tc) 71
-                     tyvar_name   = mkSysTvName tyvar_unique (fsLit "fl")
-                     tv = uniqAway in_scope $ mkTyVar tyvar_name (typeKind fam_ty)
-                     m' = extendTypeMap m fam_ty tv in
-                 (m', tv)
-  where fam_ty = TyConApp fam_tc fam_args
+      Nothing -> let tyvar_name = mkFlattenFreshTyName fam_tc
+                     tv = uniqAway in_scope $ mkTyVar tyvar_name
+                                                      (typeKind fam_ty)
+                     env' = env { fe_type_map = extendTypeMap type_map fam_ty tv
+                                , fe_in_scope = extendInScopeSet in_scope tv }
+                 in (env', tv)
+  where fam_ty   = mkTyConApp fam_tc fam_args
+        FlattenEnv { fe_type_map = type_map
+                   , fe_in_scope = in_scope } = env
 
+-- | Get the set of all type variables mentioned anywhere in the list
+-- of types. These variables are not necessarily free.
 allTyVarsInTys :: [Type] -> VarSet
 allTyVarsInTys []       = emptyVarSet
 allTyVarsInTys (ty:tys) = allTyVarsInTy ty `unionVarSet` allTyVarsInTys tys
 
+-- | Get the set of all type variables mentioned anywhere in a type.
 allTyVarsInTy :: Type -> VarSet
 allTyVarsInTy = go
   where
     go (TyVarTy tv)      = unitVarSet tv
     go (AppTy ty1 ty2)   = (go ty1) `unionVarSet` (go ty2)
     go (TyConApp _ tys)  = allTyVarsInTys tys
-    go (FunTy ty1 ty2)   = (go ty1) `unionVarSet` (go ty2)
-    go (ForAllTy tv ty)  = (go (tyVarKind tv)) `unionVarSet`
-                           unitVarSet tv `unionVarSet`
-                           (go ty) -- don't remove tv
+    go (ForAllTy bndr ty) =
+      caseBinder bndr (\tv -> unitVarSet tv) (const emptyVarSet)
+      `unionVarSet` go (binderType bndr) `unionVarSet` go ty
+        -- don't remove the tv from the set!
     go (LitTy {})        = emptyVarSet
+    go (CastTy ty co)    = go ty `unionVarSet` go_co co
+    go (CoercionTy co)   = go_co co
+
+    go_co (Refl _ ty)           = go ty
+    go_co (TyConAppCo _ _ args) = go_args args
+    go_co (AppCo co h arg)      = go_co co `unionVarSet`
+                                  go_co h `unionVarSet` go_arg arg
+    go_co (ForAllCo cobndr co)  = mkVarSet (coBndrVars cobndr) `unionVarSet` go_co co
+    go_co (CoVarCo cv)          = unitVarSet cv
+    go_co (AxiomInstCo _ _ cos) = go_args cos
+    go_co (PhantomCo h t1 t2)   = go_co h `unionVarSet` go t1 `unionVarSet` go t2
+    go_co (UnsafeCo _ _ t1 t2)  = go t1 `unionVarSet` go t2
+    go_co (SymCo co)            = go_co co
+    go_co (TransCo c1 c2)       = go_co c1 `unionVarSet` go_co c2
+    go_co (NthCo _ co)          = go_co co
+    go_co (LRCo _ co)           = go_co co
+    go_co (InstCo co arg)       = go_co co `unionVarSet` go_arg arg
+    go_co (CoherenceCo c1 c2)   = go_co c1 `unionVarSet` go_co c2
+    go_co (KindCo co)           = go_co co
+    go_co (KindAppCo co)        = go_co co
+    go_co (SubCo co)            = go_co co
+    go_co (AxiomRuleCo _ ts cs) = allTyVarsInTys ts `unionVarSet` go_cos cs
+
+    go_cos = foldr (unionVarSet . go_co) emptyVarSet
+
+    go_arg (TyCoArg co)        = go_co co
+    go_arg (CoCoArg _ h c1 c2) = mapUnionVarSet go_co [h, c1, c2]
+
+    go_args = foldr (unionVarSet . go_arg) emptyVarSet
+
+mkFlattenFreshTyName :: Uniquable a => a -> Name
+mkFlattenFreshTyName unq
+  = mkSysTvName (deriveUnique (getUnique unq) 71) (fsLit "flt")
+
+mkFlattenFreshCoName :: Name
+mkFlattenFreshCoName
+  = mkSystemVarName (deriveUnique eqPrimTyConKey 71) (fsLit "flc")
+

@@ -1,6 +1,7 @@
 
 tcfail013.hs:4:3:
-    Couldn't match expected type ‘[t]’ with actual type ‘Bool’
-    Relevant bindings include f :: [t] -> a (bound at tcfail013.hs:3:1)
+    Couldn't match expected type ‘[t1]’ with actual type ‘Bool’
+    Relevant bindings include
+      f :: [t1] -> t (bound at tcfail013.hs:3:1)
     In the pattern: True
     In an equation for ‘f’: f True = 2

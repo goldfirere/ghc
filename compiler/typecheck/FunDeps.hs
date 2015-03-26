@@ -138,7 +138,7 @@ NOTA BENE:
     is no effect iff the result of improve is empty
 -}
 
-instFD :: FunDep TyVar -> [TyVar] -> [Type] -> FunDep Type
+instFD :: FunDep TyCoVar -> [TyCoVar] -> [Type] -> FunDep Type
 -- A simpler version of instFD_WithPos to be used in checking instance coverage etc.
 instFD (ls,rs) tvs tys
   = (map lookup ls, map lookup rs)
@@ -146,7 +146,7 @@ instFD (ls,rs) tvs tys
     env       = zipVarEnv tvs tys
     lookup tv = lookupVarEnv_NF env tv
 
-instFD_WithPos :: FunDep TyVar -> [TyVar] -> [Type] -> ([Type], [(Int,Type)])
+instFD_WithPos :: FunDep TyCoVar -> [TyCoVar] -> [Type] -> ([Type], [(Int,Type)])
 -- Returns a FunDep between the types accompanied along with their
 -- position (<=0) in the types argument list.
 instFD_WithPos (ls,rs) tvs tys
@@ -203,7 +203,7 @@ pprEquation (FDEqn { fd_qtvs = qtvs, fd_eqs = pairs })
 improveFromInstEnv :: InstEnvs
                    -> PredType
                    -> [Equation SrcSpan] -- Needs to be an Equation because
-                                         -- of quantified variables
+                                 -- of quantified variables
 -- Post: Equations oriented from the template (matching instance) to the workitem!
 improveFromInstEnv _inst_env pred
   | not (isClassPred pred)
@@ -232,11 +232,11 @@ improveFromInstEnv inst_env pred
 improveFromInstEnv _ _ = []
 
 
-checkClsFD :: FunDep TyVar -> [TyVar]             -- One functional dependency from the class
+checkClsFD :: FunDep TyCoVar -> [TyCoVar]         -- One functional dependency from the class
            -> ClsInst                             -- An instance template
-           -> TyVarSet -> [Type] -> [Maybe Name]  -- Arguments of this (C tys) predicate
+           -> TyCoVarSet -> [Type] -> [Maybe Name]  -- Arguments of this (C tys) predicate
                                                   -- TyVarSet are extra tyvars that can be instantiated
-           -> [([TyVar], [FDEq])]
+           -> [([TyCoVar], [FDEq])]
 
 checkClsFD fd clas_tvs
            (ClsInst { is_tvs = qtvs, is_tys = tys_inst, is_tcs = rough_tcs_inst })
@@ -274,7 +274,8 @@ checkClsFD fd clas_tvs
 
     case tcUnifyTys bind_fn ltys1 ltys2 of
         Nothing  -> []
-        Just subst | isJust (tcUnifyTys bind_fn rtys1' rtys2')
+        Just (subst, _)
+                   | isJust (tcUnifyTys bind_fn rtys1' rtys2')
                         -- Don't include any equations that already hold.
                         -- Reason: then we know if any actual improvement has happened,
                         --         in which case we need to iterate the solver
@@ -312,7 +313,7 @@ checkClsFD fd clas_tvs
                         -- equation in there is useful)
 
                     meta_tvs = [ setVarType tv (substTy subst (varType tv))
-                               | tv <- qtvs, tv `notElemTvSubst` subst ]
+                               | tv <- qtvs, tv `notElemTCvSubst` subst ]
                         -- meta_tvs are the quantified type variables
                         -- that have not been substituted out
                         --
@@ -339,8 +340,8 @@ checkClsFD fd clas_tvs
     (ltys2, irs2)  = instFD_WithPos fd clas_tvs tys_actual
 
 {-
-************************************************************************
-*                                                                      *
+%************************************************************************
+%*                                                                      *
         The Coverage condition for instance declarations
 *                                                                      *
 ************************************************************************
@@ -395,8 +396,8 @@ checkInstCoverage be_liberal clas theta inst_taus
        = NotValid msg
        where
          (ls,rs) = instFD fd tyvars inst_taus
-         ls_tvs = closeOverKinds (tyVarsOfTypes ls)  -- See Note [Closing over kinds in coverage]
-         rs_tvs = tyVarsOfTypes rs
+         ls_tvs = tyCoVarsOfTypes ls
+         rs_tvs = tyCoVarsOfTypes rs
 
          conservative_ok = rs_tvs `subVarSet` ls_tvs
          liberal_ok      = rs_tvs `subVarSet` oclose theta ls_tvs
@@ -418,22 +419,6 @@ checkInstCoverage be_liberal clas theta inst_taus
                       ptext (sLit "Using UndecidableInstances might help") ]
 
 {-
-Note [Closing over kinds in coverage]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Suppose we have a fundep  (a::k) -> b
-Then if 'a' is instantiated to (x y), where x:k2->*, y:k2,
-then fixing x really fixes k2 as well, and so k2 should be added to
-the lhs tyvars in the fundep check.
-
-Example (Trac #8391), using liberal coverage
-
-    type Foo a = a  -- Foo :: forall k. k -> k
-    class Bar a b | a -> b
-    instance Bar a (Foo a)
-
-In the instance decl, (a:k) does fix (Foo k a), but only if we notice
-that (a:k) fixes k.
-
 Note [The liberal coverage condition]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 (oclose preds tvs) closes the set of type variables tvs,
@@ -453,7 +438,7 @@ oclose is used (only) when checking the coverage condition for
 an instance declaration
 -}
 
-oclose :: [PredType] -> TyVarSet -> TyVarSet
+oclose :: [PredType] -> TyCoVarSet -> TyCoVarSet
 -- See Note [The liberal coverage condition]
 oclose preds fixed_tvs
   | null tv_fds = fixed_tvs -- Fast escape hatch for common case.
@@ -468,8 +453,8 @@ oclose preds fixed_tvs
         | ls `subVarSet` fixed_tvs = fixed_tvs `unionVarSet` rs
         | otherwise                = fixed_tvs
 
-    tv_fds  :: [(TyVarSet,TyVarSet)]
-    tv_fds  = [ (tyVarsOfTypes xs, tyVarsOfTypes ys)
+    tv_fds  :: [(TyCoVarSet,TyCoVarSet)]
+    tv_fds  = [ (tyCoVarsOfTypes xs, tyCoVarsOfTypes ys)
               | (xs, ys) <- concatMap determined preds
               ]
 
@@ -552,7 +537,7 @@ badFunDeps cls_insts clas ins_tv_set ins_tys
         --      instance C Int Char Char
         -- The second instance conflicts with the first by *both* fundeps
 
-trimRoughMatchTcs :: [TyVar] -> FunDep TyVar -> [Maybe Name] -> [Maybe Name]
+trimRoughMatchTcs :: [TyCoVar] -> FunDep TyCoVar -> [Maybe Name] -> [Maybe Name]
 -- Computing rough_tcs for a particular fundep
 --     class C a b c | a -> b where ...
 -- For each instance .... => C ta tb tc

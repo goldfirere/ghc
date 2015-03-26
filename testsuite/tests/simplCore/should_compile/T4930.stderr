@@ -1,6 +1,6 @@
 
 ==================== Tidy Core ====================
-Result size of Tidy Core = {terms: 23, types: 11, coercions: 0}
+Result size of Tidy Core = {terms: 23, types: 12, coercions: 0}
 
 lvl :: [Char]
 [GblId, Str=DmdType]
@@ -8,7 +8,7 @@ lvl = GHC.CString.unpackCString# "Too small"#
 
 T4930.foo1 :: Int
 [GblId, Str=DmdType b]
-T4930.foo1 = error @ Int lvl
+T4930.foo1 = error @ 'GHC.Types.Lifted @ Int lvl
 
 foo :: Int -> Int
 [GblId,

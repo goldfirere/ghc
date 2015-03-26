@@ -1,6 +1,15 @@
 
 T9200b.hs:8:5:
-    The first argument of ‘F’ should have kind ‘k’,
-      but ‘True’ has kind ‘Bool’
-    In the type ‘True’
+    Couldn't match expected kind ‘k’ with actual kind ‘Bool’
+    In the first argument of ‘F’, namely ‘True’
+    In the type family declaration for ‘F’
+
+T9200b.hs:9:5:
+    Couldn't match expected kind ‘k’ with actual kind ‘Bool’
+    In the first argument of ‘F’, namely ‘False’
+    In the type family declaration for ‘F’
+
+T9200b.hs:10:9:
+    Couldn't match expected kind ‘Bool’ with actual kind ‘k’
+    In the type ‘x’
     In the type family declaration for ‘F’

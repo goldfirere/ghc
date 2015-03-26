@@ -1,6 +1,6 @@
 
 ==================== Tidy Core ====================
-Result size of Tidy Core = {terms: 36, types: 29, coercions: 0}
+Result size of Tidy Core = {terms: 36, types: 30, coercions: 0}
 
 T7360.$WFoo3 [InlPrag=INLINE] :: Int -> Foo
 [GblId[DataConWrapper],

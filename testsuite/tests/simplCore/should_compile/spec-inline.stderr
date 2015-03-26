@@ -1,12 +1,14 @@
 
 ==================== Tidy Core ====================
-Result size of Tidy Core = {terms: 162, types: 61, coercions: 0}
+Result size of Tidy Core = {terms: 162, types: 62, coercions: 0}
 
 Roman.foo3 :: Int
 [GblId, Str=DmdType b]
 Roman.foo3 =
   Control.Exception.Base.patError
-    @ Int "spec-inline.hs:(19,5)-(29,25)|function go"#
+    @ 'GHC.Types.Lifted
+    @ Int
+    "spec-inline.hs:(19,5)-(29,25)|function go"#
 
 Rec {
 Roman.foo_$s$wgo [Occ=LoopBreaker]

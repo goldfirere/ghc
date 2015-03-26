@@ -78,7 +78,6 @@ import PatSyn  ( PatSyn )
 import ConLike
 import TyCon
 import CoAxiom
-import TypeRep
 import Class
 import Name
 import NameEnv
@@ -205,7 +204,7 @@ tcLookupLocatedTyCon :: Located Name -> TcM TyCon
 tcLookupLocatedTyCon = addLocM tcLookupTyCon
 
 -- Find the instance that exactly matches a type class application.  The class arguments must be precisely
--- the same as in the instance declaration (modulo renaming).
+-- the same as in the instance declaration (modulo renaming & casts).
 --
 tcLookupInstance :: Class -> [Type] -> TcM ClsInst
 tcLookupInstance cls tys
@@ -219,10 +218,8 @@ tcLookupInstance cls tys
   where
     errNotExact = ptext (sLit "Not an exact match (i.e., some variables get instantiated)")
 
-    uniqueTyVars tys = all isTyVarTy tys && hasNoDups (map extractTyVar tys)
-      where
-        extractTyVar (TyVarTy tv) = tv
-        extractTyVar _            = panic "TcEnv.tcLookupInstance: extractTyVar"
+    uniqueTyVars tys = all isTyVarTy tys
+                    && hasNoDups (map (getTyVar "tcLookupInstance") tys)
 
 tcGetInstEnvs :: TcM InstEnvs
 -- Gets both the external-package inst-env
@@ -359,8 +356,8 @@ tcExtendKindEnv2 things thing_inside
     upd_env env = env { tcl_env = extendNameEnvList (tcl_env env) things }
 
 tcExtendKindEnv :: [(Name, TcKind)] -> TcM r -> TcM r
-tcExtendKindEnv name_kind_prs
-  = tcExtendKindEnv2 [(n, AThing k) | (n,k) <- name_kind_prs]
+tcExtendKindEnv nks
+  = tcExtendKindEnv2 $ mapSnd AThing nks
 
 -----------------------
 -- Scoped type and kind variables
@@ -370,6 +367,8 @@ tcExtendTyVarEnv tvs thing_inside
 
 tcExtendTyVarEnv2 :: [(Name,TcTyVar)] -> TcM r -> TcM r
 tcExtendTyVarEnv2 binds thing_inside
+  -- this should be used only for explicitly mentioned scoped variables.
+  -- thus, no coercion variables
   = do { stage <- getStage
        ; tc_extend_local_env (NotTopLevel, thLevel stage)
                     [(name, ATyVar name tv) | (name, tv) <- binds] $
@@ -384,7 +383,8 @@ tcExtendTyVarEnv2 binds thing_inside
     -- OccName that the programmer originally used for them
     add :: TidyEnv -> (Name, TcTyVar) -> TidyEnv
     add (env,subst) (name, tyvar)
-        = case tidyOccName env (nameOccName name) of
+        = ASSERT( isTyVar tyvar )
+          case tidyOccName env (nameOccName name) of
             (env', occ') ->  (env', extendVarEnv subst tyvar tyvar')
                 where
                   tyvar' = setTyVarName tyvar name'
@@ -447,8 +447,8 @@ tcExtendGhciIdEnv ids thing_inside
                     | AnId id <- ids
                     , let name = idName id
                     , isInternalName name ]
-    is_top id | isEmptyVarSet (tyVarsOfType (idType id)) = TopLevel
-              | otherwise                                = NotTopLevel
+    is_top id | isEmptyVarSet (tyCoVarsOfType (idType id)) = TopLevel
+              | otherwise                                  = NotTopLevel
 
 tcExtendLetEnv :: TopLevelFlag -> TopLevelFlag -> [TcId] -> TcM a -> TcM a
 -- Used for both top-level value bindings and and nested let/where-bindings
@@ -505,10 +505,10 @@ tc_extend_local_env2 thlvl extra_env not_actually_free thing_inside
 --
 -- Invariant: the ATcIds are fully zonked. Reasons:
 --      (a) The kinds of the forall'd type variables are defaulted
---          (see Kind.defaultKind, done in zonkQuantifiedTyVar)
+--          (see Kind.defaultKind, done in zonkQuantifiedTyCoVar)
 --      (b) There are no via-Indirect occurrences of the bound variables
 --          in the types, because instantiation does not look through such things
---      (c) The call to tyVarsOfTypes is ok without looking through refs
+--      (c) The call to tyCoVarsOfTypes is ok without looking through refs
 
 -- The second argument of type TyVarSet is a set of type variables
 -- that are bound together with extra_env and should not be regarded
@@ -545,17 +545,21 @@ tcExtendLocalTypeEnv tc_ty_things not_actually_free
   where
     extra_tvs = foldr get_tvs emptyVarSet tc_ty_things `minusVarSet` not_actually_free
 
-    get_tvs (_, ATcId { tct_id = id, tct_closed = closed }) tvs
-      = case closed of
+    get_tvs (_, ATcId { tct_id = id {-, tct_closed = closed -} }) tvs
+      ={- case closed of
           TopLevel    -> ASSERT2( isEmptyVarSet id_tvs, ppr id $$ ppr (idType id) )
                          tvs
-          NotTopLevel -> tvs `unionVarSet` id_tvs
-        where id_tvs = tyVarsOfType (idType id)
+          NotTopLevel -> -} tvs `unionVarSet` id_tvs
+           -- TODO (RAE): uncomment the code above. I believe once zonkTcType
+           -- can establish invariants, this should work. The problem is that
+           -- reflexive covars can leak into "closed" ids' types. But with
+           -- better zonking, this problem should disappear. Test case: Data.Ratio.
+        where id_tvs = tyCoVarsOfType (idType id)
 
     get_tvs (_, ATyVar _ tv) tvs          -- See Note [Global TyVars]
-      = tvs `unionVarSet` tyVarsOfType (tyVarKind tv) `extendVarSet` tv
+      = tvs `unionVarSet` tyCoVarsOfType (tyVarKind tv) `extendVarSet` tv
 
-    get_tvs (_, AThing k) tvs = tvs `unionVarSet` tyVarsOfType k
+    get_tvs (_, AThing k) tvs = tvs `unionVarSet` tyCoVarsOfType k
 
     get_tvs (_, AGlobal {})       tvs = tvs
     get_tvs (_, APromotionErr {}) tvs = tvs
@@ -745,18 +749,18 @@ data InstBindings a
                                          -- be enabled when type-checking this
                                          -- instance; needed for
                                          -- GeneralizedNewtypeDeriving
-
+                      
       , ib_derived :: Bool
            -- True <=> This code was generated by GHC from a deriving clause
            --          or standalone deriving declaration
-           -- Used only to improve error messages
+           --          Used only to improve error messages
       }
 
 instance OutputableBndr a => Outputable (InstInfo a) where
     ppr = pprInstInfoDetails
 
 pprInstInfoDetails :: OutputableBndr a => InstInfo a -> SDoc
-pprInstInfoDetails info
+pprInstInfoDetails info 
    = hang (pprInstanceHdr (iSpec info) <+> ptext (sLit "where"))
         2 (details (iBinds info))
   where

@@ -12,7 +12,7 @@ module Simplify ( simplTopBinds, simplExpr ) where
 
 import DynFlags
 import SimplMonad
-import Type hiding      ( substTy, extendTvSubst, substTyVar )
+import Type hiding      ( substTy, extendTCvSubst, substTyCoVar )
 import SimplEnv
 import SimplUtils
 import FamInstEnv       ( FamInstEnv )
@@ -22,11 +22,11 @@ import MkId             ( seqId, voidPrimId )
 import MkCore           ( mkImpossibleExpr, castBottomExpr )
 import IdInfo
 import Name             ( mkSystemVarName, isExternalName )
-import Coercion hiding  ( substCo, substTy, substCoVar, extendTvSubst )
+import Coercion hiding  ( substCo, substCoVar )
 import OptCoercion      ( optCoercion )
 import FamInstEnv       ( topNormaliseType_maybe )
 import DataCon          ( DataCon, dataConWorkId, dataConRepStrictness
-                        , isMarkedStrict ) --, dataConTyCon, dataConTag, fIRST_TAG )
+                        , isMarkedStrict, dataConRepArgTys ) --, dataConTyCon, dataConTag, fIRST_TAG )
 --import TyCon            ( isEnumerationTyCon ) -- temporalily commented out. See #8326
 import CoreMonad        ( Tick(..), SimplifierMode(..) )
 import CoreSyn
@@ -327,13 +327,16 @@ simplLazyBind :: SimplEnv
 simplLazyBind env top_lvl is_rec bndr bndr1 rhs rhs_se
   = -- pprTrace "simplLazyBind" ((ppr bndr <+> ppr bndr1) $$ ppr rhs $$ ppr (seIdSubst rhs_se)) $
     do  { let   rhs_env     = rhs_se `setInScope` env
-                (tvs, body) = case collectTyBinders rhs of
-                                (tvs, body) | not_lam body -> (tvs,body)
-                                            | otherwise    -> ([], rhs)
-                not_lam (Lam _ _)  = False
-                not_lam (Tick t e) | not (tickishFloatable t)
-                                   = not_lam e -- eta-reduction could float
-                not_lam _          = True
+                (tvs, body) = case collectTyAndValBinders rhs of
+                                (tvs, [], body)
+                                  | surely_not_lam body -> (tvs, body)
+                                _                       -> ([], rhs)
+
+                surely_not_lam (Lam {})     = False
+                surely_not_lam (Tick t e)
+                  | not (tickishFloatable t) = surely_not_lam e
+                   -- eta-reduction could float
+                surely_not_lam _            = True
                         -- Do not do the "abstract tyyvar" thing if there's
                         -- a lambda inside, because it defeats eta-reduction
                         --    f = /\a. \x. g a x
@@ -384,7 +387,7 @@ simplNonRecX env bndr new_rhs
                   --   the binding c = (a,b)
 
   | Coercion co <- new_rhs
-  = return (extendCvSubst env bndr co)
+  = return (extendTCvSubst env bndr (mkCoercionTy co))
 
   | otherwise
   = do  { (env', bndr') <- simplBinder env bndr
@@ -579,7 +582,7 @@ makeTrivialWithInfo top_lvl env info expr
   | otherwise           -- See Note [Take care] below
   = do  { uniq <- getUniqueM
         ; let name = mkSystemVarName uniq (fsLit "a")
-              var = mkLocalIdWithInfo name expr_ty info
+              var = mkLocalIdOrCoVarWithInfo name expr_ty info
         ; env'  <- completeNonRecX top_lvl env False var var expr
         ; expr' <- simplVar env' var
         ; return (env', expr') }
@@ -664,7 +667,7 @@ completeBind :: SimplEnv
 completeBind env top_lvl old_bndr new_bndr new_rhs
  | isCoVar old_bndr
  = case new_rhs of
-     Coercion co -> return (extendCvSubst env old_bndr co)
+     Coercion co -> return (extendTCvSubst env old_bndr (mkCoercionTy co))
      _           -> return (addNonRec env new_bndr new_rhs)
 
  | otherwise
@@ -1006,7 +1009,7 @@ simplCoercionF env co cont
 
 simplCoercion :: SimplEnv -> InCoercion -> SimplM OutCoercion
 simplCoercion env co
-  = let opt_co = optCoercion (getCvSubst env) co
+  = let opt_co = optCoercion (getTCvSubst env) co
     in seqCo opt_co `seq` return opt_co
 
 -----------------------------------
@@ -1230,11 +1233,12 @@ simplCast env body co0 cont0
        add_coerce co (Pair s1s2 _t1t2) cont@(ApplyToTy { sc_arg_ty = arg_ty, sc_cont = tail })
                 -- (f |> g) ty  --->   (f ty) |> (g @ ty)
                 -- This implements the PushT rule from the paper
-         | Just (tyvar,_) <- splitForAllTy_maybe s1s2
+         | Just (bndr,_) <- splitForAllTy_maybe s1s2
+         , Just tyvar <- binderVar_maybe bndr
          = ASSERT( isTyVar tyvar )
            cont { sc_cont = addCoerce new_cast tail }
          where
-           new_cast = mkInstCo co arg_ty
+           new_cast = mkInstCo co (mkNomReflCoArg arg_ty)
 
        add_coerce co (Pair s1s2 t1t2) (ApplyToVal { sc_arg = arg, sc_env = arg_se
                                                   , sc_dup = dup, sc_cont = cont })
@@ -1262,7 +1266,7 @@ simplCast env body co0 cont0
            -- we split coercion t1->t2 ~ s1->s2 into t1 ~ s1 and
            -- t2 ~ s2 with left and right on the curried form:
            --    (->) t1 t2 ~ (->) s1 s2
-           [co1, co2] = decomposeCo 2 co
+           [co1, co2] = map stripTyCoArg $ decomposeCo 2 co
            arg'       = substExpr (text "move-cast") arg_se' arg
            arg_se'    = arg_se `setInScope` env
 
@@ -1298,13 +1302,18 @@ simplLam env [] body cont = simplExprF env body cont
 
 simplLam env (bndr:bndrs) body (ApplyToTy { sc_arg_ty = arg_ty, sc_cont = cont })
   = do { tick (BetaReduction bndr)
-       ; simplLam (extendTvSubst env bndr arg_ty) bndrs body cont }
+       ; simplLam (extendTCvSubst env bndr arg_ty) bndrs body cont }
 
 simplLam env (bndr:bndrs) body (ApplyToVal { sc_arg = arg, sc_env = arg_se
                                            , sc_cont = cont })
   = do  { tick (BetaReduction bndr)
-        ; simplNonRecE env (zap_unfolding bndr) (arg, arg_se) (bndrs, body) cont }
+        ; simplNonRecE env' (zap_unfolding bndr) (arg, arg_se) (bndrs, body) cont }
   where
+    env' | Coercion co <- arg
+         = extendTCvSubst env bndr (mkCoercionTy co)
+         | otherwise
+         = env
+    
     zap_unfolding bndr  -- See Note [Zap unfolding when beta-reducing]
       | isId bndr, isStableUnfolding (realIdUnfolding bndr)
       = setIdUnfolding bndr NoUnfolding
@@ -1354,7 +1363,7 @@ simplNonRecE :: SimplEnv
 simplNonRecE env bndr (Type ty_arg, rhs_se) (bndrs, body) cont
   = ASSERT( isTyVar bndr )
     do  { ty_arg' <- simplType (rhs_se `setInScope` env) ty_arg
-        ; simplLam (extendTvSubst env bndr ty_arg') bndrs body cont }
+        ; simplLam (extendTCvSubst env bndr ty_arg') bndrs body cont }
 
 simplNonRecE env bndr (rhs, rhs_se) (bndrs, body) cont
   = do dflags <- getDynFlags
@@ -1386,7 +1395,7 @@ simplNonRecE env bndr (rhs, rhs_se) (bndrs, body) cont
 simplVar :: SimplEnv -> InVar -> SimplM OutExpr
 -- Look up an InVar in the environment
 simplVar env var
-  | isTyVar var = return (Type (substTyVar env var))
+  | isTyVar var = return (Type (substTyCoVar env var))
   | isCoVar var = return (Coercion (substCoVar env var))
   | otherwise
   = case substId env var of
@@ -1935,7 +1944,7 @@ rebuildCase env scrut case_bndr alts@[(_, bndrs, rhs)] cont
              out_args = [ TyArg { as_arg_ty  = scrut_ty
                                 , as_hole_ty = seq_id_ty }
                         , TyArg { as_arg_ty  = exprType rhs'
-                                , as_hole_ty = applyTy seq_id_ty scrut_ty }
+                                , as_hole_ty = piResultTy seq_id_ty scrut_ty }
                         , ValArg scrut, ValArg rhs']
                       -- Lazily evaluated, so we don't do most of this
 
@@ -2164,14 +2173,24 @@ simplAlt env scrut' _ case_bndr' cont' (DataAlt con, vs, rhs)
         where
           go [] [] = []
           go (v:vs') strs | isTyVar v = v : go vs' strs
+          go (v:vs') strs | isCoVar v = eval v : go vs' strs
           go (v:vs') (str:strs)
-            | isMarkedStrict str = evald_v  : go vs' strs
-            | otherwise          = zapped_v : go vs' strs
+            | isMarkedStrict str = eval v : go vs' strs
+            | otherwise          = zap v  : go vs' strs
+          go _ _ = pprPanic "cat_evals"
+                    (ppr con $$
+                     ppr vs  $$
+                     ppr_with_length the_strs $$
+                     ppr_with_length (dataConRepArgTys con) $$
+                     ppr_with_length (dataConRepStrictness con))
             where
-              zapped_v = zapIdOccInfo v   -- See Note [Case alternative occ info]
-              evald_v  = zapped_v `setIdUnfolding` evaldUnfolding
-          go _ _ = pprPanic "cat_evals" (ppr con $$ ppr vs $$ ppr the_strs)
+              ppr_with_length list
+                = ppr list <+> parens (text "length =" <+> ppr (length list))
+                                    -- NB: If this panic triggers, note that
+                                    -- NoStrictnessMark doesn't print!
 
+          zap v  = zapIdOccInfo v   -- See Note [Case alternative occ info]
+          eval v = zap v `setIdUnfolding` evaldUnfolding
 
 addAltUnfoldings :: SimplEnv -> Maybe OutExpr -> OutId -> OutExpr -> SimplM SimplEnv
 addAltUnfoldings env scrut case_bndr con_app
@@ -2282,7 +2301,11 @@ knownCon env scrut dc dc_ty_args dc_args bndr bs rhs cont
 
     bind_args env' (b:bs') (Type ty : args)
       = ASSERT( isTyVar b )
-        bind_args (extendTvSubst env' b ty) bs' args
+        bind_args (extendTCvSubst env' b ty) bs' args
+
+    bind_args env' (b:bs') (Coercion co : args)
+      = ASSERT( isCoVar b )
+        bind_args (extendTCvSubst env' b (mkCoercionTy co)) bs' args
 
     bind_args env' (b:bs') (arg : args)
       = ASSERT( isId b )

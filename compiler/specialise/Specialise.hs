@@ -10,13 +10,14 @@ module Specialise ( specProgram, specUnfolding ) where
 #include "HsVersions.h"
 
 import Id
-import TcType hiding( substTy, extendTvSubstList )
-import Type   hiding( substTy, extendTvSubstList )
+import TcType hiding( substTy, extendTCvSubstList )
+import Type   hiding( substTy, extendTCvSubstList )
 import Coercion( Coercion )
 import Module( Module )
 import CoreMonad
 import qualified CoreSubst
 import CoreUnfold
+import Var              ( varType )
 import VarSet
 import VarEnv
 import CoreSyn
@@ -37,6 +38,7 @@ import Outputable
 import FastString
 import State
 
+import Data.List (partition)
 #if __GLASGOW_HASKELL__ < 709
 import Control.Applicative (Applicative(..))
 #endif
@@ -878,7 +880,7 @@ specCase env scrut' case_bndr [(con, args, rhs)]
     sc_args' = filter is_flt_sc_arg args'
 
     clone_me bndr = do { uniq <- getUniqueM
-                       ; return (mkUserLocal occ uniq ty loc) }
+                       ; return (mkUserLocalOrCoVar occ uniq ty loc) }
        where
          name = idName bndr
          ty   = idType bndr
@@ -889,7 +891,7 @@ specCase env scrut' case_bndr [(con, args, rhs)]
     is_flt_sc_arg var =  isId var
                       && not (isDeadBinder var)
                       && isDictTy var_ty
-                      && not (tyVarsOfType var_ty `intersectsVarSet` arg_set)
+                      && not (tyCoVarsOfType var_ty `intersectsVarSet` arg_set)
        where
          var_ty = idType var
 
@@ -1099,15 +1101,15 @@ specCalls mb_mod env rules_for_me calls_for_me fn rhs
                      , ppr rhs_ids, ppr n_dicts
                      , ppr (idInlineActivation fn) ]
 
-    fn_type            = idType fn
-    fn_arity           = idArity fn
-    fn_unf             = realIdUnfolding fn     -- Ignore loop-breaker-ness here
-    (tyvars, theta, _) = tcSplitSigmaTy fn_type
-    n_tyvars           = length tyvars
-    n_dicts            = length theta
-    inl_prag           = idInlinePragma fn
-    inl_act            = inlinePragmaActivation inl_prag
-    is_local           = isLocalId fn
+    fn_type                 = idType fn
+    fn_arity                = idArity fn
+    fn_unf                  = realIdUnfolding fn  -- Ignore loop-breaker-ness here
+    (tycovars, theta, _)    = tcSplitSigmaTy fn_type
+    n_tyvars                = count isTyVar tycovars
+    n_dicts                 = length tycovars + length theta - n_tyvars
+    inl_prag                = idInlinePragma fn
+    inl_act                 = inlinePragmaActivation inl_prag
+    is_local                = isLocalId fn
 
         -- Figure out whether the function has an INLINE pragma
         -- See Note [Inline specialisations]
@@ -1129,10 +1131,25 @@ specCalls mb_mod env rules_for_me calls_for_me fn rhs
     mk_ty_args [] poly_tvs
       = ASSERT( null poly_tvs ) []
     mk_ty_args (Nothing : call_ts) (poly_tv : poly_tvs)
-      = Type (mkTyVarTy poly_tv) : mk_ty_args call_ts poly_tvs
+      = Type (mkOnlyTyVarTy poly_tv) : mk_ty_args call_ts poly_tvs
     mk_ty_args (Just ty : call_ts) poly_tvs
       = Type ty : mk_ty_args call_ts poly_tvs
     mk_ty_args (Nothing : _) [] = panic "mk_ty_args"
+
+    -- reassemble ty and dict arguments in the right order,
+    -- according to the nature of the tycovars
+    stitch_tys_dicts :: [TyCoVar] -> [CoreExpr] -> [CoreExpr] -> [CoreExpr]
+    stitch_tys_dicts [] [] dicts = dicts -- theta dicts
+    stitch_tys_dicts (v:vs) tys dicts
+      | isTyVar v
+      , (ty:tys') <- tys
+      = ty : stitch_tys_dicts vs tys' dicts
+  
+      | (dict:dicts') <- dicts
+      = dict : stitch_tys_dicts vs tys dicts'
+
+    stitch_tys_dicts vs tys dicts
+      = pprPanic "stitch_tys_dicts" (vcat [ppr vs, ppr tys, ppr dicts])
 
     ----------------------------------------------------------
         -- Specialise to one particular call pattern
@@ -1161,7 +1178,7 @@ specCalls mb_mod env rules_for_me calls_for_me fn rhs
                 -- spec_tyvars = [a,c]
                 -- ty_args     = [t1,b,t3]
                 spec_tv_binds = [(tv,ty) | (tv, Just ty) <- rhs_tyvars `zip` call_ts]
-                env1          = extendTvSubstList env spec_tv_binds
+                env1          = extendTCvSubstList env spec_tv_binds
                 (rhs_env, poly_tyvars) = substBndrs env1
                                             [tv | (tv, Nothing) <- rhs_tyvars `zip` call_ts]
 
@@ -1170,7 +1187,7 @@ specCalls mb_mod env rules_for_me calls_for_me fn rhs
            ; let (rhs_env2, dx_binds, spec_dict_args)
                             = bindAuxiliaryDicts rhs_env rhs_dict_ids call_ds inst_dict_ids
                  ty_args    = mk_ty_args call_ts poly_tyvars
-                 rule_args  = ty_args ++ map Var inst_dict_ids
+                 rule_args  = stitch_tys_dicts tycovars ty_args (map Var inst_dict_ids)
                  rule_bndrs = poly_tyvars ++ inst_dict_ids
 
            ; dflags <- getDynFlags
@@ -1667,7 +1684,7 @@ singleCall id tys dicts
                      Map.singleton (CallKey tys) (dicts, call_fvs) }
   where
     call_fvs = exprsFreeVars dicts `unionVarSet` tys_fvs
-    tys_fvs  = tyVarsOfTypes (catMaybes tys)
+    tys_fvs  = tyCoVarsOfTypes (catMaybes tys)
         -- The type args (tys) are guaranteed to be part of the dictionary
         -- types, because they are just the constrained types,
         -- and the dictionary is therefore sure to be bound
@@ -1704,13 +1721,23 @@ mkCallUDs' env f args
   where
     _trace_doc = vcat [ppr f, ppr args, ppr n_tyvars, ppr n_dicts
                       , ppr (map (interestingDict env) dicts)]
-    (tyvars, theta, _) = tcSplitSigmaTy (idType f)
-    constrained_tyvars = closeOverKinds (tyVarsOfTypes theta)
-    n_tyvars           = length tyvars
-    n_dicts            = length theta
+    (tycovars, theta, _)    = tcSplitSigmaTy (idType f)
+    (tyvars, covars)        = partition isTyVar tycovars
+    constrained_tyvars      = tyCoVarsOfTypes theta `unionVarSet`
+                              tyCoVarsOfTypes (map varType covars)
+    n_tyvars                = length tyvars
+    n_dicts                 = length covars + length theta
 
-    spec_tys = [mk_spec_ty tv ty | (tv, Type ty) <- tyvars `zip` args]
-    dicts    = [dict_expr | (_, dict_expr) <- theta `zip` (drop n_tyvars args)]
+    spec_tys = [mk_spec_ty tv ty | (tv, ty) <- tyvars `type_zip` args]
+    cv_dicts = take (length covars) [cv_dict | cv_dict@(Coercion _) <- args]
+    th_dicts = take (length theta) (drop (length tycovars) args)
+    dicts    = cv_dicts ++ th_dicts
+
+    -- ignores Coercion arguments
+    type_zip :: [TyVar] -> [CoreExpr] -> [(TyVar, Type)]
+    type_zip tvs      (Coercion _ : args) = type_zip tvs args
+    type_zip (tv:tvs) (Type ty : args)    = (tv, ty) : type_zip tvs args
+    type_zip _        _                   = []
 
     mk_spec_ty tyvar ty
         | tyvar `elemVarSet` constrained_tyvars = Just ty
@@ -2005,9 +2032,9 @@ mapAndCombineSM f (x:xs) = do (y, uds1) <- f x
                               (ys, uds2) <- mapAndCombineSM f xs
                               return (y:ys, uds1 `plusUDs` uds2)
 
-extendTvSubstList :: SpecEnv -> [(TyVar,Type)] -> SpecEnv
-extendTvSubstList env tv_binds
-  = env { se_subst = CoreSubst.extendTvSubstList (se_subst env) tv_binds }
+extendTCvSubstList :: SpecEnv -> [(TyVar,Type)] -> SpecEnv
+extendTCvSubstList env tv_binds 
+  = env { se_subst = CoreSubst.extendTCvSubstList (se_subst env) tv_binds }
 
 substTy :: SpecEnv -> Type -> Type
 substTy env ty = CoreSubst.substTy (se_subst env) ty
@@ -2049,7 +2076,7 @@ newDictBndr :: SpecEnv -> CoreBndr -> SpecM CoreBndr
 newDictBndr env b = do { uniq <- getUniqueM
                        ; let n   = idName b
                              ty' = substTy env (idType b)
-                       ; return (mkUserLocal (nameOccName n) uniq ty' (getSrcSpan n)) }
+                       ; return (mkUserLocalOrCoVar (nameOccName n) uniq ty' (getSrcSpan n)) }
 
 newSpecIdSM :: Id -> Type -> SpecM Id
     -- Give the new Id a similar occurrence name to the old one
@@ -2057,7 +2084,7 @@ newSpecIdSM old_id new_ty
   = do  { uniq <- getUniqueM
         ; let name    = idName old_id
               new_occ = mkSpecOcc (nameOccName name)
-              new_id  = mkUserLocal new_occ uniq new_ty (getSrcSpan name)
+              new_id  = mkUserLocalOrCoVar new_occ uniq new_ty (getSrcSpan name)
         ; return new_id }
 
 {-

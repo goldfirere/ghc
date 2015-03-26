@@ -1,9 +1,13 @@
 module Type where
-import {-# SOURCE #-} TypeRep( Type, Kind )
-import Var
+import {-# SOURCE #-} TyCoRep( Type, Kind )
 
 isPredTy :: Type -> Bool
+isCoercionTy :: Type -> Bool
+
+mkAppTy :: Type -> Type -> Type
+piResultTy :: Type -> Type -> Type
 
 typeKind :: Type -> Kind
-substKiWith :: [KindVar] -> [Kind] -> Kind -> Kind
-eqKind :: Kind -> Kind -> Bool
+eqType :: Type -> Type -> Bool
+
+coreViewOneStarKind :: Type -> Maybe Type

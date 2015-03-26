@@ -249,7 +249,6 @@ findWildcards (L l ty) = case ty of
       concatMap (go . getBangType . cd_fld_type . unLoc) xs
     (HsExplicitListTy _ xs)  -> concatMap go xs
     (HsExplicitTupleTy _ xs) -> concatMap go xs
-    (HsWrapTy _ x)           -> go (noLoc x)
     HsWildcardTy             -> [Found l]
     (HsNamedWildcardTy n)    -> [FoundNamed l n]
     -- HsTyVar, HsQuasiQuoteTy, HsSpliceTy, HsCoreTy, HsTyLit
@@ -741,7 +740,7 @@ checkTyClHdr ty
 
     go l (HsTyVar tc) acc
         | isRdrTc tc          = return (L l tc, acc)
-    go _ (HsOpTy t1 (_, ltc@(L _ tc)) t2) acc
+    go _ (HsOpTy t1 ltc@(L _ tc) t2) acc
         | isRdrTc tc         = return (ltc, t1:t2:acc)
     go _ (HsParTy ty)    acc = goL ty acc
     go _ (HsAppTy t1 t2) acc = goL t1 (t2:acc)
@@ -1097,7 +1096,6 @@ checkPartialTypeSignature fullTy = case fullTy of
         go (HsRecTy xs)             = mapM_ (go' . getBangType . cd_fld_type . unLoc) xs
         go (HsExplicitListTy _ xs)  = mapM_ go' xs
         go (HsExplicitTupleTy _ xs) = mapM_ go' xs
-        go (HsWrapTy _ x)           = go' (noLoc x)
         go (HsForAllTy _ (Just l) _ _ _) = err hintNested l ty
         go (HsForAllTy _ Nothing  _ (L _ ctxt) x)
           | Just (L l _) <- firstMatch isWildcardTy      ctxt

@@ -114,10 +114,14 @@ data Pat id
                                         --   Use (conLikeResTy pat_con pat_arg_tys) to get
                                         --   the type of the pattern
 
-        pat_tvs   :: [TyVar],           -- Existentially bound type variables (tyvars only)
+        pat_tvs   :: [TyCoVar],         -- Existentially bound type variables
         pat_dicts :: [EvVar],           -- Ditto *coercion variables* and *dictionaries*
                                         -- One reason for putting coercion variable here, I think,
                                         --      is to ensure their kinds are zonked
+        
+                                        -- Do *not* include dependent equalities;
+                                        -- those are in pat_tvs
+        
         pat_binds :: TcEvBinds,         -- Bindings involving those dictionaries
         pat_args  :: HsConPatDetails id,
         pat_wrap  :: HsWrapper          -- Extra wrapper to pass to the matcher
@@ -185,6 +189,12 @@ hsConPatArgs :: HsConPatDetails id -> [LPat id]
 hsConPatArgs (PrefixCon ps)   = ps
 hsConPatArgs (RecCon fs)      = map (hsRecFieldArg . unLoc) (rec_flds fs)
 hsConPatArgs (InfixCon p1 p2) = [p1,p2]
+
+instance (Outputable arg, Outputable rec)
+         => Outputable (HsConDetails arg rec) where
+  ppr (PrefixCon args) = text "PrefixCon" <+> ppr args
+  ppr (RecCon rec)     = text "RecCon:" <+> ppr rec
+  ppr (InfixCon l r)   = text "InfixCon:" <+> ppr [l, r]
 
 {-
 However HsRecFields is used only for patterns and expressions

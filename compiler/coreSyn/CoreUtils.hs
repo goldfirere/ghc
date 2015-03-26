@@ -40,6 +40,7 @@ module CoreUtils (
         tryEtaReduce,
 
         -- * Manipulating data constructors and types
+        exprToType,
         applyTypeToArgs, applyTypeToArg,
         dataConRepInstPat, dataConRepFSInstPat,
 
@@ -119,8 +120,8 @@ coreAltType (_,bs,rhs)
   | otherwise         = ty    -- Note [Existential variables and silly type synonyms]
   where
     ty           = exprType rhs
-    free_tvs     = tyVarsOfType ty
-    bad_binder b = isTyVar b && b `elemVarSet` free_tvs
+    free_tvs     = tyCoVarsOfType ty
+    bad_binder b = b `elemVarSet` free_tvs
 
 coreAltsType :: [CoreAlt] -> Type
 -- ^ Returns the type of the first alternative, which should be the same as for all alternatives
@@ -160,13 +161,14 @@ Various possibilities suggest themselves:
 
  - Expand synonyms on the fly, when the problem arises. That is what
    we are doing here.  It's not too expensive, I think.
+
+Note that there might be existentially quantified coercion variables, too.
 -}
 
 applyTypeToArg :: Type -> CoreExpr -> Type
 -- ^ Determines the type resulting from applying an expression with given type
 -- to a given argument expression
-applyTypeToArg fun_ty (Type arg_ty) = applyTy fun_ty arg_ty
-applyTypeToArg fun_ty _             = funResultTy fun_ty
+applyTypeToArg fun_ty arg = piResultTy fun_ty (exprToType arg)
 
 applyTypeToArgs :: CoreExpr -> Type -> [CoreExpr] -> Type
 -- ^ A more efficient version of 'applyTypeToArg' when we have several arguments.
@@ -174,15 +176,18 @@ applyTypeToArgs :: CoreExpr -> Type -> [CoreExpr] -> Type
 applyTypeToArgs e op_ty args
   = go op_ty args
   where
-    go op_ty []               = op_ty
-    go op_ty (Type ty : args) = go_ty_args op_ty [ty] args
-    go op_ty (_ : args)       | Just (_, res_ty) <- splitFunTy_maybe op_ty
-                              = go res_ty args
+    go op_ty []                   = op_ty
+    go op_ty (Type ty : args)     = go_ty_args op_ty [ty] args
+    go op_ty (Coercion co : args) = go_ty_args op_ty [mkCoercionTy co] args
+    go op_ty (_ : args)           | Just (_, res_ty) <- splitFunTy_maybe op_ty
+                                  = go res_ty args
     go _ _ = pprPanic "applyTypeToArgs" panic_msg
 
     -- go_ty_args: accumulate type arguments so we can instantiate all at once
     go_ty_args op_ty rev_tys (Type ty : args)
        = go_ty_args op_ty (ty:rev_tys) args
+    go_ty_args op_ty rev_tys (Coercion co : args)
+       = go_ty_args op_ty (mkCoercionTy co : rev_tys) args
     go_ty_args op_ty rev_tys args
        = go (applyTysD panic_msg_w_hdr op_ty (reverse rev_tys)) args
 
@@ -190,6 +195,13 @@ applyTypeToArgs e op_ty args
     panic_msg = vcat [ ptext (sLit "Expression:") <+> pprCoreExpr e
                      , ptext (sLit "Type:") <+> ppr op_ty
                      , ptext (sLit "Args:") <+> ppr args ]
+
+-- | If the expression is representable as a 'Type', converts. Otherwise,
+-- panics. Currently, only works for Type and Coercion expressions.
+exprToType :: CoreExpr -> Type
+exprToType (Type ty)     = ty
+exprToType (Coercion co) = mkCoercionTy co
+exprToType _bad          = pprPanic "exprToType" (ppr _bad)
 
 {-
 ************************************************************************
@@ -206,8 +218,8 @@ mkCast e co | ASSERT2( coercionRole co == Representational
                      , ptext (sLit "coercion") <+> ppr co <+> ptext (sLit "passed to mkCast") <+> ppr e <+> ptext (sLit "has wrong role") <+> ppr (coercionRole co) )
               isReflCo co = e
 
-mkCast (Coercion e_co) co
-  | isCoVarType (pSnd (coercionKind co))
+mkCast (Coercion e_co) co 
+  | isCoercionType (pSnd (coercionKind co))
        -- The guard here checks that g has a (~#) on both sides,
        -- otherwise decomposeCo fails.  Can in principle happen
        -- with unsafeCoerce
@@ -959,10 +971,12 @@ isExpandableApp fn n_val_args
   -- This incidentally picks up the (n_val_args = 0) case
      go 0 _ = True
      go n_val_args ty
-       | Just (_, ty) <- splitForAllTy_maybe ty   = go n_val_args ty
-       | Just (arg, ty) <- splitFunTy_maybe ty
-       , isPredTy arg                             = go (n_val_args-1) ty
-       | otherwise                                = False
+       | Just (bndr, ty) <- splitForAllTy_maybe ty
+       = caseBinder bndr
+           (\_tv -> go n_val_args ty)
+           (\bndr_ty -> isPredTy bndr_ty && go (n_val_args-1) ty)
+       | otherwise
+       = False
 
 {-
 Note [Expandable overloadings]
@@ -1353,7 +1367,7 @@ dataConInstPat fss uniqs con inst_tys
     (ex_bndrs, arg_ids)
   where
     univ_tvs = dataConUnivTyVars con
-    ex_tvs   = dataConExTyVars con
+    ex_tvs   = dataConExTyCoVars con
     arg_tys  = dataConRepArgTys con
     arg_strs = dataConRepStrictness con  -- 1-1 with arg_tys
     n_ex = length ex_tvs
@@ -1363,24 +1377,29 @@ dataConInstPat fss uniqs con inst_tys
     (ex_fss,   id_fss)   = splitAt n_ex fss
 
       -- Make the instantiating substitution for universals
-    univ_subst = zipOpenTvSubst univ_tvs inst_tys
+    univ_subst = zipOpenTCvSubst univ_tvs inst_tys
 
       -- Make existential type variables, applyingn and extending the substitution
     (full_subst, ex_bndrs) = mapAccumL mk_ex_var univ_subst
                                        (zip3 ex_tvs ex_fss ex_uniqs)
 
-    mk_ex_var :: TvSubst -> (TyVar, FastString, Unique) -> (TvSubst, TyVar)
-    mk_ex_var subst (tv, fs, uniq) = (Type.extendTvSubst subst tv (mkTyVarTy new_tv)
+    mk_ex_var :: TCvSubst -> (TyVar, FastString, Unique) -> (TCvSubst, TyVar)
+    mk_ex_var subst (tv, fs, uniq) = (Type.extendTCvSubst subst tv (mkTyCoVarTy new_tv)
                                      , new_tv)
       where
-        new_tv   = mkTyVar new_name kind
-        new_name = mkSysTvName uniq fs
+        new_tv
+          | isTyVar tv
+          = mkTyVar (mkSysTvName uniq fs) kind
+          | otherwise
+          = ASSERT( isCoVar tv )
+            mkCoVar (mkSystemVarName uniq fs) kind
+          
         kind     = Type.substTy subst (tyVarKind tv)
 
       -- Make value vars, instantiating types
     arg_ids = zipWith4 mk_id_var id_uniqs id_fss arg_tys arg_strs
     mk_id_var uniq fs ty str
-      = mkLocalIdWithInfo name (Type.substTy full_subst ty) info
+      = mkLocalIdOrCoVarWithInfo name (Type.substTy full_subst ty) info
       where
         name = mkInternalName uniq (mkVarOccFS fs) noSrcSpan
         info | isMarkedStrict str = vanillaIdInfo `setUnfoldingInfo` evaldUnfolding
@@ -1424,13 +1443,13 @@ cheapEqExpr' ignoreTick = go_s
         go (Var v1)   (Var v2)   = v1 == v2
         go (Lit lit1) (Lit lit2) = lit1 == lit2
         go (Type t1)  (Type t2)  = t1 `eqType` t2
-        go (Coercion c1) (Coercion c2) = c1 `coreEqCoercion` c2
+        go (Coercion c1) (Coercion c2) = c1 `eqCoercion` c2
 
         go (App f1 a1) (App f2 a2)
           = f1 `go_s` f2 && a1 `go_s` a2
 
         go (Cast e1 t1) (Cast e2 t2)
-          = e1 `go_s` e2 && t1 `coreEqCoercion` t2
+          = e1 `go_s` e2 && t1 `eqCoercion` t2
 
         go (Tick t1 e1) (Tick t2 e2)
           = t1 == t2 && e1 `go_s` e2
@@ -1462,8 +1481,8 @@ eqExpr in_scope e1 e2
 
     go _   (Lit lit1)    (Lit lit2)      = lit1 == lit2
     go env (Type t1)    (Type t2)        = eqTypeX env t1 t2
-    go env (Coercion co1) (Coercion co2) = coreEqCoercion2 env co1 co2
-    go env (Cast e1 co1) (Cast e2 co2) = coreEqCoercion2 env co1 co2 && go env e1 e2
+    go env (Coercion co1) (Coercion co2) = eqCoercionX env co1 co2
+    go env (Cast e1 co1) (Cast e2 co2) = eqCoercionX env co1 co2 && go env e1 e2
     go env (App f1 a1)   (App f2 a2)   = go env f1 f2 && go env a1 a2
     go env (Tick n1 e1)  (Tick n2 e2)  = eqTickish env n1 n2 && go env e1 e2
 
@@ -1508,9 +1527,9 @@ diffExpr _   env (Var v1)   (Var v2)   | rnOccL env v1 == rnOccR env v2 = []
 diffExpr _   _   (Lit lit1) (Lit lit2) | lit1 == lit2                   = []
 diffExpr _   env (Type t1)  (Type t2)  | eqTypeX env t1 t2              = []
 diffExpr _   env (Coercion co1) (Coercion co2)
-                                       | coreEqCoercion2 env co1 co2    = []
+                                       | eqCoercionX env co1 co2        = []
 diffExpr top env (Cast e1 co1)  (Cast e2 co2)
-  | coreEqCoercion2 env co1 co2            = diffExpr top env e1 e2
+  | eqCoercionX env co1 co2                = diffExpr top env e1 e2
 diffExpr top env (Tick n1 e1)   e2
   | not (tickishIsCode n1)                 = diffExpr top env e1 e2
 diffExpr top env e1             (Tick n2 e2)
@@ -1851,7 +1870,7 @@ need to address that here.
 
 tryEtaReduce :: [Var] -> CoreExpr -> Maybe CoreExpr
 tryEtaReduce bndrs body
-  = go (reverse bndrs) body (mkReflCo Representational (exprType body))
+  = go (reverse bndrs) body (mkRepReflCo (exprType body))
   where
     incoming_arity = count isId bndrs
 
@@ -1915,9 +1934,12 @@ tryEtaReduce bndrs body
     -- See Note [Eta reduction with casted arguments]
     ok_arg bndr (Type ty) co
        | Just tv <- getTyVar_maybe ty
-       , bndr == tv  = Just (mkForAllCo tv co, [])
+       , bndr == tv  = Just (mkHomoForAllCo Representational tv co, [])
+    ok_arg bndr (Coercion co1) co2
+       | Just cv <- getCoVar_maybe co1
+       , bndr == cv  = Just (mkHomoForAllCo Representational cv co2, [])
     ok_arg bndr (Var v) co
-       | bndr == v   = let reflCo = mkReflCo Representational (idType bndr)
+       | bndr == v   = let reflCo = mkRepReflCo (idType bndr)
                        in Just (mkFunCo Representational reflCo co, [])
     ok_arg bndr (Cast e co_arg) co
        | (ticks, Var v) <- stripTicksTop tickishFloatable e

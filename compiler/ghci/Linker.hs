@@ -847,7 +847,7 @@ dynLoadObjs dflags pls objs = do
                       buildTag = mkBuildTag [WayDyn],
                       outputFile = Just soFile
                   }
-    linkDynLib dflags2 objs []
+    linkDynLib dflags2 objs (pkgs_loaded pls)  -- fix for #10058
     consIORef (filesToNotIntermediateClean dflags) soFile
     m <- loadDLL soFile
     case m of

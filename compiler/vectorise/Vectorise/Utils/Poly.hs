@@ -27,12 +27,12 @@ import Control.Monad
 -- The purpose of this function is to introduce the additional 'PA' dictionary arguments that are
 -- needed when vectorising type abstractions.
 --
-polyAbstract :: [TyVar] -> ([Var] -> VM a) -> VM a
+polyAbstract :: [TyCoVar] -> ([Var] -> VM a) -> VM a
 polyAbstract tvs p
   = localV
   $ do { mdicts <- mapM mk_dict_var tvs
-       ; zipWithM_ (\tv -> maybe (defLocalTyVar tv)
-                                 (defLocalTyVarWithPA tv . Var)) tvs mdicts
+       ; zipWithM_ (\tv -> maybe (defLocalTyCoVar tv)
+                                 (defLocalTyCoVarWithPA tv . Var)) tvs mdicts
        ; p (mk_args mdicts)
        }
   where
@@ -48,7 +48,7 @@ polyAbstract tvs p
 -- |Determine the number of 'PA' dictionary arguments required for a set of type variables (depends
 -- on their kinds).
 --
-polyArity :: [TyVar] -> VM Int
+polyArity :: [TyCoVar] -> VM Int
 polyArity tvs 
   = do { tys <- mapM paDictArgType tvs
        ; return $ length [() | Just _ <- tys]

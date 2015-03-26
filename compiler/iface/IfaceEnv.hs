@@ -3,12 +3,13 @@
 {-# LANGUAGE CPP, RankNTypes #-}
 
 module IfaceEnv (
-        newGlobalBinder, newImplicitBinder,
+        newGlobalBinder, newImplicitBinder, 
         lookupIfaceTop,
         lookupOrig, lookupOrigNameCache, extendNameCache,
         newIfaceName, newIfaceNames,
-        extendIfaceIdEnv, extendIfaceTyVarEnv,
-        tcIfaceLclId, tcIfaceTyVar, lookupIfaceTyVar,
+        extendIfaceIdEnv, extendIfaceTyVarEnv, 
+        tcIfaceLclId, tcIfaceTyVar, lookupIfaceVar,
+        lookupIfaceTyVar, extendIfaceEnvs,
 
         ifaceExportNames,
 
@@ -29,6 +30,7 @@ import Avail
 import Module
 import UniqFM
 import FastString
+import IfaceType
 import UniqSupply
 import SrcLoc
 import Util
@@ -37,6 +39,7 @@ import Outputable
 import Exception     ( evaluate )
 
 import Data.IORef    ( atomicModifyIORef, readIORef )
+import Data.List     ( partition )
 
 {-
 *********************************************************
@@ -77,7 +80,7 @@ newGlobalBinder mod occ loc
          allocateGlobalBinder name_cache mod occ loc
 
 allocateGlobalBinder
-  :: NameCache
+  :: NameCache 
   -> Module -> OccName -> SrcSpan
   -> (NameCache, Name)
 -- See Note [The Name Cache]
@@ -128,7 +131,7 @@ newImplicitBinder :: Name                       -- Base name
 newImplicitBinder base_name mk_sys_occ
   | Just mod <- nameModule_maybe base_name
   = newGlobalBinder mod occ loc
-  | otherwise           -- When typechecking a [d| decl bracket |],
+  | otherwise           -- When typechecking a [d| decl bracket |], 
                         -- TH generates types, classes etc with Internal names,
                         -- so we follow suit for the implicit binders
   = do  { uniq <- newUnique
@@ -148,7 +151,7 @@ lookupOrig mod occ
                 --      then pull on mod (say)
                 --      which does some stuff that modifies the name cache
                 -- This did happen, with tycon_mod in TcIface.tcIfaceAlt (DataAlt..)
-          mod `seq` occ `seq` return ()
+          mod `seq` occ `seq` return () 
 --      ; traceIf (text "lookup_orig" <+> ppr mod <+> ppr occ)
 
         ; updNameCache $ \name_cache ->
@@ -183,7 +186,7 @@ them up in the original name cache.
 However, there are two reasons why we might look up an Orig RdrName:
 
   * If you use setRdrNameSpace on an Exact RdrName it may be
-    turned into an Orig RdrName.
+    turned into an Orig RdrName. 
 
   * Template Haskell turns a BuiltInSyntax Name into a TH.NameG
     (DsMeta.globalVar), and parses a NameG into an Orig RdrName
@@ -205,8 +208,8 @@ lookupOrigNameCache nc mod occ
         Just occ_env -> lookupOccEnv occ_env occ
 
 extendOrigNameCache :: OrigNameCache -> Name -> OrigNameCache
-extendOrigNameCache nc name
-  = ASSERT2( isExternalName name, ppr name )
+extendOrigNameCache nc name 
+  = ASSERT2( isExternalName name, ppr name ) 
     extendNameCache nc (nameModule name) (nameOccName name) name
 
 extendNameCache :: OrigNameCache -> Module -> OccName -> Name -> OrigNameCache
@@ -216,7 +219,7 @@ extendNameCache nc mod occ name
     combine _ occ_env = extendOccEnv occ_env occ name
 
 getNameCache :: TcRnIf a b NameCache
-getNameCache = do { HscEnv { hsc_NC = nc_var } <- getTopEnv;
+getNameCache = do { HscEnv { hsc_NC = nc_var } <- getTopEnv; 
                     readMutVar nc_var }
 
 updNameCache :: (NameCache -> (NameCache, c)) -> TcRnIf a b c
@@ -278,8 +281,16 @@ tcIfaceTyVar occ
             Nothing     -> failIfM (text "Iface type variable out of scope: " <+> ppr occ)
         }
 
-lookupIfaceTyVar :: FastString -> IfL (Maybe TyVar)
-lookupIfaceTyVar occ
+lookupIfaceTyVar :: IfaceTvBndr -> IfL (Maybe TyVar)
+lookupIfaceTyVar (occ, _)
+  = do  { lcl <- getLclEnv
+        ; return (lookupUFM (if_tv_env lcl) occ) }
+
+lookupIfaceVar :: IfaceBndr -> IfL (Maybe TyCoVar)
+lookupIfaceVar (IfaceIdBndr (occ, _))
+  = do  { lcl <- getLclEnv
+        ; return (lookupUFM (if_id_env lcl) occ) }
+lookupIfaceVar (IfaceTvBndr (occ, _))
   = do  { lcl <- getLclEnv
         ; return (lookupUFM (if_tv_env lcl) occ) }
 
@@ -289,6 +300,14 @@ extendIfaceTyVarEnv tyvars thing_inside
         ; let { tv_env' = addListToUFM (if_tv_env env) pairs
               ; pairs   = [(occNameFS (getOccName tv), tv) | tv <- tyvars] }
         ; setLclEnv (env { if_tv_env = tv_env' }) thing_inside }
+
+extendIfaceEnvs :: [TyCoVar] -> IfL a -> IfL a
+extendIfaceEnvs tcvs thing_inside
+  = extendIfaceTyVarEnv tvs $
+    extendIfaceIdEnv    cvs $
+    thing_inside
+  where
+    (tvs, cvs) = partition isTyVar tcvs
 
 {-
 ************************************************************************
