@@ -24,20 +24,14 @@
 
 <interactive>:37:15:
     Type family equation violates injectivity annotation.
-    Type variable ‘b’ should appear in the RHS of type family equation:
+    Injective type variable ‘b’ does not appear in the RHS of type family equation
       J Int b c -- Defined at <interactive>:37:15
 
 <interactive>:41:15:
     Type family equation violates injectivity annotation.
-    Type variable ‘n’ should appear in the RHS of type family equation:
+    Injective type variable ‘n’ does not appear in the RHS of type family equation
       K ('S n) m -- Defined at <interactive>:41:15
 
 <interactive>:45:15:
     Calling type family ‘Id’ is not allowed in injective type family equation:
       L a -- Defined at <interactive>:45:15
-
-<interactive>:50:15:
-    Type family equation violates injectivity annotation.
-    Non-injective type variable ‘b’ should not appear
-    in the RHS of type family equation:
-      Q Int b -- Defined at <interactive>:50:15
