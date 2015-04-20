@@ -1048,7 +1048,7 @@ chooseBranch axiom tys
   = do { let num_pats = coAxiomNumPats axiom
              (target_tys, extra_tys) = splitAt num_pats tys
              branches = coAxiomBranches axiom
-       ; (ind, inst_tys) <- findBranch (fromBranchList branches) 0 target_tys
+       ; (ind, inst_tys) <- findBranch (fromBranchList branches) target_tys
        ; return (ind, inst_tys ++ extra_tys) }
 
 -- The axiom must *not* be oversaturated
@@ -1056,29 +1056,41 @@ findBranch :: [CoAxBranch]             -- branches to check
            -> BranchIndex              -- index of current branch
            -> [Type]                   -- target types
            -> Maybe (BranchIndex, [Type])
-findBranch (CoAxBranch { cab_tvs = tpl_tvs, cab_lhs = tpl_lhs, cab_incomps = incomps }
-              : rest) ind target_tys
-  = case tcMatchTys (mkVarSet tpl_tvs) tpl_lhs target_tys of
-      Just subst -- matching worked. now, check for apartness.
-        |  all (isSurelyApart
-                . tcUnifyTysFG instanceBindFun flattened_target
-                . coAxBranchLHS) incomps
-        -> -- matching worked & we're apart from all incompatible branches. success
-           Just (ind, substTyVars subst tpl_tvs)
+findBranch branches target_tys
+  = go 0 branches
+  where
+    go ind (branch@(CoAxBranch { cab_tvs = tpl_tvs, cab_lhs = tpl_lhs }) : rest)
+      = case tcMatchTys (mkVarSet tpl_tvs) tpl_lhs target_tys of
+        Just subst -- matching worked. now, check for apartness.
+          |  apartnessCheck flattened_target branch
+          -> -- matching worked & we're apart from all incompatible branches. success
+             Just (ind, substTyVars subst tpl_tvs)
 
-      -- failure. keep looking
-      _ -> findBranch rest (ind+1) target_tys
+        -- failure. keep looking
+        _ -> go (ind+1) rest
 
-  where isSurelyApart SurelyApart = True
-        isSurelyApart _           = False
+    -- fail if no branches left
+    go _ [] = Nothing
 
-        -- See Note [Flattening] below
-        flattened_target = flattenTys in_scope target_tys
-        in_scope = mkInScopeSet (unionVarSets $
-                                 map (tyVarsOfTypes . coAxBranchLHS) incomps)
+    -- See Note [Flattening] below
+    flattened_target = flattenTys in_scope target_tys
+    in_scope = mkInScopeSet (unionVarSets $
+                             map (tyVarsOfTypes . coAxBranchLHS) incomps)
 
--- fail if no branches left
-findBranch [] _ _ = Nothing
+apartnessCheck :: [Type]       -- ^ /flattened/ target arguments. Make sure
+                               -- they're flattened! See Note [Flattening].
+                               -- (NB: This "flat" is a different
+                               -- "flat" than is used in TcFlatten.)
+               -> CoAxBranch   -- ^ the candidate equation we wish to use
+                               -- Precondition: this matches the target
+               -> Bool         -- ^ True <=> equation can fire
+apartnessCheck flattened_target (CoAxBranch { cab_incomps = incomps })
+  = all (isSurelyApart
+         . tcUnifyTysFG instanceBindFun flattened_target
+         . coAxBranchLHS) incomps
+  where
+    isSurelyApart SurelyApart = True
+    isSurelyApart _           = False
 
 {-
 ************************************************************************
