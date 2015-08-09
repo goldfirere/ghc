@@ -29,7 +29,6 @@ module TcUnify (
   matchExpectedAppTy,
   matchExpectedFunTys, matchExpectedFunTysPart,
   matchExpectedFunKind,
-  wrapFunResCoercion
 
   ) where
 
@@ -684,47 +683,92 @@ tc_sub_type_ds eq_orig inst_orig ctxt ty_actual ty_expected
      -- use versions without synonyms expanded
     unify = uType eq_orig ty_actual ty_expected
 
------------------
-tcWrapResult :: HsExpr TcId -> TcSigmaType -> TcRhoType -> CtOrigin
+{-
+************************************************************************
+*                                                                      *
+        Expected types & bidirectional type checking
+*                                                                      *
+************************************************************************
+
+TODO (RAE): Write introduction
+-}
+
+data ExpType = Check TcRhoType
+             | Infer Unique    -- for debugging only
+                     (TcRef (Maybe TcType))
+
+instance Outputable ExpType where
+  ppr (Check rho) = ppr rho
+  ppr (Infer u _) = angleBrackets $ text "Infer@" <> ppr u
+
+-- | Make an already-known expected type
+mkKnownExpType :: TcRhoType -> ExpType
+mkKnownExpType = Check
+
+-- | Extract a type from an 'ExpType'. If in checking mode, just produces the
+-- type. If in inference mode, produces a new TauTv metavariable for the type.
+-- The TauTv has an OpenKind.
+-- Accordingly, this is suitable only when you're sure that inference should
+-- produce a tau-type. (Checking might still propagate a rho-type, though.)
+expectedTauType :: ExpType -> TcM TcTauType
+expectedTauType (Check rho) = return rho
+expectedTauType (Infer u ref)
+  = do { when debugIsOn $
+         do { contents <- readTcRef ref
+            ; case contents of
+                Just ty -> pprPanic "expectedTauType found a filled hole"
+                                    (ppr u $$ ppr ty)
+                Nothing -> return () }
+       ; tau_ty <- newFlexiTyVarTy openTypeKind
+       ; traceTc "expectedTauType fills in an ExpType" $
+         vcat [ text "ExpType unique:" <+> ppr u
+              , text "TauTv:" <+> ppr tau_ty ]
+       ; writeTcRef ref (Just tau_ty)
+       ; return tau_ty }
+
+-- | Check an actual type against and expected type, producing a wrapper from
+-- the actual type to the expected one, along with the expected type
+checkExpType :: CtOrigin   -- ^ origin of known type
+             -> TcType     -- ^ known type
+             -> ExpType
+             -> TcM (HsWrapper, TcType)
+checkExpType orig actual_ty (Check res_ty)
+  = (, res_ty) <$> tcSubTypeDS_NC_O orig GenSigCtxt actual_ty res_ty
+checkExpType orig actual_ty (Infer u ref)
+  = do { traceTc "Filling in ExpType:" (ppr u <+> text ":=" <+> ppr actual_ty)
+       ; when debugIsOn $
+         do { contents <- readTcRef ref
+            ; case contents of
+                Just ty -> pprPanic "checkExpType writing over a type"
+                           (vcat [ppr u, ppr t , ppr actual_ty])
+                Nothing -> return () }
+       ; writeTcRef ref (Just actual_ty)
+       ; return (idHsWrapper, actual_ty) }
+
+tcWrapResult :: HsExpr TcId -> TcSigmaType -> ExpType -> CtOrigin
              -> TcM (HsExpr TcId, CtOrigin)
   -- returning the origin is very convenient in TcExpr
 tcWrapResult expr actual_ty res_ty orig
   = do { traceTc "tcWrapResult" (vcat [ text "Actual:  " <+> ppr actual_ty
                                       , text "Expected:" <+> ppr res_ty
                                       , text "Origin:" <+> pprCtOrigin orig ])
-       ; cow <- tcSubTypeDS_NC_O orig GenSigCtxt actual_ty res_ty
+       ; wrap <- checkExpType orig actual_ty res_ty
        ; return (mkHsWrap cow expr, orig) }
-
------------------------------------
-wrapFunResCoercion
-        :: [TcType]        -- Type of args
-        -> HsWrapper       -- HsExpr a -> HsExpr b
-        -> TcM HsWrapper   -- HsExpr (arg_tys -> a) -> HsExpr (arg_tys -> b)
-wrapFunResCoercion arg_tys co_fn_res
-  | isIdHsWrapper co_fn_res
-  = return idHsWrapper
-  | null arg_tys
-  = return co_fn_res
-  | otherwise
-  = do  { arg_ids <- newSysLocalIds (fsLit "sub") arg_tys
-        ; return (mkWpLams arg_ids <.> co_fn_res <.> mkWpEvVarApps arg_ids) }
 
 -----------------------------------
 -- | Infer a type using a type "checking" function by passing in a ReturnTv,
 -- which can unify with *anything*. See also Note [ReturnTv] in TcType
-tcInfer :: (TcType -> TcM a) -> TcM (a, TcType)
+tcInfer :: (ExpType -> TcM a) -> TcM (a, TcType)
 tcInfer tc_check
-  = do { ret_tv  <- newReturnTyVar openTypeKind
-       ; res <- tc_check (mkTyVarTy ret_tv)
-       ; details <- readMetaTyVar ret_tv
-       ; res_ty <- case details of
-            Indirect ty -> return ty
-            Flexi ->    -- Checking was uninformative
-                     do { traceTc "Defaulting un-filled ReturnTv to a TauTv" (ppr ret_tv)
-                        ; tau_ty <- newFlexiTyVarTy openTypeKind
-                        ; writeMetaTyVar ret_tv tau_ty
-                        ; return tau_ty }
-       ; return (res, res_ty) }
+  = do { ref <- newTcRef Nothing
+       ; u <- newUnique
+       ; traceTc "tcInfer {" (ppr u)
+       ; res <- tc_check (Infer u ref)
+       ; contents <- readTcRef ref
+       ; case contents of
+           Nothing -> pprPanic "tcInfer didn't fill in type for" (ppr u)
+           Just ty -> do { traceTc "tcInfer }" (ppr u $$ ppr ty)
+                         ; return (res, ty) }
 
 {-
 ************************************************************************

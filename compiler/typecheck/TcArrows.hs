@@ -168,10 +168,9 @@ tc_cmd env (HsCmdIf (Just fun) pred b1 b2) res_ty -- Rebindable syntax for if
         -- the return value.
         ; (_, [r_tv]) <- tcInstSkolTyVars [alphaTyVar]
         ; let r_ty = mkTyVarTy r_tv
-        ; let if_ty = mkFunTys [pred_ty, r_ty, r_ty] r_ty
         ; checkTc (not (r_tv `elemVarSet` tyVarsOfType pred_ty))
                   (ptext (sLit "Predicate type of `ifThenElse' depends on result type"))
-        ; fun'  <- tcSyntaxOp IfOrigin fun if_ty
+        ; fun'  <- tcSyntaxOp IfOrigin fun [pred_ty, r_ty, r_ty] (mkKnownExpType r_ty)
         ; pred' <- tcMonoExpr pred pred_ty
         ; b1'   <- tcCmd env b1 res_ty
         ; b2'   <- tcCmd env b2 res_ty

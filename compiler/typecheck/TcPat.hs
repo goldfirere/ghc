@@ -600,7 +600,7 @@ tc_pat penv (ListPat pats _ Nothing) pat_ty thing_inside
 
 tc_pat penv (ListPat pats _ (Just (_,e))) pat_ty thing_inside
   = do  { list_pat_ty <- newFlexiTyVarTy liftedTypeKind
-        ; e' <- tcSyntaxOp ListOrigin e (mkFunTy pat_ty list_pat_ty)
+        ; e' <- tcSyntaxOp ListOrigin e [pat_ty] list_pat_ty
         ; (coi, elt_ty) <- matchExpectedPatTy matchExpectedListTy penv list_pat_ty
         ; (pats', res) <- tcMultiple (\p -> tc_lpat p elt_ty)
                                      pats penv thing_inside
@@ -659,12 +659,12 @@ tc_pat (PE { pe_orig = pat_orig })
        (NPat (L l over_lit) mb_neg eq) pat_ty thing_inside
   = do  { let orig = LiteralOrigin over_lit
         ; (wrap, lit') <- newOverloadedLit over_lit pat_ty pat_orig
-        ; eq'     <- tcSyntaxOp orig eq (mkFunTys [pat_ty, pat_ty] boolTy)
+        ; eq'     <- tcSyntaxOp orig eq [pat_ty, pat_ty] boolTy
         ; mb_neg' <- case mb_neg of
                         Nothing  -> return Nothing      -- Positive literal
                         Just neg ->     -- Negative literal
                                         -- The 'negate' is re-mappable syntax
-                            do { neg' <- tcSyntaxOp orig neg (mkFunTy pat_ty pat_ty)
+                            do { neg' <- tcSyntaxOp orig neg [pat_ty] pat_ty
                                ; return (Just neg') }
         ; res <- thing_inside
         ; return (mkHsWrapPat wrap (NPat (L l lit') mb_neg' eq') pat_ty, res) }
@@ -676,8 +676,8 @@ tc_pat penv (NPlusKPat (L nm_loc name) (L loc lit) ge minus) pat_ty thing_inside
         ; (wrap_lit, lit') <- newOverloadedLit lit pat_ty' (pe_orig penv)
 
         -- The '>=' and '-' parts are re-mappable syntax
-        ; ge'    <- tcSyntaxOp orig ge    (mkFunTys [pat_ty', pat_ty'] boolTy)
-        ; minus' <- tcSyntaxOp orig minus (mkFunTys [pat_ty', pat_ty'] pat_ty')
+        ; ge'    <- tcSyntaxOp orig ge    [pat_ty', pat_ty'] boolTy
+        ; minus' <- tcSyntaxOp orig minus [pat_ty', pat_ty'] pat_ty'
         ; let pat' = mkHsWrapPat wrap_lit
                                  (NPlusKPat (L nm_loc bndr_id)
                                             (L loc lit')

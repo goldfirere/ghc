@@ -606,9 +606,10 @@ mkWpFun (WpCast co1) WpHole       _  t2 = WpCast (mkTcFunCo Representational (mk
 mkWpFun (WpCast co1) (WpCast co2) _  _  = WpCast (mkTcFunCo Representational (mkTcSymCo co1) co2)
 mkWpFun co1          co2          t1 _  = WpFun co1 co2 t1
 
--- | @mkWpFuns arg_tys wrap@, where @wrap :: a "->" b@, gives a wrapper from
--- @arg_tys -> a@ to @arg_tys -> b@.
-mkWpFuns :: [TcType] -> HsWrapper -> HsWrapper
+-- | @mkWpFuns arg_wraps res_wrap arg_tys res_ty@, where @arg_wrap :: a "->" b@,
+-- @arg_ty = a@, @res_wrap :: c "->" d@, and @res_ty = c@ or @res_ty = d@ (whichever
+-- is more convenient), gives a wrapper from @bs -> c@ to @as -> d@.
+mkWpFuns :: [HsWrapper] -> HsWrapper -> [TcType] -> TcType -> HsWrapper
 mkWpFuns []                 res_wrap = res_wrap
 mkWpFuns (arg_ty : arg_tys) res_wrap
   = WpFun idHsWrapper (mkWpFuns arg_tys res_wrap) arg_ty

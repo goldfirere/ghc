@@ -340,7 +340,7 @@ cases (the rest are caught in lookupInst).
 -}
 
 newOverloadedLit :: HsOverLit Name
-                 -> TcSigmaType  -- if nec'y, this type is instantiated...
+                 -> ExpType      -- if nec'y, this type is instantiated...
                  -> CtOrigin     -- ... using this CtOrigin
                  -> TcM (HsWrapper, HsOverLit TcId)
                    -- wrapper :: input type "->" type of result
@@ -349,7 +349,8 @@ newOverloadedLit
   | not rebindable
     -- all built-in overloaded lits are not higher-rank, so skolemise.
     -- this is necessary for shortCutLit.
-  = do { (wrap, insted_ty) <- deeplyInstantiate res_orig res_ty
+  = do { rho_ty <- expectedTauType res_ty
+       ; (wrap, insted_ty) <- deeplyInstantiate res_orig rho_ty
        ; dflags <- getDynFlags
        ; case shortCutLit dflags val insted_ty of
         -- Do not generate a LitInst for rebindable syntax.
@@ -372,14 +373,14 @@ newOverloadedLit
 -- newOverloadedLit in TcUnify
 newNonTrivialOverloadedLit :: CtOrigin
                            -> HsOverLit Name
-                           -> TcSigmaType
+                           -> ExpType
                            -> TcM (HsOverLit TcId)
 newNonTrivialOverloadedLit orig
   lit@(OverLit { ol_val = val, ol_witness = meth_name
                , ol_rebindable = rebindable }) res_ty
   = do  { hs_lit <- mkOverLit val
         ; let lit_ty = hsLitType hs_lit
-        ; fi' <- tcSyntaxOp orig meth_name (mkFunTy lit_ty res_ty)
+        ; fi' <- tcSyntaxOp orig meth_name [lit_ty] res_ty
                 -- Overloaded literals must have liftedTypeKind, because
                 -- we're instantiating an overloaded function here,
                 -- whereas res_ty might be openTypeKind. This was a bug in 6.2.2

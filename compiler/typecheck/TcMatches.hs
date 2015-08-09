@@ -159,7 +159,9 @@ matchFunTys herald arity res_ty thing_inside
             <- matchExpectedFunTys Expected herald arity res_ty
             -- wrap_fun :: pat_tys -> res_ty' "->" res_ty
         ; (wrap_inner, res1, res2) <- thing_inside pat_tys res_ty'
-        ; let wrap_inner_with_args = mkWpFuns pat_tys wrap_inner
+        ; let wrap_inner_with_args
+                = mkWpFuns (map (const idHsWrapper) pat_tys) wrap_inner
+                           pat_tys res_ty
         ; return (wrap_fun <.> wrap_inner_with_args, res1, res2) }
 
 {-
@@ -535,8 +537,7 @@ tcMcStmt :: TcExprStmtChecker
 
 tcMcStmt _ (LastStmt body return_op) res_ty thing_inside
   = do  { a_ty       <- newFlexiTyVarTy liftedTypeKind
-        ; return_op' <- tcSyntaxOp MCompOrigin return_op
-                                   (a_ty `mkFunTy` res_ty)
+        ; return_op' <- tcSyntaxOp MCompOrigin return_op [a_ty] res_ty
         ; body'      <- tcMonoExprNC body a_ty
         ; thing      <- thing_inside (panic "tcMcStmt: thing_inside")
         ; return (LastStmt body' return_op', thing) }
@@ -554,12 +555,12 @@ tcMcStmt ctxt (BindStmt pat rhs bind_op fail_op) res_ty thing_inside
 
            -- (>>=) :: rhs_ty -> (pat_ty -> new_res_ty) -> res_ty
         ; bind_op'   <- tcSyntaxOp MCompOrigin bind_op
-                             (mkFunTys [rhs_ty, mkFunTy pat_ty new_res_ty] res_ty)
+                             [rhs_ty, mkFunTy pat_ty new_res_ty] res_ty
 
            -- If (but only if) the pattern can fail, typecheck the 'fail' operator
         ; fail_op' <- if isIrrefutableHsPat pat
                       then return noSyntaxExpr
-                      else tcSyntaxOp MCompOrigin fail_op (mkFunTy stringTy new_res_ty)
+                      else tcSyntaxOp MCompOrigin fail_op [stringTy] new_res_ty
 
         ; rhs' <- tcMonoExprNC rhs rhs_ty
         ; (pat', thing) <- tcPat (StmtCtxt ctxt) pat pat_ty $
@@ -580,10 +581,9 @@ tcMcStmt _ (BodyStmt rhs then_op guard_op _) res_ty thing_inside
         ; rhs_ty     <- newFlexiTyVarTy liftedTypeKind
         ; new_res_ty <- newFlexiTyVarTy liftedTypeKind
         ; rhs'       <- tcMonoExpr rhs test_ty
-        ; guard_op'  <- tcSyntaxOp MCompOrigin guard_op
-                                   (mkFunTy test_ty rhs_ty)
+        ; guard_op'  <- tcSyntaxOp MCompOrigin guard_op [test_ty] rhs_ty
         ; then_op'   <- tcSyntaxOp MCompOrigin then_op
-                                   (mkFunTys [rhs_ty, new_res_ty] res_ty)
+                                   [rhs_ty, new_res_ty] res_ty
         ; thing      <- thing_inside new_res_ty
         ; return (BodyStmt rhs' then_op' guard_op' rhs_ty, thing) }
 
@@ -648,17 +648,17 @@ tcMcStmt ctxt (TransStmt { trS_stmts = stmts, trS_bndrs = bindersMap
 
                 -- 'return' is only used for the binders, so we know its type.
                 --   return :: (a,b,c,..) -> m (a,b,c,..)
-                ; return_op' <- tcSyntaxOp MCompOrigin return_op $
-                                (mkBigCoreVarTupTy bndr_ids) `mkFunTy` res_ty'
+                ; return_op' <- tcSyntaxOp MCompOrigin return_op
+                                [mkBigCoreVarTupTy bndr_ids] res_ty'
 
                 ; return (bndr_ids, by', return_op') }
 
        --------------- Typecheck the 'bind' function -------------
        -- (>>=) :: m2 (n (a,b,c)) -> ( n (a,b,c) -> new_res_ty ) -> res_ty
        ; new_res_ty <- newFlexiTyVarTy liftedTypeKind
-       ; bind_op' <- tcSyntaxOp MCompOrigin bind_op $
-                                using_res_ty `mkFunTy` (n_app tup_ty `mkFunTy` new_res_ty)
-                                             `mkFunTy` res_ty
+       ; bind_op' <- tcSyntaxOp MCompOrigin bind_op
+                                [using_res_ty, n_app tup_ty `mkFunTy` new_res_ty]
+                                res_ty
 
        --------------- Typecheck the 'fmap' function -------------
        ; fmap_op' <- case form of
@@ -741,10 +741,9 @@ tcMcStmt ctxt (ParStmt bndr_stmts_s mzip_op bind_op) res_ty thing_inside
        ; let tys      = [ mkBigCoreVarTupTy bs | ParStmtBlock _ bs _ <- blocks']
              tuple_ty = mk_tuple_ty tys
 
-       ; bind_op' <- tcSyntaxOp MCompOrigin bind_op $
-                        (m_ty `mkAppTy` tuple_ty)
-                        `mkFunTy` (tuple_ty `mkFunTy` res_ty)
-                        `mkFunTy` res_ty
+       ; bind_op' <- tcSyntaxOp MCompOrigin bind_op
+                        [m_ty `mkAppTy` tuple_ty, tuple_ty `mkFunTy` res_ty]
+                        res_ty
 
        ; return (ParStmt blocks' mzip_op' bind_op', thing) }
 
@@ -766,7 +765,7 @@ tcMcStmt ctxt (ParStmt bndr_stmts_s mzip_op bind_op) res_ty thing_inside
                    do { ids <- tcLookupLocalIds names
                       ; let tup_ty = mkBigCoreVarTupTy ids
                       ; return_op' <- tcSyntaxOp MCompOrigin return_op
-                                          (tup_ty `mkFunTy` m_tup_ty')
+                                          [tup_ty] m_tup_ty'
                       ; (pairs', thing) <- loop m_ty pairs
                       ; return (ids, return_op', pairs', thing) }
            ; return (ParStmtBlock stmts' ids return_op' : pairs', thing) }
@@ -801,13 +800,13 @@ tcDoStmt ctxt (BindStmt pat rhs bind_op fail_op) res_ty thing_inside
         ; pat_ty     <- newFlexiTyVarTy liftedTypeKind
         ; new_res_ty <- newFlexiTyVarTy liftedTypeKind
         ; bind_op'   <- tcSyntaxOp DoOrigin bind_op
-                             (mkFunTys [rhs_ty, mkFunTy pat_ty new_res_ty] res_ty)
+                             [rhs_ty, mkFunTy pat_ty new_res_ty] res_ty
 
                 -- If (but only if) the pattern can fail,
                 -- typecheck the 'fail' operator
         ; fail_op' <- if isIrrefutableHsPat pat
                       then return noSyntaxExpr
-                      else tcSyntaxOp DoOrigin fail_op (mkFunTy stringTy new_res_ty)
+                      else tcSyntaxOp DoOrigin fail_op [stringTy] new_res_ty
 
         ; rhs' <- tcMonoExprNC rhs rhs_ty
         ; (pat', thing) <- tcPat (StmtCtxt ctxt) pat pat_ty $
@@ -823,7 +822,7 @@ tcDoStmt _ (BodyStmt rhs then_op _ _) res_ty thing_inside
           rhs_ty     <- newFlexiTyVarTy liftedTypeKind
         ; new_res_ty <- newFlexiTyVarTy liftedTypeKind
         ; then_op' <- tcSyntaxOp DoOrigin then_op
-                           (mkFunTys [rhs_ty, new_res_ty] res_ty)
+                           [rhs_ty, new_res_ty] res_ty
 
         ; rhs' <- tcMonoExprNC rhs rhs_ty
         ; thing <- thing_inside new_res_ty
@@ -845,16 +844,16 @@ tcDoStmt ctxt (RecStmt { recS_stmts = stmts, recS_later_ids = later_names
                    do { tup_rets <- zipWithM tcCheckId tup_names tup_elt_tys
                              -- Unify the types of the "final" Ids (which may
                              -- be polymorphic) with those of "knot-tied" Ids
-                      ; ret_op' <- tcSyntaxOp DoOrigin ret_op (mkFunTy tup_ty inner_res_ty)
+                      ; ret_op' <- tcSyntaxOp DoOrigin ret_op [tup_ty] inner_res_ty
                       ; return (ret_op', tup_rets) }
 
         ; mfix_res_ty <- newFlexiTyVarTy liftedTypeKind
         ; mfix_op' <- tcSyntaxOp DoOrigin mfix_op
-                                 (mkFunTy (mkFunTy tup_ty stmts_ty) mfix_res_ty)
+                                 [mkFunTy tup_ty stmts_ty] mfix_res_ty
 
         ; new_res_ty <- newFlexiTyVarTy liftedTypeKind
         ; bind_op' <- tcSyntaxOp DoOrigin bind_op
-                                 (mkFunTys [mfix_res_ty, mkFunTy tup_ty new_res_ty] res_ty)
+                                 [mfix_res_ty, mkFunTy tup_ty new_res_ty] res_ty
 
         ; thing <- thing_inside new_res_ty
 
