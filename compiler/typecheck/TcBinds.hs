@@ -1694,7 +1694,11 @@ tcTySig (L loc (PatSynSig (L _ name) sig_ty))
               do { req'  <- tcHsContext req
                  ; prov' <- tcHsContext prov
                  ; ty'   <- tcHsLiftedType body_ty
-                 ; return (req', prov', ty', tvs2) }
+                 ; let bound_tvs
+                         = unionVarSets [ allBoundVariabless req'
+                                        , allBoundVariabless prov'
+                                        , allBoundVariables ty' ]
+                 ; return ((req', prov', ty', tvs2), bound_tvs) }
 
        -- These are /signatures/ so we zonk to squeeze out any kind
        -- unification variables.  ToDo: checkValidType?
@@ -1786,7 +1790,11 @@ tcUserTypeSig hs_sig_ty mb_name
                 -- NB: Do this in the context of the pushTcLevel so that
                 -- the TcLevel invariant is respected
 
-            ; return (wcs, tvs2, theta, tau) }
+            ; let bound_tvs
+                    = unionVarSets [ allBoundVariabless theta
+                                   , allBoundVariables tau
+                                   , mkVarSet (map snd wcs) ]
+            ; return ((wcs, tvs2, theta, tau), bound_tvs) }
 
        ; loc <- getSrcSpanM
        ; return $

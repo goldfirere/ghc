@@ -1557,38 +1557,35 @@ checkZonkValidTelescope hs_tvs orig_tvs extra
       = let bad_tvs = tyCoVarsOfType (tyVarKind tv) `minusVarSet` in_scope in
         go (varSetElems bad_tvs ++ errs) (in_scope `extendVarSet` tv) tvs
 
--- | After inferring kinds of an HsQTyVars, check to make sure that the
--- inferred kinds of the implicitly declared variables (what once were always
--- just kinds) don't mention any of the type variables. This is a special
--- case of skolem escape. We might need a more general approach (see #11142),
--- but this catches an easy case.
-checkValidInferredKinds :: [TyVar]     -- ^ implicit vars (not nec. zonked)
-                        -> [TyVar]     -- ^ explicit vars (zonked)
+-- | After inferring kinds of type variables, check to make sure that the
+-- inferred kinds any of the type variables bound in a smaller scope.
+-- This is a skolem escape check.
+checkValidInferredKinds :: [TyVar]     -- ^ vars to check (zonked)
+                        -> TyVarSet    -- ^ vars out of scope
+                        -> SDoc        -- ^ suffix to error message
                         -> TcM ()
-checkValidInferredKinds orig_kvs orig_tvs
-  = do { orig_kvs <- mapM zonkTyCoVarKind orig_kvs
-       ; traceTc "RAE2" (pprTvBndrs orig_kvs $$ pprTvBndrs orig_tvs)
+checkValidInferredKinds orig_kvs out_of_scope extra
+  = do { traceTc "RAE2" (pprTvBndrs orig_kvs $$ ppr out_of_scope)
        ; let bad_pairs = [ (tv, kv)
                          | kv <- orig_kvs
-                         , tv <- orig_tvs'
-                         , tv `elemVarSet` tyCoVarsOfType (tyVarKind kv) ]
+                         , Just tv <- map (lookupVarSet out_of_scope)
+                                          (tyCoVarsOfTypeList (tyVarKind kv)) ]
              report (tidyTyVarOcc env -> tv, tidyTyVarOcc env -> kv)
                = addErr $
-                 text "The kind of implicitly-bound variable" <+>
+                 text "The kind of variable" <+>
                  quotes (ppr kv) <> text ", namely" <+>
                  quotes (ppr (tyVarKind kv)) <> comma $$
-                 text "depends on explicitly-bound variable" <+>
-                 quotes (ppr tv) $$
+                 text "depends on variable" <+>
+                 quotes (ppr tv) <+> text "from an inner scope" $$
                  text "Perhaps bind" <+> quotes (ppr kv) <+>
-                 text "explicitly sometime after binding" <+>
-                 quotes (ppr tv)
+                 text "sometime after binding" <+>
+                 quotes (ppr tv) $$
+                 extra
        ; mapM_ report bad_pairs }
 
   where
     (env1, _) = tidyTyCoVarBndrs emptyTidyEnv orig_kvs
-    (env, _)  = tidyTyCoVarBndrs env1         orig_tvs
-
-    orig_tvs' = toposortTyVars orig_tvs
+    (env, _)  = tidyTyCoVarBndrs env1         (varSetElems out_of_scope)
 
 {-
 ************************************************************************

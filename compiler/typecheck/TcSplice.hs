@@ -874,10 +874,10 @@ reifyInstances th_nm th_tys
             <- bindLRdrNames tv_rdrs $ \ tv_names ->
                do { (rn_ty, fvs) <- rnLHsType doc rdr_ty
                   ; return ((tv_names, rn_ty), fvs) }
-        ; (_tvs, (ty, _kind))
+        ; (_tvs, ty)
             <- solveEqualities $
-               tcImplicitTKBndrs tv_names $
-               tcLHsType rn_ty
+               tcImplicitTKBndrsType tv_names $
+               fst <$> tcLHsType rn_ty
         ; ty <- zonkTcTypeToType emptyZonkEnv ty
                 -- Substitute out the meta type variables
                 -- In particular, the type might have kind

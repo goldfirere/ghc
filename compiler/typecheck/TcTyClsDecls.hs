@@ -1129,7 +1129,7 @@ tc_fam_ty_pats (name, _, kind) mb_clsinfo
                 hs_ty:_ -> addErrTc $ too_many_args hs_ty n
                 _       -> return ()
             ; kind_checker res_kind
-            ; return (res_kind, args) }
+            ; return ((res_kind, args), emptyVarSet) }
 
        ; return (typats, res_kind) }
   where
@@ -1380,13 +1380,13 @@ tcConDecl new_or_data rep_tycon tmpl_tvs res_tmpl
                  ; btys <- tcConArgs new_or_data hs_details
                  ; field_lbls <- lookupConstructorFields (unLoc name)
                  ; let (arg_tys, stricts) = unzip btys
-                 ; return (ctxt, arg_tys, field_lbls, stricts, tvs)
+                       bound_vars = allBoundVariabless ctxt `unionVarSet`
+                                    allBoundVariabless arg_tys
+                 ; return ((ctxt, arg_tys, field_lbls, stricts, tvs), bound_vars)
                  }
 
-       ; let tkvs = kvs ++ tvs
-
              -- Zonk to Types
-       ; (ze, qtkvs) <- zonkTyBndrsX emptyZonkEnv tkvs
+       ; (ze, qtkvs) <- zonkTyBndrsX emptyZonkEnv (kvs ++ tvs)
        ; arg_tys <- zonkTcTypeToTypes ze arg_tys
        ; ctxt    <- zonkTcTypeToTypes ze ctxt
 
@@ -1474,7 +1474,10 @@ tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
                  ; ty' <- tcHsLiftedType res_ty
                  ; field_lbls <- lookupConstructorFields name
                  ; let (arg_tys, stricts) = unzip btys
-                 ; return (ctxt, arg_tys, ty', field_lbls, stricts)
+                       bound_vars = allBoundVariabless ctxt `unionVarSet`
+                                    allBoundVariabless arg_tys
+
+                 ; return ((ctxt, arg_tys, ty', field_lbls, stricts), bound_vars)
                  }
        ; return (ctxt,stricts,field_lbls,arg_tys,res_ty,hs_details)
        }

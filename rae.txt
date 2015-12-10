@@ -1,5 +1,8 @@
 stack:
 
+remove tcHsQTyVars
+refactor ConDeclH98
+
 CHECK OptCoercion compile times.
 
 The irreducible hetero wanteds story. 
@@ -43,6 +46,7 @@ TICKETS:
 #7961: main ticket.
 #10524: Typeable k
 #8566: about dropping Given kind equalities
+#11142: skolem escape
 
 QUESTIONS:
 - Should TYPE / Levity / Lifted / Unlifted be in the Prelude? If not,
