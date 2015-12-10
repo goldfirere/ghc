@@ -1385,9 +1385,7 @@ lintCoercion the_co@(NthCo n co)
                  -- see Note [NthCo and newtypes] in TyCoRep
              , tys_s `equalLength` tys_t
              , n < length tys_s
-             -> do { lintL (not (isCoercionTy ts)) (mkNthIsCoMsg CLeft the_co)
-                   ; lintL (not (isCoercionTy tt)) (mkNthIsCoMsg CRight the_co)
-                   ; return (ks, kt, ts, tt, tr) }
+             -> return (ks, kt, ts, tt, tr)
              where
                ts = getNth tys_s n
                tt = getNth tys_t n
@@ -1403,9 +1401,7 @@ lintCoercion the_co@(LRCo lr co)
        ; lintRole co Nominal r
        ; case (splitAppTy_maybe s, splitAppTy_maybe t) of
            (Just s_pr, Just t_pr)
-             -> do { lintL (not (isCoercionTy s_pick)) (mkNthIsCoMsg CLeft the_co)
-                   ; lintL (not (isCoercionTy t_pick)) (mkNthIsCoMsg CRight the_co)
-                   ; return (ks_pick, kt_pick, s_pick, t_pick, Nominal) }
+             -> return (ks_pick, kt_pick, s_pick, t_pick, Nominal)
              where
                s_pick  = pickLR lr s_pr
                t_pick  = pickLR lr t_pr
@@ -1948,12 +1944,6 @@ mkCastErr expr co from_ty expr_ty
           ptext (sLit "Actual enclosed expr:") <+> ppr expr,
           ptext (sLit "Coercion used in cast:") <+> ppr co
          ]
-
-mkNthIsCoMsg :: LeftOrRight -> Coercion -> MsgDoc
-mkNthIsCoMsg lr co
-  = ptext (sLit "Coercion") <+> (ppr co) <+>
-    ptext (sLit "yields a coercion on the") <+> pprLeftOrRight lr <+>
-    ptext (sLit "side")
 
 mkBadUnivCoMsg :: LeftOrRight -> Coercion -> SDoc
 mkBadUnivCoMsg lr co
