@@ -1565,8 +1565,7 @@ checkValidInferredKinds :: [TyVar]     -- ^ vars to check (zonked)
                         -> SDoc        -- ^ suffix to error message
                         -> TcM ()
 checkValidInferredKinds orig_kvs out_of_scope extra
-  = do { traceTc "RAE2" (pprTvBndrs orig_kvs $$ ppr out_of_scope)
-       ; let bad_pairs = [ (tv, kv)
+  = do { let bad_pairs = [ (tv, kv)
                          | kv <- orig_kvs
                          , Just tv <- map (lookupVarSet out_of_scope)
                                           (tyCoVarsOfTypeList (tyVarKind kv)) ]

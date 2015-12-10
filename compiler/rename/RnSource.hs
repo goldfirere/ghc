@@ -1144,7 +1144,6 @@ rnTyClDecl (SynDecl { tcdLName = tycon, tcdTyVars = tyvars, tcdRhs = rhs })
 rnTyClDecl (DataDecl { tcdLName = tycon, tcdTyVars = tyvars, tcdDataDefn = defn })
   = do { tycon' <- lookupLocatedTopBndrRn tycon
        ; kvs <- extractDataDefnKindVars defn
-       ; pprTrace "RAEr" (ppr kvs) $ return ()
        ; let doc = TyDataCtx tycon
        ; traceRn (text "rntycl-data" <+> ppr tycon <+> ppr kvs)
        ; ((tyvars', defn'), fvs) <- bindHsQTyVars doc Nothing kvs tyvars $ \ tyvars' ->
@@ -1331,8 +1330,8 @@ rnFamDecl mb_cls (FamilyDecl { fdLName = tycon, fdTyVars = tyvars
        ; kvs <- extractRdrKindSigVars res_sig
        ; ((tyvars', res_sig', injectivity'), fv1) <-
             bindHsQTyVars doc mb_cls kvs tyvars $
-            \ tyvars'@(HsQTvs { hsq_implicit = rn_kvs, hsq_explicit = rn_tvs }) ->
-            do { let rn_sig = rnFamResultSig doc rn_kvs (map hsLTyVarName rn_tvs)
+            \ tyvars'@(HsQTvs { hsq_implicit = rn_kvs }) ->
+            do { let rn_sig = rnFamResultSig doc rn_kvs
                ; (res_sig', fv_kind) <- wrapLocFstM rn_sig res_sig
                ; injectivity' <- traverse (rnInjectivityAnn tyvars' res_sig')
                                           injectivity
@@ -1357,15 +1356,14 @@ rnFamDecl mb_cls (FamilyDecl { fdLName = tycon, fdTyVars = tyvars
 
 rnFamResultSig :: HsDocContext
                -> [Name]   -- kind variables already in scope
-               -> [Name]   -- type variables already in scope
                -> FamilyResultSig RdrName
                -> RnM (FamilyResultSig Name, FreeVars)
-rnFamResultSig _ _ _ NoSig
+rnFamResultSig _ _ NoSig
    = return (NoSig, emptyFVs)
-rnFamResultSig doc _ _ (KindSig kind)
+rnFamResultSig doc _ (KindSig kind)
    = do { (rndKind, ftvs) <- rnLHsKind doc kind
         ;  return (KindSig rndKind, ftvs) }
-rnFamResultSig doc kv_names tv_names (TyVarSig tvbndr)
+rnFamResultSig doc kv_names (TyVarSig tvbndr)
    = do { -- `TyVarSig` tells us that user named the result of a type family by
           -- writing `= tyvar` or `= (tyvar :: kind)`. In such case we want to
           -- be sure that the supplied result name is not identical to an
@@ -1385,7 +1383,9 @@ rnFamResultSig doc kv_names tv_names (TyVarSig tvbndr)
 
        ; bindLHsTyVarBndr doc Nothing -- this might be a lie, but it's used for
                                       -- scoping checks that are irrelevant here
-                          (mkNameSet kv_names) (mkNameSet tv_names)
+                          (mkNameSet kv_names) emptyNameSet
+                                       -- use of emptyNameSet here avoids
+                                       -- redundant duplicate errors
                           tvbndr $ \ _ tvbndr' ->
          return (TyVarSig tvbndr', unitFV (hsLTyVarName tvbndr')) }
 
