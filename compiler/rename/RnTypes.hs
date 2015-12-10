@@ -1444,7 +1444,7 @@ extractDataDefnKindVars :: HsDataDefn RdrName -> RnM [Located RdrName]
 -- Here k should scope over the whole definition
 extractDataDefnKindVars (HsDataDefn { dd_ctxt = ctxt, dd_kindSig = ksig
                                     , dd_cons = cons, dd_derivs = derivs })
-  = freeKiTyVarsKindVars <$>
+  = (nubL . freeKiTyVarsKindVars) <$>
     (extract_lctxt TypeLevel ctxt =<<
      extract_mb extract_lkind ksig =<<
      extract_mb (extract_sig_tys . unLoc) derivs =<<

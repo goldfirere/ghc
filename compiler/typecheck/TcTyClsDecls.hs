@@ -6,7 +6,7 @@
 TcTyClsDecls: Typecheck type and class declarations
 -}
 
-{-# LANGUAGE CPP, TupleSections #-}
+{-# LANGUAGE CPP, TupleSections, MultiWayIf #-}
 
 module TcTyClsDecls (
         tcTyAndClassDecls, tcAddImplicits,
@@ -464,11 +464,10 @@ kcSynDecl decl@(SynDecl { tcdTyVars = hs_tvs, tcdLName = L _ name
   -- Returns a possibly-unzonked kind
   = tcAddDeclCtxt decl $
     do { (syn_kind, _) <-
-           kcHsTyVarBndrs (hsDeclHasCusk decl) hs_tvs $ \_ tvs ->
+           kcHsTyVarBndrs (hsDeclHasCusk decl) hs_tvs $ \_ _ ->
            do { traceTc "kcd1" (ppr name <+> brackets (ppr hs_tvs))
               ; (_, rhs_kind) <- tcLHsType rhs
               ; traceTc "kcd2" (ppr name)
-              ; checkValidTelescope hs_tvs tvs
               ; return (rhs_kind, ()) }
        ; return (name, syn_kind) }
 kcSynDecl decl = pprPanic "kcSynDecl" (ppr decl)
@@ -496,18 +495,16 @@ kcTyClDecl (DataDecl { tcdLName = L _ name, tcdTyVars = hs_tvs, tcdDataDefn = de
     --    (b) dd_ctxt is not allowed for GADT-style decls, so we can ignore it
 
   | HsDataDefn { dd_ctxt = ctxt, dd_cons = cons } <- defn
-  = tcTyClTyVars name hs_tvs $ \ _ tvs _ _ ->
-    do  { checkValidTelescope hs_tvs tvs
-        ; _ <- tcHsContext ctxt
+  = tcTyClTyVars name hs_tvs $ \ _ _ _ _ ->
+    do  { _ <- tcHsContext ctxt
         ; mapM_ (wrapLocM kcConDecl) cons }
 
 kcTyClDecl decl@(SynDecl {}) = pprPanic "kcTyClDecl" (ppr decl)
 
 kcTyClDecl (ClassDecl { tcdLName = L _ name, tcdTyVars = hs_tvs
                        , tcdCtxt = ctxt, tcdSigs = sigs })
-  = tcTyClTyVars name hs_tvs $ \ _ tvs _ _ ->
-    do  { checkValidTelescope hs_tvs tvs
-        ; _ <- tcHsContext ctxt
+  = tcTyClTyVars name hs_tvs $ \ _ _ _ _ ->
+    do  { _ <- tcHsContext ctxt
         ; mapM_ (wrapLocM kc_sig)     sigs }
   where
     kc_sig (ClassOpSig _ nms op_ty) = kcHsSigType nms op_ty
@@ -516,18 +513,16 @@ kcTyClDecl (ClassDecl { tcdLName = L _ name, tcdTyVars = hs_tvs
 kcTyClDecl (FamDecl (FamilyDecl { fdLName  = L _ fam_tc_name
                                 , fdTyVars = hs_tvs
                                 , fdInfo   = fd_info }))
-  = do { tcTyClTyVars fam_tc_name hs_tvs $ \ _ tvs _ _ ->
-         checkValidTelescope hs_tvs tvs
 -- closed type families look at their equations, but other families don't
 -- do anything here
-       ; case fd_info of
-            ClosedTypeFamily (Just eqns) ->
-              do { tc_kind <- kcLookupKind fam_tc_name
-                 ; let fam_tc_shape = ( fam_tc_name
-                                      , length $ hsQTvExplicit hs_tvs
-                                      , tc_kind )
-                 ; mapM_ (kcTyFamInstEqn fam_tc_shape) eqns }
-            _ -> return () }
+  = case fd_info of
+      ClosedTypeFamily (Just eqns) ->
+        do { tc_kind <- kcLookupKind fam_tc_name
+           ; let fam_tc_shape = ( fam_tc_name
+                                , length $ hsQTvExplicit hs_tvs
+                                , tc_kind )
+           ; mapM_ (kcTyFamInstEqn fam_tc_shape) eqns }
+      _ -> return ()
 
 -------------------
 kcConDecl :: ConDecl Name -> TcM ()
@@ -1368,23 +1363,27 @@ tcConDecl :: NewOrData
 
 tcConDecl new_or_data rep_tycon tmpl_tvs res_tmpl
           (ConDeclH98 { con_name = name
-                      , con_qvars = hs_tvs, con_cxt = hs_ctxt
+                      , con_qvars = hs_qvars, con_cxt = hs_ctxt
                       , con_details = hs_details })
   = addErrCtxt (dataConCtxtName [name]) $
     do { traceTc "tcConDecl 1" (ppr name)
-       ; (ctxt, arg_tys, field_lbls, stricts)
+       ; let (hs_kvs, hs_tvs) = case hs_qvars of
+               Nothing -> ([], [])
+               Just (HsQTvs { hsq_implicit = kvs, hsq_explicit = tvs })
+                       -> (kvs, tvs)
+       ; (kvs, (ctxt, arg_tys, field_lbls, stricts, tvs))
            <- solveEqualities $
-              tcHsQTyVars (fromMaybe (HsQTvs [] []) hs_tvs) $
+              tcImplicitTKBndrs hs_kvs $
+              tcHsTyVarBndrs hs_tvs $ \tvs ->
               do { traceTc "tcConDecl" (ppr name <+> text "tvs:" <+> ppr hs_tvs)
                  ; ctxt <- tcHsContext (fromMaybe (noLoc []) hs_ctxt)
                  ; btys <- tcConArgs new_or_data hs_details
                  ; field_lbls <- lookupConstructorFields (unLoc name)
                  ; let (arg_tys, stricts) = unzip btys
-                 ; return (ctxt, arg_tys, field_lbls, stricts)
+                 ; return (ctxt, arg_tys, field_lbls, stricts, tvs)
                  }
 
-       ; tkvs <- quantifyTyVars (mkVarSet tmpl_tvs)
-                                (splitDepVarsOfTypes (ctxt++arg_tys))
+       ; let tkvs = kvs ++ tvs
 
              -- Zonk to Types
        ; (ze, qtkvs) <- zonkTyBndrsX emptyZonkEnv tkvs
@@ -1958,42 +1957,45 @@ checkValidTyCon tc
   | isPrimTyCon tc   -- Happens when Haddock'ing GHC.Prim
   = return ()
 
-  | Just cl <- tyConClass_maybe tc
-  = checkValidClass cl
-
-  | Just syn_rhs <- synTyConRhs_maybe tc
-  = checkValidType syn_ctxt syn_rhs
-
-  | Just fam_flav <- famTyConFlav_maybe tc
-  = case fam_flav of
-    { ClosedSynFamilyTyCon (Just ax) -> tcAddClosedTypeFamilyDeclCtxt tc $
-                                        checkValidCoAxiom ax
-    ; ClosedSynFamilyTyCon Nothing   -> return ()
-    ; AbstractClosedSynFamilyTyCon ->
-      do { hsBoot <- tcIsHsBootOrSig
-         ; checkTc hsBoot $
-           ptext (sLit "You may define an abstract closed type family") $$
-           ptext (sLit "only in a .hs-boot file") }
-    ; DataFamilyTyCon {}           -> return ()
-    ; OpenSynFamilyTyCon           -> return ()
-    ; BuiltInSynFamTyCon _         -> return () }
-
   | otherwise
-  = do { -- Check the context on the data decl
-         traceTc "cvtc1" (ppr tc)
-       ; checkValidTheta (DataTyCtxt name) (tyConStupidTheta tc)
+  = do { checkValidTyConTyVars tc
+       ; if | Just cl <- tyConClass_maybe tc
+              -> checkValidClass cl
 
-       ; traceTc "cvtc2" (ppr tc)
+            | Just syn_rhs <- synTyConRhs_maybe tc
+              -> checkValidType syn_ctxt syn_rhs
 
-       ; dflags          <- getDynFlags
-       ; existential_ok  <- xoptM Opt_ExistentialQuantification
-       ; gadt_ok         <- xoptM Opt_GADTs
-       ; let ex_ok = existential_ok || gadt_ok  -- Data cons can have existential context
-       ; mapM_ (checkValidDataCon dflags ex_ok tc) data_cons
+            | Just fam_flav <- famTyConFlav_maybe tc
+              -> case fam_flav of
+               { ClosedSynFamilyTyCon (Just ax)
+                   -> tcAddClosedTypeFamilyDeclCtxt tc $
+                      checkValidCoAxiom ax
+               ; ClosedSynFamilyTyCon Nothing   -> return ()
+               ; AbstractClosedSynFamilyTyCon ->
+                 do { hsBoot <- tcIsHsBootOrSig
+                    ; checkTc hsBoot $
+                      text "You may define an abstract closed type family" $$
+                      text "only in a .hs-boot file" }
+               ; DataFamilyTyCon {}           -> return ()
+               ; OpenSynFamilyTyCon           -> return ()
+               ; BuiltInSynFamTyCon _         -> return () }
 
-        -- Check that fields with the same name share a type
-       ; mapM_ check_fields groups }
+             | otherwise -> do
+               { -- Check the context on the data decl
+                 traceTc "cvtc1" (ppr tc)
+               ; checkValidTheta (DataTyCtxt name) (tyConStupidTheta tc)
 
+               ; traceTc "cvtc2" (ppr tc)
+
+               ; dflags          <- getDynFlags
+               ; existential_ok  <- xoptM Opt_ExistentialQuantification
+               ; gadt_ok         <- xoptM Opt_GADTs
+               ; let ex_ok = existential_ok || gadt_ok
+                     -- Data cons can have existential context
+               ; mapM_ (checkValidDataCon dflags ex_ok tc) data_cons
+
+                -- Check that fields with the same name share a type
+               ; mapM_ check_fields groups }}
   where
     syn_ctxt  = TySynCtxt name
     name      = tyConName tc
@@ -2048,6 +2050,35 @@ checkFieldCompat fld con1 con2 tvs1 res1 res2 fty1 fty2
   where
     mb_subst1 = tcMatchTy tvs1 res1 res2
     mb_subst2 = tcMatchTyX tvs1 (expectJust "checkFieldCompat" mb_subst1) fty1 fty2
+
+-------------------------------
+-- | Check for ill-scoped telescopes in a tycon.
+-- For example:
+--
+-- > data SameKind :: k -> k -> *   -- this is OK
+-- > data Bad a (c :: Proxy b) (d :: Proxy a) (x :: SameKind b d)
+--
+-- The problem is that @b@ should be bound (implicitly) at the beginning,
+-- but its kind mentions @a@, which is not yet in scope. Kind generalization
+-- makes a mess of this, and ends up including @a@ twice in the final
+-- tyvars. So this function checks for duplicates and, if there are any,
+-- produces the appropriate error message.
+checkValidTyConTyVars :: TyCon -> TcM ()
+checkValidTyConTyVars tc
+  = when duplicate_vars $
+    do { -- strip off the duplicates and look for ill-scoped things
+         -- but keep the *last* occurrence of each variable, as it's
+         -- most likely the one the user wrote
+         let stripped_tvs = reverse $ nub $ reverse tvs
+             vis_tvs      = filterOutInvisibleTyVars tc tvs
+             extra | not (vis_tvs `equalLength` stripped_tvs)
+                   = text "NB: Implicitly declared kind variables are put first."
+                   | otherwise
+                   = empty
+       ; checkValidTelescope (pprTvBndrs vis_tvs) stripped_tvs extra }
+  where
+    tvs = tyConTyVars tc
+    duplicate_vars = sizeVarSet (mkVarSet tvs) < length tvs
 
 -------------------------------
 checkValidDataCon :: DynFlags -> Bool -> TyCon -> DataCon -> TcM ()

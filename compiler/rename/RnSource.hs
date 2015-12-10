@@ -1144,6 +1144,7 @@ rnTyClDecl (SynDecl { tcdLName = tycon, tcdTyVars = tyvars, tcdRhs = rhs })
 rnTyClDecl (DataDecl { tcdLName = tycon, tcdTyVars = tyvars, tcdDataDefn = defn })
   = do { tycon' <- lookupLocatedTopBndrRn tycon
        ; kvs <- extractDataDefnKindVars defn
+       ; pprTrace "RAEr" (ppr kvs) $ return ()
        ; let doc = TyDataCtx tycon
        ; traceRn (text "rntycl-data" <+> ppr tycon <+> ppr kvs)
        ; ((tyvars', defn'), fvs) <- bindHsQTyVars doc Nothing kvs tyvars $ \ tyvars' ->

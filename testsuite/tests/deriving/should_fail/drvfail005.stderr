@@ -1,10 +1,6 @@
 
 drvfail005.hs:4:13: error:
-    Expecting one fewer argument to ‘Show a’
-    Expected kind ‘k0 -> Constraint’,
-      but ‘Show a’ has kind ‘Constraint’
-    In the data declaration for ‘Test’
-
-drvfail005.hs:4:13: error:
-    Illegal deriving item ‘Show a’
-    In the data declaration for ‘Test’
+    • Expecting one fewer argument to ‘Show a’
+      Expected kind ‘k0 -> Constraint’,
+        but ‘Show a’ has kind ‘Constraint’
+    • In the data declaration for ‘Test’

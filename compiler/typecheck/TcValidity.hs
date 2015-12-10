@@ -1521,27 +1521,28 @@ Refer to dependent/should_fail/BadTelescope{,2,3}
 -- general validity checking, because once we kind-generalise, this sort
 -- of problem is harder to spot (as we'll generalise over the unbound
 -- k in a's type.)
-checkValidTelescope :: Outputable tele
-                    => tele        -- the original user-written telescope
+checkValidTelescope :: SDoc        -- the original user-written telescope
                     -> [TyVar]     -- explicit vars (not necessarily zonked)
+                    -> SDoc        -- note to put at bottom of message
                     -> TcM ()      -- returns zonked tyvars
-checkValidTelescope hs_tvs orig_tvs = discardResult $
-                                      checkZonkValidTelescope hs_tvs orig_tvs
+checkValidTelescope hs_tvs orig_tvs extra
+  = discardResult $ checkZonkValidTelescope hs_tvs orig_tvs extra
 
 -- | Like 'checkZonkValidTelescope', but returns the zonked tyvars
-checkZonkValidTelescope :: Outputable tele
-                        => tele
+checkZonkValidTelescope :: SDoc
                         -> [TyVar]
+                        -> SDoc
                         -> TcM [TyVar]
-checkZonkValidTelescope hs_tvs orig_tvs
+checkZonkValidTelescope hs_tvs orig_tvs extra
   = do { orig_tvs <- mapM zonkTyCoVarKind orig_tvs
        ; let (_, sorted_tidied_tvs) = tidyTyCoVarBndrs emptyTidyEnv $
                                       toposortTyVars orig_tvs
        ; unless (go [] emptyVarSet orig_tvs) $
          addErr $
-         hang (text "These kind and type variables:" <+> ppr hs_tvs $$
-               text "are out of dependency order. Perhaps try this ordering:")
-            2 (sep (map pprTvBndr sorted_tidied_tvs))
+         vcat [ hang (text "These kind and type variables:" <+> hs_tvs $$
+                      text "are out of dependency order. Perhaps try this ordering:")
+                   2 (sep (map pprTvBndr sorted_tidied_tvs))
+              , extra ]
        ; return orig_tvs }
 
   where
@@ -1561,11 +1562,13 @@ checkZonkValidTelescope hs_tvs orig_tvs
 -- just kinds) don't mention any of the type variables. This is a special
 -- case of skolem escape. We might need a more general approach (see #11142),
 -- but this catches an easy case.
-checkValidInferredKinds :: [TyVar]     -- implicit vars
-                        -> [TyVar]     -- explicit vars
+checkValidInferredKinds :: [TyVar]     -- ^ implicit vars (not nec. zonked)
+                        -> [TyVar]     -- ^ explicit vars (zonked)
                         -> TcM ()
 checkValidInferredKinds orig_kvs orig_tvs
-  = do { let bad_pairs = [ (tv, kv)
+  = do { orig_kvs <- mapM zonkTyCoVarKind orig_kvs
+       ; traceTc "RAE2" (pprTvBndrs orig_kvs $$ pprTvBndrs orig_tvs)
+       ; let bad_pairs = [ (tv, kv)
                          | kv <- orig_kvs
                          , tv <- orig_tvs'
                          , tv `elemVarSet` tyCoVarsOfType (tyVarKind kv) ]

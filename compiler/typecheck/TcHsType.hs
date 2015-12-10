@@ -1357,6 +1357,8 @@ tcHsQTyVars (HsQTvs { hsq_implicit = kv_ns, hsq_explicit = hs_tvs })
        ; kvs <- mapM zonkTyCoVarKind kvs
          -- the tvs are already zonked
 
+       ; traceTc "RAE1" (pprTvBndrs kvs $$ pprTvBndrs tvs)
+
        ; checkValidInferredKinds kvs tvs
 
        ; traceTc "tcHsQTyVars }" $
@@ -1375,7 +1377,7 @@ tcHsTyVarBndrs orig_hs_tvs thing_inside
 
          -- Issue an error if the ordering is bogus.
          -- See Note [Bad telescopes] in TcValidity.
-       ; tvs <- checkZonkValidTelescope orig_hs_tvs tvs
+       ; tvs <- checkZonkValidTelescope (interppSP orig_hs_tvs) tvs empty
 
        ; traceTc "tcHsTyVarBndrs" $
            vcat [ text "Hs vars:" <+> ppr orig_hs_tvs
@@ -1403,7 +1405,7 @@ tcHsTyVarBndrs_Scoped orig_hs_tvs thing_inside
 
               -- Issue an error if the ordering is bogus.
               -- See Note [Bad telescopes] in TcValidity.
-       ; tvs <- checkZonkValidTelescope orig_hs_tvs tvs
+       ; tvs <- checkZonkValidTelescope (interppSP orig_hs_tvs) tvs empty
 
        ; return (tvs, result) }
   where
@@ -1557,6 +1559,10 @@ We now have several sorts of variables to think about:
    bound. It *is* a scoped kind variable, and will appear in the
    hsq_implicit field of a LHsTyVarBndrs.
 
+   2a) In the non-CUSK case, these variables won't have been generalized
+       yet and don't appear in the looked-up kind. So we just return these
+       in a NameSet.
+
 3) The variable k is mentioned in the source with an explicit binding.
    It *is* a scoped type variable, and will appear in the
    hsq_explicit field of a LHsTyVarBndrs.
@@ -1603,16 +1609,17 @@ kcLookupKind nm
 splitTelescopeTvs :: Kind         -- of the head of the telescope
                   -> LHsQTyVars Name
                   -> ( [TyVar]    -- scoped type variables
+                     , NameSet    -- ungeneralized implicit variables (case 2a)
                      , [TyVar]    -- implicit type variables (cases 1 & 2)
                      , [TyVar]    -- explicit type variables (cases 3 & 4)
                      , Kind )     -- result kind
 splitTelescopeTvs kind tvbs@(HsQTvs { hsq_implicit = hs_kvs
                                     , hsq_explicit = hs_tvs })
   = let (bndrs, inner_ki) = splitPiTys kind
-        (scoped_tvs, imp_tvs, exp_tvs, mk_kind)
+        (scoped_tvs, non_cusk_imp_names, imp_tvs, exp_tvs, mk_kind)
           = mk_tvs [] [] bndrs (mkNameSet hs_kvs) hs_tvs
     in
-    (scoped_tvs, imp_tvs, exp_tvs, mk_kind inner_ki)
+    (scoped_tvs, non_cusk_imp_names, imp_tvs, exp_tvs, mk_kind inner_ki)
   where
     mk_tvs :: [TyVar]    -- scoped tv accum (reversed)
            -> [TyVar]    -- implicit tv accum (reversed)
@@ -1620,6 +1627,7 @@ splitTelescopeTvs kind tvbs@(HsQTvs { hsq_implicit = hs_kvs
            -> NameSet             -- implicit variables
            -> [LHsTyVarBndr Name] -- explicit variables
            -> ( [TyVar]           -- the tyvars to be lexically bound
+              , NameSet           -- Case 2a names
               , [TyVar]           -- implicit tyvars
               , [TyVar]           -- explicit tyvars
               , Type -> Type )    -- a function to create the result k
@@ -1639,10 +1647,10 @@ splitTelescopeTvs kind tvbs@(HsQTvs { hsq_implicit = hs_kvs
      -- there may actually still be some hs_kvs, if we're kind checking
      -- a non-CUSK. The kinds *aren't* generalized, so we won't see them
      -- here.
-    mk_tvs scoped_tv_acc imp_tv_acc all_bndrs _all_hs_kvs all_hs_tvs
+    mk_tvs scoped_tv_acc imp_tv_acc all_bndrs all_hs_kvs all_hs_tvs
       = let (scoped, exp_tvs, mk_kind)
               = mk_tvs2 scoped_tv_acc [] all_bndrs all_hs_tvs in
-        (scoped, reverse imp_tv_acc, exp_tvs, mk_kind)
+        (scoped, all_hs_kvs, reverse imp_tv_acc, exp_tvs, mk_kind)
            -- no more Case (1) or (2)
 
     -- This can't handle Case (1) or Case (2) from [Typechecking telescopes]
@@ -1702,7 +1710,8 @@ tcTyClTyVars :: Name -> LHsQTyVars Name      -- LHS of the type or class decl
 -- is available in the local env.
 tcTyClTyVars tycon hs_tvs thing_inside
   = do { kind <- kcLookupKind tycon
-       ; let (scoped_tvs, all_kvs, all_tvs, res_k) = splitTelescopeTvs kind hs_tvs
+       ; let (scoped_tvs, non_cusk_kv_name_set, all_kvs, all_tvs, res_k)
+               = splitTelescopeTvs kind hs_tvs
        ; traceTc "tcTyClTyVars splitTelescopeTvs:"
            (vcat [ text "Tycon:" <+> ppr tycon
                  , text "Kind:" <+> ppr kind
@@ -1710,9 +1719,24 @@ tcTyClTyVars tycon hs_tvs thing_inside
                  , text "scoped tvs:" <+> pprWithCommas pprTvBndr scoped_tvs
                  , text "implicit tvs:" <+> pprWithCommas pprTvBndr all_kvs
                  , text "explicit tvs:" <+> pprWithCommas pprTvBndr all_tvs
+                 , text "non-CUSK kvs:" <+> ppr non_cusk_kv_name_set
                  , text "res_k:" <+> ppr res_k] )
 
-       ; tcExtendTyVarEnv scoped_tvs $ thing_inside all_kvs all_tvs kind res_k }
+            -- need to look up the non-cusk kvs in order to get their
+            -- kinds right, in case the kinds were informed by
+            -- the getInitialKinds pass
+       ; let non_cusk_kv_names = nameSetElems non_cusk_kv_name_set
+             free_kvs          = tyCoVarsOfTypes $
+                                 map tyVarKind (all_kvs ++ all_tvs)
+             non_cusk_kvars    = mapMaybe (lookupVarSetByName free_kvs)
+                                          non_cusk_kv_names
+
+       ; MASSERT2( length non_cusk_kvars == length non_cusk_kv_names
+                 , text "tcTyClTyVars lost a non-CUSK kv" <+>
+                     (ppr non_cusk_kv_names $$ ppr non_cusk_kvars) )
+
+       ; tcExtendTyVarEnv (non_cusk_kvars ++ scoped_tvs) $
+         thing_inside (non_cusk_kvars ++ all_kvs) all_tvs kind res_k }
 
 -----------------------------------
 tcDataKindSig :: Kind -> TcM [TyVar]
