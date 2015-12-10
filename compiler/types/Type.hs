@@ -954,14 +954,14 @@ mkCastTy ty (Refl {}) = ty
 mkCastTy (CastTy ty co1) co2 = mkCastTy ty (co1 `mkTransCo` co2)
 -- See Note [Weird typing rule for ForAllTy]
 mkCastTy (ForAllTy (Named tv vis) inner_ty) co
-  = -- have to make sure that pushing the co in doesn't capture the bound var!
+  = -- have to make sure that pushing the co in doesn't capture the bound var
     let fvs = tyCoVarsOfCo co
         empty_subst = mkEmptyTCvSubst (mkInScopeSet fvs)
         (subst, tv') = substTyVarBndr empty_subst tv
     in
     ForAllTy (Named tv' vis) (substTy subst inner_ty `mkCastTy` co)
 mkCastTy ty co = -- NB: don't check if the coercion "from" type matches here;
-                 -- there may be unzonked variables about!
+                 -- there may be unzonked variables about
                  let result = split_apps [] ty co in
                  ASSERT2( CastTy ty co `eqType` result
                         , ppr ty <+> dcolon <+> ppr (typeKind ty) $$
@@ -995,7 +995,7 @@ mkCastTy ty co = -- NB: don't check if the coercion "from" type matches here;
       -- if kind contains any dependent quantifications, we can't push.
       -- apply arguments until it doesn't
       = let (bndrs, _inner_ki) = splitPiTys kind
-            (some_dep_bndrs, no_dep_bndrs) = spanEnd isAnonBinder bndrs
+            (no_dep_bndrs, some_dep_bndrs) = spanEnd isAnonBinder bndrs
             (some_dep_args, rest_args) = splitAtList some_dep_bndrs args
             dep_subst = zipOpenTCvSubstBinders some_dep_bndrs some_dep_args
             used_no_dep_bndrs = takeList rest_args no_dep_bndrs

@@ -1413,7 +1413,7 @@ homogeniseRhsKind :: CtEvidence -- ^ the evidence to homogenise
                   -> TcS (StopOrContinue Ct)
 homogeniseRhsKind ev eq_rel lhs rhs build_ct
   | k1 `eqType` k2
-    continueWith (build_ct new_ev nrhs)
+  = continueWith (build_ct ev rhs)
 
   | CtGiven { ctev_evar = evar } <- ev
     -- tm :: (lhs :: k1) ~ (rhs :: k2)

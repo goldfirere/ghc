@@ -2068,6 +2068,7 @@ checkValidDataCon dflags existential_ok tc con
               , ppr res_ty_tmpl <+> dcolon <+> ppr (typeKind res_ty_tmpl)
               , ppr orig_res_ty <+> dcolon <+> ppr (typeKind orig_res_ty)])
 
+
         ; checkTc (isJust (tcMatchTy (mkVarSet tc_tvs)
                                      res_ty_tmpl
                                      orig_res_ty))
@@ -2075,6 +2076,8 @@ checkValidDataCon dflags existential_ok tc con
             -- Note that checkTc aborts if it finds an error. This is
             -- critical to avoid panicking when we call dataConWrapperType
             -- on an un-rejiggable datacon!
+
+        ; traceTc "checkValidDataCon 2" (ppr (dataConWrapperType con))
 
           -- Check that existentials are allowed if they are used
         ; checkTc (existential_ok || isVanillaDataCon con)

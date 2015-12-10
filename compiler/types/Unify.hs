@@ -635,9 +635,8 @@ unify_ty :: Type -> Type -> Coercion   -- Types to be unified and a co
 unify_ty ty1 ty2 kco
   | Just ty1' <- coreView ty1 = unify_ty ty1' ty2 kco
   | Just ty2' <- coreView ty2 = unify_ty ty1 ty2' kco
-  | CastTy ty1' co <- ty1                = unify_ty ty1' ty2 (co `mkTransCo` kco)
-  | CastTy ty2' co <- ty2                = unify_ty ty1 ty2'
-                                                    (kco `mkTransCo` mkSymCo co)
+  | CastTy ty1' co <- ty1     = unify_ty ty1' ty2 (co `mkTransCo` kco)
+  | CastTy ty2' co <- ty2     = unify_ty ty1 ty2' (kco `mkTransCo` mkSymCo co)
 
 unify_ty (TyVarTy tv1) ty2 kco = uVar tv1 ty2 kco
 unify_ty ty1 (TyVarTy tv2) kco

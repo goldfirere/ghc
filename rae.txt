@@ -2,6 +2,8 @@ stack:
 
 CHECK OptCoercion compile times.
 
+The irreducible hetero wanteds story. 
+
 
 PERFORMANCE STUFF:
  T5030: I think the root of the problem is that I have a lot more coercions than
