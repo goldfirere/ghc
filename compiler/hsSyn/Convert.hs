@@ -482,9 +482,9 @@ cvtDerivs cs = do { cs' <- mapM cvt_one cs
                          ; return (mkLHsSigType ty) }
 
 cvt_fundep :: FunDep -> CvtM (Located (Class.FunDep (Located RdrName)))
-cvt_fundep (FunDep xs ys) = do { xs' <- mapM tName xs
-                               ; ys' <- mapM tName ys
-                               ; returnL (map noLoc xs', map noLoc ys') }
+cvt_fundep (FunDep xs ys) = do { xs' <- mapM tNameL xs
+                               ; ys' <- mapM tNameL ys
+                               ; returnL (xs', ys') }
 
 
 ------------------------------------------
@@ -1004,12 +1004,12 @@ cvtTvs tvs = do { tvs' <- mapM cvt_tv tvs; return (mkHsQTvs tvs') }
 
 cvt_tv :: TH.TyVarBndr -> CvtM (LHsTyVarBndr RdrName)
 cvt_tv (TH.PlainTV nm)
-  = do { nm' <- tName nm
-       ; returnL $ UserTyVar (noLoc nm') }
+  = do { nm' <- tNameL nm
+       ; returnL $ UserTyVar nm' }
 cvt_tv (TH.KindedTV nm ki)
-  = do { nm' <- tName nm
+  = do { nm' <- tNameL nm
        ; ki' <- cvtKind ki
-       ; returnL $ KindedTyVar (noLoc nm') ki' }
+       ; returnL $ KindedTyVar nm' ki' }
 
 cvtRole :: TH.Role -> Maybe Coercion.Role
 cvtRole TH.NominalR          = Just Coercion.Nominal
@@ -1054,8 +1054,8 @@ cvtTypeKind ty_str ty
              | [x']    <- tys' -> returnL (HsListTy x')
              | otherwise
                         -> mk_apps (HsTyVar (noLoc (getRdrName listTyCon))) tys'
-           VarT nm -> do { nm' <- tName nm
-                         ; mk_apps (HsTyVar (noLoc nm')) tys' }
+           VarT nm -> do { nm' <- tNameL nm
+                         ; mk_apps (HsTyVar nm') tys' }
            ConT nm -> do { nm' <- tconName nm
                          ; mk_apps (HsTyVar (noLoc nm')) tys' }
 
@@ -1087,8 +1087,8 @@ cvtTypeKind ty_str ty
              -> mk_apps mkAnonWildCardTy tys'
 
            WildCardT (Just nm)
-             -> do { nm' <- tName nm
-                   ; mk_apps (mkNamedWildCardTy (noLoc nm')) tys' }
+             -> do { nm' <- tNameL nm
+                   ; mk_apps (mkNamedWildCardTy nm') tys' }
 
            InfixT t1 s t2
              -> do { s'  <- tconName s

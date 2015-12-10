@@ -969,15 +969,16 @@ repHsSigType :: LHsSigType Name -> DsM (Core TH.TypeQ)
 repHsSigType ty = repLTy (hsSigType ty)
 
 repHsSigWcType :: LHsSigWcType Name -> DsM (Core TH.TypeQ)
-repHsSigWcType (HsIB { hsib_vars = implicit_vars
+repHsSigWcType (HsIB { hsib_vars = vars
                      , hsib_body = sig1 })
   | (explicit_tvs, ctxt, ty) <- splitLHsSigmaTy (hswc_body sig1)
-  = addTyVarBinds (HsQTvs { hsq_implicit = implicit_vars
-                          , hsq_explicit = explicit_tvs })
+  = addTyVarBinds (HsQTvs { hsq_implicit = []
+                          , hsq_explicit = map (noLoc . UserTyVar . noLoc) vars ++
+                                           explicit_tvs })
                   $ \ th_tvs ->
     do { th_ctxt <- repLContext ctxt
        ; th_ty   <- repLTy ty
-       ; if null implicit_vars && null explicit_tvs && null (unLoc ctxt)
+       ; if null vars && null explicit_tvs && null (unLoc ctxt)
          then return th_ty
          else repTForall th_tvs th_ctxt th_ty }
 

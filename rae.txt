@@ -1,11 +1,11 @@
 stack:
 
-remove tcHsQTyVars
-refactor ConDeclH98
 
 CHECK OptCoercion compile times.
 
-The irreducible hetero wanteds story. 
+The irreducible hetero wanteds story:
+  - suboptimal error messages:
+    T9196
 
 
 PERFORMANCE STUFF:
