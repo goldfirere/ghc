@@ -1479,17 +1479,6 @@ kickOutModel new_tv ics@(IC { inert_model = model, inert_eqs = eqs })
       | not (isInInertEqs eqs tv rhs) = extendWorkListDerived (ctEvLoc ev) ev wl
     add _ wl                          = wl
 
--- | Kick out any constraints that mention this coercion hole.
--- See Note [Kicking out by coercion hole]
-kickOutByCoercionHole :: CoercionHole -> TcS ()
-kickOutByCoercionHole hole
-  = do { ics <- getInertCans
-       ; let (kick_out, keep)
-               = partitionBag ((`mentionsCoercionHole` hole) . ctPred)
-                              (inert_irreds ics)  -- only need to look at irreds
-       ; setInertCans (ics { inert_irreds = keep })
-       ; updWorkListTcS (extendWorkListCts (bagToList kick_out)) }
-
 {- Note [Kicking out inert constraints]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Given a new (a -> ty) inert, we want to kick out an existing inert
@@ -1513,16 +1502,6 @@ Then we really want to rewrite the insoluble to [Int] ~ [[Int]].
 Now it can be decomposed.  Otherwise we end up with a "Can't match
 [Int] ~ [[Int]]" which is true, but a bit confusing because the
 outer type constructors match.
-
-Note [Kicking out by coercion hole]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-It can happen (see Note [Irreducible hetero equalities] in TcCanonical)
-that a perfectly-soluble constraint is held as irreducible because of
-an unsolved coercion hole. When we then fill the hole, we need to kick
-out the constraint. I (Richard) am now dubious of Note [Irreducible
-hetero equalities], but the technique described there improves error
-messages. Perhaps there is a better way.
-
 -}
 
 
@@ -2851,8 +2830,7 @@ setEvBind ev_bind
 setWantedEq :: TcEvDest -> Coercion -> TcS ()
 setWantedEq (HoleDest hole) co
   = do { useVars (tyCoVarsOfCo co)
-       ; wrapTcS $ TcM.fillCoercionHole hole co
-       ; kickOutByCoercionHole hole }
+       ; wrapTcS $ TcM.fillCoercionHole hole co }
 setWantedEq (EvVarDest ev) _ = pprPanic "setWantedEq" (ppr ev)
 
 -- | Equalities only
@@ -2862,8 +2840,11 @@ setEqIfWanted _ _ = return ()
 
 -- | Good for equalities and non-equalities
 setWantedEvTerm :: TcEvDest -> EvTerm -> TcS ()
-setWantedEvTerm dest@(HoleDest {}) tm = setWantedEq dest (evTermCoercion tm)
-setWantedEvTerm (EvVarDest ev) tm     = setWantedEvBind ev tm
+setWantedEvTerm (HoleDest hole) tm
+  = do { let co = evTermCoercion tm
+       ; useVars (tyCoVarsOfCo co)
+       ; wrapTcS $ TcM.fillCoercionHole hole co }
+setWantedEvTerm (EvVarDest ev) tm = setWantedEvBind ev tm
 
 setWantedEvBind :: EvVar -> EvTerm -> TcS ()
 setWantedEvBind ev_id tm = setEvBind (mkWantedEvBind ev_id tm)

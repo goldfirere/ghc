@@ -66,7 +66,7 @@ module Coercion (
         -- ** Free variables
         tyCoVarsOfCo, tyCoVarsOfCos, coVarsOfCo,
         tyCoVarsOfCoAcc, tyCoVarsOfCosAcc, tyCoVarsOfCoDSet,
-        coercionSize, mentionsCoercionHole,
+        coercionSize,
 
         -- ** Substitution
         CvSubstEnv, emptyCvSubstEnv,
@@ -1856,40 +1856,3 @@ So it's very important to do the substitution simultaneously.
 cf Type.applyTys (which in fact we call here)
 
 -}
-
--- | Does this type use the given coercion hole anywhere?
--- See Note [Kicking out by coercion hole] in TcSMonad to explain
--- why we need this.
-mentionsCoercionHole :: Type -> CoercionHole -> Bool
-mentionsCoercionHole orig_ty (CoercionHole { chUnique = u }) = go orig_ty
-  where
-    go (TyVarTy tv)             = go (tyVarKind tv)
-    go (AppTy t1 t2)            = go t1 || go t2
-    go (TyConApp _ tys)         = any go tys
-    go (ForAllTy bndr ty)       = go (binderType bndr) || go ty
-    go (LitTy {})               = False
-    go (CastTy ty co)           = go ty || go_co co
-    go (CoercionTy co)          = go_co co
-
-    go_co (Refl _ ty)           = go ty
-    go_co (TyConAppCo _ _ cos)  = any go_co cos
-    go_co (AppCo c1 c2)         = go_co c1 || go_co c2
-    go_co (ForAllCo _ kco co)   = go_co kco || go_co co
-    go_co (CoVarCo cv)          = go (varType cv)
-    go_co (AxiomInstCo _ _ cos) = any go_co cos
-    go_co (UnivCo prov _ t1 t2) = go_prov prov || go t1 || go t2
-    go_co (SymCo co)            = go_co co
-    go_co (TransCo c1 c2)       = go_co c1 || go_co c2
-    go_co (AxiomRuleCo _ cos)   = any go_co cos
-    go_co (NthCo _ co)          = go_co co
-    go_co (LRCo _ co)           = go_co co
-    go_co (InstCo c1 c2)        = go_co c1 || go_co c2
-    go_co (CoherenceCo c1 c2)   = go_co c1 || go_co c2
-    go_co (KindCo co)           = go_co co
-    go_co (SubCo co)            = go_co co
-
-    go_prov UnsafeCoerceProv    = False
-    go_prov (PhantomProv co)    = go_co co
-    go_prov (ProofIrrelProv co) = go_co co
-    go_prov (PluginProv {})     = False
-    go_prov (HoleProv hole')    = chUnique hole' == u
