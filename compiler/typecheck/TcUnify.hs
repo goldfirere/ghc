@@ -1027,14 +1027,7 @@ uUnfilledVars origin t_or_k swapped tv1 details1 tv2 details2
              do_swap ref = maybe_sym (flipSwap swapped) <$>
                            updateMeta tv2 ref ty1 co_k
        ; case (details1, details2) of
-         { _ | not (isReflCo co_k)
-             -> do { traceTc "Deferring because of unsolved kind equality"
-                             (ppr k1 $$ ppr k2)
-                   ; defer }
-              -- See Note [Irreducible hetero equalities] in TcCanonical
-              -- for the motivation behind this special case
-
-         ; ( MetaTv { mtv_info = i1, mtv_ref = ref1 }
+         { ( MetaTv { mtv_info = i1, mtv_ref = ref1 }
            , MetaTv { mtv_info = i2, mtv_ref = ref2 } )
              | nicer_to_update_tv1 tv1 i1 i2 -> no_swap ref1
              | otherwise                     -> do_swap ref2
@@ -1045,10 +1038,8 @@ uUnfilledVars origin t_or_k swapped tv1 details1 tv2 details2
            -- This happens for skolems of all sorts
          ; _ -> do { traceTc "deferring because I can't find a meta-tyvar:"
                        (pprTcTyVarDetails details1 <+> pprTcTyVarDetails details2)
-                   ; defer } } }
+                   ; unSwap swapped (uType_defer origin t_or_k) ty1 ty2 } } }
   where
-    defer = unSwap swapped (uType_defer origin t_or_k) ty1 ty2
-
     k1  = tyVarKind tv1
     k2  = tyVarKind tv2
     ty1 = mkTyVarTy tv1
