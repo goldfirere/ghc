@@ -842,8 +842,7 @@ separate actions:
 
   2. Stripping silly case expressions, like the Coercible_SCSel one.
      A case expression is silly if its binder is dead, it has only one,
-     DEFAULT, alternative, and the scrutinee is unlifted. (This last bit
-     is to make sure we're not changing laziness properties.)
+     DEFAULT, alternative, and the scrutinee is a coercion.
      See the `Case` case of simple_opt_expr's `go` function.
 
   3. Look for case expressions that unpack something that was
@@ -952,7 +951,7 @@ simple_opt_expr subst expr
          -- Note [Getting the map/coerce RULE to work]
       | isDeadBinder b
       , [(DEFAULT, _, rhs)] <- as
-      , isUnLiftedType (varType b)
+      , isCoercionType (varType b)
       = go rhs
 
       | otherwise
