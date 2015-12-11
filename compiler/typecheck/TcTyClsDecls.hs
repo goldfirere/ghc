@@ -2118,10 +2118,10 @@ checkValidDataCon dflags existential_ok tc con
                                      orig_res_ty))
                   (badDataConTyCon con res_ty_tmpl orig_res_ty)
             -- Note that checkTc aborts if it finds an error. This is
-            -- critical to avoid panicking when we call dataConWrapperType
+            -- critical to avoid panicking when we call dataConUserType
             -- on an un-rejiggable datacon!
 
-        ; traceTc "checkValidDataCon 2" (ppr (dataConWrapperType con))
+        ; traceTc "checkValidDataCon 2" (ppr (dataConUserType con))
 
           -- Check that existentials are allowed if they are used
         ; checkTc (existential_ok || isVanillaDataCon con)
@@ -2133,7 +2133,7 @@ checkValidDataCon dflags existential_ok tc con
         ; checkValidMonoType orig_res_ty
 
           -- Check all argument types for validity
-        ; checkValidType ctxt (dataConWrapperType con)
+        ; checkValidType ctxt (dataConUserType con)
 
           -- Extra checks for newtype data constructors
         ; when (isNewTyCon tc) (checkNewDataCon con)

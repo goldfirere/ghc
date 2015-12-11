@@ -16,7 +16,8 @@ module DataCon (
         ConTag,
 
         -- ** Equality specs
-        EqSpec, mkEqSpec, eqSpecTyVar, eqSpecPair, eqSpecPreds,
+        EqSpec, mkEqSpec, eqSpecTyVar, eqSpecType,
+        eqSpecPair, eqSpecPreds,
         substEqSpec,
 
         -- ** Field labels
@@ -28,7 +29,7 @@ module DataCon (
         -- ** Type deconstruction
         dataConRepType, dataConSig, dataConInstSig, dataConFullSig,
         dataConName, dataConIdentity, dataConTag, dataConTyCon,
-        dataConOrigTyCon, dataConUserType, dataConWrapperType,
+        dataConOrigTyCon, dataConUserType,
         dataConUnivTyVars, dataConExTyVars, dataConAllTyVars,
         dataConEqSpec, dataConTheta,
         dataConStupidTheta,
@@ -509,6 +510,9 @@ mkEqSpec tv ty = EqSpec tv ty
 eqSpecTyVar :: EqSpec -> TyVar
 eqSpecTyVar (EqSpec tv _) = tv
 
+eqSpecType :: EqSpec -> Type
+eqSpecType (EqSpec _ ty) = ty
+
 eqSpecPair :: EqSpec -> (TyVar, Type)
 eqSpecPair (EqSpec tv ty) = (tv, ty)
 
@@ -769,7 +773,7 @@ mkDataCon name declared_infix prom_info
              mkTyConApp rep_tycon (mkTyVarTys univ_tvs)
 
     promoted   -- See Note [Promoted data constructors] in TyCon
-      = mkPromotedDataCon con name prom_info (dataConWrapperType con) roles
+      = mkPromotedDataCon con name prom_info (dataConUserType con) roles
 
     roles = map (const Nominal) (univ_tvs ++ ex_tvs) ++
             map (const Representational) orig_arg_tys
@@ -840,8 +844,7 @@ dataConEqSpec (MkData { dcEqSpec = eq_spec, dcOtherTheta = theta })
     ]
 
 
--- | The *full* constraints on the constructor type, including dependent
--- GADT equalities.
+-- | The *full* constraints on the constructor type.
 dataConTheta :: DataCon -> ThetaType
 dataConTheta (MkData { dcEqSpec = eq_spec, dcOtherTheta = theta })
   = eqSpecPreds eq_spec ++ theta
@@ -1017,9 +1020,6 @@ dataConUserType :: DataCon -> Type
 --
 -- NB: If the constructor is part of a data instance, the result type
 -- mentions the family tycon, not the internal one.
---
--- You probably want this only for pretty-printing. If you are not
--- pretty-printing, you probably want 'dataConWrapperType'.
 dataConUserType (MkData { dcUnivTyVars = univ_tvs,
                           dcExTyVars = ex_tvs, dcEqSpec = eq_spec,
                           dcOtherTheta = theta, dcOrigArgTys = arg_tys,
@@ -1029,31 +1029,6 @@ dataConUserType (MkData { dcUnivTyVars = univ_tvs,
     mkFunTys theta $
     mkFunTys arg_tys $
     res_ty
-
--- | The type of a datacon wrapper (or of the datacon itself if there
--- is no wrapper). For a GADT datacon, this is the "rejigged" version --
--- that is, the result type is the result tycon applied to the universal
--- tyvars.
-dataConWrapperType :: DataCon -> Type
-dataConWrapperType (MkData { dcUnivTyVars = univ_tvs
-                           , dcExTyVars   = ex_tvs
-                           , dcEqSpec     = eq_spec
-                           , dcOtherTheta = theta
-                           , dcOrigArgTys = arg_tys
-                           , dcRepTyCon   = rep_tycon })
-  = mkInvForAllTys univ_tvs $
-    mkInvForAllTys ex_tvs $
-    mkFunTys (eqSpecPreds eq_spec) $
-    mkFunTys theta $
-    mkFunTys arg_tys $
-    res_ty
-  where
-    univ_tys = mkTyVarTys univ_tvs
-    res_ty
-      | Just co <- tyConFamilyCoercion_maybe rep_tycon
-      = mkUnbranchedAxInstLHS co univ_tys []
-      | otherwise
-      = mkTyConApp rep_tycon univ_tys
 
 -- | Finds the instantiated types of the arguments required to construct a 'DataCon' representation
 -- NB: these INCLUDE any dictionary args
@@ -1141,7 +1116,7 @@ isLegacyPromotableDataCon dc
   && null (dataConTheta dc)   -- no context
   && not (isFamInstTyCon (dataConTyCon dc))   -- no data instance constructors
   && all isLegacyPromotableTyCon (nameEnvElts $
-                                  tyConsOfType (dataConWrapperType dc))
+                                  tyConsOfType (dataConUserType dc))
 
 -- | Was this tycon promotable before GHC 8.0? That is, is it promotable
 -- without -XTypeInType

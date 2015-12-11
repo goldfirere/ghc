@@ -50,6 +50,7 @@ import TysWiredIn
 import PrelNames
 import BasicTypes
 import Maybes
+import VarEnv
 import SrcLoc
 import Util
 import Bag
@@ -541,6 +542,18 @@ RHSs, and do not generate a Core constructor application directly, because the c
 might do some argument-evaluation first; and may have to throw away some
 dictionaries.
 
+Note [Update for GADTs]
+~~~~~~~~~~~~~~~~~~~~~~~
+Consider
+   data T a b where
+     T1 :: { f1 :: a } -> T a Int
+
+Then the wrapper function for T1 has type
+   $WT1 :: a -> T a Int
+But if x::T a b, then
+   x { f1 = v } :: T a b   (not T a Int!)
+So we need to cast (T a Int) to (T a b).  Sigh.
+
 -}
 
 dsExpr expr@(RecordUpd { rupd_expr = record_expr, rupd_flds = fields
@@ -617,10 +630,37 @@ dsExpr expr@(RecordUpd { rupd_expr = record_expr, rupd_flds = fields
                  -- The order here is because of the order in `TcPatSyn`.
                  wrap = dict_req_wrap                                           <.>
                         mkWpEvVarApps theta_vars                                <.>
-                        mkWpEvApps    (map (EvCoercion . mkTcCoVarCo) eqs_vars) <.>
                         mkWpTyApps    (mkTyVarTys ex_tvs)                       <.>
-                        mkWpTyApps    out_inst_tys
+                        mkWpTyApps    [ ty
+                                      | (tv, ty) <- univ_tvs `zip` out_inst_tys
+                                      , not (tv `elemVarEnv` wrap_subst) ]
                  rhs = foldl (\a b -> nlHsApp a b) inst_con val_args
+
+                        -- Tediously wrap the application in a cast
+                        -- Note [Update for GADTs]
+                 wrapped_rhs =
+                  case con of
+                    RealDataCon data_con ->
+                      let
+                        wrap_co =
+                          mkTcTyConAppCo Nominal
+                            (dataConTyCon data_con)
+                            [ lookup tv ty
+                              | (tv,ty) <- univ_tvs `zip` out_inst_tys ]
+                        lookup univ_tv ty =
+                          case lookupVarEnv wrap_subst univ_tv of
+                            Just co' -> co'
+                            Nothing  -> mkTcReflCo Nominal ty
+                        in if null eq_spec
+                             then rhs
+                             else mkLHsWrap (mkWpCastN wrap_co) rhs
+                    -- eq_spec is always null for a PatSynCon
+                    PatSynCon _ -> rhs
+
+                 wrap_subst =
+                  mkVarEnv [ (tv, mkTcSymCo (mkTcCoVarCo eq_var))
+                           | (spec, eq_var) <- eq_spec `zip` eqs_vars
+                           , let tv = eqSpecTyVar spec ]
 
                  req_wrap = dict_req_wrap <.> mkWpTyApps in_inst_tys
 
@@ -631,7 +671,7 @@ dsExpr expr@(RecordUpd { rupd_expr = record_expr, rupd_flds = fields
                                          , pat_args = PrefixCon $ map nlVarPat arg_ids
                                          , pat_arg_tys = in_inst_tys
                                          , pat_wrap = req_wrap }
-           ; return (mkSimpleMatch [pat] rhs) }
+           ; return (mkSimpleMatch [pat] wrapped_rhs) }
 
 -- Here is where we desugar the Template Haskell brackets and escapes
 

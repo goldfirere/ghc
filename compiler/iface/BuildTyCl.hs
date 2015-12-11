@@ -76,7 +76,7 @@ mkNewTyConRhs tycon_name tycon con
   where
     tvs    = tyConTyVars tycon
     roles  = tyConRoles tycon
-    inst_con_ty = applyTys (dataConWrapperType con) (mkTyVarTys tvs)
+    inst_con_ty = applyTys (dataConUserType con) (mkTyVarTys tvs)
     rhs_ty = ASSERT( isFunTy inst_con_ty ) funArgTy inst_con_ty
         -- Instantiate the data con with the
         -- type variables from the tycon
