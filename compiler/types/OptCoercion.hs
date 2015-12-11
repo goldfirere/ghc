@@ -1,6 +1,10 @@
 -- (c) The University of Glasgow 2006
 
 {-# LANGUAGE CPP #-}
+{-# OPTIONS_GHC -fno-warn-overlapping-patterns -fno-warn-incomplete-patterns #-}
+ -- Inexplicably, this module takes 10GB of memory to compile with the new
+ -- (Nov '15) pattern-match check. This needs to be fixed. But we need
+ -- to be able to compile in the meantime.
 
 module OptCoercion ( optCoercion, checkAxInstCo ) where
 
