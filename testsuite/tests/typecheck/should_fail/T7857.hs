@@ -1,5 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
-
 module T7857 where
 
 import Text.Printf

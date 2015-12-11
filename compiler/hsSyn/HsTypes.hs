@@ -57,7 +57,7 @@ module HsTypes (
         splitHsFunType, splitHsAppTys,
         mkHsOpTy,
         ignoreParens, hsSigType, hsSigWcType,
-        hsLTyVarBndrsToTypes,
+        hsLTyVarBndrToType, hsLTyVarBndrsToTypes,
 
         -- Printing
         pprParendHsType, pprHsForAll, pprHsForAllTvs, pprHsForAllExtra,
@@ -815,17 +815,15 @@ hsLTyVarLocName = fmap hsTyVarName
 hsLTyVarLocNames :: LHsQTyVars name -> [Located name]
 hsLTyVarLocNames qtvs = map hsLTyVarLocName (hsQTvExplicit qtvs)
 
--- | Convert a LHsTyVarBndr to an equivalent LHsType. Used in Template Haskell
--- quoting for type family equations.
+-- | Convert a LHsTyVarBndr to an equivalent LHsType.
 hsLTyVarBndrToType :: LHsTyVarBndr name -> LHsType name
 hsLTyVarBndrToType = fmap cvt
   where cvt (UserTyVar n)                     = HsTyVar n
         cvt (KindedTyVar (L name_loc n) kind)
                    = HsKindSig (L name_loc (HsTyVar (L name_loc n))) kind
 
--- | Convert a LHsTyVarBndrs to a list of types. Used in Template Haskell
--- quoting for type family equations. Works on *type* variable only, no kind
--- vars.
+-- | Convert a LHsTyVarBndrs to a list of types.
+-- Works on *type* variable only, no kind vars.
 hsLTyVarBndrsToTypes :: LHsQTyVars name -> [LHsType name]
 hsLTyVarBndrsToTypes (HsQTvs { hsq_explicit = tvbs }) = map hsLTyVarBndrToType tvbs
 

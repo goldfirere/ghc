@@ -1504,12 +1504,42 @@ famPatErr fam_tc tvs pats
 
 Note [Bad telescopes]
 ~~~~~~~~~~~~~~~~~~~~~
-TODO (RAE): Write note. Include example from checkValidTelescope and
-talk about where to do telescope checking and where to do telescope
-reordering.
+Now that we can mix type and kind variables, there are an awful lot of
+ways to shoot yourself in the foot. Here are some.
 
-Refer to dependent/should_fail/BadTelescope{,2,3}
+  data SameKind :: k -> k -> *   -- just to force unification
 
+1.  data T1 a k (b :: k) (x :: SameKind a b)
+
+The problem here is that we discover that a and b should have the same
+kind. But this kind mentions k, which is bound *after* a.
+(Testcase: dependent/should_fail/BadTelescope)
+
+2.  data T2 a (c :: Proxy b) (d :: Proxy a) (x :: SameKind b d)
+
+Note that b is not bound. Yet its kind mentions a. Because we have
+a nice rule that all implicitly bound variables come before others,
+this is bogus. (We could probably figure out to put b between a and c.
+But I think this is doing users a disservice, in the long run.)
+(Testcase: dependent/should_fail/BadTelescope4)
+
+3. t3 :: forall a. (forall k (b :: k). SameKind a b) -> ()
+
+This is a straightforward skolem escape. Note that a and b need to have
+the same kind.
+(Testcase: polykinds/T11142)
+
+How do we deal with all of this? For TyCons, we have checkValidTyConTyVars.
+That function looks to see if any of the tyConTyVars are repeated, but
+it's really a telescope check. It works because all tycons are kind-generalized.
+If there is a bad telescope, the kind-generalization will end up generalizing
+over a variable bound later in the telescope.
+
+For non-tycons, we do scope checking when we bring tyvars into scope,
+in tcImplicitTKBndrs and tcHsTyVarBndrs. Note that we also have to
+sort implicit binders into a well-scoped order whenever we have implicit
+binders to worry about. This is done in quantifyTyVars and in
+tcImplicitTKBndrs.
 -}
 
 -- | Check a list of binders to see if they make a valid telescope.
@@ -1520,7 +1550,7 @@ Refer to dependent/should_fail/BadTelescope{,2,3}
 -- because k isn't in scope when a is bound. This check has to come before
 -- general validity checking, because once we kind-generalise, this sort
 -- of problem is harder to spot (as we'll generalise over the unbound
--- k in a's type.)
+-- k in a's type.) See also Note [Bad telescopes].
 checkValidTelescope :: SDoc        -- the original user-written telescope
                     -> [TyVar]     -- explicit vars (not necessarily zonked)
                     -> SDoc        -- note to put at bottom of message
@@ -1559,7 +1589,7 @@ checkZonkValidTelescope hs_tvs orig_tvs extra
 
 -- | After inferring kinds of type variables, check to make sure that the
 -- inferred kinds any of the type variables bound in a smaller scope.
--- This is a skolem escape check.
+-- This is a skolem escape check. See also Note [Bad telescopes].
 checkValidInferredKinds :: [TyVar]     -- ^ vars to check (zonked)
                         -> TyVarSet    -- ^ vars out of scope
                         -> SDoc        -- ^ suffix to error message

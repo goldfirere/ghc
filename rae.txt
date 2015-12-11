@@ -1,5 +1,9 @@
 stack:
 
+BUGS TO POST:
+perfomance bug in OptCoercion
+poor error in T9260 (
+
 
 CHECK OptCoercion compile times.
 

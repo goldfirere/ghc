@@ -961,7 +961,7 @@ tcClassATs class_name cls ats at_defs
                   ; return (ATI fam_tc atd) }
 
 -------------------------
-tcDefaultAssocDecl :: TyCon                         -- ^ Family TyCon
+tcDefaultAssocDecl :: TyCon                    -- ^ Family TyCon (not knot-tied)
                    -> [LTyFamDefltEqn Name]         -- ^ Defaults
                    -> TcM (Maybe (Type, SrcSpan))   -- ^ Type checked RHS
 tcDefaultAssocDecl _ []
@@ -977,8 +977,8 @@ tcDefaultAssocDecl fam_tc [L loc (TyFamEqn { tfe_tycon = L _ tc_name
   = setSrcSpan loc $
     tcAddFamInstCtxt (ptext (sLit "default type instance")) tc_name $
     do { traceTc "tcDefaultAssocDecl" (ppr tc_name)
-       ; let (fam_name, fam_pat_arity, _) = famTyConShape fam_tc
-             fam_tc_tvs                   = tyConTyVars fam_tc
+       ; let shape@(fam_name, fam_pat_arity, _) = famTyConShape fam_tc
+             fam_tc_tvs                         = tyConTyVars fam_tc
 
        -- Kind of family check
        ; checkTc (isTypeFamilyTyCon fam_tc) (wrongKindOfFamily fam_tc)
@@ -989,15 +989,25 @@ tcDefaultAssocDecl fam_tc [L loc (TyFamEqn { tfe_tycon = L _ tc_name
                  (wrongNumberOfParmsErr fam_pat_arity)
 
        -- Typecheck RHS
-       -- NB: the tcTyClTYVars call is here, /after/ the arity check
-       -- If the arity isn't right, tcTyClTyVars crashes (Trac #11136)
-       ; (tvs, rhs_ty) <- tcTyClTyVars tc_name hs_tvs $
-                          \ kvs tvs _full_kind rhs_kind ->
-                          do { rhs_ty <- solveEqualities $
-                                         tcCheckLHsType rhs rhs_kind
-                             ; return (kvs ++ tvs, rhs_ty) }
+       -- Oddly, we don't pass in any enclosing class info, and we treat
+       -- this as a top-level type instance. Type family defaults are renamed
+       -- outside the scope of their enclosing class and so the ClsInfo would
+       -- be of no use.
+       ; let HsQTvs { hsq_implicit = imp_vars, hsq_explicit = exp_vars } = hs_tvs
+             pats = HsIB { hsib_vars = imp_vars ++ map hsLTyVarName exp_vars
+                         , hsib_body = map hsLTyVarBndrToType exp_vars }
+          -- NB: Use tcFamTyPats, not tcTyClTyVars. The latter expects to get
+          -- the LHsQTyVars used for declaring a tycon, but the names here
+          -- are different.
+       ; (ktvs, rhs_ty)
+           <- tcFamTyPats shape Nothing pats
+              (discardResult . tcCheckLHsType rhs) $ \ktvs _ rhs_kind ->
+              do { rhs_ty <- solveEqualities $
+                             tcCheckLHsType rhs rhs_kind
+                 ; return (ktvs, rhs_ty) }
+
        ; rhs_ty <- zonkTcTypeToType emptyZonkEnv rhs_ty
-       ; let subst = zipTopTCvSubst tvs (mkTyVarTys fam_tc_tvs)
+       ; let subst = zipTopTCvSubst ktvs (mkTyVarTys fam_tc_tvs)
        ; return ( Just (substTy subst rhs_ty, loc) ) }
     -- We check for well-formedness and validity later, in checkValidClass
 
@@ -1774,9 +1784,9 @@ GHC). So, we add a mapping from the tycon tyvar to the result tyvar to t_sub.
 
 If we discover that a mapping in `subst` gives us a non-tyvar (the second
 branch of the `case` statement), then we have a GADT equality to create.
-We create a fresh coercion variable and extend the substitutions accordingly,
-being careful to apply the correct substitutions built up from previous
-variables.
+We create a fresh equality, but we don't extend any substitutions. The
+template variable substitution is meant for use in universal tyvar kinds,
+and these shouldn't be affected by any GADT equalities.
 
 This whole algorithm is quite delicate, indeed. I (Richard E.) see two ways
 of simplifying it:
@@ -1794,7 +1804,7 @@ certainly degrade error messages a bit, though.
 
 -- ^ From information about a source datacon definition, extract out
 -- what the universal variables and the GADT equalities should be.
--- See Note [mkGADTVars].   TODO (RAE): Update note to remove LCs
+-- See Note [mkGADTVars].
 mkGADTVars :: [TyVar]    -- ^ The tycon vars
            -> [TyVar]    -- ^ The datacon vars
            -> TCvSubst   -- ^ The matching between the template result type
