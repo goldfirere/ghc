@@ -1574,6 +1574,36 @@ but there may be dependency among the variables. Of course, the order in
 the kind must take dependency into account. So we use a NameSet to keep
 these straightened out.
 
+Note [Free-floating kind vars]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider
+
+  data T = MkT (forall (a :: k). Proxy a)
+
+This is not an existential datatype, but a higher-rank one. Note that
+the forall to the right of MkT. Also consider
+
+  data S a = MkS (Proxy (a :: k))
+
+According to the rules around implicitly-bound kind variables, those
+k's scope over the whole declarations. The renamer grabs it and adds it
+to the hsq_implicits field of the HsQTyVars of the tycon. So it must
+be in scope during type-checking, but we want to reject T while accepting
+S.
+
+Why reject T? Because the kind variable isn't fixed by anything. For
+a variable like k to be implicit, it needs to be mentioned in the kind
+of a tycon tyvar. But it isn't.
+
+Why accept S? Because kind inference tells us that a has kind k, so it's
+all OK.
+
+Here's the approach: in the first pass ("kind-checking") we just bring
+k into scope. In the second pass, we certainly hope that k has been
+integrated into the type's (generalized) kind, and so it should be found
+by splitTelescopeTvs. If it's not, then we must have a definition like
+T, and we reject.
+
 -}
 
 --------------------
