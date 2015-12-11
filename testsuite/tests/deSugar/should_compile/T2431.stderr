@@ -1,21 +1,17 @@
 
 ==================== Tidy Core ====================
-Result size of Tidy Core = {terms: 38, types: 48, coercions: 1}
+Result size of Tidy Core = {terms: 36, types: 30, coercions: 1}
 
--- RHS size: {terms: 4, types: 13, coercions: 1}
-T2431.$WRefl [InlPrag=INLINE] :: forall a b. (b ~# a) => a :~: b
+-- RHS size: {terms: 2, types: 4, coercions: 1}
+T2431.$WRefl [InlPrag=INLINE] :: forall a. a :~: a
 [GblId[DataConWrapper],
- Arity=1,
  Caf=NoCafRefs,
  Str=DmdType m,
  Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True,
-         Guidance=ALWAYS_IF(arity=1,unsat_ok=False,boring_ok=True)
-         Tmpl= \ (@ a) (@ b) (dt :: b ~# a) ->
-                 T2431.Refl @ a @ b @~ (dt :: b ~# a)}]
-T2431.$WRefl =
-  \ (@ a) (@ b) (dt :: b ~# a) ->
-    T2431.Refl @ a @ b @~ (dt :: b ~# a)
+         Guidance=ALWAYS_IF(arity=0,unsat_ok=False,boring_ok=False)
+         Tmpl= \ (@ a) -> T2431.Refl @ a @ a @~ (<a>_N :: a ~# a)}]
+T2431.$WRefl = \ (@ a) -> T2431.Refl @ a @ a @~ (<a>_N :: a ~# a)
 
 -- RHS size: {terms: 2, types: 0, coercions: 0}
 a :: TrName

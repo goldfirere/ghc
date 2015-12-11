@@ -38,11 +38,11 @@ AbsBinds [a] []
    Exported types: T8958.$fRepresentationala
                      :: forall a. Representational a
                    [LclIdX[DFunId], Str=DmdType]
-   Binds: $dRepresentational = (T8958.D:Representational) @ a}
+   Binds: $dRepresentational = T8958.D:Representational}
 AbsBinds [a] []
   {Exports: [T8958.$fNominala <= $dNominal
                <>]
    Exported types: T8958.$fNominala :: forall a. Nominal a
                    [LclIdX[DFunId], Str=DmdType]
-   Binds: $dNominal = (T8958.D:Nominal) @ a}
+   Binds: $dNominal = T8958.D:Nominal}
 

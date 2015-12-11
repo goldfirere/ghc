@@ -700,9 +700,7 @@ pprHsWrapper :: SDoc -> HsWrapper -> SDoc
 -- otherwise just print what's inside
 pprHsWrapper doc wrap
   = sdocWithDynFlags $ \ dflags ->
-    getPprStyle (\ s -> if (dumpStyle s && debugIsOn)
-                           || debugStyle s
-                           || gopt Opt_PrintExplicitCoercions dflags
+    getPprStyle (\ s -> if debugStyle s || gopt Opt_PrintExplicitCoercions dflags
                         then (help (add_parens doc) wrap False)
                         else doc )
   where
