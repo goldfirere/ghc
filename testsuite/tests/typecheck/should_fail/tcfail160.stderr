@@ -4,8 +4,3 @@ tcfail160.hs:7:8: error:
     • In the first argument of ‘T’, namely ‘Int’
       In the type signature:
         g :: T Int
-
-tcfail160.hs:8:1: error:
-    • Couldn't match expected type ‘t0 -> t0’ with actual type ‘T Int’
-    • The equation(s) for ‘g’ have one argument,
-      but its type ‘T Int’ has none

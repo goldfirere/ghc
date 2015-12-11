@@ -9,6 +9,9 @@ CHECK OptCoercion compile times.
 The irreducible hetero wanteds story:
   - suboptimal error messages:
     T9196
+    T8262
+    T8603
+    tcfail122
 
 
 PERFORMANCE STUFF:

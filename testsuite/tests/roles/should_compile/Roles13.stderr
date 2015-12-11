@@ -68,7 +68,7 @@ convert :: Wrap Age -> Int
 convert =
   a6
   `cast` (<Wrap Age>_R -> Roles13.NTCo:Wrap[0] Roles13.NTCo:Age[0]
-          :: Coercible (Wrap Age -> Wrap Age) (Wrap Age -> Int))
+          :: (Wrap Age -> Wrap Age) ~R# (Wrap Age -> Int))
 
 
 

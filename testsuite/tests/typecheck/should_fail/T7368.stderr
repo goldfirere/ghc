@@ -1,5 +1,6 @@
 
 T7368.hs:3:10: error:
-    Couldn't match kind ‘*’ with ‘* -> *’
-    In the first argument of ‘b’, namely ‘(l Nothing)’
-    In the expression: b (l Nothing)
+    • Couldn't match kind ‘*’ with ‘* -> *’
+      When matching the kind of ‘Maybe’
+    • In the first argument of ‘b’, namely ‘(l Nothing)’
+      In the expression: b (l Nothing)
