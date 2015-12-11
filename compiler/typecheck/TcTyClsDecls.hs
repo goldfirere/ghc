@@ -495,7 +495,7 @@ kcTyClDecl (DataDecl { tcdLName = L _ name, tcdTyVars = hs_tvs, tcdDataDefn = de
     --    (b) dd_ctxt is not allowed for GADT-style decls, so we can ignore it
 
   | HsDataDefn { dd_ctxt = ctxt, dd_cons = cons } <- defn
-  = tcTyClTyVars name hs_tvs $ \ _ _ _ _ ->
+  = kcTyClTyVars name hs_tvs $
     do  { _ <- tcHsContext ctxt
         ; mapM_ (wrapLocM kcConDecl) cons }
 
@@ -503,7 +503,7 @@ kcTyClDecl decl@(SynDecl {}) = pprPanic "kcTyClDecl" (ppr decl)
 
 kcTyClDecl (ClassDecl { tcdLName = L _ name, tcdTyVars = hs_tvs
                        , tcdCtxt = ctxt, tcdSigs = sigs })
-  = tcTyClTyVars name hs_tvs $ \ _ _ _ _ ->
+  = kcTyClTyVars name hs_tvs $
     do  { _ <- tcHsContext ctxt
         ; mapM_ (wrapLocM kc_sig)     sigs }
   where

@@ -74,7 +74,7 @@ import Unique
 import UniqSupply
 import MonadUtils
 import Module
-import PrelNames  ( toDynName )
+import PrelNames  ( toDynName, pretendNameIsInScope )
 import Panic
 import UniqFM
 import Maybes
@@ -963,11 +963,13 @@ getInfo allInfo name
        || all ok (nameSetElems names)
         where   -- A name is ok if it's in the rdr_env,
                 -- whether qualified or not
-          ok n | n == name         = True       -- The one we looked for in the first place!
-               | isBuiltInSyntax n = True
-               | isExternalName n  = any ((== n) . gre_name)
-                                         (lookupGRE_Name rdr_env n)
-               | otherwise         = True
+          ok n | n == name              = True
+                       -- The one we looked for in the first place!
+               | pretendNameIsInScope n = True
+               | isBuiltInSyntax n      = True
+               | isExternalName n       = any ((== n) . gre_name)
+                                              (lookupGRE_Name rdr_env n)
+               | otherwise              = True
 
 -- | Returns all names in scope in the current interactive context
 getNamesInScope :: GhcMonad m => m [Name]

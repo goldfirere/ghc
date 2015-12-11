@@ -1,8 +1,8 @@
 stack:
 
 BUGS TO POST:
-perfomance bug in OptCoercion
-
+1. perfomance bug in OptCoercion
+2. defer-type-errors are now more eager. need to float in.
 
 CHECK OptCoercion compile times.
 

@@ -19,7 +19,7 @@ module TcHsType (
         tcImplicitTKBndrs, tcImplicitTKBndrsType, tcHsTyVarBndrs,
 
                 -- Type checking type and class decls
-        kcLookupKind, tcTyClTyVars,
+        kcLookupKind, kcTyClTyVars, tcTyClTyVars,
         tcHsConArgType, tcDataKindSig,
 
         -- Kind-checking types
@@ -1673,8 +1673,20 @@ splitTelescopeTvs kind tvbs@(HsQTvs { hsq_implicit = hs_kvs
 
 
 -----------------------
+-- used on first pass only ("kind checking")
+kcTyClTyVars :: Name -> LHsQTyVars Name
+             -> TcM a -> TcM a
+kcTyClTyVars tycon hs_tvs thing_inside
+  = tc_tycl_tyvars False tycon hs_tvs $ \_ _ _ _ -> thing_inside
+
+-- used on second pass only ("type checking", really desugaring)
 tcTyClTyVars :: Name -> LHsQTyVars Name      -- LHS of the type or class decl
              -> ([TyVar] -> [TyVar] -> Kind -> Kind -> TcM a) -> TcM a
+tcTyClTyVars = tc_tycl_tyvars True
+
+tc_tycl_tyvars :: Bool  -- are we doing the second pass?
+               -> Name -> LHsQTyVars Name      -- LHS of the type or class decl
+               -> ([TyVar] -> [TyVar] -> Kind -> Kind -> TcM a) -> TcM a
 -- Used for the type variables of a type or class decl
 -- on both the first and second full passes in TcTyClDecls.
 -- *Not* used in the initial-kind run.
@@ -1693,7 +1705,7 @@ tcTyClTyVars :: Name -> LHsQTyVars Name      -- LHS of the type or class decl
 --
 -- The LHsTyVarBndrs is always user-written, and the kind of the tycon
 -- is available in the local env.
-tcTyClTyVars tycon hs_tvs thing_inside
+tc_tycl_tyvars second_pass tycon hs_tvs thing_inside
   = do { kind <- kcLookupKind tycon
        ; let (scoped_tvs, non_cusk_kv_name_set, all_kvs, all_tvs, res_k)
                = splitTelescopeTvs kind hs_tvs
@@ -1713,15 +1725,33 @@ tcTyClTyVars tycon hs_tvs thing_inside
        ; let non_cusk_kv_names = nameSetElems non_cusk_kv_name_set
              free_kvs          = tyCoVarsOfTypes $
                                  map tyVarKind (all_kvs ++ all_tvs)
-             non_cusk_kvars    = mapMaybe (lookupVarSetByName free_kvs)
-                                          non_cusk_kv_names
+             lookup nm         = case lookupVarSetByName free_kvs nm of
+                                   Just tv -> Left tv
+                                   Nothing -> Right nm
+             (non_cusk_kvs, weirds) = partitionWith lookup non_cusk_kv_names
 
-       ; MASSERT2( length non_cusk_kvars == length non_cusk_kv_names
-                 , text "tcTyClTyVars lost a non-CUSK kv" <+>
-                     (ppr non_cusk_kv_names $$ ppr non_cusk_kvars) )
+         -- See Note [Free-floating kind vars]  TODO (RAE): Write note.
+       ; weird_kvs <- if second_pass
+                      then do { checkNoErrs $
+                                mapM_ (report_floating_kv all_tvs) weirds
+                              ; return [] }
+                      else do { ks <- mapM (const newMetaKindVar) weirds
+                              ; return (zipWith new_skolem_tv weirds ks) }
 
-       ; tcExtendTyVarEnv (non_cusk_kvars ++ scoped_tvs) $
-         thing_inside (non_cusk_kvars ++ all_kvs) all_tvs kind res_k }
+       ; tcExtendTyVarEnv (non_cusk_kvs ++ weird_kvs ++ scoped_tvs) $
+         thing_inside (non_cusk_kvs ++ weird_kvs ++ all_kvs) all_tvs kind res_k }
+  where
+    report_floating_kv all_tvs kv_name
+      = addErr $
+        vcat [ text "Kind variable" <+> quotes (ppr kv_name) <+>
+               text "is implicitly bound in datatype"
+             , quotes (ppr tycon) <> comma <+>
+               text "but does not appear as the kind of any"
+             , text "of its type variables. Perhaps you meant"
+             , text "to bind it (with TypeInType) explicitly somewhere?"
+             , if null all_tvs then empty else
+               hang (text "Type variables with inferred kinds:")
+                  2 (pprTvBndrs all_tvs) ]
 
 -----------------------------------
 tcDataKindSig :: Kind -> TcM [TyVar]

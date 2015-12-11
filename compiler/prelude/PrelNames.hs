@@ -2183,3 +2183,21 @@ derivableClassKeys :: [Unique]
 derivableClassKeys
   = [ eqClassKey, ordClassKey, enumClassKey, ixClassKey,
       boundedClassKey, showClassKey, readClassKey ]
+
+{-
+************************************************************************
+*                                                                      *
+   Semi-builtin names
+*                                                                      *
+************************************************************************
+
+The following names should be considered by GHCi to be in scope always.
+
+-}
+
+pretendNameIsInScope :: Name -> Bool
+pretendNameIsInScope n
+  = any (n `hasKey`)
+    [ starKindTyConKey, liftedTypeKindTyConKey, tYPETyConKey
+    , unliftedTypeKindTyConKey, levityTyConKey, liftedDataConKey
+    , unliftedDataConKey ]
