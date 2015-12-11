@@ -1,17 +1,29 @@
 stack:
 
 BUGS TO POST:
-1. perfomance bug in OptCoercion
+1. perfomance bug in OptCoercion: #11195
 2. defer-type-errors are now more eager. need to float in.
    Test cases: Defer02, T7861 (but that's impredicative)
-
-
-The irreducible hetero wanteds story:
+3. The irreducible hetero wanteds story:
   - suboptimal error messages:
     T9196
     T8262
     T8603
     tcfail122
+
+4. Performance: #11196
+   T3064 (14%)
+   T5030 (61.8%)
+   T5837 (13%)
+   T5321Fun (11%)
+   T5631 (39%)
+   T9872d (-91.8%)
+   T9872a (33.6%)
+   T9872c (59.4%)
+   T9872b (49.4%)
+   T9675 (29.7%) (and 28.4% peak_megabytes_allocated)
+   haddock.base (12.4%)
+   haddock.Cabal (9.5%)
 
 
 PERFORMANCE STUFF:
