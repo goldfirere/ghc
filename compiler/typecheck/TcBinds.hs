@@ -294,7 +294,7 @@ Consider this (Trac #9161)
 Here, the type signature for b mentions A.  But A is a pattern
 synonym, which is typechecked (for very good reasons; a view pattern
 in the RHS may mention a value binding) as part of a group of
-bindings.  It is entirely resonable to reject this, but to do so
+bindings.  It is entirely reasonable to reject this, but to do so
 we need A to be in the kind environment when kind-checking the signature for B.
 
 Hence the tcExtendKindEnv2 patsyn_placeholder_kinds, which adds a binding
@@ -443,6 +443,7 @@ tc_group top_lvl sig_fn prag_fn (Recursive, binds) thing_inside
         -- strongly-connected-component analysis, this time omitting
         -- any references to variables with type signatures.
         -- (This used to be optional, but isn't now.)
+        -- See Note [Polymorphic recursion] in HsBinds.
     do  { traceTc "tc_group rec" (pprLHsBinds binds)
         ; when hasPatSyn $ recursivePatSynErr binds
         ; (binds1, thing) <- go sccs
@@ -503,10 +504,10 @@ tc_single top_lvl sig_fn prag_fn lbind thing_inside
        ; return (binds1, thing) }
 
 ------------------------
-mkEdges :: TcSigFun -> LHsBinds Name -> [Node BKey (LHsBind Name)]
-
 type BKey = Int -- Just number off the bindings
 
+mkEdges :: TcSigFun -> LHsBinds Name -> [Node BKey (LHsBind Name)]
+-- See Note [Polymorphic recursion] in HsBinds.
 mkEdges sig_fn binds
   = [ (bind, key, [key | n <- nameSetElems (bind_fvs (unLoc bind)),
                          Just key <- [lookupNameEnv key_map n], no_sig n ])
@@ -754,7 +755,7 @@ mkInferredPolyId qtvs inferred_theta poly_name mb_sig mono_ty
                -- Example: f :: [F Int] -> Bool
                -- should be rewritten to f :: [Char] -> Bool, if possible
                --
-               -- We can discard the coercion _co, becuase we'll reconstruct
+               -- We can discard the coercion _co, because we'll reconstruct
                -- it in the call to tcSubType below
 
        ; (my_tvs, theta') <- chooseInferredQuantifiers
@@ -1784,7 +1785,7 @@ tcUserTypeSig hs_sig_ty mb_name
 
               -- Check for validity (eg rankN etc)
               -- The ambiguity check will happen (from checkValidType),
-              -- but unnecessarily; it will always succeed becuase there
+              -- but unnecessarily; it will always succeed because there
               -- is no quantification
             ; checkValidType ctxt_F (mkPhiTy theta tau)
                 -- NB: Do this in the context of the pushTcLevel so that

@@ -130,13 +130,10 @@ ghciWelcomeMsg :: String
 ghciWelcomeMsg = "GHCi, version " ++ cProjectVersion ++
                  ": http://www.haskell.org/ghc/  :? for help"
 
-cmdName :: Command -> String
-cmdName (n,_,_) = n
-
 GLOBAL_VAR(macros_ref, [], [Command])
 
 ghciCommands :: [Command]
-ghciCommands = [
+ghciCommands = map mkCmd [
   -- Hugs users are accustomed to :e, so make sure it doesn't overlap
   ("?",         keepGoing help,                 noCompletion),
   ("add",       keepGoingPaths addModule,       completeFilename),
@@ -148,7 +145,6 @@ ghciCommands = [
   ("cd",        keepGoing' changeDirectory,     completeFilename),
   ("check",     keepGoing' checkModule,         completeHomeModule),
   ("continue",  keepGoing continueCmd,          noCompletion),
-  ("complete",  keepGoing completeCmd,          noCompletion),
   ("cmd",       keepGoing cmdCmd,               completeExpression),
   ("ctags",     keepGoing createCTagsWithLineNumbersCmd, completeFilename),
   ("ctags!",    keepGoing createCTagsWithRegExesCmd, completeFilename),
@@ -189,8 +185,21 @@ ghciCommands = [
   ("trace",     keepGoing traceCmd,             completeExpression),
   ("undef",     keepGoing undefineMacro,        completeMacro),
   ("unset",     keepGoing unsetOptions,         completeSetOptions)
+  ] ++ map mkCmdHidden [ -- hidden commands
+  ("complete",  keepGoing completeCmd)
   ]
+ where
+  mkCmd (n,a,c) = Command { cmdName = n
+                          , cmdAction = a
+                          , cmdHidden = False
+                          , cmdCompletionFunc = c
+                          }
 
+  mkCmdHidden (n,a) = Command { cmdName = n
+                              , cmdAction = a
+                              , cmdHidden = True
+                              , cmdCompletionFunc = noCompletion
+                              }
 
 -- We initialize readline (in the interactiveUI function) to use
 -- word_break_chars as the default set of completion word break characters.
@@ -620,10 +629,9 @@ checkPerms file =
 #endif
 
 incrementLineNo :: InputT GHCi ()
-incrementLineNo = do
-   st <- lift $ getGHCiState
-   let ln = 1+(line_number st)
-   lift $ setGHCiState st{line_number=ln}
+incrementLineNo = modifyGHCiState incLineNo
+  where
+    incLineNo st = st { line_number = line_number st + 1 }
 
 fileLoop :: Handle -> InputT GHCi (Maybe String)
 fileLoop hdl = do
@@ -766,10 +774,11 @@ runOneCommand eh gCmd = do
                                      ":{" -> multiLineCmd q
                                      _    -> return (Just c) )
     multiLineCmd q = do
-      st <- lift getGHCiState
+      st <- getGHCiState
       let p = prompt st
-      lift $ setGHCiState st{ prompt = prompt2 st }
-      mb_cmd <- collectCommand q "" `GHC.gfinally` lift (getGHCiState >>= \st' -> setGHCiState st' { prompt = p })
+      setGHCiState st{ prompt = prompt2 st }
+      mb_cmd <- collectCommand q "" `GHC.gfinally`
+                modifyGHCiState (\st' -> st' { prompt = p })
       return mb_cmd
     -- we can't use removeSpaces for the sublines here, so
     -- multiline commands are somewhat more brittle against
@@ -806,7 +815,7 @@ runOneCommand eh gCmd = do
       ml <- lift $ isOptionSet Multiline
       if ml && stmt_nl_cnt == 0 -- don't trigger automatic multi-line mode for ':{'-multiline input
         then do
-          fst_line_num <- lift (line_number <$> getGHCiState)
+          fst_line_num <- line_number <$> getGHCiState
           mb_stmt <- checkInputForLayout stmt gCmd
           case mb_stmt of
             Nothing      -> return $ Just True
@@ -816,7 +825,7 @@ runOneCommand eh gCmd = do
                 runStmtWithLineNum fst_line_num ml_stmt GHC.RunToCompletion
               return $ Just (runSuccess result)
         else do -- single line input and :{ - multiline input
-          last_line_num <- lift (line_number <$> getGHCiState)
+          last_line_num <- line_number <$> getGHCiState
           -- reconstruct first line num from last line num and stmt
           let fst_line_num | stmt_nl_cnt > 0 = last_line_num - (stmt_nl_cnt2 + 1)
                            | otherwise = last_line_num -- single line input
@@ -849,18 +858,18 @@ runOneCommand eh gCmd = do
 checkInputForLayout :: String -> InputT GHCi (Maybe String)
                     -> InputT GHCi (Maybe String)
 checkInputForLayout stmt getStmt = do
-   dflags' <- lift $ getDynFlags
+   dflags' <- getDynFlags
    let dflags = xopt_set dflags' Opt_AlternativeLayoutRule
-   st0 <- lift $ getGHCiState
+   st0 <- getGHCiState
    let buf'   =  stringToStringBuffer stmt
        loc    = mkRealSrcLoc (fsLit (progname st0)) (line_number st0) 1
        pstate = Lexer.mkPState dflags buf' loc
    case Lexer.unP goToEnd pstate of
      (Lexer.POk _ False) -> return $ Just stmt
      _other              -> do
-       st1 <- lift getGHCiState
+       st1 <- getGHCiState
        let p = prompt st1
-       lift $ setGHCiState st1{ prompt = prompt2 st1 }
+       setGHCiState st1{ prompt = prompt2 st1 }
        mb_stmt <- ghciHandle (\ex -> case fromException ex of
                             Just UserInterrupt -> return Nothing
                             _ -> case fromException ex of
@@ -869,7 +878,7 @@ checkInputForLayout stmt getStmt = do
                                       return Nothing
                                  _other -> liftIO (Exception.throwIO ex))
                      getStmt
-       lift $ getGHCiState >>= \st' -> setGHCiState st'{ prompt = p }
+       modifyGHCiState (\st' -> st' { prompt = p })
        -- the recursive call does not recycle parser state
        -- as we use a new string buffer
        case mb_stmt of
@@ -1017,9 +1026,9 @@ specialCommand ('!':str) = lift $ shellEscape (dropWhile isSpace str)
 specialCommand str = do
   let (cmd,rest) = break isSpace str
   maybe_cmd <- lift $ lookupCommand cmd
-  htxt <- lift $ short_help `fmap` getGHCiState
+  htxt <- short_help <$> getGHCiState
   case maybe_cmd of
-    GotCommand (_,f,_) -> f (dropWhile isSpace rest)
+    GotCommand cmd -> (cmdAction cmd) (dropWhile isSpace rest)
     BadCommand ->
       do liftIO $ hPutStr stdout ("unknown command ':" ++ cmd ++ "'\n"
                            ++ htxt)
@@ -1040,8 +1049,7 @@ lookupCommand "" = do
       Nothing -> return NoLastCommand
 lookupCommand str = do
   mc <- lookupCommand' str
-  st <- getGHCiState
-  setGHCiState st{ last_command = mc }
+  modifyGHCiState (\st -> st { last_command = mc })
   return $ case mc of
            Just c -> GotCommand c
            Nothing -> BadCommand
@@ -1050,7 +1058,10 @@ lookupCommand' :: String -> GHCi (Maybe Command)
 lookupCommand' ":" = return Nothing
 lookupCommand' str' = do
   macros    <- liftIO $ readIORef macros_ref
-  ghci_cmds <- ghci_commands `fmap` getGHCiState
+  ghci_cmds <- ghci_commands <$> getGHCiState
+
+  let ghci_cmds_nohide = filter (not . cmdHidden) ghci_cmds
+
   let (str, xcmds) = case str' of
           ':' : rest -> (rest, [])     -- "::" selects a builtin command
           _          -> (str', macros) -- otherwise include macros in lookup
@@ -1058,7 +1069,8 @@ lookupCommand' str' = do
       lookupExact  s = find $ (s ==)           . cmdName
       lookupPrefix s = find $ (s `isPrefixOf`) . cmdName
 
-      builtinPfxMatch = lookupPrefix str ghci_cmds
+      -- hidden commands can only be matched exact
+      builtinPfxMatch = lookupPrefix str ghci_cmds_nohide
 
   -- first, look for exact match (while preferring macros); then, look
   -- for first prefix match (preferring builtins), *unless* a macro
@@ -1221,7 +1233,7 @@ trySuccess act =
 editFile :: String -> InputT GHCi ()
 editFile str =
   do file <- if null str then lift chooseEditFile else expandPath str
-     st <- lift getGHCiState
+     st <- getGHCiState
      errs <- liftIO $ readIORef $ lastErrorLocations st
      let cmd = editor st
      when (null cmd)
@@ -1308,8 +1320,14 @@ defineMacro overwrite s = do
         new_expr = L (getLoc expr) $ ExprWithTySig body tySig
     hv <- GHC.compileParsedExpr new_expr
 
-    liftIO (writeIORef macros_ref -- later defined macros have precedence
-            ((macro_name, lift . runMacro hv, noCompletion) : filtered))
+    let newCmd = Command { cmdName = macro_name
+                         , cmdAction = lift . runMacro hv
+                         , cmdHidden = False
+                         , cmdCompletionFunc = noCompletion
+                         }
+
+    -- later defined macros have precedence
+    liftIO $ writeIORef macros_ref (newCmd : filtered)
 
 runMacro :: GHC.HValue{-String -> IO String-} -> String -> GHCi Bool
 runMacro fun s = do
@@ -1613,14 +1631,14 @@ runScript filename = do
     Left _err    -> throwGhcException (CmdLineError $ "IO error:  \""++filename++"\" "
                       ++(ioeGetErrorString _err))
     Right script -> do
-      st <- lift $ getGHCiState
+      st <- getGHCiState
       let prog = progname st
           line = line_number st
-      lift $ setGHCiState st{progname=filename',line_number=0}
+      setGHCiState st{progname=filename',line_number=0}
       scriptLoop script
       liftIO $ hClose script
-      new_st <- lift $ getGHCiState
-      lift $ setGHCiState new_st{progname=prog,line_number=line}
+      new_st <- getGHCiState
+      setGHCiState new_st{progname=prog,line_number=line}
   where scriptLoop script = do
           res <- runOneCommand handler $ fileLoop script
           case res of
@@ -2110,17 +2128,9 @@ showDynFlags show_all dflags = do
 setArgs, setOptions :: [String] -> GHCi ()
 setProg, setEditor, setStop :: String -> GHCi ()
 
-setArgs args = do
-  st <- getGHCiState
-  setGHCiState st{ GhciMonad.args = args }
-
-setProg prog = do
-  st <- getGHCiState
-  setGHCiState st{ progname = prog }
-
-setEditor cmd = do
-  st <- getGHCiState
-  setGHCiState st{ editor = cmd }
+setArgs args = modifyGHCiState (\st -> st { GhciMonad.args = args })
+setProg prog = modifyGHCiState (\st -> st { progname = prog })
+setEditor cmd = modifyGHCiState (\st -> st { editor = cmd })
 
 setStop str@(c:_) | isDigit c
   = do let (nm_str,rest) = break (not.isDigit) str
@@ -2135,9 +2145,7 @@ setStop str@(c:_) | isDigit c
            fn (i,loc) | i == nm   = (i,loc { onBreakCmd = dropWhile isSpace rest })
                       | otherwise = (i,loc)
        setGHCiState st{ breaks = new_breaks }
-setStop cmd = do
-  st <- getGHCiState
-  setGHCiState st{ stop = cmd }
+setStop cmd = modifyGHCiState (\st -> st { stop = cmd })
 
 setPrompt :: String -> GHCi ()
 setPrompt = setPrompt_ f err
@@ -2544,14 +2552,14 @@ ghciCompleteWord line@(left,_) = case firstWord of
     lookupCompletion c = do
         maybe_cmd <- lookupCommand' c
         case maybe_cmd of
-            Just (_,_,f) -> return f
-            Nothing -> return completeFilename
+            Just cmd -> return (cmdCompletionFunc cmd)
+            Nothing  -> return completeFilename
 
 completeGhciCommand = wrapCompleter " " $ \w -> do
   macros <- liftIO $ readIORef macros_ref
   cmds   <- ghci_commands `fmap` getGHCiState
   let macro_names = map (':':) . map cmdName $ macros
-  let command_names = map (':':) . map cmdName $ cmds
+  let command_names = map (':':) . map cmdName $ filter (not . cmdHidden) cmds
   let{ candidates = case w of
       ':' : ':' : _ -> map (':':) command_names
       _ -> nub $ macro_names ++ command_names }
@@ -3110,9 +3118,7 @@ getTickArray modl = do
         return arr
 
 discardTickArrays :: GHCi ()
-discardTickArrays = do
-   st <- getGHCiState
-   setGHCiState st{tickarrays = emptyModuleEnv}
+discardTickArrays = modifyGHCiState (\st -> st {tickarrays = emptyModuleEnv})
 
 mkTickArray :: [(BreakIndex,SrcSpan)] -> TickArray
 mkTickArray ticks
