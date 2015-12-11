@@ -1156,7 +1156,7 @@ canDeriveAnyClass dflags _tycon clas
     target_kind = tyVarKind (last (classTyVars clas))
 
 typeToTypeKind :: Kind
-typeToTypeKind = liftedTypeKind `mkArrowKind` liftedTypeKind
+typeToTypeKind = liftedTypeKind `mkFunTy` liftedTypeKind
 
 type Condition = (DynFlags, TyCon, [Type]) -> Validity
         -- first Bool is whether or not we are allowed to derive Data and Typeable

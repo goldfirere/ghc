@@ -4,7 +4,6 @@ BUGS TO POST:
 1. perfomance bug in OptCoercion
 2. defer-type-errors are now more eager. need to float in.
 
-CHECK OptCoercion compile times.
 
 The irreducible hetero wanteds story:
   - suboptimal error messages:
