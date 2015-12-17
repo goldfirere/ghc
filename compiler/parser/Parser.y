@@ -141,7 +141,7 @@ state 50 contains 1 shift/reduce conflict.
 state 51 contains 9 shift/reduce conflicts.
 
     *** btype -> tyapps .                                   (rule 303)
-	tyapps -> tyapps . tyapp                            (rule 307)
+        tyapps -> tyapps . tyapp                            (rule 307)
 
     Conflicts: ':' '-' '!' '.' '`' VARSYM CONSYM QVARSYM QCONSYM
 
@@ -193,7 +193,7 @@ a rule instructing how to rewrite the expression '[0] f'.
 state 301 contains 1 shift/reduce conflict.
 
     *** type -> btype .                                     (rule 297)
-	type -> btype . '->' ctype                          (rule 298)
+        type -> btype . '->' ctype                          (rule 298)
 
     Conflict: '->'
 
@@ -230,7 +230,7 @@ Same as State 324 for unboxed tuples.
 
 state 460 contains 1 shift/reduce conflict.
 
-	oqtycon -> '(' qtyconsym . ')'                      (rule 621)
+        oqtycon -> '(' qtyconsym . ')'                      (rule 621)
     *** qtyconop -> qtyconsym .                             (rule 628)
 
     Conflict: ')'
@@ -284,7 +284,7 @@ state 930 contains 1 shift/reduce conflicts.
 state 1270 contains 1 shift/reduce conflict.
 
     *** atype -> tyvar .                                    (rule 314)
-	tv_bndr -> '(' tyvar . '::' kind ')'                (rule 346)
+        tv_bndr -> '(' tyvar . '::' kind ')'                (rule 346)
 
     Conflict: '::'
 
