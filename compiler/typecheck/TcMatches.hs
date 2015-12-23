@@ -88,13 +88,15 @@ tcMatchesFun fun_name matches exp_ty
           traceTc "tcMatchesFun" (ppr fun_name $$ ppr exp_ty)
         ; checkArgs fun_name matches
 
-        ; (wrap_gen, (wrap_tauify, (wrap_fun, group)))
+        ; tauifyMultipleMatches matches exp_ty
+        ; (wrap_gen, (wrap_fun, group))
             <- tcSkolemise (FunSigCtxt fun_name True) exp_ty $ \ _ exp_rho ->
                   -- Note [Polymorphic expected type for tcMatchesFun]
-               tauifyMultipleMatches matches exp_rho $ \exp_rho' ->
-               matchFunTys herald arity exp_rho' $ \ pat_tys rhs_ty ->
-               tcMatches match_ctxt pat_tys rhs_ty matches
-        ; return (wrap_gen <.> wrap_tauify <.> wrap_fun, group) }
+               do { (wrap_fun, pat_tys, rhs_ty)
+                       <- matchExpectedFunTys herald arity exp_rho
+                  ; matches' <- tcMatches match_ctxt pat_tys rhs_ty matches
+                  ; return (wrap_fun, matches') }
+        ; return (wrap_gen <.> wrap_fun, group) }
   where
     arity = matchGroupArity matches
     herald = ptext (sLit "The equation(s) for")
@@ -123,24 +125,21 @@ tcMatchesCase ctxt scrut_ty matches res_ty
                             , mg_origin = mg_origin matches })
 
   | otherwise
-  = tauifyMultipleMatches matches res_ty $ \res_ty' ->
-    tcMatches ctxt [scrut_ty] res_ty' matches
+  = do { tauifyMultipleMatches matches res_ty
+       ; tcMatches ctxt [scrut_ty] res_ty matches }
 
-tcMatchLambda :: MatchGroup Name (LHsExpr Name)
+tcMatchLambda :: SDoc -- see Note [Herald for matchExpectedFunTys] in TcUnify
+              -> TcMatchCtxt HsExpr
+              -> MatchGroup Name (LHsExpr Name)
               -> TcRhoType   -- deeply skolemised
               -> TcM (HsWrapper, MatchGroup TcId (LHsExpr TcId))
-tcMatchLambda match res_ty
-  = matchFunTys herald n_pats res_ty  $ \ pat_tys rhs_ty ->
-    tcMatches match_ctxt pat_tys rhs_ty match
+tcMatchLambda herald match_ctxt match res_ty
+  = do { tauifyMultipleMatches match res_ty
+       ; (wrap, pat_tys, rhs_ty) <- matchExpectedFunTys herald n_pats res_ty
+       ; match' <- tcMatches match_ctxt pat_tys rhs_ty match
+       ; return (wrap, match') }
   where
     n_pats = matchGroupArity match
-    herald = sep [ ptext (sLit "The lambda expression")
-                         <+> quotes (pprSetDepth (PartWay 1) $
-                             pprMatches (LambdaExpr :: HsMatchContext Name) match),
-                        -- The pprSetDepth makes the abstraction print briefly
-                ptext (sLit "has")]
-    match_ctxt = MC { mc_what = LambdaExpr,
-                      mc_body = tcBody }
 
 -- @tcGRHSsPat@ typechecks @[GRHSs]@ that occur in a @PatMonoBind@.
 
@@ -151,24 +150,6 @@ tcGRHSsPat grhss res_ty = tcGRHSs match_ctxt grhss res_ty
   where
     match_ctxt = MC { mc_what = PatBindRhs,
                       mc_body = tcBody }
-
-matchFunTys
-  :: SDoc       -- See Note [Herald for matchExpectedFunTys] in TcUnify
-  -> Arity
-  -> TcRhoType  -- deeply skolemised
-  -> ([TcSigmaType] -> TcRhoType -> TcM a)
-  -> TcM (HsWrapper, a)
-     -- wrapper :: (pat_tys -> a's res_ty) "->" res_ty passed in
-
--- Written in CPS style for historical reasons;
--- could probably be un-CPSd, like matchExpectedTyConApp
-
-matchFunTys herald arity res_ty thing_inside
-  = do  { (wrap_fun, pat_tys, res_ty')
-            <- matchExpectedFunTys herald arity res_ty
-            -- wrap_fun :: pat_tys -> res_ty' "->" res_ty
-        ; result <- thing_inside pat_tys res_ty'
-        ; return (wrap_fun, result) }
 
 {-
 ************************************************************************
@@ -189,8 +170,16 @@ Should that type-check? The problem is that, if we check the second branch
 first, then we'll get a type (b -> b) for the branches, which won't unify
 with the polytype in the first branch. If we check the first branch first,
 then everything is OK. This order-dependency is terrible. So we want only
-proper tau-types in branches. This is what tauTvsForReturnsTvs ensures:
+proper tau-types in branches. This is what tauTvForReturnsTv ensures:
 it gets rid of those pesky ReturnTvs that might unify with polytypes.
+
+An even trickier case looks like
+
+  f x True  = x undefined
+  f x False = x ()
+
+Here, we see that the arguments must also be non-ReturnTvs. Thus, we must
+tauify before calling matchFunTys.
 
 But we make a special case for a one-branch case. This is so that
 
@@ -200,23 +189,14 @@ still gets assigned a polytype.
 -}
 
 -- | When the MatchGroup has multiple RHSs, convert any ReturnTvs in the
--- expected type into TauTvs and pass the modified types into the callback.
+-- expected type into TauTvs.
 -- See Note [Case branches must be taus]
 tauifyMultipleMatches :: MatchGroup id body
                       -> TcType
-                      -> (TcType -> TcM a)
-                      -> TcM (HsWrapper, a)
-             -- ^ wrapper :: type passed to thing_inside "->" type given
-tauifyMultipleMatches group exp_ty thing_inside
-  | isSingletonMatchGroup group
-  = (idHsWrapper, ) <$> thing_inside exp_ty
-
-  | otherwise
-  = do { exp_ty' <- tauTvsForReturnTvs exp_ty
-       ; result <- thing_inside exp_ty'
-       ; wrap <- tcSubTypeHR (Shouldn'tHappenOrigin "tauify")
-                             noThing exp_ty' exp_ty
-       ; return (wrap, result) }
+                      -> TcM ()
+tauifyMultipleMatches group exp_ty
+  = unless (isSingletonMatchGroup group) $
+    tauTvForReturnTv exp_ty
 
 -- | Type-check a MatchGroup. If there are multiple RHSs, the expected type
 -- must already be tauified. See Note [Case branches must be taus] and

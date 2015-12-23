@@ -225,16 +225,19 @@ tcExpr e@(HsOverLabel l) res_ty  -- See Note [Type-checking overloaded labels]
   origin = OverLabelOrigin l
 
 tcExpr (HsLam match) res_ty
-  = do  { (co_fn, match') <- tcMatchLambda match res_ty
+  = do  { (co_fn, match') <- tcMatchLambda herald match_ctxt match res_ty
         ; return (mkHsWrap co_fn (HsLam match')) }
+  where
+    match_ctxt = MC { mc_what = LambdaExpr, mc_body = tcBody }
+    herald = sep [ ptext (sLit "The lambda expression") <+>
+                   quotes (pprSetDepth (PartWay 1) $
+                           pprMatches (LambdaExpr :: HsMatchContext Name) match),
+                        -- The pprSetDepth makes the abstraction print briefly
+                   ptext (sLit "has")]
 
 tcExpr e@(HsLamCase _ matches) res_ty
-  = do {(wrap1, [arg_ty], body_ty) <-
-            matchExpectedFunTys msg 1 res_ty
-       ; (wrap2, matches')
-           <- tcMatchesCase match_ctxt arg_ty matches body_ty
-       ; return (mkHsWrap (wrap1 <.> mkWpFun idHsWrapper wrap2 arg_ty body_ty) $
-                 HsLamCase arg_ty matches') }
+  = do { (co_fn, matches') <- tcMatchLambda msg match_ctxt matches res_ty
+       ; return (mkHsWrap co_fn $ HsLamCase arg_ty matches') }
   where msg = sep [ ptext (sLit "The function") <+> quotes (ppr e)
                   , ptext (sLit "requires")]
         match_ctxt = MC { mc_what = CaseAlt, mc_body = tcBody }
@@ -520,10 +523,10 @@ tcExpr e@(HsIf Nothing pred b1 b2) res_ty    -- Ordinary 'if'
   = do { pred' <- tcMonoExpr pred boolTy
             -- this forces the branches to be fully instantiated
             -- (See #10619)
-       ; tau_ty <- tauTvsForReturnTvs res_ty
-       ; b1' <- tcMonoExpr b1 tau_ty
-       ; b2' <- tcMonoExpr b2 tau_ty
-       ; tcWrapResult e (HsIf Nothing pred' b1' b2') tau_ty res_ty }
+       ; tauTvForReturnTv res_ty
+       ; b1' <- tcMonoExpr b1 res_ty
+       ; b2' <- tcMonoExpr b2 res_ty
+       ; return (HsIf Nothing pred' b1' b2') }
 
 tcExpr (HsIf (Just fun) pred b1 b2) res_ty
   -- Note [Rebindable syntax for if]
@@ -1131,11 +1134,13 @@ tcArgs :: LHsExpr Name   -- ^ The function itself (for err msgs only)
        -> TcM (HsWrapper, [LHsExpr TcId], TcSigmaType)
           -- ^ (a wrapper for the function, the tc'd args, result type)
 tcArgs fun orig_fun_ty fun_orig orig_args herald
-  = go id 1 orig_fun_ty orig_args
+  = go [] 1 orig_fun_ty orig_args
   where
+    orig_arity = length orig_args
+
     go _ _ fun_ty [] = return (idHsWrapper, [], fun_ty)
 
-    go mk_full_ty n fun_ty (arg:args)
+    go acc_args n fun_ty (arg:args)
       | Just hs_ty_arg <- isLHsTypeExpr_maybe arg
       = do { (wrap1, upsilon_ty) <- topInstantiateInferred fun_orig fun_ty
                -- wrap1 :: fun_ty "->" upsilon_ty
@@ -1147,7 +1152,7 @@ tcArgs fun orig_fun_ty fun_orig orig_args herald
                     ; ty_arg <- tcHsTypeApp hs_ty_arg kind
                     ; let insted_ty = substTyWith [tv] [ty_arg] inner_ty
                     ; (inner_wrap, args', res_ty)
-                        <- go mk_full_ty (n+1) insted_ty args
+                        <- go acc_args (n+1) insted_ty args
                    -- inner_wrap :: insted_ty "->" (map typeOf args') -> res_ty
                     ; let inst_wrap = mkWpTyApps [ty_arg]
                     ; return ( inner_wrap <.> inst_wrap <.> wrap1
@@ -1158,12 +1163,11 @@ tcArgs fun orig_fun_ty fun_orig orig_args herald
       | otherwise   -- not a type application.
       = do { (wrap, [arg_ty], res_ty)
                <- matchActualFunTysPart herald fun_orig 1 fun_ty
-                                        mk_full_ty (length orig_args)
+                                        acc_args orig_arity
                -- wrap :: fun_ty "->" arg_ty -> res_ty
            ; arg' <- tcArg fun (arg, arg_ty, n)
-           ; let mk_full_ty' res_ty' = mk_full_ty (mkFunTy arg_ty res_ty')
            ; (inner_wrap, args', inner_res_ty)
-               <- go mk_full_ty' (n+1) res_ty args
+               <- go (arg_ty : acc_args) (n+1) res_ty args
                -- inner_wrap :: res_ty "->" (map typeOf args') -> inner_res_ty
            ; return ( mkWpFun idHsWrapper inner_wrap arg_ty res_ty <.> wrap
                     , arg' : args'

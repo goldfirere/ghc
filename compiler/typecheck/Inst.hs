@@ -175,7 +175,7 @@ top_instantiate inst_all orig ty
              (inst_theta, leave_theta)
                | null leave_bndrs = (theta, [])
                | otherwise        = ([], theta)
-       ; (subst, inst_tvs') <- tcInstTyVars (map (binderVar "top_inst") inst_bndrs)
+       ; (subst, inst_tvs') <- newMetaTyVars (map (binderVar "top_inst") inst_bndrs)
        ; let inst_theta' = substTheta subst inst_theta
              sigma'      = substTy    subst (mkForAllTys leave_bndrs $
                                              mkFunTys leave_theta rho)

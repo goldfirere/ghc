@@ -25,7 +25,7 @@ module TcMType (
   newMetaKindVar, newMetaKindVars,
   cloneMetaTyVar,
   newFmvTyVar, newFskTyVar,
-  tauTvsForReturnTvs,
+  tauTvForReturnTv,
 
   readMetaTyVar, writeMetaTyVar, writeMetaTyVarRef,
   newMetaDetails, isFilledMetaTyVar, isUnfilledMetaTyVar,
@@ -646,39 +646,17 @@ newOpenReturnTyVar
        ; tv <- newReturnTyVar k
        ; return (tv, k) }
 
--- | Replace all the ReturnTvs in a type with TauTvs. These types are
--- *not* then unified. The caller may wish to do that. No variables
--- are looked through here. Similarly, no synonyms are looked through,
--- as doing so won't expose more ReturnTvs.
-tauTvsForReturnTvs :: TcType -> TcM TcType
-tauTvsForReturnTvs = mapType mapper emptyTCvSubst
-  where
-    mapper = TyCoMapper { tcm_smart = False
-                        , tcm_tyvar = tyvar
-                        , tcm_covar = covar
-                        , tcm_hole  = hole
-                        , tcm_tybinder = tybinder }
-
-    tyvar :: TCvSubst -> TcTyVar -> TcM TcType
-    tyvar env tv
-      | isReturnTyVar tv = newFlexiTyVarTy (substTy env (tyVarKind tv))
-      | otherwise        = return $ substTyVar env tv
-
-    covar :: TCvSubst -> CoVar -> TcM Coercion
-    covar _ cv = return $ mkCoVarCo cv
-
-    hole :: TCvSubst -> CoercionHole -> Role -> Type -> Type -> TcM Coercion
-    hole env hole role ty1 ty2
-      = do { ty1' <- mapType mapper env ty1
-           ; ty2' <- mapType mapper env ty2
-           ; return $ mkHoleCo hole role ty1' ty2' }
-
-    tybinder :: TCvSubst -> TyVar -> VisibilityFlag -> TcM (TCvSubst, TyVar)
-    tybinder env tv _
-      = do { k <- mapType mapper env (tyVarKind tv)
-           ; let tv' = setTyVarKind tv k
-                 env' = extendTCvSubst env tv (mkTyVarTy tv')
-           ; return (env', tv') }
+-- | If the type is a ReturnTv, fill it with a new meta-TauTv. Otherwise,
+-- no change.
+tauTvForReturnTv :: TcType -> TcM ()
+tauTvForReturnTv ty
+  | Just tv <- tcGetTyVar_maybe ty
+  , isReturnTyVar tv
+  = do { tau_ty <- newFlexiTyVarTy (tyVarKind tv)
+       ; writeMetaTyVar tv tau_ty }
+  | otherwise
+  = ASSERT( all (not . isReturnTyVar) (tyCoVarsOfTypeList ty) )
+    return ()
 
 newMetaSigTyVars :: [TyVar] -> TcM (TCvSubst, [TcTyVar])
 newMetaSigTyVars = mapAccumLM newMetaSigTyVarX emptyTCvSubst

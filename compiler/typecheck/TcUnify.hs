@@ -110,6 +110,9 @@ matchExpectedFunTys :: SDoc   -- See Note [Herald for matchExpectedFunTys]
                     -> Arity
                     -> TcSigmaType  -- deeply skolemised
                     -> TcM (HsWrapper, [TcSigmaType], TcSigmaType)
+-- If    matchExpectedFunTys n ty = (wrap, [t1,..,tn], ty_r)
+-- then  wrap : (t1 -> ... -> tn -> ty_r) "->" ty
+
 -- This function is always called with a deeply skolemised expected result
 -- type. This means that matchActualFunTys will never actually instantiate,
 -- and the returned HsWrapper will be reversible (that is, just a coercion).
@@ -122,7 +125,7 @@ matchExpectedFunTys herald arity ty
     do { (wrap, arg_tys, res_ty)
            <- match_fun_tys True herald
                             (Shouldn'tHappenOrigin "matchExpectedFunTys")
-                            arity ty id arity
+                            arity ty [] arity
        ; return $
          case symWrapper_maybe wrap of
            Just wrap' -> (wrap', arg_tys, res_ty)
@@ -144,7 +147,7 @@ matchActualFunTys :: SDoc   -- See Note [Herald for matchExpectedFunTys]
                   -> TcSigmaType
                   -> TcM (HsWrapper, [TcSigmaType], TcSigmaType)
 matchActualFunTys herald ct_orig arity ty
-  = matchActualFunTysPart herald ct_orig arity ty id arity
+  = matchActualFunTysPart herald ct_orig arity ty [] arity
 
 -- | Variant of 'matchActualFunTys' that works when supplied only part
 -- (that is, to the right of some arrows) of the full function type
@@ -152,7 +155,7 @@ matchActualFunTysPart :: SDoc -- See Note [Herald for matchExpectedFunTys]
                       -> CtOrigin
                       -> Arity
                       -> TcSigmaType
-                      -> (TcSigmaType -> TcSigmaType) -- see (*) below
+                      -> [TcSigmaType] -- reversed args. See (*) below.
                       -> Arity   -- overall arity of the function, for errs
                       -> TcM (HsWrapper, [TcSigmaType], TcSigmaType)
 matchActualFunTysPart = match_fun_tys False
@@ -164,11 +167,11 @@ match_fun_tys :: Bool -- True <=> swap the args when unifying,
               -> CtOrigin
               -> Arity
               -> TcSigmaType
-              -> (TcSigmaType -> TcSigmaType)
+              -> [TcSigmaType]
               -> Arity
               -> TcM (HsWrapper, [TcSigmaType], TcSigmaType)
-match_fun_tys swap_tys herald ct_orig arity orig_ty mk_full_ty full_arity
-  = go arity mk_full_ty orig_ty
+match_fun_tys swap_tys herald ct_orig arity orig_ty orig_old_args full_arity
+  = go arity orig_old_args orig_ty
 -- If    matchActualFunTys n ty = (wrap, [t1,..,tn], ty_r)
 -- then  wrap : ty "->" (t1 -> ... -> tn -> ty_r)
 --
@@ -181,41 +184,51 @@ match_fun_tys swap_tys herald ct_orig arity orig_ty mk_full_ty full_arity
 
 -- (*) Sometimes it's necessary to call matchActualFunTys with only part
 -- (that is, to the right of some arrows) of the type of the function in
--- question. (See TcExpr.tcArgs.) So, this function takes the part of the
--- type that matchActualFunTys has and returns the full type, from the
--- beginning. This is helpful for error messages.
+-- question. (See TcExpr.tcArgs.) This argument is the reversed list of
+-- arguments already seen (that is, not part of the TcSigmaType passed
+-- in elsewhere).
 
   where
+    -- This function has a bizarre mechanic: it accumulates arguments on
+    -- the way down and also builds an argument list on the way up. Why:
+    -- 1. The returns args list and the accumulated args list might be different.
+    --    The accumulated args include all the arg types for the function,
+    --    including those from before this function was called. The returned
+    --    list should include only those arguments produced by this call of
+    --    matchActualFunTys
+    --
+    -- 2. The HsWrapper can be built only on the way up. It seems (more)
+    --    bizarre to build the HsWrapper but not the arg_tys.
+    --
+    -- Refactoring is welcome.
     go :: Arity
-       -> (TcSigmaType -> TcSigmaType)
-            -- this goes from the "remainder type" to the full type
+       -> [TcSigmaType] -- accumulator of arguments (reversed)
        -> TcSigmaType   -- the remainder of the type as we're processing
        -> TcM (HsWrapper, [TcSigmaType], TcSigmaType)
     go 0 _ ty = return (idHsWrapper, [], ty)
 
-    go n mk_full_ty ty
+    go n acc_args ty
       | not (null tvs && null theta)
       = do { (wrap1, rho) <- topInstantiate ct_orig ty
-           ; (wrap2, arg_tys, res_ty) <- go n mk_full_ty rho
+           ; (wrap2, arg_tys, res_ty) <- go n acc_args rho
            ; return (wrap2 <.> wrap1, arg_tys, res_ty) }
       where
         (tvs, theta, _) = tcSplitSigmaTy ty
 
-    go n mk_full_ty ty
-      | Just ty' <- coreView ty = go n mk_full_ty ty'
+    go n acc_args ty
+      | Just ty' <- coreView ty = go n acc_args ty'
 
-    go n mk_full_ty (ForAllTy (Anon arg_ty) res_ty)
+    go n acc_args (ForAllTy (Anon arg_ty) res_ty)
       = ASSERT( not (isPredTy arg_ty) )
-        do { let mk_full_ty' res_ty' = mk_full_ty (mkFunTy arg_ty res_ty')
-           ; (wrap_res, tys, ty_r) <- go (n-1) mk_full_ty' res_ty
+        do { (wrap_res, tys, ty_r) <- go (n-1) (arg_ty : acc_args) res_ty
            ; return ( mkWpFun idHsWrapper wrap_res arg_ty (mkFunTys tys ty_r)
                     , arg_ty:tys, ty_r ) }
 
-    go n mk_full_ty ty@(TyVarTy tv)
+    go n acc_args ty@(TyVarTy tv)
       | ASSERT( isTcTyVar tv) isMetaTyVar tv
       = do { cts <- readMetaTyVar tv
            ; case cts of
-               Indirect ty' -> go n mk_full_ty ty'
+               Indirect ty' -> go n acc_args ty'
                Flexi        -> defer n ty (isReturnTyVar tv) }
 
        -- In all other cases we bale out into ordinary unification
@@ -233,8 +246,8 @@ match_fun_tys swap_tys herald ct_orig arity orig_ty mk_full_ty full_arity
        --
        -- But in that case we add specialized type into error context
        -- anyway, because it may be useful. See also Trac #9605.
-    go n mk_full_ty ty = addErrCtxtM (mk_ctxt (mk_full_ty ty)) $
-                         defer n ty False
+    go n acc_args ty = addErrCtxtM (mk_ctxt (reverse acc_args) ty) $
+                       defer n ty False
 
     ------------
     -- If we decide that a ReturnTv (see Note [ReturnTv] in TcType) should
@@ -255,13 +268,13 @@ match_fun_tys swap_tys herald ct_orig arity orig_ty mk_full_ty full_arity
                   | otherwise = newOpenFlexiTyVarTy
 
     ------------
-    mk_ctxt :: TcSigmaType -> TidyEnv -> TcM (TidyEnv, MsgDoc)
-    mk_ctxt full_ty env
-      = do { (env', ty) <- zonkTidyTcType env full_ty
-           ; let (args, _) = tcSplitFunTys ty
-                 n_actual = length args
-                 (env'', full_ty') = tidyOpenType env' full_ty
-           ; return (env'', mk_msg full_ty' ty n_actual) }
+    mk_ctxt :: [TcSigmaType] -> TcSigmaType -> TidyEnv -> TcM (TidyEnv, MsgDoc)
+    mk_ctxt arg_tys res_ty env
+      = do { let ty = mkFunTys arg_tys res_ty
+           ; (env1, zonked) <- zonkTidyTcType env ty
+           ; let n_actual = length arg_tys
+                 (env2, unzonked) = tidyOpenType env1 ty
+           ; return (env2, mk_msg unzonked zonked n_actual) }
 
     mk_msg full_ty ty n_args
       = herald <+> speakNOf full_arity (text "argument") <> comma $$
