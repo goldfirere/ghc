@@ -525,7 +525,7 @@ tcExpr (HsIf Nothing pred b1 b2) res_ty    -- Ordinary 'if'
   = do { pred' <- tcMonoExpr pred boolTy
             -- this forces the branches to be fully instantiated
             -- (See #10619)
-       ; tauTvForReturnTv res_ty
+       ; res_ty <- tauTvForReturnTv res_ty
        ; b1' <- tcMonoExpr b1 res_ty
        ; b2' <- tcMonoExpr b2 res_ty
        ; return (HsIf Nothing pred' b1' b2') }

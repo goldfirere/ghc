@@ -87,7 +87,7 @@ tcMatchesFun fun_name matches exp_ty
           traceTc "tcMatchesFun" (ppr fun_name $$ ppr exp_ty)
         ; checkArgs fun_name matches
 
-        ; tauifyMultipleMatches matches exp_ty
+        ; exp_ty <- tauifyMultipleMatches matches exp_ty
         ; (wrap_gen, (wrap_fun, group))
             <- tcSkolemise (FunSigCtxt fun_name True) exp_ty $ \ _ exp_rho ->
                   -- Note [Polymorphic expected type for tcMatchesFun]
@@ -124,7 +124,7 @@ tcMatchesCase ctxt scrut_ty matches res_ty
                , mg_origin = mg_origin matches })
 
   | otherwise
-  = do { tauifyMultipleMatches matches res_ty
+  = do { res_ty <- tauifyMultipleMatches matches res_ty
        ; tcMatches ctxt [scrut_ty] res_ty matches }
 
 tcMatchLambda :: SDoc -- see Note [Herald for matchExpectedFunTys] in TcUnify
@@ -134,7 +134,7 @@ tcMatchLambda :: SDoc -- see Note [Herald for matchExpectedFunTys] in TcUnify
               -> TcM (HsWrapper, [TcSigmaType], MatchGroup TcId (LHsExpr TcId))
                      -- also returns the argument types
 tcMatchLambda herald match_ctxt match res_ty
-  = do { tauifyMultipleMatches match res_ty
+  = do { res_ty <- tauifyMultipleMatches match res_ty
        ; (wrap, pat_tys, rhs_ty) <- matchExpectedFunTys herald n_pats res_ty
        ; match' <- tcMatches match_ctxt pat_tys rhs_ty match
        ; return (wrap, pat_tys, match') }
@@ -193,10 +193,13 @@ still gets assigned a polytype.
 -- See Note [Case branches must be taus]
 tauifyMultipleMatches :: MatchGroup id body
                       -> TcType
-                      -> TcM ()
+                      -> TcM TcType
 tauifyMultipleMatches group exp_ty
-  = unless (isSingletonMatchGroup group) $
-    tauTvForReturnTv exp_ty
+  | isSingletonMatchGroup group
+  = return exp_ty
+
+  | otherwise
+  = tauTvForReturnTv exp_ty
 
 -- | Type-check a MatchGroup. If there are multiple RHSs, the expected type
 -- must already be tauified. See Note [Case branches must be taus] and

@@ -647,16 +647,21 @@ newOpenReturnTyVar
        ; return (tv, k) }
 
 -- | If the type is a ReturnTv, fill it with a new meta-TauTv. Otherwise,
--- no change.
-tauTvForReturnTv :: TcType -> TcM ()
+-- no change. This function can look through ReturnTvs and returns a partially
+-- zonked type as an optimisation.
+tauTvForReturnTv :: TcType -> TcM TcType
 tauTvForReturnTv ty
   | Just tv <- tcGetTyVar_maybe ty
   , isReturnTyVar tv
-  = do { tau_ty <- newFlexiTyVarTy (tyVarKind tv)
-       ; writeMetaTyVar tv tau_ty }
+  = do { contents <- readMetaTyVar tv
+       ; case contents of
+           Flexi -> do { tau_ty <- newFlexiTyVarTy (tyVarKind tv)
+                       ; writeMetaTyVar tv tau_ty
+                       ; return tau_ty }
+           Indirect ty -> tauTvForReturnTv ty }
   | otherwise
   = ASSERT( all (not . isReturnTyVar) (tyCoVarsOfTypeList ty) )
-    return ()
+    return ty
 
 newMetaSigTyVars :: [TyVar] -> TcM (TCvSubst, [TcTyVar])
 newMetaSigTyVars = mapAccumLM newMetaSigTyVarX emptyTCvSubst
