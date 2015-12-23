@@ -654,7 +654,7 @@ qcnames1 :: { ([AddAnn], [Located (Maybe RdrName)]) }     -- A reversed list
                                                     l@(L _ Nothing) ->
                                                       return ([mj AnnComma $2, mj AnnDotdot l]
                                                               ,($3  : snd $1))
-                                                    l -> (aa l (AnnComma, $2) >>
+                                                    l -> (aa (head (snd $1)) (AnnComma, $2) >>
                                                           return (fst $1, $3 : snd $1)) }
 
 
@@ -941,13 +941,13 @@ overlap_pragma :: { Maybe (Located OverlapMode) }
 
 opt_injective_info :: { Located ([AddAnn], Maybe (LInjectivityAnn RdrName)) }
         : {- empty -}               { noLoc ([], Nothing) }
-        | '|' injectivity_cond      { sLL $1 $> ( mj AnnVbar $1 : fst (unLoc $2)
-                                                , Just (snd (unLoc $2))) }
+        | '|' injectivity_cond      { sLL $1 $> ([mj AnnVbar $1]
+                                                , Just ($2)) }
 
-injectivity_cond :: { Located ([AddAnn], LInjectivityAnn RdrName) }
+injectivity_cond :: { LInjectivityAnn RdrName }
         : tyvarid '->' inj_varids
-           { sLL $1 $> ( [mu AnnRarrow $2]
-                       , (sLL $1 $> (InjectivityAnn $1 (reverse (unLoc $3))))) }
+           {% ams (sLL $1 $> (InjectivityAnn $1 (reverse (unLoc $3))))
+                  [mu AnnRarrow $2] }
 
 inj_varids :: { Located [Located RdrName] }
         : inj_varids tyvarid  { sLL $1 $> ($2 : unLoc $1) }
@@ -1085,8 +1085,8 @@ opt_at_kind_inj_sig :: { Located ([AddAnn], ( LFamilyResultSig RdrName
         | '::' kind  { sLL $1 $> ( [mu AnnDcolon $1]
                                  , (sLL $2 $> (KindSig $2), Nothing)) }
         | '='  tv_bndr '|' injectivity_cond
-                { sLL $1 $> ( mj AnnEqual $1 : mj AnnVbar $3 : fst (unLoc $4)
-                            , (sLL $1 $2 (TyVarSig $2), Just (snd (unLoc $4))))}
+                { sLL $1 $> ([mj AnnEqual $1, mj AnnVbar $3]
+                            , (sLL $1 $2 (TyVarSig $2), Just $4))}
 
 -- tycl_hdr parses the header of a class or data type decl,
 -- which takes the form
@@ -1192,28 +1192,9 @@ where_decls :: { Located ([AddAnn]
                                           ,sL1 $3 (snd $ unLoc $3)) }
 
 pattern_synonym_sig :: { LSig RdrName }
-        : 'pattern' con '::' ptype
+        : 'pattern' con '::' sigtype
                    {% ams (sLL $1 $> $ PatSynSig $2 (mkLHsSigType $4))
                           [mj AnnPattern $1, mu AnnDcolon $3] }
-
-ptype   :: { LHsType RdrName }
-        : 'forall' tv_bndrs '.' ptype
-                   {% hintExplicitForall (getLoc $1) >>
-                      ams (sLL $1 $> $
-                           HsForAllTy { hst_bndrs = $2
-                                      , hst_body = $4 })
-                          [mu AnnForall $1, mj AnnDot $3] }
-
-        | context '=>' context '=>' type
-                   {% ams (sLL $1 $> $
-                           HsQualTy { hst_ctxt = $1, hst_body = sLL $3 $> $
-                           HsQualTy { hst_ctxt = $3, hst_body = $5 } })
-                           [mu AnnDarrow $2, mu AnnDarrow $4] }
-        | context '=>' type
-                   {% ams (sLL $1 $> $
-                           HsQualTy { hst_ctxt = $1, hst_body = $3 })
-                           [mu AnnDarrow $2] }
-        | type     { $1 }
 
 -----------------------------------------------------------------------------
 -- Nested declarations
@@ -1653,7 +1634,8 @@ typedoc :: { LHsType RdrName }
 
 -- See Note [Parsing ~]
 btype :: { LHsType RdrName }
-        : tyapps                      { sL1 $1 $ HsAppsTy (splitTildeApps (reverse (unLoc $1))) }
+        : tyapps                      {%  splitTildeApps (reverse (unLoc $1)) >>=
+                                          \ts -> return $ sL1 $1 $ HsAppsTy ts }
 
 -- Used for parsing Haskell98-style data constructors,
 -- in order to forbid the blasphemous
@@ -1663,12 +1645,12 @@ btype_no_ops :: { LHsType RdrName }
         : btype_no_ops atype            { sLL $1 $> $ HsAppTy $1 $2 }
         | atype                         { $1 }
 
-tyapps :: { Located [HsAppType RdrName] }   -- NB: This list is reversed
-        : tyapp                         { sL1 $1 [unLoc $1] }
-        | tyapps tyapp                  { sLL $1 $> $ (unLoc $2) : (unLoc $1) }
+tyapps :: { Located [LHsAppType RdrName] }   -- NB: This list is reversed
+        : tyapp                         { sL1 $1 [$1] }
+        | tyapps tyapp                  { sLL $1 $> $ $2 : (unLoc $1) }
 
 -- See Note [HsAppsTy] in HsTypes
-tyapp :: { Located (HsAppType RdrName) }
+tyapp :: { LHsAppType RdrName }
         : atype                         { sL1 $1 $ HsAppPrefix $1 }
         | qtyconop                      { sL1 $1 $ HsAppInfix $1 }
         | tyvarop                       { sL1 $1 $ HsAppInfix $1 }

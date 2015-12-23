@@ -330,7 +330,7 @@ matchExpectedTyConApp tc orig_ty
     -- This happened in Trac #7368
     defer
       = ASSERT2( classifiesTypeWithValues res_kind, ppr tc )
-        do { (k_subst, kvs') <- tcInstTyVars kvs
+        do { (k_subst, kvs') <- newMetaTyVars kvs
            ; let arg_kinds' = substTys k_subst arg_kinds
                  kappa_tys  = mkTyVarTys kvs'
            ; tau_tys <- mapM newFlexiTyVarTy arg_kinds'

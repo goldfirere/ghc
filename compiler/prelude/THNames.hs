@@ -73,19 +73,23 @@ templateHaskellNames = [
     roleAnnotDName,
     -- Cxt
     cxtName,
-    -- Strict
-    isStrictName, notStrictName, unpackedName,
+    -- SourceUnpackedness
+    noSourceUnpackednessName, sourceNoUnpackName, sourceUnpackName,
+    -- SourceStrictness
+    noSourceStrictnessName, sourceLazyName, sourceStrictName,
     -- Con
     normalCName, recCName, infixCName, forallCName, gadtCName, recGadtCName,
-    -- StrictType
-    strictTypeName,
-    -- VarStrictType
-    varStrictTypeName,
+    -- Bang
+    bangName,
+    -- BangType
+    bangTypeName,
+    -- VarBangType
+    varBangTypeName,
     -- Type
     forallTName, varTName, conTName, appTName, equalityTName,
     tupleTName, unboxedTupleTName, arrowTName, listTName, sigTName, litTName,
     promotedTName, promotedTupleTName, promotedNilTName, promotedConsTName,
-    wildCardTName, namedWildCardTName,
+    wildCardTName,
     -- TyLit
     numTyLitName, strTyLitName,
     -- TyVarBndr
@@ -130,8 +134,8 @@ templateHaskellNames = [
     -- And the tycons
     qTyConName, nameTyConName, patTyConName, fieldPatTyConName, matchQTyConName,
     clauseQTyConName, expQTyConName, fieldExpTyConName, predTyConName,
-    stmtQTyConName, decQTyConName, conQTyConName, strictTypeQTyConName,
-    varStrictTypeQTyConName, typeQTyConName, expTyConName, decTyConName,
+    stmtQTyConName, decQTyConName, conQTyConName, bangTypeQTyConName,
+    varBangTypeQTyConName, typeQTyConName, expTyConName, decTyConName,
     typeTyConName, tyVarBndrTyConName, matchTyConName, clauseTyConName,
     patQTyConName, fieldPatQTyConName, fieldExpQTyConName, funDepTyConName,
     predQTyConName, decsQTyConName, ruleBndrQTyConName, tySynEqnQTyConName,
@@ -349,11 +353,17 @@ roleAnnotDName       = libFun (fsLit "roleAnnotD")        roleAnnotDIdKey
 cxtName :: Name
 cxtName = libFun (fsLit "cxt") cxtIdKey
 
--- data Strict = ...
-isStrictName, notStrictName, unpackedName :: Name
-isStrictName      = libFun  (fsLit "isStrict")      isStrictKey
-notStrictName     = libFun  (fsLit "notStrict")     notStrictKey
-unpackedName      = libFun  (fsLit "unpacked")      unpackedKey
+-- data SourceUnpackedness = ...
+noSourceUnpackednessName, sourceNoUnpackName, sourceUnpackName :: Name
+noSourceUnpackednessName = libFun (fsLit "noSourceUnpackedness") noSourceUnpackednessKey
+sourceNoUnpackName       = libFun (fsLit "sourceNoUnpack")       sourceNoUnpackKey
+sourceUnpackName         = libFun (fsLit "sourceUnpack")         sourceUnpackKey
+
+-- data SourceStrictness = ...
+noSourceStrictnessName, sourceLazyName, sourceStrictName :: Name
+noSourceStrictnessName = libFun (fsLit "noSourceStrictness") noSourceStrictnessKey
+sourceLazyName         = libFun (fsLit "sourceLazy")         sourceLazyKey
+sourceStrictName       = libFun (fsLit "sourceStrict")       sourceStrictKey
 
 -- data Con = ...
 normalCName, recCName, infixCName, forallCName, gadtCName, recGadtCName :: Name
@@ -364,20 +374,24 @@ forallCName  = libFun (fsLit "forallC" ) forallCIdKey
 gadtCName    = libFun (fsLit "gadtC"   ) gadtCIdKey
 recGadtCName = libFun (fsLit "recGadtC") recGadtCIdKey
 
--- type StrictType = ...
-strictTypeName :: Name
-strictTypeName    = libFun  (fsLit "strictType")    strictTKey
+-- data Bang = ...
+bangName :: Name
+bangName = libFun (fsLit "bang") bangIdKey
 
--- type VarStrictType = ...
-varStrictTypeName :: Name
-varStrictTypeName = libFun  (fsLit "varStrictType") varStrictTKey
+-- type BangType = ...
+bangTypeName :: Name
+bangTypeName = libFun (fsLit "bangType") bangTKey
+
+-- type VarBangType = ...
+varBangTypeName :: Name
+varBangTypeName = libFun (fsLit "varBangType") varBangTKey
 
 -- data Type = ...
 forallTName, varTName, conTName, tupleTName, unboxedTupleTName, arrowTName,
     listTName, appTName, sigTName, equalityTName, litTName,
     promotedTName, promotedTupleTName,
     promotedNilTName, promotedConsTName,
-    wildCardTName, namedWildCardTName :: Name
+    wildCardTName :: Name
 forallTName         = libFun (fsLit "forallT")        forallTIdKey
 varTName            = libFun (fsLit "varT")           varTIdKey
 conTName            = libFun (fsLit "conT")           conTIdKey
@@ -394,8 +408,6 @@ promotedTupleTName  = libFun (fsLit "promotedTupleT") promotedTupleTIdKey
 promotedNilTName    = libFun (fsLit "promotedNilT")   promotedNilTIdKey
 promotedConsTName   = libFun (fsLit "promotedConsT")  promotedConsTIdKey
 wildCardTName       = libFun (fsLit "wildCardT")      wildCardTIdKey
-namedWildCardTName  = libFun (fsLit "namedWildCardT") namedWildCardTIdKey
-
 
 -- data TyLit = ...
 numTyLitName, strTyLitName :: Name
@@ -479,8 +491,8 @@ typeAnnotationName   = libFun (fsLit "typeAnnotation")   typeAnnotationIdKey
 moduleAnnotationName = libFun (fsLit "moduleAnnotation") moduleAnnotationIdKey
 
 matchQTyConName, clauseQTyConName, expQTyConName, stmtQTyConName,
-    decQTyConName, conQTyConName, strictTypeQTyConName,
-    varStrictTypeQTyConName, typeQTyConName, fieldExpQTyConName,
+    decQTyConName, conQTyConName, bangTypeQTyConName,
+    varBangTypeQTyConName, typeQTyConName, fieldExpQTyConName,
     patQTyConName, fieldPatQTyConName, predQTyConName, decsQTyConName,
     ruleBndrQTyConName, tySynEqnQTyConName, roleTyConName :: Name
 matchQTyConName         = libTc (fsLit "MatchQ")         matchQTyConKey
@@ -490,8 +502,8 @@ stmtQTyConName          = libTc (fsLit "StmtQ")          stmtQTyConKey
 decQTyConName           = libTc (fsLit "DecQ")           decQTyConKey
 decsQTyConName          = libTc (fsLit "DecsQ")          decsQTyConKey  -- Q [Dec]
 conQTyConName           = libTc (fsLit "ConQ")           conQTyConKey
-strictTypeQTyConName    = libTc (fsLit "StrictTypeQ")    strictTypeQTyConKey
-varStrictTypeQTyConName = libTc (fsLit "VarStrictTypeQ") varStrictTypeQTyConKey
+bangTypeQTyConName      = libTc (fsLit "BangTypeQ")      bangTypeQTyConKey
+varBangTypeQTyConName   = libTc (fsLit "VarBangTypeQ")   varBangTypeQTyConKey
 typeQTyConName          = libTc (fsLit "TypeQ")          typeQTyConKey
 fieldExpQTyConName      = libTc (fsLit "FieldExpQ")      fieldExpQTyConKey
 patQTyConName           = libTc (fsLit "PatQ")           patQTyConKey
@@ -550,7 +562,7 @@ liftClassKey = mkPreludeClassUnique 200
 expTyConKey, matchTyConKey, clauseTyConKey, qTyConKey, expQTyConKey,
     decQTyConKey, patTyConKey, matchQTyConKey, clauseQTyConKey,
     stmtQTyConKey, conQTyConKey, typeQTyConKey, typeTyConKey, tyVarBndrTyConKey,
-    decTyConKey, varStrictTypeQTyConKey, strictTypeQTyConKey,
+    decTyConKey, bangTypeQTyConKey, varBangTypeQTyConKey,
     fieldExpTyConKey, fieldPatTyConKey, nameTyConKey, patQTyConKey,
     fieldPatQTyConKey, fieldExpQTyConKey, funDepTyConKey, predTyConKey,
     predQTyConKey, decsQTyConKey, ruleBndrQTyConKey, tySynEqnQTyConKey,
@@ -569,8 +581,8 @@ conQTyConKey            = mkPreludeTyConUnique 210
 typeQTyConKey           = mkPreludeTyConUnique 211
 typeTyConKey            = mkPreludeTyConUnique 212
 decTyConKey             = mkPreludeTyConUnique 213
-varStrictTypeQTyConKey  = mkPreludeTyConUnique 214
-strictTypeQTyConKey     = mkPreludeTyConUnique 215
+bangTypeQTyConKey       = mkPreludeTyConUnique 214
+varBangTypeQTyConKey    = mkPreludeTyConUnique 215
 fieldExpTyConKey        = mkPreludeTyConUnique 216
 fieldPatTyConKey        = mkPreludeTyConUnique 217
 nameTyConKey            = mkPreludeTyConUnique 218
@@ -796,11 +808,17 @@ defaultSigDIdKey       = mkPreludeMiscIdUnique 357
 cxtIdKey :: Unique
 cxtIdKey            = mkPreludeMiscIdUnique 360
 
--- data Strict = ...
-isStrictKey, notStrictKey, unpackedKey :: Unique
-isStrictKey         = mkPreludeMiscIdUnique 363
-notStrictKey        = mkPreludeMiscIdUnique 364
-unpackedKey         = mkPreludeMiscIdUnique 365
+-- data SourceUnpackedness = ...
+noSourceUnpackednessKey, sourceNoUnpackKey, sourceUnpackKey :: Unique
+noSourceUnpackednessKey = mkPreludeMiscIdUnique 361
+sourceNoUnpackKey       = mkPreludeMiscIdUnique 362
+sourceUnpackKey         = mkPreludeMiscIdUnique 363
+
+-- data SourceStrictness = ...
+noSourceStrictnessKey, sourceLazyKey, sourceStrictKey :: Unique
+noSourceStrictnessKey   = mkPreludeMiscIdUnique 364
+sourceLazyKey           = mkPreludeMiscIdUnique 365
+sourceStrictKey         = mkPreludeMiscIdUnique 366
 
 -- data Con = ...
 normalCIdKey, recCIdKey, infixCIdKey, forallCIdKey, gadtCIdKey,
@@ -812,20 +830,24 @@ forallCIdKey      = mkPreludeMiscIdUnique 373
 gadtCIdKey        = mkPreludeMiscIdUnique 374
 recGadtCIdKey     = mkPreludeMiscIdUnique 375
 
--- type StrictType = ...
-strictTKey :: Unique
-strictTKey        = mkPreludeMiscIdUnique 376
+-- data Bang = ...
+bangIdKey :: Unique
+bangIdKey         = mkPreludeMiscIdUnique 376
 
--- type VarStrictType = ...
-varStrictTKey :: Unique
-varStrictTKey     = mkPreludeMiscIdUnique 377
+-- type BangType = ...
+bangTKey :: Unique
+bangTKey          = mkPreludeMiscIdUnique 377
+
+-- type VarBangType = ...
+varBangTKey :: Unique
+varBangTKey       = mkPreludeMiscIdUnique 378
 
 -- data Type = ...
 forallTIdKey, varTIdKey, conTIdKey, tupleTIdKey, unboxedTupleTIdKey, arrowTIdKey,
     listTIdKey, appTIdKey, sigTIdKey, equalityTIdKey, litTIdKey,
     promotedTIdKey, promotedTupleTIdKey,
     promotedNilTIdKey, promotedConsTIdKey,
-    wildCardTIdKey, namedWildCardTIdKey :: Unique
+    wildCardTIdKey :: Unique
 forallTIdKey        = mkPreludeMiscIdUnique 380
 varTIdKey           = mkPreludeMiscIdUnique 381
 conTIdKey           = mkPreludeMiscIdUnique 382
@@ -842,7 +864,6 @@ promotedTupleTIdKey = mkPreludeMiscIdUnique 392
 promotedNilTIdKey   = mkPreludeMiscIdUnique 393
 promotedConsTIdKey  = mkPreludeMiscIdUnique 394
 wildCardTIdKey      = mkPreludeMiscIdUnique 395
-namedWildCardTIdKey = mkPreludeMiscIdUnique 396
 
 -- data TyLit = ...
 numTyLitIdKey, strTyLitIdKey :: Unique

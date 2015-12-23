@@ -503,16 +503,24 @@ cvtConstr (RecGadtC c varstrtys ty idx)
         ; let rec_ty = noLoc (HsFunTy (noLoc $ HsRecTy rec_flds) ret_ty)
         ; returnL $ mkGadtDecl c' (mkLHsSigType rec_ty) }
 
-cvt_arg :: (TH.Strict, TH.Type) -> CvtM (LHsType RdrName)
-cvt_arg (NotStrict, ty) = cvtType ty
-cvt_arg (IsStrict,  ty)
-  = do { ty' <- cvtType ty
-       ; returnL $ HsBangTy (HsSrcBang Nothing NoSrcUnpack SrcStrict) ty' }
-cvt_arg (Unpacked,  ty)
-  = do { ty' <- cvtType ty
-       ; returnL $ HsBangTy (HsSrcBang Nothing SrcUnpack   SrcStrict) ty' }
+cvtSrcUnpackedness :: TH.SourceUnpackedness -> SrcUnpackedness
+cvtSrcUnpackedness NoSourceUnpackedness = NoSrcUnpack
+cvtSrcUnpackedness SourceNoUnpack       = SrcNoUnpack
+cvtSrcUnpackedness SourceUnpack         = SrcUnpack
 
-cvt_id_arg :: (TH.Name, TH.Strict, TH.Type) -> CvtM (LConDeclField RdrName)
+cvtSrcStrictness :: TH.SourceStrictness -> SrcStrictness
+cvtSrcStrictness NoSourceStrictness = NoSrcStrict
+cvtSrcStrictness SourceLazy         = SrcLazy
+cvtSrcStrictness SourceStrict       = SrcStrict
+
+cvt_arg :: (TH.Bang, TH.Type) -> CvtM (LHsType RdrName)
+cvt_arg (Bang su ss, ty)
+  = do { ty' <- cvtType ty
+       ; let su' = cvtSrcUnpackedness su
+       ; let ss' = cvtSrcStrictness ss
+       ; returnL $ HsBangTy (HsSrcBang Nothing su' ss') ty' }
+
+cvt_id_arg :: (TH.Name, TH.Bang, TH.Type) -> CvtM (LConDeclField RdrName)
 cvt_id_arg (i, str, ty)
   = do  { L li i' <- vNameL i
         ; ty' <- cvt_arg (str,ty)
@@ -1134,12 +1142,8 @@ cvtTypeKind ty_str ty
            LitT lit
              -> returnL (HsTyLit (cvtTyLit lit))
 
-           WildCardT Nothing
+           WildCardT
              -> mk_apps mkAnonWildCardTy tys'
-
-           WildCardT (Just nm)
-             -> do { nm' <- tNameL nm
-                   ; mk_apps (mkNamedWildCardTy nm') tys' }
 
            InfixT t1 s t2
              -> do { s'  <- tconName s
@@ -1227,17 +1231,17 @@ cvtTyLit (TH.StrTyLit s) = HsStrTy s        (fsLit s)
 cvtOpAppT :: LHsType RdrName -> RdrName -> LHsType RdrName -> LHsType RdrName
 cvtOpAppT t1@(L loc1 _) op t2@(L loc2 _)
   = L (combineSrcSpans loc1 loc2) $
-    HsAppsTy (t1' ++ [HsAppInfix (noLoc op)] ++ t2')
+    HsAppsTy (t1' ++ [noLoc $ HsAppInfix (noLoc op)] ++ t2')
   where
     t1' | L _ (HsAppsTy t1s) <- t1
         = t1s
         | otherwise
-        = [HsAppPrefix t1]
+        = [noLoc $ HsAppPrefix t1]
 
     t2' | L _ (HsAppsTy t2s) <- t2
         = t2s
         | otherwise
-        = [HsAppPrefix t2]
+        = [noLoc $ HsAppPrefix t2]
 
 cvtKind :: TH.Kind -> CvtM (LHsKind RdrName)
 cvtKind = cvtTypeKind "kind"

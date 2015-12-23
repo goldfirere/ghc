@@ -1180,12 +1180,13 @@ data TcIdSigBndr   -- See Note [Complete and partial type signatures]
 
 data TcPatSynInfo
   = TPSI {
-        patsig_name  :: Name,
-        patsig_tau   :: TcSigmaType,
-        patsig_ex    :: [TcTyVar],
-        patsig_prov  :: TcThetaType,
-        patsig_univ  :: [TcTyVar],
-        patsig_req   :: TcThetaType
+        patsig_name     :: Name,
+        patsig_univ_tvs :: [TcTyVar],
+        patsig_req      :: TcThetaType,
+        patsig_ex_tvs   :: [TcTyVar],
+        patsig_prov     :: TcThetaType,
+        patsig_arg_tys  :: [TcSigmaType],
+        patsig_body_ty  :: TcSigmaType
     }
 
 findScopedTyVars  -- See Note [Binding scoped type variables]
@@ -2100,6 +2101,7 @@ So a Given has EvVar inside it rather that (as previously) an EvTerm.
 data TcEvDest
   = EvVarDest EvVar         -- ^ bind this var to the evidence
   | HoleDest  CoercionHole  -- ^ fill in this hole with the evidence
+              -- See Note [Coercion holes] in TyCoRep
 
 data CtEvidence
   = CtGiven { ctev_pred :: TcPredType      -- See Note [Ct/evidence invariant]

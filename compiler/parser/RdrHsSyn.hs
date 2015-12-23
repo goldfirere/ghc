@@ -93,6 +93,7 @@ import Util
 import ApiAnnotation
 import Data.List
 import qualified GHC.LanguageExtensions as LangExt
+import MonadUtils
 
 #if __GLASGOW_HASKELL__ < 709
 import Control.Applicative ((<$>))
@@ -652,10 +653,11 @@ checkTyVars pp_what equals_or_where tc tparms
   where
 
     chk (L _ (HsParTy ty)) = chk ty
-    chk (L _ (HsAppsTy [HsAppPrefix ty])) = chk ty
+    chk (L _ (HsAppsTy [L _ (HsAppPrefix ty)])) = chk ty
 
         -- Check that the name space is correct!
-    chk (L l (HsKindSig (L _ (HsAppsTy [HsAppPrefix (L lv (HsTyVar (L _ tv)))])) k))
+    chk (L l (HsKindSig
+              (L _ (HsAppsTy [L _ (HsAppPrefix (L lv (HsTyVar (L _ tv))))])) k))
         | isRdrTyVar tv    = return (L l (KindedTyVar (L lv tv) k))
     chk (L l (HsTyVar (L ltv tv)))
         | isRdrTyVar tv    = return (L l (UserTyVar (L ltv tv)))
@@ -715,7 +717,7 @@ checkTyClHdr is_cls ty
     go _ (HsAppsTy ts)   acc ann
       | Just (head, args) <- getAppsTyHead_maybe ts = goL head (args ++ acc) ann
 
-    go _ (HsAppsTy [HsAppInfix (L loc star)]) [] ann
+    go _ (HsAppsTy [L _ (HsAppInfix (L loc star))]) [] ann
       | occNameFS (rdrNameOcc star) == fsLit "*"
       = return (L loc (nameRdrName starKindTyConName), [], ann)
       | occNameFS (rdrNameOcc star) == fsLit "★"
@@ -740,7 +742,7 @@ checkContext (L l orig_t)
     = return (anns ++ mkParensApiAnn lp,L l ts)                -- Ditto ()
 
     -- don't let HsAppsTy get in the way
-  check anns (L _ (HsAppsTy [HsAppPrefix ty]))
+  check anns (L _ (HsAppsTy [L _ (HsAppPrefix ty)]))
     = check anns ty
 
   check anns (L lp1 (HsParTy ty))-- to be sure HsParTy doesn't get into the way
@@ -1070,18 +1072,25 @@ splitTilde t = go t
 
 -- | Transform tyapps with strict_marks into uses of twiddle
 -- [~a, ~b, c, ~d] ==> (~a) ~ b c ~ d
-splitTildeApps :: [HsAppType RdrName] -> [HsAppType RdrName]
-splitTildeApps []         = []
-splitTildeApps (t : rest) = t : concatMap go rest
-  where go (HsAppPrefix
+splitTildeApps :: [LHsAppType RdrName] -> P [LHsAppType RdrName]
+splitTildeApps []         = return []
+splitTildeApps (t : rest) = do
+  rest' <- concatMapM go rest
+  return (t : rest')
+  where go (L l (HsAppPrefix
             (L loc (HsBangTy
                     (HsSrcBang Nothing NoSrcUnpack SrcLazy)
-                    ty)))
-          = [HsAppInfix (L tilde_loc eqTyCon_RDR), HsAppPrefix ty]
+                    ty))))
+          = addAnnotation l AnnTilde l >>
+            return
+              [L tilde_loc (HsAppInfix (L tilde_loc eqTyCon_RDR)),
+               L l (HsAppPrefix ty)]
+               -- NOTE: no annotation is attached to an HsAppPrefix, so the
+               --       surrounding SrcSpan is not critical
           where
             tilde_loc = srcSpanFirstCharacter loc
 
-        go t = [t]
+        go t = return [t]
 
 
 

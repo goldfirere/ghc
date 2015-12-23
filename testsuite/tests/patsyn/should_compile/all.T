@@ -45,3 +45,5 @@ test('T10897', expect_broken(10897), multi_compile, ['T10897', [
                                        ('T10897a.hs','-c')
                                       ,('T10897b.hs', '-c')], ''])
 test('T9793', normal, compile, [''])
+test('T11224b', normal, compile, [''])
+test('MoreEx', normal, compile, [''])

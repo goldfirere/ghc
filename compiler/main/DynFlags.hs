@@ -45,6 +45,7 @@ module DynFlags (
         GhcMode(..), isOneShot,
         GhcLink(..), isNoLink,
         PackageFlag(..), PackageArg(..), ModRenaming(..),
+        IgnorePackageFlag(..), TrustFlag(..),
         PkgConfRef(..),
         Option(..), showOpt,
         DynLibLoader(..),
@@ -403,6 +404,7 @@ data GeneralFlag
    | Opt_SplitSections
    | Opt_StgStats
    | Opt_HideAllPackages
+   | Opt_HideAllPluginPackages
    | Opt_PrintBindResult
    | Opt_Haddock
    | Opt_HaddockOptions
@@ -691,8 +693,14 @@ data DynFlags = DynFlags {
         -- ^ The @-package-db@ flags given on the command line, in the order
         -- they appeared.
 
+  ignorePackageFlags    :: [IgnorePackageFlag],
+        -- ^ The @-ignore-package@ flags from the command line
   packageFlags          :: [PackageFlag],
         -- ^ The @-package@ and @-hide-package@ flags from the command-line
+  pluginPackageFlags    :: [PackageFlag],
+        -- ^ The @-plugin-package-id@ flags from command line
+  trustFlags            :: [TrustFlag],
+        -- ^ The @-trust@ and @-distrust@ flags
   packageEnv            :: Maybe FilePath,
         -- ^ Filepath to the package environment file (if overriding default)
 
@@ -1087,15 +1095,24 @@ data ModRenaming = ModRenaming {
                                                --   under name @n@.
   } deriving (Eq)
 
--- | Flags for manipulating packages.
+-- | Flags for manipulating the set of non-broken packages.
+newtype IgnorePackageFlag = IgnorePackage String -- ^ @-ignore-package@
+  deriving (Eq)
+
+-- | Flags for manipulating package trust.
+data TrustFlag
+  = TrustPackage    String -- ^ @-trust@
+  | DistrustPackage String -- ^ @-distrust@
+  deriving (Eq)
+
+-- | Flags for manipulating packages visibility.
 data PackageFlag
-  = ExposePackage   PackageArg ModRenaming -- ^ @-package@, @-package-id@
+  = ExposePackage   String PackageArg ModRenaming -- ^ @-package@, @-package-id@
                                            -- and @-package-key@
   | HidePackage     String -- ^ @-hide-package@
-  | IgnorePackage   String -- ^ @-ignore-package@
-  | TrustPackage    String -- ^ @-trust-package@
-  | DistrustPackage String -- ^ @-distrust-package@
   deriving (Eq)
+-- NB: equality instance is used by InteractiveUI to test if
+-- package flags have changed.
 
 defaultHscTarget :: Platform -> HscTarget
 defaultHscTarget = defaultObjectTarget
@@ -1424,6 +1441,9 @@ defaultDynFlags mySettings =
 
         extraPkgConfs           = id,
         packageFlags            = [],
+        pluginPackageFlags      = [],
+        ignorePackageFlags      = [],
+        trustFlags              = [],
         packageEnv              = Nothing,
         pkgDatabase             = Nothing,
         -- This gets filled in with GHC.setSessionDynFlags
@@ -2700,9 +2720,12 @@ package_flags = [
   , defGhcFlag "this-package-key"   (hasArg setUnitId)
   , defFlag "package-id"            (HasArg exposePackageId)
   , defFlag "package"               (HasArg exposePackage)
+  , defFlag "plugin-package-id"     (HasArg exposePluginPackageId)
+  , defFlag "plugin-package"        (HasArg exposePluginPackage)
   , defFlag "package-key"           (HasArg exposeUnitId)
   , defFlag "hide-package"          (HasArg hidePackage)
   , defFlag "hide-all-packages"     (NoArg (setGeneralFlag Opt_HideAllPackages))
+  , defFlag "hide-all-plugin-packages" (NoArg (setGeneralFlag Opt_HideAllPluginPackages))
   , defFlag "package-env"           (HasArg setPackageEnv)
   , defFlag "ignore-package"        (HasArg ignorePackage)
   , defFlag "syslib"
@@ -3743,18 +3766,22 @@ parseModuleName :: ReadP ModuleName
 parseModuleName = fmap mkModuleName
                 $ munch1 (\c -> isAlphaNum c || c `elem` "_.")
 
-parsePackageFlag :: (String -> PackageArg) -- type of argument
+parsePackageFlag :: String                 -- the flag
+                 -> (String -> PackageArg) -- type of argument
                  -> String                 -- string to parse
                  -> PackageFlag
-parsePackageFlag constr str = case filter ((=="").snd) (readP_to_S parse str) of
+parsePackageFlag flag constr str
+ = case filter ((=="").snd) (readP_to_S parse str) of
     [(r, "")] -> r
     _ -> throwGhcException $ CmdLineError ("Can't parse package flag: " ++ str)
-  where parse = do
+  where doc = flag ++ " " ++ str
+        parse = do
             pkg <- tok $ munch1 (\c -> isAlphaNum c || c `elem` ":-_.")
+            let mk_expose = ExposePackage doc (constr pkg)
             ( do _ <- tok $ string "with"
-                 fmap (ExposePackage (constr pkg) . ModRenaming True) parseRns
-             <++ fmap (ExposePackage (constr pkg) . ModRenaming False) parseRns
-             <++ return (ExposePackage (constr pkg) (ModRenaming True [])))
+                 fmap (mk_expose . ModRenaming True) parseRns
+             <++ fmap (mk_expose . ModRenaming False) parseRns
+             <++ return (mk_expose (ModRenaming True [])))
         parseRns = do _ <- tok $ R.char '('
                       rns <- tok $ sepBy parseItem (tok $ R.char ',')
                       _ <- tok $ R.char ')'
@@ -3768,28 +3795,37 @@ parsePackageFlag constr str = case filter ((=="").snd) (readP_to_S parse str) of
              return (orig, orig))
         tok m = m >>= \x -> skipSpaces >> return x
 
-exposePackage, exposePackageId, exposeUnitId, hidePackage, ignorePackage,
+exposePackage, exposePackageId, exposeUnitId, hidePackage,
+        exposePluginPackage, exposePluginPackageId,
+        ignorePackage,
         trustPackage, distrustPackage :: String -> DynP ()
 exposePackage p = upd (exposePackage' p)
 exposePackageId p =
   upd (\s -> s{ packageFlags =
-    parsePackageFlag PackageIdArg p : packageFlags s })
+    parsePackageFlag "-package-id" PackageIdArg p : packageFlags s })
+exposePluginPackage p =
+  upd (\s -> s{ pluginPackageFlags =
+    parsePackageFlag "-plugin-package" PackageArg p : pluginPackageFlags s })
+exposePluginPackageId p =
+  upd (\s -> s{ pluginPackageFlags =
+    parsePackageFlag "-plugin-package-id" PackageIdArg p : pluginPackageFlags s })
 exposeUnitId p =
   upd (\s -> s{ packageFlags =
-    parsePackageFlag UnitIdArg p : packageFlags s })
+    parsePackageFlag "-package-key" UnitIdArg p : packageFlags s })
 hidePackage p =
   upd (\s -> s{ packageFlags = HidePackage p : packageFlags s })
 ignorePackage p =
-  upd (\s -> s{ packageFlags = IgnorePackage p : packageFlags s })
+  upd (\s -> s{ ignorePackageFlags = IgnorePackage p : ignorePackageFlags s })
+
 trustPackage p = exposePackage p >> -- both trust and distrust also expose a package
-  upd (\s -> s{ packageFlags = TrustPackage p : packageFlags s })
+  upd (\s -> s{ trustFlags = TrustPackage p : trustFlags s })
 distrustPackage p = exposePackage p >>
-  upd (\s -> s{ packageFlags = DistrustPackage p : packageFlags s })
+  upd (\s -> s{ trustFlags = DistrustPackage p : trustFlags s })
 
 exposePackage' :: String -> DynFlags -> DynFlags
 exposePackage' p dflags
     = dflags { packageFlags =
-            parsePackageFlag PackageArg p : packageFlags dflags }
+            parsePackageFlag "-package" PackageArg p : packageFlags dflags }
 
 setUnitId :: String -> DynFlags -> DynFlags
 setUnitId p s =  s{ thisPackage = stringToUnitId p }

@@ -59,7 +59,7 @@ module TyCoRep (
 
         -- Free variables
         tyCoVarsOfType, tyCoVarsOfTypeDSet, tyCoVarsOfTypes, tyCoVarsOfTypesDSet,
-        tyCoVarsOfTypeAcc, tyCoVarsOfTypeList,
+        tyCoVarsBndrAcc, tyCoVarsOfTypeAcc, tyCoVarsOfTypeList,
         tyCoVarsOfTypesAcc, tyCoVarsOfTypesList,
         closeOverKindsDSet, closeOverKindsAcc,
         coVarsOfType, coVarsOfTypes,
@@ -522,11 +522,12 @@ isLevityVar = isLevityTy . tyVarKind
 -- See Note [GHC Formalism] in coreSyn/CoreLint.hs
 data Coercion
   -- Each constructor has a "role signature", indicating the way roles are
-  -- propagated through coercions. P, N, and R stand for coercions of the
-  -- given role. e stands for a coercion of a specific unknown role (think
-  -- "role polymorphism"). "e" stands for an explicit role parameter
-  -- indicating role e. _ stands for a parameter that is not a Role or
-  -- Coercion.
+  -- propagated through coercions.
+  --    -  P, N, and R stand for coercions of the given role
+  --    -  e stands for a coercion of a specific unknown role
+  --           (think "role polymorphism")
+  --    -  "e" stands for an explicit role parameter indicating role e.
+  --    -   _ stands for a parameter that is not a Role or Coercion.
 
   -- These ones mirror the shape of types
   = -- Refl :: "e" -> _ -> e
@@ -626,107 +627,6 @@ pickLR :: LeftOrRight -> (a,a) -> a
 pickLR CLeft  (l,_) = l
 pickLR CRight (_,r) = r
 
-{-
-%************************************************************************
-%*                                                                      *
-     UnivCo Provenance
-%*                                                                      *
-%************************************************************************
-
-Note [Coercion holes]
-~~~~~~~~~~~~~~~~~~~~~
-During typechecking, we emit constraints for kind coercions, to be used
-to cast a type's kind. These coercions then must be used in types. Because
-they might appear in a top-level type, there is no place to bind these
-(unlifted) coercions in the usual way. So, instead of creating a coercion
-variable and then solving for the variable, we use a coercion hole, which
-is just an unnamed mutable cell. During type-checking, the holes are filled
-in. The Unique carried with a coercion hole is used solely for debugging.
-Coercion holes can be compared for equality only like other coercions:
-only by looking at the types coerced.
-
-Holes should never appear in Core. If, one day, we use type-level information
-to separate out forms that can appear during type-checking vs forms that can
-appear in core proper, holes in Core will be ruled out. (This is quite like
-the fact that Type can, technically, store TcTyVars but never do.)
-
-Note that we don't use holes for other evidence because other evidence wants
-to be shared. But coercions are entirely erased, so there's little benefit
-to sharing.
-
-Note [ProofIrrelProv]
-~~~~~~~~~~~~~~~~~~~~~
-A ProofIreelProv is a coercion between coercions. For example:
-
-  data G a where
-    MkG :: G Bool
-
-In core, we get
-
-  G :: * -> *
-  MkG :: forall (a :: *). (a ~ Bool) -> G a
-
-Now, consider 'MkG -- that is, MkG used in a type -- and suppose we want
-a proof that ('MkG co1 a1) ~ ('MkG co2 a2). This will have to be
-
-  TyConAppCo Nominal MkG [co3, co4]
-  where
-    co3 :: co1 ~ co2
-    co4 :: a1 ~ a2
-
-Note that
-  co1 :: a1 ~ Bool
-  co2 :: a2 ~ Bool
-
-Here,
-  co3 = UnivCo (ProofIrrelProv co5) Nominal (CoercionTy co1) (CoercionTy co2)
-  where
-    co5 :: (a1 ~ Bool) ~ (a2 ~ Bool)
-    co5 = TyConAppCo Nominal (~) [<*>, <*>, co4, <Bool>]
-
--}
-
--- | For simplicity, we have just one UnivCo that represents a coercion from
--- some type to some other type, with (in general) no restrictions on the
--- type. To make better sense of these, we tag a UnivCo with a
--- UnivCoProvenance. This provenance is rarely consulted and is more
--- for debugging info than anything else.
--- An important exception to this rule is that we also use a UnivCo
--- for coercion holes. See Note [Coercion holes].
-data UnivCoProvenance
-  = UnsafeCoerceProv   -- ^ From @unsafeCoerce#@. These are unsound.
-  | PhantomProv Coercion -- ^ From the need to create a phantom coercion;
-                         --   the UnivCo must be Phantom. The Coercion stored is
-                         --   the (nominal) kind coercion between the types
-  | ProofIrrelProv Coercion  -- ^ From the fact that any two coercions are
-                             --   considered equivalent. See Note [ProofIrrelProv]
-  | PluginProv String  -- ^ From a plugin, which asserts that this coercion
-                       --   is sound. The string is for the use of the plugin.
-  | HoleProv CoercionHole  -- ^ See Note [Coercion holes]
-  deriving (Data.Data, Data.Typeable)
-
-instance Outputable UnivCoProvenance where
-  ppr UnsafeCoerceProv   = text "(unsafeCoerce#)"
-  ppr (PhantomProv _)    = text "(phantom)"
-  ppr (ProofIrrelProv _) = text "(proof irrel.)"
-  ppr (PluginProv str)   = parens (text "plugin" <+> brackets (text str))
-  ppr (HoleProv hole)    = parens (text "hole" <> ppr hole)
-
--- | A coercion to be filled in by the type-checker. See Note [Coercion holes]
-data CoercionHole
-  = CoercionHole { chUnique   :: Unique   -- ^ used only for debugging
-                 , chCoercion :: (IORef (Maybe Coercion))
-                 }
-  deriving (Data.Typeable)
-
-instance Data.Data CoercionHole where
-  -- don't traverse?
-  toConstr _   = abstractConstr "CoercionHole"
-  gunfold _ _  = error "gunfold"
-  dataTypeOf _ = mkNoRepType "CoercionHole"
-
-instance Outputable CoercionHole where
-  ppr (CoercionHole u _) = braces (ppr u)
 
 {-
 Note [Refl invariant]
@@ -1036,6 +936,168 @@ A more nuanced treatment might be able to relax this condition
 somewhat, by checking if t1 and/or t2 use their bound variables
 in nominal ways. If not, having w be representational is OK.
 
+
+%************************************************************************
+%*                                                                      *
+                UnivCoProvenance
+%*                                                                      *
+%************************************************************************
+
+A UnivCo is a coercion whose proof does not directly express its role
+and kind (indeed for some UnivCos, like UnsafeCoerceProv, there /is/
+no proof).
+
+The different kinds of UnivCo are described by UnivCoProvenance.  Really
+each is entirely separate, but they all share the need to represent their
+role and kind, which is done in the UnivCo constructor.
+
+-}
+
+-- | For simplicity, we have just one UnivCo that represents a coercion from
+-- some type to some other type, with (in general) no restrictions on the
+-- type. The UnivCoProvenance specifies more exactly what the coercion really
+-- is and why a program should (or shouldn't!) trust the coercion.
+-- It is reasonable to consider each constructor of 'UnivCoProvenance'
+-- as a totally independent coercion form; their only commonality is
+-- that they don't tell you what types they coercion between. (That info
+-- is in the 'UnivCo' constructor of 'Coercion'.
+data UnivCoProvenance
+  = UnsafeCoerceProv   -- ^ From @unsafeCoerce#@. These are unsound.
+
+  | PhantomProv Coercion -- ^ See Note [Phantom coercions]
+
+  | ProofIrrelProv Coercion  -- ^ From the fact that any two coercions are
+                             --   considered equivalent. See Note [ProofIrrelProv]
+
+  | PluginProv String  -- ^ From a plugin, which asserts that this coercion
+                       --   is sound. The string is for the use of the plugin.
+
+  | HoleProv CoercionHole  -- ^ See Note [Coercion holes]
+  deriving (Data.Data, Data.Typeable)
+
+instance Outputable UnivCoProvenance where
+  ppr UnsafeCoerceProv   = text "(unsafeCoerce#)"
+  ppr (PhantomProv _)    = text "(phantom)"
+  ppr (ProofIrrelProv _) = text "(proof irrel.)"
+  ppr (PluginProv str)   = parens (text "plugin" <+> brackets (text str))
+  ppr (HoleProv hole)    = parens (text "hole" <> ppr hole)
+
+-- | A coercion to be filled in by the type-checker. See Note [Coercion holes]
+data CoercionHole
+  = CoercionHole { chUnique   :: Unique   -- ^ used only for debugging
+                 , chCoercion :: IORef (Maybe Coercion)
+                 }
+  deriving (Data.Typeable)
+
+instance Data.Data CoercionHole where
+  -- don't traverse?
+  toConstr _   = abstractConstr "CoercionHole"
+  gunfold _ _  = error "gunfold"
+  dataTypeOf _ = mkNoRepType "CoercionHole"
+
+instance Outputable CoercionHole where
+  ppr (CoercionHole u _) = braces (ppr u)
+
+
+{- Note [Phantom coercions]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider
+     data T a = T1 | T2
+Then we have
+     T s ~R T t
+for any old s,t. The witness for this is (TyConAppCo T Rep co),
+where (co :: s ~P t) is a phantom coercion built with PhantomProv.
+The role of the UnivCo is always Phantom.  The Coercion stored is the
+(nominal) kind coercion between the types
+   kind(s) ~N kind (t)
+
+Note [Coercion holes]
+~~~~~~~~~~~~~~~~~~~~~~~~
+During typechecking, constraint solving for type classes works by
+  - Generate an evidence Id,  d7 :: Num a
+  - Wrap it in a Wanted constraint, [W] d7 :: Num a
+  - Use the evidence Id where the evidence is needed
+  - Solve the constraint later
+  - When solved, add an enclosing let-binding  let d7 = .... in ....
+    which actually binds d7 to the (Num a) evidence
+
+For equality constraints we use a different strategy.  See Note [The
+equality types story] in TysPrim for background on equality constraints.
+  - For boxed equality constraints, (t1 ~N t2) and (t1 ~R t2), it's just
+    like type classes above. (Indeed, boxed equality constraints *are* classes.)
+  - But for /unboxed/ equality constraints (t1 ~R# t2) and (t1 ~N# t2)
+    we use a different plan
+
+For unboxed equalities:
+  - Generate a CoercionHole, a mutable variable just like a unification
+    variable
+  - Wrap the CoercionHole in a Wanted constraint; see TcRnTypes.TcEvDest
+  - Use the CoercionHole in a Coercion, via HoleProv
+  - Solve the constraint later
+  - When solved, fill in the CoercionHole by side effect, instead of
+    doing the let-binding thing
+
+The main reason for all this is that there may be no good place to let-bind
+the evidence for unboxed equalities:
+  - We emit constraints for kind coercions, to be used
+    to cast a type's kind. These coercions then must be used in types. Because
+    they might appear in a top-level type, there is no place to bind these
+   (unlifted) coercions in the usual way.
+
+  - A coercion for (forall a. t1) ~ forall a. t2) will look like
+       forall a. (coercion for t1~t2)
+    But the coercion for (t1~t2) may mention 'a', and we don't have let-bindings
+    within coercions.  We could add them, but coercion holes are easier.
+
+Other notes about HoleCo:
+
+ * INVARIANT: CoercionHole and HoleProv are used only during type checking,
+   and should never appear in Core. Just like unification variables; a Type
+   can contain a TcTyVar, but only during type checking. If, one day, we
+   use type-level information to separate out forms that can appear during
+   type-checking vs forms that can appear in core proper, holes in Core will
+   be ruled out.
+
+ * The Unique carried with a coercion hole is used solely for debugging.
+
+ * Coercion holes can be compared for equality only like other coercions:
+   only by looking at the types coerced.
+
+ * We don't use holes for other evidence because other evidence wants to
+   be /shared/. But coercions are entirely erased, so there's little
+   benefit to sharing.
+
+Note [ProofIrrelProv]
+~~~~~~~~~~~~~~~~~~~~~
+A ProofIrrelProv is a coercion between coercions. For example:
+
+  data G a where
+    MkG :: G Bool
+
+In core, we get
+
+  G :: * -> *
+  MkG :: forall (a :: *). (a ~ Bool) -> G a
+
+Now, consider 'MkG -- that is, MkG used in a type -- and suppose we want
+a proof that ('MkG co1 a1) ~ ('MkG co2 a2). This will have to be
+
+  TyConAppCo Nominal MkG [co3, co4]
+  where
+    co3 :: co1 ~ co2
+    co4 :: a1 ~ a2
+
+Note that
+  co1 :: a1 ~ Bool
+  co2 :: a2 ~ Bool
+
+Here,
+  co3 = UnivCo (ProofIrrelProv co5) Nominal (CoercionTy co1) (CoercionTy co2)
+  where
+    co5 :: (a1 ~ Bool) ~ (a2 ~ Bool)
+    co5 = TyConAppCo Nominal (~) [<*>, <*>, co4, <Bool>]
+
+
 %************************************************************************
 %*                                                                      *
                  Free variables of types and coercions
@@ -1064,19 +1126,24 @@ tyCoVarsOfTypeList ty = runFVList $ tyCoVarsOfTypeAcc ty
 -- | The worker for `tyVarsOfType` and `tyVarsOfTypeList`.
 -- The previous implementation used `unionVarSet` which is O(n+m) and can
 -- make the function quadratic.
--- It's exported, so that it can be composed with other functions that compute
--- free variables.
+-- It's exported, so that it can be composed with
+-- other functions that compute free variables.
 -- See Note [FV naming conventions] in FV.
+--
+-- Eta-expanded because that makes it run faster (apparently)
 tyCoVarsOfTypeAcc :: Type -> FV
-tyCoVarsOfTypeAcc (TyVarTy v)         fv_cand in_scope acc = (oneVar v `unionFV` tyCoVarsOfTypeAcc (tyVarKind v)) fv_cand in_scope acc
-tyCoVarsOfTypeAcc (TyConApp _ tys)    fv_cand in_scope acc = tyCoVarsOfTypesAcc tys fv_cand in_scope acc
-tyCoVarsOfTypeAcc (LitTy {})          fv_cand in_scope acc = noVars fv_cand in_scope acc
-tyCoVarsOfTypeAcc (AppTy fun arg)     fv_cand in_scope acc = (tyCoVarsOfTypeAcc fun `unionFV` tyCoVarsOfTypeAcc arg) fv_cand in_scope acc
-tyCoVarsOfTypeAcc (ForAllTy bndr ty) fv_cand in_scope acc
-  = (delBinderVarFV bndr (tyCoVarsOfTypeAcc ty)
-     `unionFV` tyCoVarsOfTypeAcc (binderType bndr)) fv_cand in_scope acc
-tyCoVarsOfTypeAcc (CastTy ty co)      fv_cand in_scope acc = (tyCoVarsOfTypeAcc ty `unionFV` tyCoVarsOfCoAcc co) fv_cand in_scope acc
-tyCoVarsOfTypeAcc (CoercionTy co)     fv_cand in_scope acc = tyCoVarsOfCoAcc co fv_cand in_scope acc
+tyCoVarsOfTypeAcc (TyVarTy v)        a b c = (oneVar v `unionFV` tyCoVarsOfTypeAcc (tyVarKind v)) a b c
+tyCoVarsOfTypeAcc (TyConApp _ tys)   a b c = tyCoVarsOfTypesAcc tys a b c
+tyCoVarsOfTypeAcc (LitTy {})         a b c = noVars a b c
+tyCoVarsOfTypeAcc (AppTy fun arg)    a b c = (tyCoVarsOfTypeAcc fun `unionFV` tyCoVarsOfTypeAcc arg) a b c
+tyCoVarsOfTypeAcc (ForAllTy bndr ty) a b c = tyCoVarsBndrAcc bndr (tyCoVarsOfTypeAcc ty)  a b c
+tyCoVarsOfTypeAcc (CastTy ty co)     a b c = (tyCoVarsOfTypeAcc ty `unionFV` tyCoVarsOfCoAcc co) a b c
+tyCoVarsOfTypeAcc (CoercionTy co)    a b c = tyCoVarsOfCoAcc co a b c
+
+tyCoVarsBndrAcc :: TyBinder -> FV -> FV
+-- Free vars of (forall b. <thing with fvs>)
+tyCoVarsBndrAcc bndr fvs = delBinderVarFV bndr fvs
+                           `unionFV` tyCoVarsOfTypeAcc (binderType bndr)
 
 -- | Returns free variables of types, including kind variables as
 -- a non-deterministic set. For type synonyms it does /not/ expand the

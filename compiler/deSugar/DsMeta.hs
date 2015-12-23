@@ -637,18 +637,27 @@ repC (L _ (ConDeclGADT { con_names = cons
   where
      gadtDetails = gadtDeclDetails res_ty
 
-repBangTy :: LBangType Name -> DsM (Core (TH.StrictTypeQ))
+repSrcUnpackedness :: SrcUnpackedness -> DsM (Core TH.SourceUnpackednessQ)
+repSrcUnpackedness SrcUnpack   = rep2 sourceUnpackName         []
+repSrcUnpackedness SrcNoUnpack = rep2 sourceNoUnpackName       []
+repSrcUnpackedness NoSrcUnpack = rep2 noSourceUnpackednessName []
+
+repSrcStrictness :: SrcStrictness -> DsM (Core TH.SourceStrictnessQ)
+repSrcStrictness SrcLazy     = rep2 sourceLazyName         []
+repSrcStrictness SrcStrict   = rep2 sourceStrictName       []
+repSrcStrictness NoSrcStrict = rep2 noSourceStrictnessName []
+
+repBangTy :: LBangType Name -> DsM (Core (TH.BangTypeQ))
 repBangTy ty = do
-  MkC s <- rep2 str []
+  MkC u <- repSrcUnpackedness su'
+  MkC s <- repSrcStrictness ss'
+  MkC b <- rep2 bangName [u, s]
   MkC t <- repLTy ty'
-  rep2 strictTypeName [s, t]
+  rep2 bangTypeName [b, t]
   where
-    (str, ty') = case ty of
-         L _ (HsBangTy (HsSrcBang _ SrcUnpack SrcStrict) ty)
-           -> (unpackedName,  ty)
-         L _ (HsBangTy (HsSrcBang _ _         SrcStrict) ty)
-           -> (isStrictName,  ty)
-         _ -> (notStrictName, ty)
+    (su', ss', ty') = case ty of
+            L _ (HsBangTy (HsSrcBang _ su ss) ty) -> (su, ss, ty)
+            _ -> (NoSrcUnpack, NoSrcStrict, ty)
 
 -------------------------------------------------------
 --                      Deriving clause
@@ -956,9 +965,6 @@ repTy (HsTyLit lit) = do
                         lit' <- repTyLit lit
                         repTLit lit'
 repTy (HsWildCardTy (AnonWildCard _)) = repTWildCard
-repTy (HsWildCardTy (NamedWildCard (L _ n))) = do
-                                           nwc <- lookupOcc n
-                                           repTNamedWildCard nwc
 
 repTy ty                      = notHandled "Exotic form of type" (ppr ty)
 
@@ -1955,18 +1961,18 @@ repConstr :: HsConDeclDetails Name
           -> [Core TH.Name]
           -> DsM (Core TH.ConQ)
 repConstr (PrefixCon ps) Nothing [con]
-    = do arg_tys  <- repList strictTypeQTyConName repBangTy ps
+    = do arg_tys  <- repList bangTypeQTyConName repBangTy ps
          rep2 normalCName [unC con, unC arg_tys]
 
 repConstr (PrefixCon ps) (Just res_ty) cons
-    = do arg_tys      <- repList strictTypeQTyConName repBangTy ps
+    = do arg_tys      <- repList bangTypeQTyConName repBangTy ps
          (res_n, idx) <- repGadtReturnTy res_ty
          rep2 gadtCName [ unC (nonEmptyCoreList cons), unC arg_tys, unC res_n
                         , unC idx]
 
 repConstr (RecCon (L _ ips)) resTy cons
     = do args     <- concatMapM rep_ip ips
-         arg_vtys <- coreList varStrictTypeQTyConName args
+         arg_vtys <- coreList varBangTypeQTyConName args
          case resTy of
            Nothing -> rep2 recCName [unC (head cons), unC arg_vtys]
            Just res_ty -> do
@@ -1980,7 +1986,7 @@ repConstr (RecCon (L _ ips)) resTy cons
       rep_one_ip :: LBangType Name -> LFieldOcc Name -> DsM (Core a)
       rep_one_ip t n = do { MkC v  <- lookupOcc (selectorFieldOcc $ unLoc n)
                           ; MkC ty <- repBangTy  t
-                          ; rep2 varStrictTypeName [v,ty] }
+                          ; rep2 varBangTypeName [v,ty] }
 
 repConstr (InfixCon st1 st2) Nothing [con]
     = do arg1 <- repBangTy st1
@@ -2035,10 +2041,6 @@ repTLit (MkC lit) = rep2 litTName [lit]
 
 repTWildCard :: DsM (Core TH.TypeQ)
 repTWildCard = rep2 wildCardTName []
-
-repTNamedWildCard :: Core TH.Name -> DsM (Core TH.TypeQ)
-repTNamedWildCard (MkC s) = rep2 namedWildCardTName [s]
-
 
 --------- Type constructors --------------
 
