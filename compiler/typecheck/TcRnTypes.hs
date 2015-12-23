@@ -887,6 +887,8 @@ data PromotionErr
 
   | FamDataConPE     -- Data constructor for a data family
                      -- See Note [AFamDataCon: not promoting data family constructors] in TcRnDriver
+  | PatSynPE         -- Pattern synonyms
+                     -- See Note [Don't promote pattern synonyms] in TcEnv
 
   | RecDataConPE     -- Data constructor in a recursive loop
                      -- See Note [ARecDataCon: recusion and promoting data constructors] in TcTyClsDecls
@@ -907,6 +909,7 @@ instance Outputable TcTyThing where     -- Debugging only
 instance Outputable PromotionErr where
   ppr ClassPE        = text "ClassPE"
   ppr TyConPE        = text "TyConPE"
+  ppr PatSynPE       = text "PatSynPE"
   ppr FamDataConPE   = text "FamDataConPE"
   ppr RecDataConPE   = text "RecDataConPE"
   ppr NoDataKinds    = text "NoDataKinds"
@@ -923,6 +926,7 @@ pprTcTyThingCategory (APromotionErr pe) = pprPECategory pe
 pprPECategory :: PromotionErr -> SDoc
 pprPECategory ClassPE        = ptext (sLit "Class")
 pprPECategory TyConPE        = ptext (sLit "Type constructor")
+pprPECategory PatSynPE       = ptext (sLit "Pattern synonym")
 pprPECategory FamDataConPE   = ptext (sLit "Data constructor")
 pprPECategory RecDataConPE   = ptext (sLit "Data constructor")
 pprPECategory NoDataKinds    = ptext (sLit "Data constructor")
@@ -966,6 +970,7 @@ Note that:
     *type variable*  Eg
         f :: forall a. blah
         f x = let g y = ...(y::a)...
+
 -}
 
 type ErrCtxt = (Bool, TidyEnv -> TcM (TidyEnv, MsgDoc))

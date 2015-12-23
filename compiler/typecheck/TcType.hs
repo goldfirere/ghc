@@ -1633,7 +1633,10 @@ Notice that
       (Eq a, (Ord a, Ix a))
    And this is try of any class that we can statically guarantee
    as non-recursive (in some sense).  For now, we just make a special
-   case for tuples
+   case for tuples.  Somthing better would be cool.
+
+See also TcTyDecls.checkClassCycles.
+
 
 ************************************************************************
 *                                                                      *

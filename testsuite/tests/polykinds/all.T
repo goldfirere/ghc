@@ -130,4 +130,4 @@ test('T9017', normal, compile_fail, [''])
 test('TidyClassKinds', normal, compile_fail, ['-fprint-explicit-kinds'])
 test('T11249', normal, compile, [''])
 test('T11248', normal, compile, [''])
-
+test('T11278', normal, compile, [''])
