@@ -839,11 +839,10 @@ addTickHsCmd (OpApp e1 c2 fix c3) =
                 (addTickLHsCmd c3)
 -}
 addTickHsCmd (HsCmdPar e) = liftM HsCmdPar (addTickLHsCmd e)
-addTickHsCmd (HsCmdCase e mgs w) =
-        liftM3 HsCmdCase
+addTickHsCmd (HsCmdCase e mgs) =
+        liftM2 HsCmdCase
                 (addTickLHsExpr e)
                 (addTickCmdMatchGroup mgs)
-                (return w)
 addTickHsCmd (HsCmdIf cnd e1 c2 c3) =
         liftM3 (HsCmdIf cnd)
                 (addBinTickLHsExpr (BinBox CondBinBox) e1)

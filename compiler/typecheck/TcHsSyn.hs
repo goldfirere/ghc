@@ -775,11 +775,10 @@ zonkCmd env (HsCmdPar c)
   = do new_c <- zonkLCmd env c
        return (HsCmdPar new_c)
 
-zonkCmd env (HsCmdCase expr ms wrap)
-  = do (env1, wrap') <- zonkCoFn env wrap
-       new_expr <- zonkLExpr env expr
-       new_ms <- zonkMatchGroup env1 zonkLCmd ms
-       return (HsCmdCase new_expr new_ms wrap')
+zonkCmd env (HsCmdCase expr ms)
+  = do new_expr <- zonkLExpr env expr
+       new_ms <- zonkMatchGroup env zonkLCmd ms
+       return (HsCmdCase new_expr new_ms)
 
 zonkCmd env (HsCmdIf eCond ePred cThen cElse)
   = do { new_eCond <- fmapMaybeM (zonkExpr env) eCond

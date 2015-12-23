@@ -21,7 +21,6 @@ import {-# SOURCE #-}   TcExpr( tcSyntaxOp, tcInferSigmaNC, tcInferSigma
                               , tcCheckId, tcMonoExpr, tcMonoExprNC, tcPolyExpr )
 
 import HsSyn
-import BasicTypes
 import TcRnMonad
 import TcEnv
 import TcPat
@@ -113,16 +112,16 @@ tcMatchesCase :: (Outputable (body Name)) =>
               -> TcSigmaType                                  -- Type of scrutinee
               -> MatchGroup Name (Located (body Name))        -- The case alternatives
               -> TcRhoType                                    -- Type of whole case expressions
-              -> TcM (HsWrapper, MatchGroup TcId (Located (body TcId)))
+              -> TcM (MatchGroup TcId (Located (body TcId)))
                  -- Translated alternatives
                  -- wrapper goes from MatchGroup's ty to expected ty
 
 tcMatchesCase ctxt scrut_ty matches res_ty
   | isEmptyMatchGroup matches   -- Allow empty case expressions
-  = return (idHsWrapper, MG { mg_alts = noLoc []
-                            , mg_arg_tys = [scrut_ty]
-                            , mg_res_ty = res_ty
-                            , mg_origin = mg_origin matches })
+  = return (MG { mg_alts = noLoc []
+               , mg_arg_tys = [scrut_ty]
+               , mg_res_ty = res_ty
+               , mg_origin = mg_origin matches })
 
   | otherwise
   = do { tauifyMultipleMatches matches res_ty
@@ -132,12 +131,13 @@ tcMatchLambda :: SDoc -- see Note [Herald for matchExpectedFunTys] in TcUnify
               -> TcMatchCtxt HsExpr
               -> MatchGroup Name (LHsExpr Name)
               -> TcRhoType   -- deeply skolemised
-              -> TcM (HsWrapper, MatchGroup TcId (LHsExpr TcId))
+              -> TcM (HsWrapper, [TcSigmaType], MatchGroup TcId (LHsExpr TcId))
+                     -- also returns the argument types
 tcMatchLambda herald match_ctxt match res_ty
   = do { tauifyMultipleMatches match res_ty
        ; (wrap, pat_tys, rhs_ty) <- matchExpectedFunTys herald n_pats res_ty
        ; match' <- tcMatches match_ctxt pat_tys rhs_ty match
-       ; return (wrap, match') }
+       ; return (wrap, pat_tys, match') }
   where
     n_pats = matchGroupArity match
 

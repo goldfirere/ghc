@@ -272,7 +272,9 @@ match_fun_tys swap_tys herald ct_orig arity orig_ty orig_old_args full_arity
     mk_ctxt arg_tys res_ty env
       = do { let ty = mkFunTys arg_tys res_ty
            ; (env1, zonked) <- zonkTidyTcType env ty
-           ; let n_actual = length arg_tys
+                   -- zonking might change # of args
+           ; let (zonked_args, _) = tcSplitFunTys zonked
+                 n_actual         = length zonked_args
                  (env2, unzonked) = tidyOpenType env1 ty
            ; return (env2, mk_msg unzonked zonked n_actual) }
 

@@ -50,8 +50,6 @@ import ListSetOps( assocDefault )
 import FastString
 import Data.List
 
-import Control.Arrow ( first )
-
 data DsCmdEnv = DsCmdEnv {
         arr_id, compose_id, first_id, app_id, choice_id, loop_id :: CoreExpr
     }
@@ -508,7 +506,7 @@ case bodies, containing the following fields:
 
 dsCmd ids local_vars stack_ty res_ty
       (HsCmdCase exp (MG { mg_alts = L l matches, mg_arg_tys = arg_tys
-                         , mg_origin = origin }) wrap)
+                         , mg_origin = origin }))
       env_ids = do
     stack_id <- newSysLocalDs stack_ty
 
@@ -516,8 +514,7 @@ dsCmd ids local_vars stack_ty res_ty
     -- expressions that will (after tagging) replace these leaves
 
     let
-        leaves = map (first $ mkLHsCmdWrap wrap) $
-                 concatMap leavesMatch matches
+        leaves = concatMap leavesMatch matches
         make_branch (leaf, bound_vars) = do
             (core_leaf, _fvs, leaf_ids) <-
                   dsfixCmd ids (bound_vars `unionVarSet` local_vars) stack_ty res_ty leaf

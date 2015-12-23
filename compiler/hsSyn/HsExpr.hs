@@ -948,7 +948,6 @@ data HsCmd id
 
   | HsCmdCase   (LHsExpr id)
                 (MatchGroup id (LHsCmd id))     -- bodies are HsCmd's
-                (PostTc id HsWrapper)
     -- ^ - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnCase',
     --       'ApiAnnotation.AnnOf','ApiAnnotation.AnnOpen' @'{'@,
     --       'ApiAnnotation.AnnClose' @'}'@
@@ -1048,7 +1047,7 @@ ppr_cmd (HsCmdApp c e)
 ppr_cmd (HsCmdLam matches)
   = pprMatches (LambdaExpr :: HsMatchContext id) matches
 
-ppr_cmd (HsCmdCase expr matches _wrap)
+ppr_cmd (HsCmdCase expr matches)
   = sep [ sep [ptext (sLit "case"), nest 4 (ppr expr), ptext (sLit "of {")],
           nest 2 (pprMatches (CaseAlt :: HsMatchContext id) matches <+> char '}') ]
 

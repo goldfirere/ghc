@@ -142,12 +142,11 @@ tc_cmd env (HsCmdLet (L l binds) (L body_loc body)) res_ty
                              tc_cmd env body res_ty
         ; return (HsCmdLet (L l binds') (L body_loc body')) }
 
-tc_cmd env in_cmd@(HsCmdCase scrut matches _) (stk, res_ty)
+tc_cmd env in_cmd@(HsCmdCase scrut matches) (stk, res_ty)
   = addErrCtxt (cmdCtxt in_cmd) $ do
       (scrut', scrut_ty) <- tcInferRho scrut
-      (wrap, matches')
-        <- tcMatchesCase match_ctxt scrut_ty matches res_ty
-      return (HsCmdCase scrut' matches' wrap)
+      matches' <- tcMatchesCase match_ctxt scrut_ty matches res_ty
+      return (HsCmdCase scrut' matches')
   where
     match_ctxt = MC { mc_what = CaseAlt,
                       mc_body = mc_body }

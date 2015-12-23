@@ -225,7 +225,7 @@ tcExpr e@(HsOverLabel l) res_ty  -- See Note [Type-checking overloaded labels]
   origin = OverLabelOrigin l
 
 tcExpr (HsLam match) res_ty
-  = do  { (co_fn, match') <- tcMatchLambda herald match_ctxt match res_ty
+  = do  { (co_fn, _, match') <- tcMatchLambda herald match_ctxt match res_ty
         ; return (mkHsWrap co_fn (HsLam match')) }
   where
     match_ctxt = MC { mc_what = LambdaExpr, mc_body = tcBody }
@@ -236,7 +236,10 @@ tcExpr (HsLam match) res_ty
                    ptext (sLit "has")]
 
 tcExpr e@(HsLamCase _ matches) res_ty
-  = do { (co_fn, matches') <- tcMatchLambda msg match_ctxt matches res_ty
+  = do { (co_fn, ~[arg_ty], matches')
+           <- tcMatchLambda msg match_ctxt matches res_ty
+           -- The laziness annotation is because we don't want to fail here
+           -- if there are multiple arguments
        ; return (mkHsWrap co_fn $ HsLamCase arg_ty matches') }
   where msg = sep [ ptext (sLit "The function") <+> quotes (ppr e)
                   , ptext (sLit "requires")]
@@ -512,14 +515,13 @@ tcExpr (HsCase scrut matches) exp_ty
           (scrut', scrut_ty) <- tcInferRho scrut
 
         ; traceTc "HsCase" (ppr scrut_ty)
-        ; (wrap, matches')
-            <- tcMatchesCase match_ctxt scrut_ty matches exp_ty
-        ; return (mkHsWrap wrap $ HsCase scrut' matches') }
+        ; matches' <- tcMatchesCase match_ctxt scrut_ty matches exp_ty
+        ; return (HsCase scrut' matches') }
  where
     match_ctxt = MC { mc_what = CaseAlt,
                       mc_body = tcBody }
 
-tcExpr e@(HsIf Nothing pred b1 b2) res_ty    -- Ordinary 'if'
+tcExpr (HsIf Nothing pred b1 b2) res_ty    -- Ordinary 'if'
   = do { pred' <- tcMonoExpr pred boolTy
             -- this forces the branches to be fully instantiated
             -- (See #10619)
