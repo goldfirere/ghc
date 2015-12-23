@@ -64,6 +64,10 @@ import FastString
 import SrcLoc
 import Data.IORef( IORef )
 
+#if __GLASGOW_HASKELL__ < 709
+import Control.Applicative ( (<*>), (<$>) )
+#endif
+
 {-
 Note [TcCoercions]
 ~~~~~~~~~~~~~~~~~~
