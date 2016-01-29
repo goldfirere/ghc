@@ -442,7 +442,7 @@ cvtConstr (NormalC c strtys)
   = do  { c'   <- cNameL c
         ; cxt' <- returnL []
         ; tys' <- mapM cvt_arg strtys
-        ; returnL $ mkConDeclH98 c' Nothing cxt' (PrefixCon tys') }
+        ; returnL $ mkConDeclH98 c' Nothing cxt' (PrefixCon [] tys') }
 
 cvtConstr (RecC c varstrtys)
   = do  { c'    <- cNameL c
@@ -1005,7 +1005,7 @@ cvtp (TupP [p])        = do { p' <- cvtPat p; return $ ParPat p' } -- Note [Drop
 cvtp (TupP ps)         = do { ps' <- cvtPats ps; return $ TuplePat ps' Boxed   [] }
 cvtp (UnboxedTupP ps)  = do { ps' <- cvtPats ps; return $ TuplePat ps' Unboxed [] }
 cvtp (ConP s ps)       = do { s' <- cNameL s; ps' <- cvtPats ps
-                            ; return $ ConPatIn s' (PrefixCon ps') }
+                            ; return $ ConPatIn s' (PrefixCon [] ps') }
 cvtp (InfixP p1 s p2)  = do { s' <- cNameL s; p1' <- cvtPat p1; p2' <- cvtPat p2
                             ; wrapParL ParPat $
                               ConPatIn s' (InfixCon (mkParPat p1') (mkParPat p2')) }

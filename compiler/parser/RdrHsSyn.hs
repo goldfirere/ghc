@@ -447,11 +447,11 @@ splitCon ty
    split (L l (HsTyVar (L _ tc)))  ts = do data_con <- tyConToDataCon l tc
                                            return (data_con, mk_rest ts)
    split (L l (HsTupleTy HsBoxedOrConstraintTuple ts)) []
-      = return (L l (getRdrName (tupleDataCon Boxed (length ts))), PrefixCon ts)
+      = return (L l (getRdrName (tupleDataCon Boxed (length ts))), PrefixCon [] ts)
    split (L l _) _ = parseErrorSDoc l (text "Cannot parse data constructor in a data/newtype declaration:" <+> ppr ty)
 
-   mk_rest [L l (HsRecTy flds)] = RecCon (L l flds)
-   mk_rest ts                   = PrefixCon ts
+   mk_rest [L l (HsRecTy flds)] = RecCon [] (L l flds)
+   mk_rest ts                   = PrefixCon [] ts
 
 recordPatSynErr :: SrcSpan -> LPat RdrName -> P a
 recordPatSynErr loc pat =
@@ -471,7 +471,7 @@ mkPatSynMatchGroup (L loc patsyn_name) (L _ decls) =
         do { unless (name == patsyn_name) $
                wrongNameBindingErr loc decl
            ; match <- case details of
-               PrefixCon pats -> return $ Match (FunBindMatch ln False) pats Nothing rhs
+               PrefixCon _ pats -> return $ Match (FunBindMatch ln False) pats Nothing rhs
                InfixCon pat1 pat2 ->
                          return $ Match (FunBindMatch ln True) [pat1, pat2] Nothing rhs
                RecCon{} -> recordPatSynErr loc pat
@@ -774,6 +774,8 @@ checkPat msg loc e args     -- OK to let this happen even if bang-patterns
   | Just (e', args') <- splitBang e
   = do  { args'' <- checkPatterns msg args'
         ; checkPat msg loc e' (args'' ++ args) }
+checkPat msg loc e@(L _ (HsApp _ (L _ HsType{}))) args
+  = checkPatWithTys msg loc e [] args
 checkPat msg loc (L _ (HsApp f e)) args
   = do p <- checkLPat msg e
        checkPat msg loc f (p : args)
@@ -782,6 +784,16 @@ checkPat msg loc (L _ e) []
        return (L loc p)
 checkPat msg loc e _
   = patFail msg loc (unLoc e)
+
+checkPatWithTys :: SDoc -> SrcSpan -> LHsExpr RdrName -> [Located RdrName]
+                -> [LPat RdrName]
+checkPatWithTys msg loc (L _ e@(HsApp f (L _ (HsType wc_ty)))) ty_args args
+  | HsWC { hswc_body = L _ (HsTyVar ltv) } <- wc_ty
+  = checkPatWithTys msg loc f (ltv : ty_args) args
+checkPatWithTys msg loc (L l (HsVar (L _ c))) ty_args args
+  | isRdrDataCon c = return (L loc (ConPatIn (L l c) (PrefixCon ty_args args)))
+checkPatWithTys msg loc e _ _
+  = patFail msg loc e
 
 checkAPat :: SDoc -> SrcSpan -> HsExpr RdrName -> P (Pat RdrName)
 checkAPat msg loc e0 = do

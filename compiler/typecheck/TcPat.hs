@@ -753,7 +753,7 @@ tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
         ; if null ex_tvs && null eq_spec && null theta
           then do { -- The common case; no class bindings etc
                     -- (see Note [Arrows and patterns])
-                    (arg_pats', res) <- tcConArgs (RealDataCon data_con) arg_tys'
+                    (arg_pats', res) <- tcConArgs (RealDataCon data_con) [] arg_tys'
                                                   arg_pats penv thing_inside
                   ; let res_pat = ConPatOut { pat_con = header,
                                               pat_tvs = [], pat_dicts = [],
@@ -786,7 +786,7 @@ tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
         ; given <- newEvVars theta'
         ; (ev_binds, (arg_pats', res))
              <- checkConstraints skol_info ex_tvs' given $
-                tcConArgs (RealDataCon data_con) arg_tys' arg_pats penv thing_inside
+                tcConArgs (RealDataCon data_con) ex_tvs' arg_tys' arg_pats penv thing_inside
 
         ; let res_pat = ConPatOut { pat_con   = header,
                                     pat_tvs   = ex_tvs',
@@ -836,7 +836,7 @@ tcPatSynPat penv (L con_span _) pat_syn pat_ty arg_pats thing_inside
         ; traceTc "checkConstraints {" Outputable.empty
         ; (ev_binds, (arg_pats', res))
              <- checkConstraints skol_info ex_tvs' prov_dicts' $
-                tcConArgs (PatSynCon pat_syn) arg_tys' arg_pats penv thing_inside
+                tcConArgs (PatSynCon pat_syn) ex_tvs' arg_tys' arg_pats penv thing_inside
 
         ; traceTc "checkConstraints }" (ppr ev_binds)
         ; let res_pat = ConPatOut { pat_con   = L con_span $ PatSynCon pat_syn,
@@ -935,21 +935,24 @@ Suppose (coi, tys) = matchExpectedConType data_tc pat_ty
    error messages; it's a purely internal thing
 -}
 
-tcConArgs :: ConLike -> [TcSigmaType]
+tcConArgs :: ConLike -> [TcTyVar]  -- existentials
+          -> [TcSigmaType]
           -> Checker (HsConPatDetails Name) (HsConPatDetails Id)
 
-tcConArgs con_like arg_tys (PrefixCon arg_pats) penv thing_inside
+tcConArgs con_like ex_tvs arg_tys (PrefixCon tvs arg_pats) penv thing_inside
   = do  { checkTc (con_arity == no_of_args)     -- Check correct arity
                   (arityErr "constructor" con_like con_arity no_of_args)
         ; let pats_w_tys = zipEqual "tcConArgs" arg_pats arg_tys
-        ; (arg_pats', res) <- tcMultiple tcConArg pats_w_tys
-                                              penv thing_inside
-        ; return (PrefixCon arg_pats', res) }
+              ex_tv_pairs = zip tvs ex_tvs  -- might not be same length
+        ; (tvs', (arg_pats', res))
+              <- tcMultiple tcPatTv ex_tv_pairs penv $
+                 tcMultiple tcConArg pats_w_tys penv thing_inside
+        ; return (PrefixCon tvs' arg_pats', res) }
   where
     con_arity  = conLikeArity con_like
     no_of_args = length arg_pats
 
-tcConArgs con_like arg_tys (InfixCon p1 p2) penv thing_inside
+tcConArgs con_like _ arg_tys (InfixCon p1 p2) penv thing_inside
   = do  { checkTc (con_arity == 2)      -- Check correct arity
                   (arityErr "constructor" con_like con_arity 2)
         ; let [arg_ty1,arg_ty2] = arg_tys       -- This can't fail after the arity check
@@ -959,8 +962,10 @@ tcConArgs con_like arg_tys (InfixCon p1 p2) penv thing_inside
   where
     con_arity  = conLikeArity con_like
 
-tcConArgs con_like arg_tys (RecCon (HsRecFields rpats dd)) penv thing_inside
-  = do  { (rpats', res) <- tcMultiple tc_field rpats penv thing_inside
+tcConArgs con_like ex_tvs arg_tys (RecCon tvs (HsRecFields rpats dd)) penv thing_inside
+  = do  { (tvs', (rpats', res))
+            <- tcMultiple tPatTv (zip tvs ex_tvs) penv $
+               tcMultiple tc_field rpats penv thing_inside
         ; return (RecCon (HsRecFields rpats' dd), res) }
   where
     tc_field :: Checker (LHsRecField Name (LPat Name))
@@ -999,6 +1004,17 @@ tcConArgs con_like arg_tys (RecCon (HsRecFields rpats dd)) penv thing_inside
 tcConArg :: Checker (LPat Name, TcSigmaType) (LPat Id)
 tcConArg (arg_pat, arg_ty) penv thing_inside
   = tc_lpat arg_pat (mkCheckExpType arg_ty) penv thing_inside
+
+tcPatTv :: Checker (Located Name, TcTyVar) (Located TyVar)
+tcPatTv (L loc tv, ex_tv) penv thing_inside
+  = do { (tv', tv_binds, wcs, wrap)
+            <- tcPatSig (inPatBind penv) (mkTyVarTy tv)
+                                         (mkCheckExpType $ mkTyVarTy ex_tv)
+       ; MASSERT2( null wcs, ppr wcs )
+       ; MASSERT2( isIdHsWrapper wrap, ppr wrap )
+       ; MASSERT2( tcIsTyVar tv', ppr tv' )
+       ; result <- tcExtendTyVarEnv tv_binds thing_inside
+       ; return (L loc (tcGetTyVar tv'), result) }
 
 addDataConStupidTheta :: DataCon -> [TcType] -> TcM ()
 -- Instantiate the "stupid theta" of the data con, and throw

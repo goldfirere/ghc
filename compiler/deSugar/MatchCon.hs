@@ -112,7 +112,7 @@ matchPatSyn (var:vars) ty eqns
         _ -> panic "matchPatSyn: not PatSynCon"
 matchPatSyn _ _ _ = panic "matchPatSyn []"
 
-type ConArgPats = HsConDetails (LPat Id) (HsRecFields Id (LPat Id))
+type ConArgPats = HsConDetails (LPat Id) (HsRecFields Id (LPat Id)) Id
 
 matchOneConLike :: [Id]
                 -> Type
@@ -208,7 +208,7 @@ same_fields flds1 flds2
 -----------------
 selectConMatchVars :: [Type] -> ConArgPats -> DsM [Id]
 selectConMatchVars arg_tys (RecCon {})      = newSysLocalsDs arg_tys
-selectConMatchVars _       (PrefixCon ps)   = selectMatchVars (map unLoc ps)
+selectConMatchVars _       (PrefixCon _ ps) = selectMatchVars (map unLoc ps)
 selectConMatchVars _       (InfixCon p1 p2) = selectMatchVars [unLoc p1, unLoc p2]
 
 conArgPats :: [Type]      -- Instantiated argument types
@@ -216,9 +216,9 @@ conArgPats :: [Type]      -- Instantiated argument types
                           -- are probably never looked at anyway
            -> ConArgPats
            -> [Pat Id]
-conArgPats _arg_tys (PrefixCon ps)   = map unLoc ps
+conArgPats _arg_tys (PrefixCon _ ps)   = map unLoc ps
 conArgPats _arg_tys (InfixCon p1 p2) = [unLoc p1, unLoc p2]
-conArgPats  arg_tys (RecCon (HsRecFields { rec_flds = rpats }))
+conArgPats  arg_tys (RecCon _ (HsRecFields { rec_flds = rpats }))
   | null rpats = map WildPat arg_tys
         -- Important special case for C {}, which can be used for a
         -- datacon that isn't declared to have fields at all

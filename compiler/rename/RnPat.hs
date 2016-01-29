@@ -461,10 +461,11 @@ rnConPatAndThen :: NameMaker
                 -> HsConPatDetails RdrName
                 -> CpsRn (Pat Name)
 
-rnConPatAndThen mk con (PrefixCon pats)
+rnConPatAndThen mk con (PrefixCon tvs pats)
   = do  { con' <- lookupConCps con
+        ; tvs' <- rnConTvs tvs
         ; pats' <- rnLPatsAndThen mk pats
-        ; return (ConPatIn con' (PrefixCon pats')) }
+        ; return (ConPatIn con' (PrefixCon tvs' pats')) }
 
 rnConPatAndThen mk con (InfixCon pat1 pat2)
   = do  { con' <- lookupConCps con
@@ -475,8 +476,20 @@ rnConPatAndThen mk con (InfixCon pat1 pat2)
 
 rnConPatAndThen mk con (RecCon rpats)
   = do  { con' <- lookupConCps con
+        ; tvbs' <- rnConTvbs tvbs
         ; rpats' <- rnHsRecPatsAndThen mk con' rpats
-        ; return (ConPatIn con' (RecCon rpats')) }
+        ; return (ConPatIn con' (RecCon tvbs' rpats')) }
+
+rnConTvs :: NameMaker -> [Located RdrName] -> CpsRn [Located Name]
+rnConTvs _  []   = return []
+rnConTvs mk tvbs = do { scoped_tyvars <- xoptM LangExt.ScopedTypeVariables
+                      ; if scoped_tyvars
+                        then mapM (newPatLName mk) tvbs
+                        else do { liftCps $ addErrAt tvs_span err_msg
+                                ; return [] }}
+  where
+    tvs_span = foldl combineSrcSpans noSrcSpan (map getLoc tvs)
+    err_msg   = text "Visible type patterns require ScopedTypeVariables"
 
 --------------------
 rnHsRecPatsAndThen :: NameMaker

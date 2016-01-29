@@ -1224,23 +1224,25 @@ zonk_pat _ pat = pprPanic "zonk_pat" (ppr pat)
 
 ---------------------------
 zonkConStuff :: ZonkEnv
-             -> HsConDetails (OutPat TcId) (HsRecFields id (OutPat TcId))
+             -> HsConDetails (OutPat TcId) (HsRecFields id (OutPat TcId)) TcId
              -> TcM (ZonkEnv,
-                     HsConDetails (OutPat Id) (HsRecFields id (OutPat Id)))
-zonkConStuff env (PrefixCon pats)
-  = do  { (env', pats') <- zonkPats env pats
-        ; return (env', PrefixCon pats') }
+                     HsConDetails (OutPat Id) (HsRecFields id (OutPat Id)) Id)
+zonkConStuff env (PrefixCon tvs pats)
+  = do  { tvs' <- mapM (zonkTyVarOcc env) tvs  -- tvs are bound by the ConPat
+        ; (env', pats') <- zonkPats env pats
+        ; return (env', PrefixCon tvs' pats') }
 
 zonkConStuff env (InfixCon p1 p2)
   = do  { (env1, p1') <- zonkPat env  p1
         ; (env', p2') <- zonkPat env1 p2
         ; return (env', InfixCon p1' p2') }
 
-zonkConStuff env (RecCon (HsRecFields rpats dd))
-  = do  { (env', pats') <- zonkPats env (map (hsRecFieldArg . unLoc) rpats)
+zonkConStuff env (RecCon tvs (HsRecFields rpats dd))
+  = do  { tvs' <- mapM (zonkTyVarOcc env) tvs
+        ; (env', pats') <- zonkPats env (map (hsRecFieldArg . unLoc) rpats)
         ; let rpats' = zipWith (\(L l rp) p' -> L l (rp { hsRecFieldArg = p' }))
                                rpats pats'
-        ; return (env', RecCon (HsRecFields rpats' dd)) }
+        ; return (env', RecCon tvs' (HsRecFields rpats' dd)) }
         -- Field selectors have declared types; hence no zonking
 
 ---------------------------

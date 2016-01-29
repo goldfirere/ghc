@@ -410,11 +410,11 @@ translatePatVec fam_insts pats = mapM (translatePat fam_insts) pats
 
 translateConPatVec :: FamInstEnvs -> [Type] -> [TyVar]
                    -> DataCon -> HsConPatDetails Id -> UniqSM PatVec
-translateConPatVec fam_insts _univ_tys _ex_tvs _ (PrefixCon ps)
+translateConPatVec fam_insts _univ_tys _ex_tvs _ (PrefixCon _ ps)
   = concat <$> translatePatVec fam_insts (map unLoc ps)
 translateConPatVec fam_insts _univ_tys _ex_tvs _ (InfixCon p1 p2)
   = concat <$> translatePatVec fam_insts (map unLoc [p1,p2])
-translateConPatVec fam_insts  univ_tys  ex_tvs c (RecCon (HsRecFields fs _))
+translateConPatVec fam_insts  univ_tys  ex_tvs c (RecCon _ (HsRecFields fs _))
     -- Nothing matched. Make up some fresh term variables
   | null fs        = mkPmVarsSM arg_tys
     -- The data constructor was not defined using record syntax. For the

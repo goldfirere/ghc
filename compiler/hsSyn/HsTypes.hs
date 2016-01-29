@@ -63,7 +63,8 @@ module HsTypes (
 
         -- Printing
         pprParendHsType, pprHsForAll, pprHsForAllTvs, pprHsForAllExtra,
-        pprHsContext, pprHsContextNoArrow, pprHsContextMaybe
+        pprHsContext, pprHsContextNoArrow, pprHsContextMaybe,
+        pprConTvs
     ) where
 
 import {-# SOURCE #-} HsExpr ( HsSplice, pprSplice )
@@ -725,17 +726,22 @@ instance (OutputableBndr name) => Outputable (ConDeclField name) where
 
 -- HsConDetails is used for patterns/expressions *and* for data type
 -- declarations
-data HsConDetails arg rec
-  = PrefixCon [arg]             -- C p1 p2 p3
-  | RecCon    rec               -- C { x = p1, y = p2 }
-  | InfixCon  arg arg           -- p1 `C` p2
+data HsConDetails arg rec id
+  = PrefixCon [Located id] [arg] -- C @a @b p1 p2 p3
+  | RecCon    [Located id] rec   -- C @a { x = p1, y = p2 }
+  | InfixCon  arg arg            -- p1 `C` p2
   deriving (Data, Typeable)
 
-instance (Outputable arg, Outputable rec)
-         => Outputable (HsConDetails arg rec) where
-  ppr (PrefixCon args) = text "PrefixCon" <+> ppr args
-  ppr (RecCon rec)     = text "RecCon:" <+> ppr rec
-  ppr (InfixCon l r)   = text "InfixCon:" <+> ppr [l, r]
+instance (Outputable arg, Outputable rec, OutputableBndr id)
+         => Outputable (HsConDetails arg rec id) where
+  ppr (PrefixCon tvs args) = text "PrefixCon" <+> pprConTvs tvs <+> ppr args
+  ppr (RecCon tvs rec)     = text "RecCon:" <+> pprConTvs tvs <+> ppr rec
+  ppr (InfixCon l r)       = text "InfixCon:" <+> ppr [l, r]
+
+pprConTvs :: OutputableBndr id => [Located id] -> SDoc
+pprConTvs tvbs = sep (map pp_tvb tvbs)
+  where
+    pp_tvb tvb = char '@' <> pprPrefixOcc tvb
 
 type LFieldOcc name = Located (FieldOcc name)
 
@@ -809,10 +815,10 @@ updateGadtResult
   :: (Monad m)
      => (SDoc -> m ())
      -> SDoc
-     -> HsConDetails (LHsType Name) (Located [LConDeclField Name])
+     -> HsConDetails (LHsType Name) (Located [LConDeclField Name]) Name
                      -- ^ Original details
      -> LHsType Name -- ^ Original result type
-     -> m (HsConDetails (LHsType Name) (Located [LConDeclField Name]),
+     -> m (HsConDetails (LHsType Name) (Located [LConDeclField Name]) Name,
            LHsType Name)
 updateGadtResult failWith doc details ty
   = do { let (arg_tys, res_ty) = splitHsFunType ty
@@ -824,7 +830,7 @@ updateGadtResult failWith doc details ty
                                        (failWith (doc <+> badConSig))
                               ; return (details, res_ty) }
 
-           PrefixCon {} -> return (PrefixCon arg_tys, res_ty)}
+           PrefixCon {} -> return (PrefixCon [] arg_tys, res_ty)}
 
 {-
 Note [ConDeclField names]

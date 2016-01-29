@@ -869,9 +869,9 @@ tcCollectEx pat = go pat
     go1 _                   = mempty
 
     goConDetails :: HsConPatDetails Id -> (TyVarSet, [EvVar])
-    goConDetails (PrefixCon ps) = mconcat . map go $ ps
+    goConDetails (PrefixCon _ ps) = mconcat . map go $ ps
     goConDetails (InfixCon p1 p2) = go p1 `mappend` go p2
-    goConDetails (RecCon HsRecFields{ rec_flds = flds })
+    goConDetails (RecCon _ HsRecFields{ rec_flds = flds })
       = mconcat . map goRecFd $ flds
 
     goRecFd :: LHsRecField Id (LPat Id) -> (TyVarSet, [EvVar])

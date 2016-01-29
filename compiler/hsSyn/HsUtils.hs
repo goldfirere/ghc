@@ -413,17 +413,17 @@ nlInfixConPat :: id -> LPat id -> LPat id -> LPat id
 nlInfixConPat con l r = noLoc (ConPatIn (noLoc con) (InfixCon l r))
 
 nlConPat :: RdrName -> [LPat RdrName] -> LPat RdrName
-nlConPat con pats = noLoc (ConPatIn (noLoc con) (PrefixCon pats))
+nlConPat con pats = noLoc (ConPatIn (noLoc con) (PrefixCon [] pats))
 
 nlConPatName :: Name -> [LPat Name] -> LPat Name
-nlConPatName con pats = noLoc (ConPatIn (noLoc con) (PrefixCon pats))
+nlConPatName con pats = noLoc (ConPatIn (noLoc con) (PrefixCon [] pats))
 
 nlNullaryConPat :: id -> LPat id
-nlNullaryConPat con = noLoc (ConPatIn (noLoc con) (PrefixCon []))
+nlNullaryConPat con = noLoc (ConPatIn (noLoc con) (PrefixCon [] []))
 
 nlWildConPat :: DataCon -> LPat RdrName
 nlWildConPat con = noLoc (ConPatIn (noLoc (getRdrName con))
-                         (PrefixCon (nOfThem (dataConSourceArity con)
+                         (PrefixCon [] (nOfThem (dataConSourceArity con)
                                              nlWildPat)))
 
 nlWildPat :: LPat RdrName
@@ -1132,8 +1132,8 @@ lPatImplicits = hs_lpat
 
     hs_pat _ = emptyNameSet
 
-    details (PrefixCon ps)   = hs_lpats ps
-    details (RecCon fs)      = hs_lpats explicit `unionNameSet` mkNameSet (collectPatsBinders implicit)
+    details (PrefixCon _ ps)   = hs_lpats ps
+    details (RecCon _ fs)      = hs_lpats explicit `unionNameSet` mkNameSet (collectPatsBinders implicit)
       where (explicit, implicit) = partitionEithers [if pat_explicit then Left pat else Right pat
                                                     | (i, fld) <- [0..] `zip` rec_flds fs
                                                     , let pat = hsRecFieldArg

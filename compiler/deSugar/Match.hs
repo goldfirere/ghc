@@ -513,14 +513,14 @@ tidy_bang_pat _ l p = return (idDsWrapper, BangPat (L l p))
 push_bang_into_newtype_arg :: SrcSpan -> HsConPatDetails Id -> HsConPatDetails Id
 -- See Note [Bang patterns and newtypes]
 -- We are transforming   !(N p)   into   (N !p)
-push_bang_into_newtype_arg l (PrefixCon (arg:args))
+push_bang_into_newtype_arg l (PrefixCon tvs (arg:args))
   = ASSERT( null args)
-    PrefixCon [L l (BangPat arg)]
-push_bang_into_newtype_arg l (RecCon rf)
+    PrefixCon tvs [L l (BangPat arg)]
+push_bang_into_newtype_arg l (RecCon tvs rf)
   | HsRecFields { rec_flds = L lf fld : flds } <- rf
   , HsRecField { hsRecFieldArg = arg } <- fld
   = ASSERT( null flds)
-    RecCon (rf { rec_flds = [L lf (fld { hsRecFieldArg = L l (BangPat arg) })] })
+    RecCon tvs (rf { rec_flds = [L lf (fld { hsRecFieldArg = L l (BangPat arg) })] })
 push_bang_into_newtype_arg _ cd
   = pprPanic "push_bang_into_newtype_arg" (pprConArgs cd)
 

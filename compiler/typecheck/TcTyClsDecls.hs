@@ -1462,7 +1462,8 @@ tcConDecl _new_or_data rep_tycon tmpl_tvs res_tmpl
 tcGadtSigType :: SDoc -> Name -> LHsSigType Name
               -> TcM ( [PredType],[HsSrcBang], [FieldLabel], [Type], Type
                      , HsConDetails (LHsType Name)
-                                    (Located [LConDeclField Name]) )
+                                    (Located [LConDeclField Name])
+                                    Name )
 tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
   = do { let (hs_details', res_ty', cxt, gtvs) = gadtDeclDetails ty
        ; (hs_details, res_ty) <- updateGadtResult failWithTc doc hs_details' res_ty'
@@ -1484,7 +1485,7 @@ tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
        }
 
 tcConIsInfixH98 :: Name
-             -> HsConDetails (LHsType Name) (Located [LConDeclField Name])
+             -> HsConDetails (LHsType Name) (Located [LConDeclField Name] Name)
              -> TcM Bool
 tcConIsInfixH98 _   details
   = case details of
@@ -1492,13 +1493,13 @@ tcConIsInfixH98 _   details
            _            -> return False
 
 tcConIsInfixGADT :: Name
-             -> HsConDetails (LHsType Name) (Located [LConDeclField Name])
+             -> HsConDetails (LHsType Name) (Located [LConDeclField Name] Name)
              -> TcM Bool
 tcConIsInfixGADT con details
   = case details of
            InfixCon {}  -> return True
            RecCon {}    -> return False
-           PrefixCon arg_tys           -- See Note [Infix GADT constructors]
+           PrefixCon _ arg_tys           -- See Note [Infix GADT constructors]
                | isSymOcc (getOccName con)
                , [_ty1,_ty2] <- arg_tys
                   -> do { fix_env <- getFixityEnv
@@ -1509,13 +1510,13 @@ tcConIsInfixGADT con details
 
 tcConArgs :: NewOrData -> HsConDeclDetails Name
           -> TcM [(TcType, HsSrcBang)]
-tcConArgs new_or_data (PrefixCon btys)
+tcConArgs new_or_data (PrefixCon _ btys)
   = mapM (tcConArg new_or_data) btys
 tcConArgs new_or_data (InfixCon bty1 bty2)
   = do { bty1' <- tcConArg new_or_data bty1
        ; bty2' <- tcConArg new_or_data bty2
        ; return [bty1', bty2'] }
-tcConArgs new_or_data (RecCon fields)
+tcConArgs new_or_data (RecCon _ fields)
   = mapM (tcConArg new_or_data) btys
   where
     -- We need a one-to-one mapping from field_names to btys

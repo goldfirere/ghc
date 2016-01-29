@@ -857,6 +857,13 @@ repTyVarBndr (L _ (KindedTyVar (L _ nm) ki)) = do { nm' <- lookupBinder nm
                                                   ; ki' <- repLKind ki
                                                   ; repKindedTV nm' ki' }
 
+-- | Check to make sure that the tyvarbndrs in a PrefixCon or RecCon
+-- are empty; TH doesn't handle these yet
+checkConTvs :: [Located Name] -> DsM ()
+checkConTvs []   = return ()
+checkConTvs tvbs = notHandled "Visible type patterns:" (pprConTvs tvbs)
+
+
 -- represent a type context
 --
 repLContext :: LHsContext Name -> DsM (Core TH.CxtQ)
@@ -1470,9 +1477,12 @@ repP (TuplePat ps boxed _)
 repP (ConPatIn dc details)
  = do { con_str <- lookupLOcc dc
       ; case details of
-         PrefixCon ps -> do { qs <- repLPs ps; repPcon con_str qs }
-         RecCon rec   -> do { fps <- repList fieldPatQTyConName rep_fld (rec_flds rec)
-                            ; repPrec con_str fps }
+         PrefixCon tvs ps ->  do { checkConTvs tvs
+                                 ; qs <- repLPs ps
+                                 ; repPcon con_str qs }
+         RecCon tvs rec   ->  do { checkConTvs tvs
+                                 ; fps <- repList fieldPatQTyConName rep_fld (rec_flds rec)
+                                 ; repPrec con_str fps }
          InfixCon p1 p2 -> do { p1' <- repLP p1;
                                 p2' <- repLP p2;
                                 repPinfix p1' con_str p2' }
@@ -1961,17 +1971,20 @@ repConstr :: HsConDeclDetails Name
           -> Maybe (LHsType Name)
           -> [Core TH.Name]
           -> DsM (Core TH.ConQ)
-repConstr (PrefixCon ps) Nothing [con]
-    = do arg_tys  <- repList bangTypeQTyConName repBangTy ps
+repConstr (PrefixCon tvs ps) Nothing [con]
+    = do checkConTvs tvs
+         arg_tys  <- repList bangTypeQTyConName repBangTy ps
          rep2 normalCName [unC con, unC arg_tys]
 
-repConstr (PrefixCon ps) (Just (L _ res_ty)) cons
-    = do arg_tys     <- repList bangTypeQTyConName repBangTy ps
+repConstr (PrefixCon tvs ps) (Just (L _ res_ty)) cons
+    = do checkConTvs tvs
+         arg_tys     <- repList bangTypeQTyConName repBangTy ps
          res_ty' <- repTy res_ty
          rep2 gadtCName [ unC (nonEmptyCoreList cons), unC arg_tys, unC res_ty']
 
-repConstr (RecCon (L _ ips)) resTy cons
-    = do args     <- concatMapM rep_ip ips
+repConstr (RecCon tvs (L _ ips)) resTy cons
+    = do checkConTvs tvs
+         args     <- concatMapM rep_ip ips
          arg_vtys <- coreList varBangTypeQTyConName args
          case resTy of
            Nothing -> rep2 recCName [unC (head cons), unC arg_vtys]

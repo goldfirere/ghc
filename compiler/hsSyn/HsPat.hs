@@ -228,11 +228,11 @@ data Pat id
   deriving (Typeable)
 deriving instance (DataId id) => Data (Pat id)
 
-type HsConPatDetails id = HsConDetails (LPat id) (HsRecFields id (LPat id))
+type HsConPatDetails id = HsConDetails (LPat id) (HsRecFields id (LPat id)) id
 
 hsConPatArgs :: HsConPatDetails id -> [LPat id]
-hsConPatArgs (PrefixCon ps)   = ps
-hsConPatArgs (RecCon fs)      = map (hsRecFieldArg . unLoc) (rec_flds fs)
+hsConPatArgs (PrefixCon _ ps)   = ps
+hsConPatArgs (RecCon _ fs)      = map (hsRecFieldArg . unLoc) (rec_flds fs)
 hsConPatArgs (InfixCon p1 p2) = [p1,p2]
 
 -- HsRecFields is used only for patterns and expressions (not data type
@@ -427,9 +427,11 @@ pprUserCon c (InfixCon p1 p2) = ppr p1 <+> pprInfixOcc c <+> ppr p2
 pprUserCon c details          = pprPrefixOcc c <+> pprConArgs details
 
 pprConArgs ::  OutputableBndr id => HsConPatDetails id -> SDoc
-pprConArgs (PrefixCon pats) = sep (map pprParendLPat pats)
-pprConArgs (InfixCon p1 p2) = sep [pprParendLPat p1, pprParendLPat p2]
-pprConArgs (RecCon rpats)   = ppr rpats
+pprConArgs (PrefixCon tvs pats)  = sep [ pprConTvs tvs
+                                       , sep (map pprParendLPat pats) ]
+pprConArgs (InfixCon p1 p2)      = sep [pprParendLPat p1, pprParendLPat p2]
+pprConArgs (RecCon tvs rpats)    = sep [ pprConTvs tvs
+                                       , ppr rpats ]
 
 instance (Outputable arg)
       => Outputable (HsRecFields id arg) where
@@ -459,7 +461,7 @@ mkPrefixConPat :: DataCon -> [OutPat id] -> [Type] -> OutPat id
 -- Make a vanilla Prefix constructor pattern
 mkPrefixConPat dc pats tys
   = noLoc $ ConPatOut { pat_con = noLoc (RealDataCon dc), pat_tvs = [], pat_dicts = [],
-                        pat_binds = emptyTcEvBinds, pat_args = PrefixCon pats,
+                        pat_binds = emptyTcEvBinds, pat_args = PrefixCon [] pats,
                         pat_arg_tys = tys, pat_wrap = idHsWrapper }
 
 mkNilPat :: Type -> OutPat id
@@ -610,10 +612,10 @@ hsPatNeedsParens (PArrPat {})        = False
 hsPatNeedsParens (LitPat {})         = False
 hsPatNeedsParens (NPat {})           = False
 
-conPatNeedsParens :: HsConDetails a b -> Bool
-conPatNeedsParens (PrefixCon args) = not (null args)
-conPatNeedsParens (InfixCon {})    = True
-conPatNeedsParens (RecCon {})      = True
+conPatNeedsParens :: HsConDetails a b c -> Bool
+conPatNeedsParens (PrefixCon tvs args) = not (null args && null tvs)
+conPatNeedsParens (InfixCon {})        = True
+conPatNeedsParens (RecCon {})          = True
 
 {-
 % Collect all EvVars from all constructor patterns

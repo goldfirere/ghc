@@ -1047,7 +1047,7 @@ data ConDecl name
 deriving instance (DataId name) => Data (ConDecl name)
 
 type HsConDeclDetails name
-   = HsConDetails (LBangType name) (Located [LConDeclField name])
+   = HsConDetails (LBangType name) (Located [LConDeclField name]) name
 
 getConNames :: ConDecl name -> [Located name]
 getConNames ConDeclH98  {con_name  = name}  = [name]
@@ -1072,13 +1072,13 @@ gadtDeclDetails HsIB {hsib_body = lbody_ty} = (details,res_ty,cxt,tvs)
     (details, res_ty)           -- See Note [Sorting out the result type]
       = case tau of
           L _ (HsFunTy (L l (HsRecTy flds)) res_ty')
-                  -> (RecCon (L l flds), res_ty')
+                  -> (RecCon [] (L l flds), res_ty')
           _other  -> (PrefixCon [], tau)
 
 hsConDeclArgTys :: HsConDeclDetails name -> [LBangType name]
-hsConDeclArgTys (PrefixCon tys)    = tys
+hsConDeclArgTys (PrefixCon _ tys)  = tys
 hsConDeclArgTys (InfixCon ty1 ty2) = [ty1,ty2]
-hsConDeclArgTys (RecCon flds)      = map (cd_fld_type . unLoc) (unLoc flds)
+hsConDeclArgTys (RecCon _ flds)    = map (cd_fld_type . unLoc) (unLoc flds)
 
 pp_data_defn :: OutputableBndr name
                   => (HsContext name -> SDoc)   -- Printing the header
@@ -1127,10 +1127,13 @@ pprConDecl (ConDeclH98 { con_name = L _ con
   = sep [ppr_mbDoc doc, pprHsForAll tvs cxt,         ppr_details details]
   where
     ppr_details (InfixCon t1 t2) = hsep [ppr t1, pprInfixOcc con, ppr t2]
-    ppr_details (PrefixCon tys)  = hsep (pprPrefixOcc con
-                                   : map (pprParendHsType . unLoc) tys)
-    ppr_details (RecCon fields)  = pprPrefixOcc con
-                                 <+> pprConDeclFields (unLoc fields)
+    ppr_details (PrefixCon tvs tys)
+      = hsep (pprPrefixOcc con
+              :  map ((char '@' <>) . pprPrefixOcc) tvs
+              ++ map (pprParendHsType . unLoc) tys)
+    ppr_details (RecCon tvs fields)
+      = pprPrefixOcc con <+> pprConTvs tvs
+                         <+> pprConDeclFields (unLoc fields)
     tvs = case mtvs of
       Nothing -> []
       Just (HsQTvs _ tvs) -> tvs

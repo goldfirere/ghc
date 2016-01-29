@@ -1743,23 +1743,24 @@ rnConDecl decl@(ConDeclGADT { con_names = names, con_type = ty
 rnConDeclDetails
    :: Name
    -> HsDocContext
-   -> HsConDetails (LHsType RdrName) (Located [LConDeclField RdrName])
-   -> RnM (HsConDetails (LHsType Name) (Located [LConDeclField Name]), FreeVars)
-rnConDeclDetails _ doc (PrefixCon tys)
+   -> HsConDetails (LHsType RdrName) (Located [LConDeclField RdrName]) RdrName
+   -> RnM ( HsConDetails (LHsType Name) (Located [LConDeclField Name]) Name
+          , FreeVars )
+rnConDeclDetails _ doc (PrefixCon _ tys) -- TODO (RAE): No tvs possible here.
   = do { (new_tys, fvs) <- rnLHsTypes doc tys
-       ; return (PrefixCon new_tys, fvs) }
+       ; return (PrefixCon [] new_tys, fvs) }
 
 rnConDeclDetails _ doc (InfixCon ty1 ty2)
   = do { (new_ty1, fvs1) <- rnLHsType doc ty1
        ; (new_ty2, fvs2) <- rnLHsType doc ty2
        ; return (InfixCon new_ty1 new_ty2, fvs1 `plusFV` fvs2) }
 
-rnConDeclDetails con doc (RecCon (L l fields))
+rnConDeclDetails con doc (RecCon _ (L l fields)) -- TODO (RAE): No tvs possible here.
   = do  { fls <- lookupConstructorFields con
         ; (new_fields, fvs) <- rnConDeclFields doc fls fields
                 -- No need to check for duplicate fields
                 -- since that is done by RnNames.extendGlobalRdrEnvRn
-        ; return (RecCon (L l new_fields), fvs) }
+        ; return (RecCon [] (L l new_fields), fvs) }
 
 -------------------------------------------------
 
