@@ -390,6 +390,7 @@ expectedKindInCtxt TypeAppCtxt     = AnythingKind
 expectedKindInCtxt (ForSigCtxt _)  = TheKind liftedTypeKind
 expectedKindInCtxt InstDeclCtxt    = TheKind constraintKind
 expectedKindInCtxt SpecInstCtxt    = TheKind constraintKind
+expectedKindInCtxt PatSigCtxt      = AnythingKind  -- TODO (RAE): WRONG WRONG
 expectedKindInCtxt _               = OpenKind
 
 {-

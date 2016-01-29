@@ -616,7 +616,7 @@ getLocalNonValBinders fixity_env
     mk_fld_env d names flds = concatMap find_con_flds (dd_cons d)
       where
         find_con_flds (L _ (ConDeclH98 { con_name    = L _ rdr
-                                       , con_details = RecCon cdflds }))
+                                       , con_details = RecCon _ cdflds }))
             = [( find_con_name rdr
                , concatMap find_con_decl_flds (unLoc cdflds) )]
         find_con_flds (L _ (ConDeclGADT

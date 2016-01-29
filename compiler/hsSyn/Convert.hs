@@ -449,7 +449,7 @@ cvtConstr (RecC c varstrtys)
         ; cxt'  <- returnL []
         ; args' <- mapM cvt_id_arg varstrtys
         ; returnL $ mkConDeclH98 c' Nothing cxt'
-                                   (RecCon (noLoc args')) }
+                                   (RecCon [] (noLoc args')) }
 
 cvtConstr (InfixC st1 c st2)
   = do  { c'   <- cNameL c
@@ -1018,7 +1018,7 @@ cvtp (TH.AsP s p)      = do { s' <- vNameL s; p' <- cvtPat p; return $ AsPat s' 
 cvtp TH.WildP          = return $ WildPat placeHolderType
 cvtp (RecP c fs)       = do { c' <- cNameL c; fs' <- mapM cvtPatFld fs
                             ; return $ ConPatIn c'
-                                     $ Hs.RecCon (HsRecFields fs' Nothing) }
+                                     $ Hs.RecCon [] (HsRecFields fs' Nothing) }
 cvtp (ListP ps)        = do { ps' <- cvtPats ps
                             ; return $ ListPat ps' placeHolderType Nothing }
 cvtp (SigP p t)        = do { p' <- cvtPat p; t' <- cvtType t

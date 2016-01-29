@@ -741,7 +741,7 @@ instance (Outputable arg, Outputable rec, OutputableBndr id)
 pprConTvs :: OutputableBndr id => [Located id] -> SDoc
 pprConTvs tvbs = sep (map pp_tvb tvbs)
   where
-    pp_tvb tvb = char '@' <> pprPrefixOcc tvb
+    pp_tvb (L _ tvb) = char '@' <> pprPrefixOcc tvb
 
 type LFieldOcc name = Located (FieldOcc name)
 

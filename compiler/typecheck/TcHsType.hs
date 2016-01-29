@@ -1993,7 +1993,8 @@ tcHsPatSigType ctxt sig_ty
     tcWildCardBinders sig_wcs $ \ wcs ->
     do  { emitWildCardHoleConstraints wcs
         ; (vars, sig_ty) <- tcImplicitTKBndrsX new_tkv sig_vars $
-                            do { ty <- tcHsLiftedType hs_ty
+                            do { -- ty <- tcHsLiftedType hs_ty TODO (RAE): WRONG WRONG
+                                 (ty, _) <- tc_infer_lhs_type typeLevelMode hs_ty
                                ; return (ty, allBoundVariables ty) }
         ; sig_ty <- zonkTcType sig_ty
               -- don't use zonkTcTypeToType; it mistreats wildcards

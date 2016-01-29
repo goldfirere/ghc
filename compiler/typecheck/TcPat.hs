@@ -964,9 +964,9 @@ tcConArgs con_like _ arg_tys (InfixCon p1 p2) penv thing_inside
 
 tcConArgs con_like ex_tvs arg_tys (RecCon tvs (HsRecFields rpats dd)) penv thing_inside
   = do  { (tvs', (rpats', res))
-            <- tcMultiple tPatTv (zip tvs ex_tvs) penv $
+            <- tcMultiple tcPatTv (zip tvs ex_tvs) penv $
                tcMultiple tc_field rpats penv thing_inside
-        ; return (RecCon (HsRecFields rpats' dd), res) }
+        ; return (RecCon tvs' (HsRecFields rpats' dd), res) }
   where
     tc_field :: Checker (LHsRecField Name (LPat Name))
                         (LHsRecField TcId (LPat TcId))
@@ -1006,15 +1006,19 @@ tcConArg (arg_pat, arg_ty) penv thing_inside
   = tc_lpat arg_pat (mkCheckExpType arg_ty) penv thing_inside
 
 tcPatTv :: Checker (Located Name, TcTyVar) (Located TyVar)
-tcPatTv (L loc tv, ex_tv) penv thing_inside
-  = do { (tv', tv_binds, wcs, wrap)
-            <- tcPatSig (inPatBind penv) (mkTyVarTy tv)
+tcPatTv (ltv@(L loc tv), ex_tv) penv thing_inside
+  = do { (tv1, tv_binds, wcs, _)
+            <- tcPatSig (inPatBind penv)
+                        (HsIB { hsib_vars = [tv]
+                              , hsib_body = HsWC { hswc_wcs = []
+                                                 , hswc_ctx = Nothing
+                                                 , hswc_body = noLoc (HsTyVar ltv) }})
                                          (mkCheckExpType $ mkTyVarTy ex_tv)
        ; MASSERT2( null wcs, ppr wcs )
-       ; MASSERT2( isIdHsWrapper wrap, ppr wrap )
-       ; MASSERT2( tcIsTyVar tv', ppr tv' )
+--       ; MASSERT2( isIdHsWrapper wrap, ppr wrap )
+       ; MASSERT2( tcIsTyVarTy tv1, ppr tv1 )
        ; result <- tcExtendTyVarEnv tv_binds thing_inside
-       ; return (L loc (tcGetTyVar tv'), result) }
+       ; return (L loc (tcGetTyVar "tcPatTv" tv1), result) }
 
 addDataConStupidTheta :: DataCon -> [TcType] -> TcM ()
 -- Instantiate the "stupid theta" of the data con, and throw

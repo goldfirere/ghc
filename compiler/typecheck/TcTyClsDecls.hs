@@ -1485,7 +1485,7 @@ tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
        }
 
 tcConIsInfixH98 :: Name
-             -> HsConDetails (LHsType Name) (Located [LConDeclField Name] Name)
+             -> HsConDetails (LHsType Name) (Located [LConDeclField Name]) Name
              -> TcM Bool
 tcConIsInfixH98 _   details
   = case details of
@@ -1493,7 +1493,7 @@ tcConIsInfixH98 _   details
            _            -> return False
 
 tcConIsInfixGADT :: Name
-             -> HsConDetails (LHsType Name) (Located [LConDeclField Name] Name)
+             -> HsConDetails (LHsType Name) (Located [LConDeclField Name]) Name
              -> TcM Bool
 tcConIsInfixGADT con details
   = case details of

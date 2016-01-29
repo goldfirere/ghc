@@ -1228,7 +1228,8 @@ zonkConStuff :: ZonkEnv
              -> TcM (ZonkEnv,
                      HsConDetails (OutPat Id) (HsRecFields id (OutPat Id)) Id)
 zonkConStuff env (PrefixCon tvs pats)
-  = do  { tvs' <- mapM (zonkTyVarOcc env) tvs  -- tvs are bound by the ConPat
+  = do  { tvs' <- mapM (wrapLocM $ (getTyVar "zonkConStuff" <$>) . zonkTyVarOcc env) tvs
+                  -- tvs are bound by the ConPat
         ; (env', pats') <- zonkPats env pats
         ; return (env', PrefixCon tvs' pats') }
 
@@ -1238,7 +1239,7 @@ zonkConStuff env (InfixCon p1 p2)
         ; return (env', InfixCon p1' p2') }
 
 zonkConStuff env (RecCon tvs (HsRecFields rpats dd))
-  = do  { tvs' <- mapM (zonkTyVarOcc env) tvs
+  = do  { tvs' <- mapM (wrapLocM $ (getTyVar "zonkConStuff2" <$>) . zonkTyVarOcc env) tvs
         ; (env', pats') <- zonkPats env (map (hsRecFieldArg . unLoc) rpats)
         ; let rpats' = zipWith (\(L l rp) p' -> L l (rp { hsRecFieldArg = p' }))
                                rpats pats'

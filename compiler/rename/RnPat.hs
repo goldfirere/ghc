@@ -463,7 +463,7 @@ rnConPatAndThen :: NameMaker
 
 rnConPatAndThen mk con (PrefixCon tvs pats)
   = do  { con' <- lookupConCps con
-        ; tvs' <- rnConTvs tvs
+        ; tvs' <- rnConTvs mk tvs
         ; pats' <- rnLPatsAndThen mk pats
         ; return (ConPatIn con' (PrefixCon tvs' pats')) }
 
@@ -474,19 +474,19 @@ rnConPatAndThen mk con (InfixCon pat1 pat2)
         ; fixity <- liftCps $ lookupFixityRn (unLoc con')
         ; liftCps $ mkConOpPatRn con' fixity pat1' pat2' }
 
-rnConPatAndThen mk con (RecCon rpats)
+rnConPatAndThen mk con (RecCon tvs rpats)
   = do  { con' <- lookupConCps con
-        ; tvbs' <- rnConTvbs tvbs
+        ; tvbs' <- rnConTvs mk tvs
         ; rpats' <- rnHsRecPatsAndThen mk con' rpats
         ; return (ConPatIn con' (RecCon tvbs' rpats')) }
 
 rnConTvs :: NameMaker -> [Located RdrName] -> CpsRn [Located Name]
 rnConTvs _  []   = return []
-rnConTvs mk tvbs = do { scoped_tyvars <- xoptM LangExt.ScopedTypeVariables
-                      ; if scoped_tyvars
-                        then mapM (newPatLName mk) tvbs
-                        else do { liftCps $ addErrAt tvs_span err_msg
-                                ; return [] }}
+rnConTvs mk tvs = do { scoped_tyvars <- liftCps $ xoptM LangExt.ScopedTypeVariables
+                     ; if scoped_tyvars
+                       then mapM (newPatLName mk) tvs
+                       else do { liftCps $ addErrAt tvs_span err_msg
+                               ; return [] }}
   where
     tvs_span = foldl combineSrcSpans noSrcSpan (map getLoc tvs)
     err_msg   = text "Visible type patterns require ScopedTypeVariables"

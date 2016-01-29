@@ -767,7 +767,7 @@ checkLPat msg e@(L l _) = checkPat msg l e []
 checkPat :: SDoc -> SrcSpan -> LHsExpr RdrName -> [LPat RdrName]
          -> P (LPat RdrName)
 checkPat _ loc (L l (HsVar (L _ c))) args
-  | isRdrDataCon c = return (L loc (ConPatIn (L l c) (PrefixCon args)))
+  | isRdrDataCon c = return (L loc (ConPatIn (L l c) (PrefixCon [] args)))
 checkPat msg loc e args     -- OK to let this happen even if bang-patterns
                         -- are not enabled, because there is no valid
                         -- non-bang-pattern parse of (C ! e)
@@ -786,13 +786,13 @@ checkPat msg loc e _
   = patFail msg loc (unLoc e)
 
 checkPatWithTys :: SDoc -> SrcSpan -> LHsExpr RdrName -> [Located RdrName]
-                -> [LPat RdrName]
-checkPatWithTys msg loc (L _ e@(HsApp f (L _ (HsType wc_ty)))) ty_args args
+                -> [LPat RdrName] -> P (LPat RdrName)
+checkPatWithTys msg loc (L _ (HsApp f (L _ (HsType wc_ty)))) ty_args args
   | HsWC { hswc_body = L _ (HsTyVar ltv) } <- wc_ty
   = checkPatWithTys msg loc f (ltv : ty_args) args
-checkPatWithTys msg loc (L l (HsVar (L _ c))) ty_args args
+checkPatWithTys _ loc (L l (HsVar (L _ c))) ty_args args
   | isRdrDataCon c = return (L loc (ConPatIn (L l c) (PrefixCon ty_args args)))
-checkPatWithTys msg loc e _ _
+checkPatWithTys msg loc (L _ e) _ _
   = patFail msg loc e
 
 checkAPat :: SDoc -> SrcSpan -> HsExpr RdrName -> P (Pat RdrName)
@@ -854,7 +854,7 @@ checkAPat msg loc e0 = do
 
    RecordCon { rcon_con_name = c, rcon_flds = HsRecFields fs dd }
                         -> do fs <- mapM (checkPatField msg) fs
-                              return (ConPatIn c (RecCon (HsRecFields fs dd)))
+                              return (ConPatIn c (RecCon [] (HsRecFields fs dd)))
    HsSpliceE s | not (isTypedSplice s)
                -> return (SplicePat s)
    _           -> patFail msg loc e0

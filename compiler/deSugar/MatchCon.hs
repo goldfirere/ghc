@@ -174,7 +174,7 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
     -- Note [Record patterns]
     select_arg_vars :: [Id] -> [(ConArgPats, EquationInfo)] -> [Id]
     select_arg_vars arg_vars ((arg_pats, _) : _)
-      | RecCon flds <- arg_pats
+      | RecCon _ flds <- arg_pats
       , let rpats = rec_flds flds
       , not (null rpats)     -- Treated specially; cf conArgPats
       = ASSERT2( length fields1 == length arg_vars,
@@ -193,10 +193,10 @@ matchOneConLike _ _ [] = panic "matchOneCon []"
 compatible_pats :: (ConArgPats,a) -> (ConArgPats,a) -> Bool
 -- Two constructors have compatible argument patterns if the number
 -- and order of sub-matches is the same in both cases
-compatible_pats (RecCon flds1, _) (RecCon flds2, _) = same_fields flds1 flds2
-compatible_pats (RecCon flds1, _) _                 = null (rec_flds flds1)
-compatible_pats _                 (RecCon flds2, _) = null (rec_flds flds2)
-compatible_pats _                 _                 = True -- Prefix or infix con
+compatible_pats (RecCon _ flds1, _) (RecCon _ flds2, _) = same_fields flds1 flds2
+compatible_pats (RecCon _ flds1, _) _                   = null (rec_flds flds1)
+compatible_pats _                   (RecCon _ flds2, _) = null (rec_flds flds2)
+compatible_pats _                   _                   = True -- Prefix or infix con
 
 same_fields :: HsRecFields Id (LPat Id) -> HsRecFields Id (LPat Id) -> Bool
 same_fields flds1 flds2

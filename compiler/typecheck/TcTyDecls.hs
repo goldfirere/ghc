@@ -982,7 +982,7 @@ mkOneRecordSelector all_cons idDetails fl
              | otherwise =  map mk_match cons_w_field ++ deflt
     mk_match con = mkSimpleMatch [L loc (mk_sel_pat con)]
                                  (L loc (HsVar (L loc field_var)))
-    mk_sel_pat con = ConPatIn (L loc (getName con)) (RecCon rec_fields)
+    mk_sel_pat con = ConPatIn (L loc (getName con)) (RecCon [] rec_fields)
     rec_fields = HsRecFields { rec_flds = [rec_field], rec_dotdot = Nothing }
     rec_field  = noLoc (HsRecField
                         { hsRecFieldLbl

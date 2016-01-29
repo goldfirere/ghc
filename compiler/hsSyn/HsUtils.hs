@@ -1028,7 +1028,7 @@ hsConDeclsBinders cons = go id cons
                          (ns, fs) = go remSeen' rs
 
              L loc (ConDeclH98 { con_name = name
-                               , con_details = RecCon flds }) ->
+                               , con_details = RecCon _ flds }) ->
                ([L loc (unLoc name)] ++ ns, r' ++ fs)
                   where r' = remSeen (concatMap (cd_fld_names . unLoc)
                                                 (unLoc flds))

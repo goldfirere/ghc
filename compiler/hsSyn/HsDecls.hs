@@ -1073,7 +1073,7 @@ gadtDeclDetails HsIB {hsib_body = lbody_ty} = (details,res_ty,cxt,tvs)
       = case tau of
           L _ (HsFunTy (L l (HsRecTy flds)) res_ty')
                   -> (RecCon [] (L l flds), res_ty')
-          _other  -> (PrefixCon [], tau)
+          _other  -> (PrefixCon [] [], tau)
 
 hsConDeclArgTys :: HsConDeclDetails name -> [LBangType name]
 hsConDeclArgTys (PrefixCon _ tys)  = tys
@@ -1129,7 +1129,7 @@ pprConDecl (ConDeclH98 { con_name = L _ con
     ppr_details (InfixCon t1 t2) = hsep [ppr t1, pprInfixOcc con, ppr t2]
     ppr_details (PrefixCon tvs tys)
       = hsep (pprPrefixOcc con
-              :  map ((char '@' <>) . pprPrefixOcc) tvs
+              :  map ((char '@' <>) . pprPrefixOcc . unLoc) tvs
               ++ map (pprParendHsType . unLoc) tys)
     ppr_details (RecCon tvs fields)
       = pprPrefixOcc con <+> pprConTvs tvs
