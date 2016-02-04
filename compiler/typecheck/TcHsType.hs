@@ -185,8 +185,8 @@ tcHsSigType ctxt sig_ty
     do { kind <- case expectedKindInCtxt ctxt of
                     AnythingKind -> newMetaKindVar
                     TheKind k    -> return k
-                    OpenKind     -> do { lev <- newFlexiTyVarTy levityTy
-                                       ; return $ tYPE lev }
+                    OpenKind     -> do { rr <- newFlexiTyVarTy runtimeRepTy
+                                       ; return $ tYPE rr }
               -- The kind is checked by checkValidType, and isn't necessarily
               -- of kind * in a Template Haskell quote eg [t| Maybe |]
 
@@ -474,10 +474,10 @@ tc_lhs_type mode (L span ty) exp_kind
 ------------------------------------------
 tc_fun_type :: TcTyMode -> LHsType Name -> LHsType Name -> TcKind -> TcM TcType
 tc_fun_type mode ty1 ty2 exp_kind
-  = do { arg_lev <- newFlexiTyVarTy levityTy
-       ; res_lev <- newFlexiTyVarTy levityTy
-       ; ty1' <- tc_lhs_type mode ty1 (tYPE arg_lev)
-       ; ty2' <- tc_lhs_type mode ty2 (tYPE res_lev)
+  = do { arg_rr <- newFlexiTyVarTy runtimeRepTy
+       ; res_rr <- newFlexiTyVarTy runtimeRepTy
+       ; ty1' <- tc_lhs_type mode ty1 (tYPE arg_rr)
+       ; ty2' <- tc_lhs_type mode ty2 (tYPE res_rr)
        ; checkExpectedKind (mkNakedFunTy ty1' ty2') liftedTypeKind exp_kind }
 
 ------------------------------------------
@@ -674,8 +674,8 @@ tc_tuple :: TcTyMode -> TupleSort -> [LHsType Name] -> TcKind -> TcM TcType
 tc_tuple mode tup_sort tys exp_kind
   = do { arg_kinds <- case tup_sort of
            BoxedTuple      -> return (nOfThem arity liftedTypeKind)
-           UnboxedTuple    -> do { levs <- newFlexiTyVarTys arity levityTy
-                                 ; return $ map tYPE levs }
+           UnboxedTuple    -> do { rrs <- newFlexiTyVarTys arity runtimeRepTy
+                                 ; return $ map tYPE rrs }
            ConstraintTuple -> return (nOfThem arity constraintKind)
        ; tau_tys <- zipWithM (tc_lhs_type mode) tys arg_kinds
        ; finish_tuple tup_sort tau_tys arg_kinds exp_kind }
@@ -690,8 +690,8 @@ finish_tuple :: TupleSort
 finish_tuple tup_sort tau_tys tau_kinds exp_kind
   = do { traceTc "finish_tuple" (ppr res_kind $$ ppr tau_kinds $$ ppr exp_kind)
        ; let arg_tys  = case tup_sort of
-                   -- See also Note [Unboxed tuple levity vars] in TyCon
-                 UnboxedTuple    -> map (getLevityFromKind "finish_tuple") tau_kinds
+                   -- See also Note [Unboxed tuple RuntimeRep vars] in TyCon
+                 UnboxedTuple    -> map (getRuntimeRepFromKind "finish_tuple") tau_kinds
                                     ++ tau_tys
                  BoxedTuple      -> tau_tys
                  ConstraintTuple -> tau_tys
@@ -708,7 +708,7 @@ finish_tuple tup_sort tau_tys tau_kinds exp_kind
   where
     arity = length tau_tys
     res_kind = case tup_sort of
-                 UnboxedTuple    -> unliftedTypeKind
+                 UnboxedTuple    -> tYPE unboxedTupleRepDataConTy
                  BoxedTuple      -> liftedTypeKind
                  ConstraintTuple -> constraintKind
 
@@ -1003,7 +1003,8 @@ tcTyVar mode name         -- Could be a tyvar, a tycon, or a datacon
 
            ATcTyCon tc_tc -> do { data_kinds <- xoptM LangExt.DataKinds
                                 ; unless (isTypeLevel (mode_level mode) ||
-                                          data_kinds) $
+                                          data_kinds ||
+                                          isKindTyCon tc_tc) $
                                   promotionErr name NoDataKinds
                                 ; tc <- get_loopy_tc name tc_tc
                                 ; return (mkNakedTyConApp tc [], tyConKind tc_tc) }
@@ -2126,8 +2127,8 @@ in-scope variables that it should not unify with, but it's fiddly.
 
 -- | Produce an 'TcKind' suitable for a checking a type that can be * or #.
 ekOpen :: TcM TcKind
-ekOpen = do { lev <- newFlexiTyVarTy levityTy
-            ; return (tYPE lev) }
+ekOpen = do { rr <- newFlexiTyVarTy runtimeRepTy
+            ; return (tYPE rr) }
 
 unifyKinds :: [(TcType, TcKind)] -> TcM ([TcType], TcKind)
 unifyKinds act_kinds

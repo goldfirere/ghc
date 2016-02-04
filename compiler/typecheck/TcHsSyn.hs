@@ -1605,7 +1605,7 @@ zonkTypeZapping :: UnboundTyVarZonker
 -- It zaps unbound type variables to (), or some other arbitrary type
 -- Works on both types and kinds
 zonkTypeZapping tv
-  = do { let ty | isLevityVar tv = liftedDataConTy
-                | otherwise      = anyTypeOfKind (tyVarKind tv)
+  = do { let ty | isRuntimeRepVar tv = ptrRepLiftedTy
+                | otherwise          = anyTypeOfKind (tyVarKind tv)
        ; writeMetaTyVar tv ty
        ; return ty }

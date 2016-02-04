@@ -1,6 +1,6 @@
 
 ==================== Tidy Core ====================
-Result size of Tidy Core = {terms: 172, types: 65, coercions: 0}
+Result size of Tidy Core = {terms: 172, types: 66, coercions: 0}
 
 -- RHS size: {terms: 2, types: 0, coercions: 0}
 Roman.$trModule2 :: GHC.Types.TrName
@@ -30,12 +30,12 @@ Roman.$trModule :: GHC.Types.Module
 Roman.$trModule =
   GHC.Types.Module Roman.$trModule2 Roman.$trModule1
 
--- RHS size: {terms: 2, types: 2, coercions: 0}
+-- RHS size: {terms: 2, types: 3, coercions: 0}
 Roman.foo3 :: Int
 [GblId, Str=DmdType x]
 Roman.foo3 =
   Control.Exception.Base.patError
-    @ 'GHC.Types.Lifted
+    @ ('GHC.Types.PtrRep 'GHC.Types.Lifted)
     @ Int
     "spec-inline.hs:(19,5)-(29,25)|function go"#
 

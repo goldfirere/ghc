@@ -329,10 +329,10 @@ test gadt/gadt-escape1.
 -- | Make an 'ExpType' suitable for inferring a type of kind * or #.
 newOpenInferExpType :: TcM ExpType
 newOpenInferExpType
-  = do { lev <- newFlexiTyVarTy levityTy
+  = do { rr <- newFlexiTyVarTy runtimeRepTy
        ; u <- newUnique
        ; tclvl <- getTcLevel
-       ; let ki = tYPE lev
+       ; let ki = tYPE rr
        ; traceTc "newOpenInferExpType" (ppr u <+> dcolon <+> ppr ki)
        ; ref <- newMutVar Nothing
        ; return (Infer u tclvl ki ref) }
@@ -751,8 +751,8 @@ newFlexiTyVarTys n kind = mapM newFlexiTyVarTy (nOfThem n kind)
 -- | Create a tyvar that can be a lifted or unlifted type.
 newOpenFlexiTyVarTy :: TcM TcType
 newOpenFlexiTyVarTy
-  = do { lev <- newFlexiTyVarTy levityTy
-       ; newFlexiTyVarTy (tYPE lev) }
+  = do { rr <- newFlexiTyVarTy runtimeRepTy
+       ; newFlexiTyVarTy (tYPE rr) }
 
 newMetaSigTyVars :: [TyVar] -> TcM (TCvSubst, [TcTyVar])
 newMetaSigTyVars = mapAccumLM newMetaSigTyVarX emptyTCvSubst
@@ -908,15 +908,15 @@ zonkQuantifiedTyVar :: TcTyVar -> TcM (Maybe TcTyVar)
 --
 -- This returns a tyvar if it should be quantified over; otherwise,
 -- it returns Nothing. Nothing is
--- returned only if zonkQuantifiedTyVar is passed a Levity meta-tyvar,
--- in order to default to Lifted.
+-- returned only if zonkQuantifiedTyVar is passed a RuntimeRep meta-tyvar,
+-- in order to default to (PtrRep Lifted).
 zonkQuantifiedTyVar tv = left_only `liftM` zonkQuantifiedTyVarOrType tv
   where left_only :: Either a b -> Maybe a
         left_only (Left x) =  Just x
         left_only (Right _) = Nothing
 
 -- | Like zonkQuantifiedTyVar, but if zonking reveals that the tyvar
--- should become a type (when defaulting a levity var to Lifted), it
+-- should become a type (when defaulting a RuntimeRep var to (PtrRep Lifted)), it
 -- returns the type instead.
 zonkQuantifiedTyVarOrType :: TcTyVar -> TcM (Either TcTyVar TcType)
 zonkQuantifiedTyVarOrType tv
@@ -935,19 +935,19 @@ zonkQuantifiedTyVarOrType tv
                      Flexi -> return ()
                      Indirect ty -> WARN( True, ppr tv $$ ppr ty )
                                     return ()
-             if isLevityVar tv
-             then do { writeMetaTyVar tv liftedDataConTy
-                     ; return (Right liftedDataConTy) }
+             if isRuntimeRepVar tv
+             then do { writeMetaTyVar tv ptrRepLiftedTy
+                     ; return (Right ptrRepLiftedTy) }
              else Left `liftM` skolemiseUnboundMetaTyVar tv vanillaSkolemTv
       _other -> pprPanic "zonkQuantifiedTyVar" (ppr tv) -- FlatSkol, RuntimeUnk
 
 -- | Take an (unconstrained) meta tyvar and default it. Works only for
--- kind vars (of type BOX) and levity vars (of type Levity).
+-- kind vars (of type *) and RuntimeRep vars (of type RuntimeRep).
 defaultKindVar :: TcTyVar -> TcM Kind
 defaultKindVar kv
   | ASSERT( isMetaTyVar kv )
-    isLevityVar kv
-  = writeMetaTyVar kv liftedDataConTy >> return liftedDataConTy
+    isRuntimeRepVar kv
+  = writeMetaTyVar kv ptrRepLiftedTy >> return ptrRepLiftedTy
   | otherwise
   = writeMetaTyVar kv liftedTypeKind >> return liftedTypeKind
 

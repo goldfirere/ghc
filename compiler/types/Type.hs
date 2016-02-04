@@ -103,9 +103,9 @@ module Type (
         -- (Lifting and boxity)
         isUnliftedType, isUnboxedTupleType, isAlgType, isClosedAlgType,
         isPrimitiveType, isStrictType,
-        isLevityTy, isLevityVar, isLevityKindedTy,
-        dropLevityArgs,
-        getLevity, getLevityFromKind,
+        isRuntimeRepTy, isRuntimeRepVar, isRuntimeRepKindedTy,
+        dropRuntimeRepArgs,
+        getRuntimeRep, getRuntimeRepFromKind,
 
         -- * Main data types representing Kinds
         Kind,
@@ -114,7 +114,7 @@ module Type (
         typeKind,
 
         -- ** Common Kind
-        liftedTypeKind, unliftedTypeKind,
+        liftedTypeKind,
 
         -- * Type free variables
         tyCoVarsOfType, tyCoVarsOfTypes, tyCoVarsOfTypeAcc,
@@ -143,7 +143,7 @@ module Type (
         tyConsOfType,
 
         -- * Type representation for the code generator
-        typePrimRep, typeRepArity,
+        typePrimRep, typeRepArity, kindPrimRep, tyConPrimRep,
 
         -- * Main type substitution data types
         TvSubstEnv,     -- Representation widely visible
@@ -1133,10 +1133,10 @@ repType ty
       | isUnboxedTupleTyCon tc
       = if null tys
          then UnaryRep voidPrimTy -- See Note [Nullary unboxed tuple]
-         else UbxTupleRep (concatMap (flattenRepType . go rec_nts) non_levity_tys)
+         else UbxTupleRep (concatMap (flattenRepType . go rec_nts) non_rr_tys)
       where
-          -- See Note [Unboxed tuple levity vars] in TyCon
-        non_levity_tys = dropLevityArgs tys
+          -- See Note [Unboxed tuple RuntimeRep vars] in TyCon
+        non_rr_tys = dropRuntimeRepArgs tys
 
     go rec_nts (CastTy ty _)
       = go rec_nts ty
@@ -1151,16 +1151,31 @@ repType ty
 
 -- | Discovers the primitive representation of a more abstract 'UnaryType'
 typePrimRep :: UnaryType -> PrimRep
-typePrimRep ty
-  = case repType ty of
-      UbxTupleRep _ -> pprPanic "typePrimRep: UbxTupleRep" (ppr ty)
-      UnaryRep rep -> go rep
-    where go (TyConApp tc _)   = tyConPrimRep tc
-          go (ForAllTy _ _)    = PtrRep
-          go (AppTy _ _)       = PtrRep      -- See Note [AppTy rep]
-          go (TyVarTy _)       = PtrRep
-          go (CastTy ty _)     = go ty
-          go _                 = pprPanic "typePrimRep: UnaryRep" (ppr ty)
+typePrimRep = kindPrimRep . typeKind
+
+-- | Find the primitive representation of a 'TyCon'. Defined here to
+-- avoid module loops.
+tyConPrimRep :: TyCon -> PrimRep
+tyConPrimRep tc = kindPrimRep res_kind
+  where
+    (_, res_kind) = splitPiTys (tyConKind tc)
+
+-- | Take a kind (of shape @TYPE rr@) and produce the 'PrimRep' of values
+-- of types of this kind.
+kindPrimRep :: Kind -> PrimRep
+kindPrimRep ki | Just ki' <- coreViewOneStarKind ki = kindPrimRep ki'
+kindPrimRep (TyConApp typ [runtime_rep])
+  = ASSERT( typ `hasKey` tYPETyConKey )
+    go runtime_rep
+  where
+    go rr | Just rr' <- coreView rr = go rr'
+    go (TyConApp rr_dc args)
+      | RuntimeRep fun <- tyConRuntimeRepInfo rr_dc
+      = fun args
+    go rr = pprPanic "kindPrimRep.go" (ppr rr)
+kindPrimRep ki = WARN( True
+                     , text "kindPrimRep defaulting to PtrRep on" <+> ppr ki )
+                 PtrRep  -- this can happen legitimately for, e.g., Any
 
 typeRepArity :: Arity -> Type -> RepArity
 typeRepArity 0 _ = 0
@@ -1863,25 +1878,26 @@ isUnliftedType (ForAllTy (Named {}) ty) = isUnliftedType ty
 isUnliftedType (TyConApp tc _)          = isUnliftedTyCon tc
 isUnliftedType _                        = False
 
--- | Extract the levity classifier of a type. Panics if this is not possible.
-getLevity :: String   -- ^ Printed in case of an error
-          -> Type -> Type
-getLevity err ty = getLevityFromKind err (typeKind ty)
+-- | Extract the RuntimeRep classifier of a type. Panics if this is not possible.
+getRuntimeRep :: String   -- ^ Printed in case of an error
+              -> Type -> Type
+getRuntimeRep err ty = getRuntimeRepFromKind err (typeKind ty)
 
--- | Extract the levity classifier of a type from its kind.
--- For example, getLevityFromKind * = Lifted; getLevityFromKind # = Unlifted.
+-- | Extract the RuntimeRep classifier of a type from its kind.
+-- For example, getRuntimeRepFromKind * = PtrRep Lifted;
+--              getRuntimeRepFromKind # = PtrRep Unlifted.
 -- Panics if this is not possible.
-getLevityFromKind :: String  -- ^ Printed in case of an error
-                  -> Type -> Type
-getLevityFromKind err = go
+getRuntimeRepFromKind :: String  -- ^ Printed in case of an error
+                      -> Type -> Type
+getRuntimeRepFromKind err = go
   where
     go k | Just k' <- coreViewOneStarKind k = go k'
     go k
       | Just (tc, [arg]) <- splitTyConApp_maybe k
       , tc `hasKey` tYPETyConKey
       = arg
-    go k = pprPanic "getLevity" (text err $$
-                                 ppr k <+> dcolon <+> ppr (typeKind k))
+    go k = pprPanic "getRuntimeRep" (text err $$
+                                     ppr k <+> dcolon <+> ppr (typeKind k))
 
 isUnboxedTupleType :: Type -> Bool
 isUnboxedTupleType ty = case tyConAppTyCon_maybe ty of

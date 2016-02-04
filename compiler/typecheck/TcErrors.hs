@@ -29,7 +29,7 @@ import DataCon
 import TcEvidence
 import Name
 import RdrName ( lookupGRE_Name, GlobalRdrEnv, mkRdrUnqual )
-import PrelNames ( typeableClassName, hasKey
+import PrelNames ( typeableClassName, hasKey, ptrRepDataConKey
                  , liftedDataConKey, unliftedDataConKey )
 import Id
 import Var
@@ -1351,12 +1351,23 @@ misMatchMsg ct oriented ty1 ty2
   | Just NotSwapped <- oriented
   = misMatchMsg ct (Just IsSwapped) ty2 ty1
 
+  | Just (tc1, [arg1]) <- splitTyConApp_maybe ty1
+  , Just (arg1_tc, []) <- splitTyConApp_maybe arg1
+  , tc1 `hasKey` ptrRepDataConKey
+  , arg1_tc `hasKey` liftedDataConKey
+  = lifted_vs_unlifted
+
+  | Just (tc2, [arg2]) <- splitTyConApp_maybe ty2
+  , Just (arg2_tc, []) <- splitTyConApp_maybe arg2
+  , tc2 `hasKey` ptrRepDataConKey
+  , arg2_tc `hasKey` liftedDataConKey
+  = lifted_vs_unlifted
+
   | Just (tc1, []) <- splitTyConApp_maybe ty1
   , Just (tc2, []) <- splitTyConApp_maybe ty2
-  , (tc1 `hasKey` liftedDataConKey && tc2 `hasKey` unliftedDataConKey) ||
-    (tc2 `hasKey` liftedDataConKey && tc1 `hasKey` unliftedDataConKey)
-  = addArising orig $
-    text "Couldn't match a lifted type with an unlifted type"
+  ,    (tc1 `hasKey` liftedDataConKey && tc2 `hasKey` unliftedDataConKey)
+    || (tc1 `hasKey` unliftedDataConKey && tc2 `hasKey` liftedDataConKey)
+  = lifted_vs_unlifted
 
   | otherwise  -- So now we have Nothing or (Just IsSwapped)
                -- For some reason we treat Nothign like IsSwapped
@@ -1390,6 +1401,10 @@ misMatchMsg ct oriented ty1 ty2
     add_space s1 s2 | null s1   = s2
                     | null s2   = s1
                     | otherwise = s1 ++ (' ' : s2)
+
+    lifted_vs_unlifted
+      = addArising orig $
+        text "Couldn't match a lifted type with an unlifted type"
 
 mkExpectedActualMsg :: Type -> Type -> CtOrigin -> Maybe TypeOrKind -> Bool
                     -> (Bool, Maybe SwapFlag, SDoc)

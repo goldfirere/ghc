@@ -121,7 +121,7 @@ module TcType (
   --------------------------------
   -- Rexported from Kind
   Kind, typeKind,
-  unliftedTypeKind, liftedTypeKind,
+  liftedTypeKind,
   constraintKind,
   isLiftedTypeKind, isUnliftedTypeKind, classifiesTypeWithValues,
 
@@ -140,7 +140,7 @@ module TcType (
   mkClassPred,
   isDictLikeTy,
   tcSplitDFunTy, tcSplitDFunHead,
-  isLevityVar, isLevityPolymorphic, isLevityPolymorphic_maybe,
+  isRuntimeRepVar, isRuntimeRepPolymorphic,
   isVisibleBinder, isInvisibleBinder,
 
   -- Type substitutions

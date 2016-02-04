@@ -98,7 +98,7 @@ import qualified Data.IntMap as IntMap
 import Data.List (find,intercalate)
 import StringBuffer (stringToStringBuffer)
 import Control.Monad
-import GHC.Exts
+import GHC.Exts hiding ( PtrRep )
 import Data.Array
 import Exception
 import Control.Concurrent

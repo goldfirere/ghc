@@ -10,6 +10,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TypeApplications #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -249,18 +250,6 @@ tyConOf = typeRepTyCon . typeRep
 tcFun :: TyCon
 tcFun = tyConOf (Proxy :: Proxy (Int -> Int))
 
-tcList :: TyCon
-tcList = tyConOf (Proxy :: Proxy [])
-
-tcTYPE :: TyCon
-tcTYPE = tyConOf (Proxy :: Proxy TYPE)
-
-tc'Lifted :: TyCon
-tc'Lifted = tyConOf (Proxy :: Proxy 'Lifted)
-
-tc'Unlifted :: TyCon
-tc'Unlifted = tyConOf (Proxy :: Proxy 'Unlifted)
-
 -- | Adds a TypeRep argument to a TypeRep.
 mkAppTy :: TypeRep -> TypeRep -> TypeRep
 {-# INLINE mkAppTy #-}
@@ -364,10 +353,20 @@ instance Show TypeRep where
   showsPrec p (TypeRep _ tycon kinds tys) =
     case tys of
       [] -> showsPrec p tycon
-      [x@(TypeRep _ argCon _ _)]
+      [x]
         | tycon == tcList -> showChar '[' . shows x . showChar ']'
-        | tycon == tcTYPE && argCon == tc'Lifted   -> showChar '*'
-        | tycon == tcTYPE && argCon == tc'Unlifted -> showChar '#'
+        where
+          tcList = tyConOf @[] Proxy
+      [TypeRep _ ptrRepCon _ [TypeRep _ levityCon _ _]]
+        | tycon == tcTYPE && ptrRepCon == tc'PtrRep && levityCon == tc'Lifted
+          -> showChar '*'
+        | tycon == tcTYPE && ptrRepCon == tc'PtrRep && levityCon == tc'Unlifted
+          -> showChar '#'
+        where
+          tcTYPE      = tyConOf @TYPE      Proxy
+          tc'PtrRep   = tyConOf @'PtrRep   Proxy
+          tc'Lifted   = tyConOf @'Lifted   Proxy
+          tc'Unlifted = tyConOf @'Unlifted Proxy
       [a,r] | tycon == tcFun  -> showParen (p > 8) $
                                  showsPrec 9 a .
                                  showString " -> " .

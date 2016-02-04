@@ -720,6 +720,7 @@ mkDataCon :: Name
           -> ThetaType      -- ^ Theta-type occuring before the arguments proper
           -> [Type]         -- ^ Original argument types
           -> Type           -- ^ Original result type
+          -> RuntimeRepInfo -- ^ See comments on 'TyCon.RuntimeRepInfo'
           -> TyCon          -- ^ Representation type constructor
           -> ThetaType      -- ^ The "stupid theta", context of the data
                             -- declaration e.g. @data Eq a => T a ...@
@@ -733,7 +734,7 @@ mkDataCon name declared_infix prom_info
           fields
           univ_tvs ex_tvs
           eq_spec theta
-          orig_arg_tys orig_res_ty rep_tycon
+          orig_arg_tys orig_res_ty rep_info rep_tycon
           stupid_theta work_id rep
 -- Warning: mkDataCon is not a good place to check invariants.
 -- If the programmer writes the wrong result type in the decl, thus:
@@ -773,7 +774,7 @@ mkDataCon name declared_infix prom_info
              mkTyConApp rep_tycon (mkTyVarTys univ_tvs)
 
     promoted   -- See Note [Promoted data constructors] in TyCon
-      = mkPromotedDataCon con name prom_info (dataConUserType con) roles
+      = mkPromotedDataCon con name prom_info (dataConUserType con) roles rep_info
 
     roles = map (const Nominal) (univ_tvs ++ ex_tvs) ++
             map (const Representational) orig_arg_tys
@@ -1104,9 +1105,7 @@ isVanillaDataCon dc = dcVanilla dc
 -- | Should this DataCon be allowed in a type even without -XDataKinds?
 -- Currently, only Lifted & Unlifted
 specialPromotedDc :: DataCon -> Bool
-specialPromotedDc dc
-  = dc `hasKey` liftedDataConKey ||
-    dc `hasKey` unliftedDataConKey
+specialPromotedDc = isKindTyCon . dataConTyCon
 
 -- | Was this datacon promotable before GHC 8.0? That is, is it promotable
 -- without -XTypeInType

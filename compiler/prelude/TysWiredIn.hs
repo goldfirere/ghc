@@ -93,11 +93,26 @@ module TysWiredIn (
         trNameTyCon, trNameSDataCon, trNameDDataCon,
         trTyConTyCon, trTyConDataCon,
 
-        -- * Levity
-        levityTy, levityTyCon, liftedDataCon, unliftedDataCon,
-        liftedPromDataCon, unliftedPromDataCon,
-        liftedDataConTy, unliftedDataConTy,
-        liftedDataConName, unliftedDataConName,
+        -- * RuntimeRep and friends
+        levityTyCon, runtimeRepTyCon, vecCountTyCon, vecElemTyCon,
+
+        runtimeRepTy, ptrRepLiftedTy,
+
+        ptrRepDataConTyCon, vecRepDataConTyCon,
+
+        voidRepDataConTy, intRepDataConTy,
+        wordRepDataConTy, int64RepDataConTy, word64RepDataConTy, addrRepDataConTy,
+        floatRepDataConTy, doubleRepDataConTy, unboxedTupleRepDataConTy,
+
+        vec2DataConTy, vec4DataConTy, vec8DataConTy, vec16DataConTy, vec32DataConTy,
+        vec64DataConTy,
+
+        int8ElemRepDataConTy, int16ElemRepDataConTy, int32ElemRepDataConTy,
+        int64ElemRepDataConTy, word8ElemRepDataConTy, word16ElemRepDataConTy,
+        word32ElemRepDataConTy, word64ElemRepDataConTy, floatElemRepDataConTy,
+        doubleElemRepDataConTy,
+
+        unliftedDataConTy
     ) where
 
 #include "HsVersions.h"
@@ -140,6 +155,15 @@ alpha_ty :: [Type]
 alpha_ty = [alphaTy]
 
 {-
+Note [Wiring in RuntimeRep]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The RuntimeRep type (and friends) in GHC.Types has a bunch of constructors,
+making it a pain to wire in. To ease the pain somewhat, we use lists of
+the different bits, like Uniques, Names, DataCons. These lists must be
+kept in sync with each other. The rule is this: use the order as declared
+in GHC.Types. All places where such lists exist should contain a reference
+to this Note, so a search for this Note's name should find all the lists.
+
 ************************************************************************
 *                                                                      *
 \subsection{Wired in type constructors}
@@ -184,6 +208,9 @@ wiredInTyCons = [ unitTyCon     -- Not treated like other tuples, because
               , typeNatKindCon
               , typeSymbolKindCon
               , levityTyCon
+              , runtimeRepTyCon
+              , vecCountTyCon
+              , vecElemTyCon
               , constraintKindTyCon
               , liftedTypeKindTyCon
               , starKindTyCon
@@ -277,6 +304,49 @@ levityTyConName     = mkWiredInTyConName   UserSyntax gHC_TYPES (fsLit "Levity")
 liftedDataConName   = mkWiredInDataConName UserSyntax gHC_TYPES (fsLit "Lifted") liftedDataConKey liftedDataCon
 unliftedDataConName = mkWiredInDataConName UserSyntax gHC_TYPES (fsLit "Unlifted") unliftedDataConKey unliftedDataCon
 
+runtimeRepTyConName, ptrRepDataConName, vecRepDataConName :: Name
+runtimeRepTyConName = mkWiredInTyConName UserSyntax gHC_TYPES (fsLit "RuntimeRep") runtimeRepTyConKey runtimeRepTyCon
+ptrRepDataConName = mkWiredInDataConName UserSyntax gHC_TYPES (fsLit "PtrRep") ptrRepDataConKey ptrRepDataCon
+vecRepDataConName = mkWiredInDataConName UserSyntax gHC_TYPES (fsLit "VecRep") vecRepDataConKey vecRepDataCon
+
+-- See Note [Wiring in RuntimeRep]
+runtimeRepSimpleDataConNames :: [Name]
+runtimeRepSimpleDataConNames
+  = zipWith3Lazy mk_special_dc_name
+      [ fsLit "VoidRep", fsLit "IntRep"
+      , fsLit "WordRep", fsLit "Int64Rep", fsLit "Word64Rep"
+      , fsLit "AddrRep", fsLit "FloatRep", fsLit "DoubleRep"
+      , fsLit "UnboxedTupleRep" ]
+      runtimeRepSimpleDataConKeys
+      runtimeRepSimpleDataCons
+
+vecCountTyConName :: Name
+vecCountTyConName = mkWiredInTyConName UserSyntax gHC_TYPES (fsLit "VecCount") vecCountTyConKey vecCountTyCon
+
+-- See Note [Wiring in RuntimeRep]
+vecCountDataConNames :: [Name]
+vecCountDataConNames = zipWith3Lazy mk_special_dc_name
+                         [ fsLit "Vec2", fsLit "Vec4", fsLit "Vec8"
+                         , fsLit "Vec16", fsLit "Vec32", fsLit "Vec64" ]
+                         vecCountDataConKeys
+                         vecCountDataCons
+
+vecElemTyConName :: Name
+vecElemTyConName = mkWiredInTyConName UserSyntax gHC_TYPES (fsLit "VecElem") vecElemTyConKey vecElemTyCon
+
+-- See Note [Wiring in RuntimeRep]
+vecElemDataConNames :: [Name]
+vecElemDataConNames = zipWith3Lazy mk_special_dc_name
+                        [ fsLit "Int8ElemRep", fsLit "Int16ElemRep", fsLit "Int32ElemRep"
+                        , fsLit "Int64ElemRep", fsLit "Word8ElemRep", fsLit "Word16elemRep"
+                        , fsLit "Word32ElemRep", fsLit "Word64ElemRep"
+                        , fsLit "FloatElemRep", fsLit "DoubleElemRep" ]
+                        vecElemDataConKeys
+                        vecElemDataCons
+
+mk_special_dc_name :: FastString -> Unique -> DataCon -> Name
+mk_special_dc_name fs u dc = mkWiredInDataConName UserSyntax gHC_TYPES fs u dc
+
 parrTyConName, parrDataConName :: Name
 parrTyConName   = mkWiredInTyConName   BuiltInSyntax
                     gHC_PARR' (fsLit "[::]") parrTyConKey parrTyCon
@@ -333,6 +403,7 @@ pcDataConWithFixity :: Bool      -- ^ declared infix?
                     -> TyCon
                     -> DataCon
 pcDataConWithFixity infx n = pcDataConWithFixity' infx n (incrUnique (nameUnique n))
+                                                  NoRRI
 -- The Name's unique is the first of two free uniques;
 -- the first is used for the datacon itself,
 -- the second is used for the "worker name"
@@ -340,12 +411,13 @@ pcDataConWithFixity infx n = pcDataConWithFixity' infx n (incrUnique (nameUnique
 -- To support this the mkPreludeDataConUnique function "allocates"
 -- one DataCon unique per pair of Ints.
 
-pcDataConWithFixity' :: Bool -> Name -> Unique -> [TyVar] -> [TyVar]
+pcDataConWithFixity' :: Bool -> Name -> Unique -> RuntimeRepInfo
+                     -> [TyVar] -> [TyVar]
                      -> [Type] -> TyCon -> DataCon
 -- The Name should be in the DataName name space; it's the name
 -- of the DataCon itself.
 
-pcDataConWithFixity' declared_infix dc_name wrk_key tyvars ex_tyvars arg_tys tycon
+pcDataConWithFixity' declared_infix dc_name wrk_key rri tyvars ex_tyvars arg_tys tycon
   = data_con
   where
     data_con = mkDataCon dc_name declared_infix prom_info
@@ -356,6 +428,7 @@ pcDataConWithFixity' declared_infix dc_name wrk_key tyvars ex_tyvars arg_tys tyc
                 []      -- No equality spec
                 []      -- No theta
                 arg_tys (mkTyConApp tycon (mkTyVarTys tyvars))
+                rri
                 tycon
                 []      -- No stupid theta
                 (mkDataConWorkId wrk_name data_con)
@@ -371,6 +444,12 @@ pcDataConWithFixity' declared_infix dc_name wrk_key tyvars ex_tyvars arg_tys tyc
                              (AnId (dataConWorkId data_con)) UserSyntax
 
     prom_info = mkPrelTyConRepName dc_name
+
+-- used for RuntimeRep and friends
+pcSpecialDataCon :: Name -> [Type] -> TyCon -> RuntimeRepInfo -> DataCon
+pcSpecialDataCon dc_name arg_tys tycon rri
+  = pcDataConWithFixity' False dc_name (incrUnique (nameUnique dc_name)) rri
+                         [] [] arg_tys tycon
 
 {-
 ************************************************************************
@@ -395,7 +474,7 @@ constraintKindTyCon = pcTyCon False NonRecursive constraintKindTyConName
                               Nothing [] []
 
 liftedTypeKind, constraintKind :: Kind
-liftedTypeKind   = tYPE liftedDataConTy
+liftedTypeKind   = tYPE ptrRepLiftedTy
 constraintKind   = mkTyConApp constraintKindTyCon []
 
 
@@ -559,19 +638,22 @@ mk_tuple boxity arity = (tycon, tuple_con)
             , mkTyVarTys boxed_tyvars
             , VanillaAlgTyCon (mkPrelTyConRepName tc_name)
             )
-            -- See Note [Unboxed tuple levity vars] in TyCon
+            -- See Note [Unboxed tuple RuntimeRep vars] in TyCon
           Unboxed ->
-            let all_tvs = mkTemplateTyVars (replicate arity levityTy ++
+            let all_tvs = mkTemplateTyVars (replicate arity runtimeRepTy ++
                                             map (tYPE . mkTyVarTy) (take arity all_tvs))
                    -- NB: This must be one call to mkTemplateTyVars, to make
                    -- sure that all the uniques are different
-                (lev_tvs, open_tvs) = splitAt arity all_tvs
+                (rr_tvs, open_tvs) = splitAt arity all_tvs
+                res_rep | arity == 0 = voidRepDataConTy
+                              -- See Note [Nullary unboxed tuple] in Type
+                        | otherwise  = unboxedTupleRepDataConTy
             in
             ( UnboxedTuple
             , gHC_PRIM
-            , mkSpecForAllTys lev_tvs $
+            , mkSpecForAllTys rr_tvs $
               mkFunTys (map tyVarKind open_tvs) $
-              unliftedTypeKind
+              tYPE res_rep
             , arity * 2
             , all_tvs
             , mkTyVarTys open_tvs
@@ -663,14 +745,14 @@ heqSCSelId, coercibleSCSelId :: Id
 
 {- *********************************************************************
 *                                                                      *
-                Kinds and levity
+                Kinds and RuntimeRep
 *                                                                      *
 ********************************************************************* -}
 
 -- For information about the usage of the following type, see Note [TYPE]
 -- in module TysPrim
-levityTy :: Type
-levityTy = mkTyConTy levityTyCon
+runtimeRepTy :: Type
+runtimeRepTy = mkTyConTy runtimeRepTyCon
 
 levityTyCon :: TyCon
 levityTyCon = pcTyCon True NonRecursive levityTyConName
@@ -694,17 +776,109 @@ liftedTypeKindTyCon, starKindTyCon, unicodeStarKindTyCon :: TyCon
 liftedTypeKindTyCon   = mkSynonymTyCon liftedTypeKindTyConName
                                        liftedTypeKind
                                        [] []
-                                       (tYPE liftedDataConTy)
+                                       (tYPE ptrRepLiftedTy)
 
 starKindTyCon         = mkSynonymTyCon starKindTyConName
                                        liftedTypeKind
                                        [] []
-                                       (tYPE liftedDataConTy)
+                                       (tYPE ptrRepLiftedTy)
 
 unicodeStarKindTyCon  = mkSynonymTyCon unicodeStarKindTyConName
                                        liftedTypeKind
                                        [] []
-                                       (tYPE liftedDataConTy)
+                                       (tYPE ptrRepLiftedTy)
+
+runtimeRepTyCon :: TyCon
+runtimeRepTyCon = pcNonRecDataTyCon runtimeRepTyConName Nothing []
+                          (ptrRepDataCon : vecRepDataCon : runtimeRepSimpleDataCons)
+
+ptrRepDataCon, vecRepDataCon :: DataCon
+ptrRepDataCon = pcSpecialDataCon ptrRepDataConName [mkTyConTy levityTyCon]
+                                 runtimeRepTyCon
+                                 (RuntimeRep (\_ -> PtrRep))
+vecRepDataCon = pcSpecialDataCon vecRepDataConName [ mkTyConTy vecCountTyCon
+                                                   , mkTyConTy vecElemTyCon ]
+                                 runtimeRepTyCon
+                                 (RuntimeRep prim_rep_fun)
+  where
+    prim_rep_fun [count, elem]
+      | VecCount n <- tyConRuntimeRepInfo (tyConAppTyCon count)
+      , VecElem  e <- tyConRuntimeRepInfo (tyConAppTyCon elem)
+      = VecRep n e
+    prim_rep_fun args
+      = pprPanic "vecRepDataCon" (ppr args)
+
+ptrRepDataConTyCon, vecRepDataConTyCon :: TyCon
+ptrRepDataConTyCon = promoteDataCon ptrRepDataCon
+vecRepDataConTyCon = promoteDataCon vecRepDataCon
+
+-- See Note [Wiring in RuntimeRep]
+runtimeRepSimpleDataCons :: [DataCon]
+runtimeRepSimpleDataCons = zipWithLazy mk_runtime_rep_dc
+                             [ VoidRep, IntRep, WordRep, Int64Rep
+                             , Word64Rep, AddrRep, FloatRep, DoubleRep
+                             , panic "unboxed tuple PrimRep" ]
+                             runtimeRepSimpleDataConNames
+  where
+    mk_runtime_rep_dc primrep name
+      = pcSpecialDataCon name [] runtimeRepTyCon (RuntimeRep (\_ -> primrep))
+
+-- See Note [Wiring in RuntimeRep]
+voidRepDataConTy, intRepDataConTy, wordRepDataConTy, int64RepDataConTy,
+  word64RepDataConTy, addrRepDataConTy, floatRepDataConTy, doubleRepDataConTy,
+  unboxedTupleRepDataConTy :: Type
+[voidRepDataConTy, intRepDataConTy, wordRepDataConTy, int64RepDataConTy,
+   word64RepDataConTy, addrRepDataConTy, floatRepDataConTy, doubleRepDataConTy,
+   unboxedTupleRepDataConTy] = map (mkTyConTy . promoteDataCon)
+                                   runtimeRepSimpleDataCons
+
+vecCountTyCon :: TyCon
+vecCountTyCon = pcNonRecDataTyCon vecCountTyConName Nothing []
+                        vecCountDataCons
+
+-- See Note [Wiring in RuntimeRep]
+vecCountDataCons :: [DataCon]
+vecCountDataCons = zipWithLazy mk_vec_count_dc
+                     [ 2, 4, 8, 16, 32, 64 ]
+                     vecCountDataConNames
+  where
+    mk_vec_count_dc n name
+      = pcSpecialDataCon name [] vecCountTyCon (VecCount n)
+
+-- See Note [Wiring in RuntimeRep]
+vec2DataConTy, vec4DataConTy, vec8DataConTy, vec16DataConTy, vec32DataConTy,
+  vec64DataConTy :: Type
+[vec2DataConTy, vec4DataConTy, vec8DataConTy, vec16DataConTy, vec32DataConTy,
+  vec64DataConTy] = map (mkTyConTy . promoteDataCon) vecCountDataCons
+
+vecElemTyCon :: TyCon
+vecElemTyCon = pcNonRecDataTyCon vecElemTyConName Nothing [] vecElemDataCons
+
+-- See Note [Wiring in RuntimeRep]
+vecElemDataCons :: [DataCon]
+vecElemDataCons = zipWithLazy mk_vec_elem_dc
+                    [ Int8ElemRep, Int16ElemRep, Int32ElemRep, Int64ElemRep
+                    , Word8ElemRep, Word16ElemRep, Word32ElemRep, Word64ElemRep
+                    , FloatElemRep, DoubleElemRep ]
+                    vecElemDataConNames
+  where
+    mk_vec_elem_dc elem name
+      = pcSpecialDataCon name [] vecElemTyCon (VecElem elem)
+
+-- See Note [Wiring in RuntimeRep]
+int8ElemRepDataConTy, int16ElemRepDataConTy, int32ElemRepDataConTy,
+  int64ElemRepDataConTy, word8ElemRepDataConTy, word16ElemRepDataConTy,
+  word32ElemRepDataConTy, word64ElemRepDataConTy, floatElemRepDataConTy,
+  doubleElemRepDataConTy :: Type
+[int8ElemRepDataConTy, int16ElemRepDataConTy, int32ElemRepDataConTy,
+  int64ElemRepDataConTy, word8ElemRepDataConTy, word16ElemRepDataConTy,
+  word32ElemRepDataConTy, word64ElemRepDataConTy, floatElemRepDataConTy,
+  doubleElemRepDataConTy] = map (mkTyConTy . promoteDataCon)
+                                vecElemDataCons
+
+-- The type ('PtrRep 'Lifted)
+ptrRepLiftedTy :: Type
+ptrRepLiftedTy = mkTyConApp (promoteDataCon ptrRepDataCon) [liftedDataConTy]
 
 {- *********************************************************************
 *                                                                      *
@@ -950,13 +1124,13 @@ done by enumeration\srcloc{lib/prelude/InTup?.hs}.
 -}
 
 -- | Make a tuple type. The list of types should /not/ include any
--- levity specifications.
+-- RuntimeRep specifications.
 mkTupleTy :: Boxity -> [Type] -> Type
 -- Special case for *boxed* 1-tuples, which are represented by the type itself
 mkTupleTy Boxed   [ty] = ty
 mkTupleTy Boxed   tys  = mkTyConApp (tupleTyCon Boxed (length tys)) tys
 mkTupleTy Unboxed tys  = mkTyConApp (tupleTyCon Unboxed (length tys))
-                                        (map (getLevity "mkTupleTy") tys ++ tys)
+                                        (map (getRuntimeRep "mkTupleTy") tys ++ tys)
 
 -- | Build the type of a small tuple that holds the specified type of thing
 mkBoxedTupleTy :: [Type] -> Type

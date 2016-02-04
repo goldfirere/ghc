@@ -1943,10 +1943,8 @@ unify_derived loc role    orig_ty1 orig_ty2
                 Nothing   -> bale_out }
     go _ _ = bale_out
 
-     -- no point in having *boxed* deriveds.
     bale_out = emitNewDerivedEq loc role orig_ty1 orig_ty2
 
 maybeSym :: SwapFlag -> TcCoercion -> TcCoercion
 maybeSym IsSwapped  co = mkTcSymCo co
 maybeSym NotSwapped co = co
-

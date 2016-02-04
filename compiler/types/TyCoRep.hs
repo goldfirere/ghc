@@ -38,8 +38,8 @@ module TyCoRep (
         mkTyConTy, mkTyVarTy, mkTyVarTys,
         mkFunTy, mkFunTys,
         isLiftedTypeKind, isUnliftedTypeKind,
-        isCoercionType, isLevityTy, isLevityVar,
-        isLevityKindedTy, dropLevityArgs,
+        isCoercionType, isRuntimeRepTy, isRuntimeRepVar,
+        isRuntimeRepKindedTy, dropRuntimeRepArgs,
         sameVis,
 
         -- Functions over binders
@@ -510,39 +510,48 @@ mkTyConTy tycon = TyConApp tycon []
 Some basic functions, put here to break loops eg with the pretty printer
 -}
 
+-- | This version considers Constraint to be distinct from *.
 isLiftedTypeKind :: Kind -> Bool
 isLiftedTypeKind ki | Just ki' <- coreView ki = isLiftedTypeKind ki'
-isLiftedTypeKind (TyConApp tc [TyConApp lev []])
-  = tc `hasKey` tYPETyConKey && lev `hasKey` liftedDataConKey
+isLiftedTypeKind (TyConApp tc [TyConApp ptr_rep [TyConApp lifted []]])
+  =  tc      `hasKey` tYPETyConKey
+  && ptr_rep `hasKey` ptrRepDataConKey
+  && lifted  `hasKey` liftedDataConKey
 isLiftedTypeKind _                = False
 
 isUnliftedTypeKind :: Kind -> Bool
 isUnliftedTypeKind ki | Just ki' <- coreView ki = isUnliftedTypeKind ki'
-isUnliftedTypeKind (TyConApp tc [TyConApp lev []])
-  = tc `hasKey` tYPETyConKey && lev `hasKey` unliftedDataConKey
+isUnliftedTypeKind (TyConApp tc [TyConApp ptr_rep [TyConApp unlifted []]])
+  | tc       `hasKey` tYPETyConKey
+  , ptr_rep  `hasKey` ptrRepDataConKey
+  = unlifted `hasKey` unliftedDataConKey
+isUnliftedTypeKind (TyConApp tc [arg])
+  = tc `hasKey` tYPETyConKey && isEmptyVarSet (tyCoVarsOfType arg)
+      -- all other possibilities are unlifted
 isUnliftedTypeKind _ = False
 
--- | Is this the type 'Levity'?
-isLevityTy :: Type -> Bool
-isLevityTy ty | Just ty' <- coreView ty = isLevityTy ty'
-isLevityTy (TyConApp tc []) = tc `hasKey` levityTyConKey
-isLevityTy _ = False
+-- | Is this the type 'RuntimeRep'?
+isRuntimeRepTy :: Type -> Bool
+isRuntimeRepTy ty | Just ty' <- coreView ty = isRuntimeRepTy ty'
+isRuntimeRepTy (TyConApp tc []) = tc `hasKey` runtimeRepTyConKey
+isRuntimeRepTy _ = False
 
--- | Is this a type of kind Levity? (e.g. Lifted, Unlifted)
-isLevityKindedTy :: Type -> Bool
-isLevityKindedTy = isLevityTy . typeKind
+-- | Is this a type of kind RuntimeRep? (e.g. PtrRep)
+isRuntimeRepKindedTy :: Type -> Bool
+isRuntimeRepKindedTy = isRuntimeRepTy . typeKind
 
--- | Is a tyvar of type 'Levity'?
-isLevityVar :: TyVar -> Bool
-isLevityVar = isLevityTy . tyVarKind
+-- | Is a tyvar of type 'RuntimeRep'?
+isRuntimeRepVar :: TyVar -> Bool
+isRuntimeRepVar = isRuntimeRepTy . tyVarKind
 
--- | Drops prefix of Levity constructors in 'TyConApp's. Useful for e.g.
--- dropping 'Lifted and 'Unlifted arguments of unboxed tuple TyCon applications:
+-- | Drops prefix of RuntimeRep constructors in 'TyConApp's. Useful for e.g.
+-- dropping 'PtrRep arguments of unboxed tuple TyCon applications:
 --
---   dropLevityArgs ['Lifted, 'Unlifted, String, Int#] == [String, Int#]
+--   dropRuntimeRepArgs [ 'PtrRep 'Lifted, 'PtrRep 'Unlifted
+--                      , String, Int# ] == [String, Int#]
 --
-dropLevityArgs :: [Type] -> [Type]
-dropLevityArgs = dropWhile isLevityKindedTy
+dropRuntimeRepArgs :: [Type] -> [Type]
+dropRuntimeRepArgs = dropWhile isRuntimeRepKindedTy
 
 {-
 %************************************************************************
@@ -2642,7 +2651,8 @@ pprTyTcApp p tc tys
   = text "(TypeError ...)"   -- Suppress detail unles you _really_ want to see
 
   | tc `hasKey` tYPETyConKey
-  , [TyConApp lev_tc []] <- tys
+  , [TyConApp ptr_rep [TyConApp lev_tc []]] <- tys
+  , ptr_rep `hasKey` ptrRepDataConKey
   = if | lev_tc `hasKey` liftedDataConKey   -> char '*'
        | lev_tc `hasKey` unliftedDataConKey -> char '#'
        | otherwise                          -> ppr_deflt

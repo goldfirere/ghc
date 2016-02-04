@@ -55,7 +55,7 @@ import TysWiredIn
 import DynFlags
 import Outputable as Ppr
 import GHC.Arr          ( Array(..) )
-import GHC.Exts
+import GHC.Exts hiding ( PtrRep )
 import GHC.IO ( IO(..) )
 
 import StaticFlags( opt_PprStyle_Debug )
@@ -800,8 +800,8 @@ extractSubTerms recurse clos = liftM thdOf3 . go 0 (nonPtrs clos)
     go ptr_i ws (ty:tys)
       | Just (tc, elem_tys) <- tcSplitTyConApp_maybe ty
       , isUnboxedTupleTyCon tc
-                -- See Note [Unboxed tuple levity vars] in TyCon
-      = do (ptr_i, ws, terms0) <- go ptr_i ws (dropLevityArgs elem_tys)
+                -- See Note [Unboxed tuple RuntimeRep vars] in TyCon
+      = do (ptr_i, ws, terms0) <- go ptr_i ws (dropRuntimeRepArgs elem_tys)
            (ptr_i, ws, terms1) <- go ptr_i ws tys
            return (ptr_i, ws, unboxedTupleTerm ty terms0 : terms1)
       | otherwise

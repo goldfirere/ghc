@@ -1,6 +1,6 @@
 
 ==================== Tidy Core ====================
-Result size of Tidy Core = {terms: 82, types: 42, coercions: 0}
+Result size of Tidy Core = {terms: 82, types: 44, coercions: 0}
 
 -- RHS size: {terms: 6, types: 3, coercions: 0}
 T7360.$WFoo3 [InlPrag=INLINE] :: Int -> Foo
@@ -165,7 +165,7 @@ T7360.fun4 :: Int
          WorkFree=True, Expandable=True, Guidance=IF_ARGS [] 10 20}]
 T7360.fun4 = GHC.Types.I# 0#
 
--- RHS size: {terms: 16, types: 13, coercions: 0}
+-- RHS size: {terms: 16, types: 14, coercions: 0}
 fun2 :: forall a. [a] -> ((), Int)
 [GblId,
  Arity=1,

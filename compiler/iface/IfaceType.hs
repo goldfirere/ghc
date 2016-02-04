@@ -59,7 +59,6 @@ import DataCon ( isTupleDataCon )
 import TcType
 import DynFlags
 import TyCoRep  -- needs to convert core types to iface types
-import Unique( hasKey )
 import TyCon hiding ( pprPromotionQuote )
 import CoAxiom
 import Id
@@ -67,7 +66,7 @@ import Var
 -- import RnEnv( FastStringEnv, mkFsEnv, lookupFsEnv )
 import TysWiredIn
 import TysPrim
-import PrelNames( funTyConKey, ipClassKey )
+import PrelNames
 import Name
 import BasicTypes
 import Binary
@@ -570,9 +569,10 @@ pprIfaceIdBndr (name, ty) = parens (ppr name <+> dcolon <+> ppr ty)
 pprIfaceTvBndr :: IfaceTvBndr -> SDoc
 pprIfaceTvBndr (tv, IfaceTyConApp tc ITC_Nil)
   | isLiftedTypeKindTyConName (ifaceTyConName tc) = ppr tv
-pprIfaceTvBndr (tv, IfaceTyConApp tc (ITC_Vis (IfaceTyConApp lifted ITC_Nil) ITC_Nil))
-  | ifaceTyConName tc     == tYPETyConName
-  , ifaceTyConName lifted == liftedDataConName
+pprIfaceTvBndr (tv, IfaceTyConApp tc (ITC_Vis (IfaceTyConApp ptr_rep (ITC_Vis (IfaceTyConApp lifted ITC_Nil) ITC_Nil)) ITC_Nil))
+  | ifaceTyConName tc      == tYPETyConName
+  , ifaceTyConName ptr_rep `hasKey` ptrRepDataConKey
+  , ifaceTyConName lifted  `hasKey` liftedDataConKey
   = ppr tv
 pprIfaceTvBndr (tv, kind) = parens (ppr tv <+> dcolon <+> ppr kind)
 
@@ -786,11 +786,12 @@ pprTyTcApp ctxt_prec tc tys dflags
   = pprIfaceTyList ctxt_prec ty1 ty2
 
   | ifaceTyConName tc == tYPETyConName
-  , ITC_Vis (IfaceTyConApp lev_tc ITC_Nil) ITC_Nil <- tys
-  = let n = ifaceTyConName lev_tc in
-    if n == liftedDataConName then char '*'
-    else if n == unliftedDataConName then char '#'
-         else pprPanic "IfaceType.pprTyTcApp" (ppr lev_tc)
+  , ITC_Vis (IfaceTyConApp ptr_rep (ITC_Vis (IfaceTyConApp lev ITC_Nil) ITC_Nil)) ITC_Nil <- tys
+  , ifaceTyConName ptr_rep `hasKey` ptrRepDataConKey
+  = let n = ifaceTyConName lev in
+    if n `hasKey` liftedDataConKey then char '*'
+    else if n `hasKey` unliftedDataConKey then char '#'
+         else pprPanic "IfaceType.pprTyTcApp" (ppr lev)
 
   | otherwise
   = ppr_iface_tc_app ppr_ty ctxt_prec tc tys_wo_kinds
@@ -826,8 +827,8 @@ ppr_iface_tc_app pp ctxt_prec tc tys
 
 pprTuple :: TupleSort -> IfaceTyConInfo -> IfaceTcArgs -> SDoc
 pprTuple sort info args
-  =   -- drop the levity vars.
-      -- See Note [Unboxed tuple levity vars] in TyCon
+  =   -- drop the RuntimeRep vars.
+      -- See Note [Unboxed tuple RuntimeRep vars] in TyCon
     let tys   = tcArgsIfaceTypes args
         args' = case sort of
                   UnboxedTuple -> drop (length tys `div` 2) tys
