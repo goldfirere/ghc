@@ -12,7 +12,7 @@ import VarEnv
 import Pair
 import InstEnv
 
-type NormalCo    = Coercion
+type NormalCo    = CoercionRep
 type NormalNonIdCo = NormalCo  -- Extra invariant: not the identity
 type SymFlag = Bool
 type ReprFlag = Bool
@@ -44,7 +44,7 @@ opt_co3 = undefined
 opt_co2 :: LiftingContext -> SymFlag -> Role -> Coercion -> NormalCo
 opt_co2 = undefined
 
-compatible_co :: Coercion -> Coercion -> Bool
+compatible_co :: CoercionRep -> CoercionRep -> Bool
 compatible_co = undefined
 
 etaTyConAppCo_maybe = undefined
@@ -71,7 +71,7 @@ opt_trans_rule is in_co1@(LRCo d1 co1) in_co2@(LRCo d2 co2)
 
 -- Push transitivity inside instantiation
 opt_trans_rule is in_co1@(InstCo co1 ty1) in_co2@(InstCo co2 ty2)
-  | ty1 `eqCoercion` ty2
+  | ty1 `eqCoercionRep` ty2
   , co1 `compatible_co` co2 = undefined
 
 opt_trans_rule is in_co1@(UnivCo p1 r1 tyl1 _tyr1)
@@ -112,10 +112,10 @@ opt_trans_rule is co1 co2@(AppCo co2a co2b)
 
 -- Push transitivity inside forall
 opt_trans_rule is co1 co2
-  | ForAllCo tv1 eta1 r1 <- co1
+  | ForAllCo tv1 _ eta1 r1 <- co1
   , Just (tv2,eta2,r2) <- etaForAllCo_maybe co2 = undefined
 
-  | ForAllCo tv2 eta2 r2 <- co2
+  | ForAllCo tv2 _ eta2 r2 <- co2
   , Just (tv1,eta1,r1) <- etaForAllCo_maybe co1 = undefined
 
   where
@@ -127,7 +127,7 @@ opt_trans_rule is co1 co2
   , True <- sym
   , Just cos2 <- matchAxiom sym con ind co2
   , let newAxInst = AxiomInstCo con ind
-                      (opt_transList is (map mkSymCo cos2) cos1)
+                      (opt_transList is (map mkSymCoRep cos2) cos1)
   , Nothing <- checkAxInstCo newAxInst
   = undefined
 
@@ -144,7 +144,7 @@ opt_trans_rule is co1 co2
   , True <- sym
   , Just cos1 <- matchAxiom (not sym) con ind co1
   , let newAxInst = AxiomInstCo con ind
-                      (opt_transList is cos2 (map mkSymCo cos1))
+                      (opt_transList is cos2 (map mkSymCoRep cos1))
   , Nothing <- checkAxInstCo newAxInst
   = undefined
 
@@ -172,7 +172,7 @@ opt_trans_rule is co1 co2
   where
     co1_is_axiom_maybe = isAxiom_maybe co1
     co2_is_axiom_maybe = isAxiom_maybe co2
-    role = coercionRole co1 -- should be the same as coercionRole co2!
+    role = coercionRepRole co1 -- should be the same as coercionRole co2!
 
 opt_trans_rule is co1 co2
   | Just (lco, lh) <- isCohRight_maybe co1
@@ -181,9 +181,20 @@ opt_trans_rule is co1 co2
   = undefined
 
 opt_trans_rule _ co1 co2        -- Identity rule
-  | (Pair ty1 _, r) <- coercionKindRole co1
-  , Pair _ ty2 <- coercionKind co2
+  | (Pair ty1 _, r) <- coercionRepKindRole co1
+  , Pair _ ty2 <- coercionRepKind co2
   , ty1 `eqType` ty2
   = undefined
 
 opt_trans_rule _ _ _ = Nothing
+
+-- | Syntactic equality of coercions
+eqCoercionRep :: CoercionRep -> CoercionRep -> Bool
+eqCoercionRep co1 co2 = and (eqType <$> coercionRepKind co1 <*> coercionRepKind co2)
+
+-- | Retrieve the role from a coercion.
+coercionRepRole :: CoercionRep -> Role
+coercionRepRole = snd . coercionRepKindRole
+  -- There's not a better way to do this, because NthCo needs the *kind*
+  -- and role of its argument. Luckily, laziness should generally avoid
+  -- the need for computing kinds in other cases.

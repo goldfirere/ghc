@@ -2336,7 +2336,7 @@ checkValidRoleAnnots role_annots tc
     tyvars                 = tyConTyVars tc
     roles                  = tyConRoles tc
     (vis_roles, vis_vars)  = unzip $ snd $
-                             partitionInvisibles tc (mkTyVarTy . snd) $
+                             partitionInvisibles tc (Just (mkTyVarTy . snd)) $
                              zip roles tyvars
     role_annot_decl_maybe  = lookupRoleAnnots role_annots name
 

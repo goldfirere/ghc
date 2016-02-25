@@ -2928,6 +2928,7 @@ setEvBind ev_bind
 
 -- | Equalities only
 setWantedEq :: TcEvDest -> Coercion -> TcS ()
+setWantedEq ReflDest _ = return ()  -- don't need to do anything here
 setWantedEq (HoleDest hole) co
   = do { useVars (tyCoVarsOfCo co)
        ; wrapTcS $ TcM.fillCoercionHole hole co }
@@ -2940,6 +2941,7 @@ setEqIfWanted _ _ = return ()
 
 -- | Good for equalities and non-equalities
 setWantedEvTerm :: TcEvDest -> EvTerm -> TcS ()
+setWantedEvTerm ReflDest _ = return ()
 setWantedEvTerm (HoleDest hole) tm
   = do { let co = evTermCoercion tm
        ; useVars (tyCoVarsOfCo co)
@@ -2985,6 +2987,11 @@ newGivenEvVars loc pts = mapM (newGivenEvVar loc) pts
 -- | Make a new equality CtEvidence
 newWantedEq :: CtLoc -> Role -> TcType -> TcType -> TcS (CtEvidence, Coercion)
 newWantedEq loc role ty1 ty2
+  | ty1 `eqType` ty2
+  = return ( CtWanted { ctev_pred = pty, ctev_dest = ReflDest
+                      , ctev_loc = loc }
+           , mkReflCo role ty1 )
+  | otherwise
   = do { hole <- wrapTcS $ TcM.newCoercionHole
        ; traceTcS "Emitting new coercion hole" (ppr hole <+> dcolon <+> ppr pty)
        ; return ( CtWanted { ctev_pred = pty, ctev_dest = HoleDest hole
@@ -3118,9 +3125,9 @@ deferTcSForAllEq role loc kind_cos (bndrs1,body1) (bndrs2,body2)
                                , ic_binds  = Nothing -- no place to put binds
                                , ic_env    = env
                                , ic_info   = skol_info }
+            cobndrs   = zip3 skol_tvs (map binderVisibility bndrs1) kind_cos
       ; updWorkListTcS (extendWorkListImplic imp)
-      ; let cobndrs    = zip skol_tvs kind_cos
-      ; return $ mkForAllCos cobndrs hole_co }
+      ; return $ mkTcForAllCos cobndrs hole_co }
    where
      tvs1 = map (binderVar "deferTcSForAllEq") bndrs1
      tvs2 = map (binderVar "deferTcSForAllEq") bndrs2

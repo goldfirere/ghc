@@ -6,4 +6,3 @@ T11407.hs:10:40: error:
     • Type variable kinds:
         a :: k0
         x :: k0 -> *
-        k0 :: *

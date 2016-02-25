@@ -913,16 +913,19 @@ flatten_one (TyVarTy tv)
        ; role <- getRole
        ; case mb_yes of
            FTRCasted tv' kco -> -- Done
-                       do { -- traceFlat "flattenTyVar1"
-                            --   (pprTvBndr tv' $$
-                            --    ppr kco <+> dcolon <+> ppr (coercionKind kco))
+                       do { traceFlat "flattenTyVar1"
+                               (pprTvBndr tv' $$
+                                ppr kco <+> dcolon <+> ppr (coercionKind kco))
                           ; return (ty', mkReflCo role ty
                                          `mkCoherenceLeftCo` mkSymCo kco) }
                     where
                        ty  = mkTyVarTy tv'
                        ty' = ty `mkCastTy` mkSymCo kco
 
-           FTRFollowed ty1 co1  -- Recur
+             -- followed a meta-tyvar; just recur
+           FTRZonked ty -> flatten_one ty
+
+           FTRFollowed ty1 co1  -- followed an inert tyvar; Recur
                     -> do { (ty2, co2) <- flatten_one ty1
                           -- ; traceFlat "flattenTyVar2" (ppr tv $$ ppr ty2)
                           ; return (ty2, co2 `mkTransCo` co1) } }
@@ -1267,8 +1270,11 @@ data FlattenTvResult
       -- ^ Flattening the tyvar's kind produced a cast.
       -- co :: new kind ~N old kind;
       -- The 'TyVar' in there might have a new, zonked kind
+  | FTRZonked TcType
+      -- ^ Following a filled meta-tyvar
   | FTRFollowed TcType Coercion
-      -- ^ The tyvar flattens to a not-necessarily flat other type.
+      -- ^ The tyvar flattens to a not-necessarily flat other type
+      -- via the inert substitution.
       -- co :: new type ~r old type, where the role is determined by
       -- the FlattenEnv
 
@@ -1286,10 +1292,9 @@ flatten_tyvar tv
 
   | otherwise
   = do { mb_ty <- liftTcS $ isFilledMetaTyVar_maybe tv
-       ; role <- getRole
        ; case mb_ty of
            Just ty -> do { traceFlat "Following filled tyvar" (ppr tv <+> equals <+> ppr ty)
-                         ; return (FTRFollowed ty (mkReflCo role ty)) } ;
+                         ; return (FTRZonked ty) } ;
            Nothing -> do { fr <- getFlavourRole
                          ; flatten_tyvar2  tv fr } }
 

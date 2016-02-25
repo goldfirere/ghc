@@ -3,17 +3,19 @@ A simple homogeneous pair type with useful Functor, Applicative, and
 Traversable instances.
 -}
 
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, DeriveDataTypeable #-}
 
 module Pair ( Pair(..), unPair, toPair, swap, pLiftFst, pLiftSnd ) where
 
 #include "HsVersions.h"
 
 import Outputable
+import qualified Data.Data as Data
 
 data Pair a = Pair { pFst :: a, pSnd :: a }
 -- Note that Pair is a *unary* type constructor
 -- whereas (,) is binary
+  deriving (Data.Data, Data.Typeable)
 
 -- The important thing about Pair is that it has a *homogenous*
 -- Functor instance, so you can easily apply the same function

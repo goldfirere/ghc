@@ -445,7 +445,7 @@ unusedInjTvsInRHS tycon injList lhs rhs =
     where
       -- set of type and kind variables in which type family is injective
       (invis_pairs, vis_pairs)
-        = partitionInvisibles tycon snd (zipEqual "unusedInjTvsInRHS" injList lhs)
+        = partitionInvisibles tycon (Just snd) (zipEqual "unusedInjTvsInRHS" injList lhs)
       invis_lhs = uncurry filterByList $ unzip invis_pairs
       vis_lhs   = uncurry filterByList $ unzip vis_pairs
 

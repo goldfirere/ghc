@@ -347,6 +347,7 @@ simplLazyBind env top_lvl is_rec bndr bndr1 rhs rhs_se
         -- Simplify the RHS
         ; let   rhs_cont = mkRhsStop (substTy body_env (exprType body))
         ; (body_env1, body1) <- simplExprF body_env body rhs_cont
+
         -- ANF-ise a constructor or PAP rhs
         ; (body_env2, body2) <- prepareRhs top_lvl body_env1 bndr1 body1
 

@@ -1375,11 +1375,24 @@ uUnfilledVars origin t_or_k swapped tv1 details1 tv2 details2
   = do { traceTc "uUnfilledVars for" (ppr tv1 <+> text "and" <+> ppr tv2)
        ; traceTc "uUnfilledVars" (    text "trying to unify" <+> ppr k1
                                   <+> text "with"            <+> ppr k2)
-       ; co_k <- uType kind_origin KindLevel k1 k2
-       ; let no_swap ref = maybe_sym swapped <$>
-                           updateMeta tv1 ref ty2 (mkSymCo co_k)
-             do_swap ref = maybe_sym (flipSwap swapped) <$>
-                           updateMeta tv2 ref ty1 co_k
+       ; dflags <- getDynFlags
+       ; let fill_var inner_swapped tv ref ty
+               = do { mb <- checkTauTvUpdate dflags origin t_or_k tv ty
+                    ; case mb of
+                        Just (ty', co_k) ->
+                          maybe_sym inner_swapped <$>
+                          updateMeta tv ref ty' co_k
+                        Nothing -> do { traceTc "Occ-check failure in uUnfilledVars" $
+                                                vcat [ ppr swapped
+                                                     , pprTvBndr tv1
+                                                     , pprTvBndr tv2 ]
+                                      ; defer } }
+
+             no_swap ref = fill_var swapped            tv1 ref ty2
+             do_swap ref = fill_var (flipSwap swapped) tv2 ref ty1
+
+             defer = unSwap swapped (uType_defer origin t_or_k) ty1 ty2
+
        ; case (details1, details2) of
          { ( MetaTv { mtv_info = i1, mtv_ref = ref1 }
            , MetaTv { mtv_info = i2, mtv_ref = ref2 } )
@@ -1392,13 +1405,12 @@ uUnfilledVars origin t_or_k swapped tv1 details1 tv2 details2
            -- This happens for skolems of all sorts
          ; _ -> do { traceTc "deferring because I can't find a meta-tyvar:"
                        (pprTcTyVarDetails details1 <+> pprTcTyVarDetails details2)
-                   ; unSwap swapped (uType_defer origin t_or_k) ty1 ty2 } } }
+                   ; defer } } }
   where
     k1  = tyVarKind tv1
     k2  = tyVarKind tv2
     ty1 = mkTyVarTy tv1
     ty2 = mkTyVarTy tv2
-    kind_origin = KindEqOrigin ty1 (Just ty2) origin (Just t_or_k)
 
 -- | apply sym iff swapped
 maybe_sym :: SwapFlag -> Coercion -> Coercion
@@ -1444,8 +1456,11 @@ checkTauTvUpdate :: DynFlags
 
 checkTauTvUpdate dflags origin t_or_k tv ty
   | SigTv <- info
-  = ASSERT( not (isTyVarTy ty) )
-    return Nothing
+  , not (isTyVarTy ty)
+  = return Nothing
+    -- in the SigTv case where the ty is really a tyvar, then it's safe to
+    -- just fall through to the general case. NB: occurCheckExpand handles
+    -- SigTvs
   | otherwise
   = do { ty   <- zonkTcType ty
        ; co_k <- uType kind_origin KindLevel (typeKind ty) (tyVarKind tv)

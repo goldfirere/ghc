@@ -24,10 +24,14 @@ module FV (
         delFVs,
         filterFV,
         mapUnionFV,
+        tidyFV
     ) where
 
 import Var
 import VarSet
+import VarEnv
+
+import Data.Maybe
 
 -- | Predicate on possible free variables: returns @True@ iff the variable is
 -- interesting
@@ -196,3 +200,11 @@ someVars :: [Var] -> FV
 someVars vars fv_cand in_scope acc =
   mapUnionFV oneVar vars fv_cand in_scope acc
 {-# INLINE someVars #-}
+
+-- | Applies a tidying substitution to an FV
+tidyFV :: VarSet -> FV -> FV
+tidyFV env fv fv_cand in_scope acc
+  = let (v_list, v_set) = fv fv_cand in_scope acc in
+    (map go v_list, mapVarSet go v_set)
+  where
+    go v = fromMaybe v (lookupVarEnv env v)

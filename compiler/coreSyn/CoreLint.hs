@@ -146,8 +146,8 @@ For Ids, the type-substituted Id is added to the in_scope set (which
 itself is part of the TCvSubst we are carrying down), and when we
 find an occurrence of an Id, we fetch it from the in-scope set.
 
-Note [Bad unsafe coercion]
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Note [Bad coercions]
+~~~~~~~~~~~~~~~~~~~~
 
 For discussion see https://ghc.haskell.org/trac/ghc/wiki/BadUnsafeCoercions
 Linter introduces additional rules that checks improper coercion between
@@ -1113,7 +1113,7 @@ lint_ty_app ty k tys
   = lint_app (text "type" <+> quotes (ppr ty)) k tys
 
 ----------------
-lint_co_app :: Coercion -> LintedKind -> [(LintedType,LintedKind)] -> LintM LintedKind
+lint_co_app :: CoercionRep -> LintedKind -> [(LintedType,LintedKind)] -> LintM LintedKind
 lint_co_app ty k tys
   = lint_app (text "coercion" <+> quotes (ppr ty)) k tys
 
@@ -1232,8 +1232,16 @@ lintInCo co
 -- lints a coercion, confirming that its lh kind and its rh kind are both *
 -- also ensures that the role is Nominal
 lintStarCoercion :: OutCoercion -> LintM (LintedType, LintedType)
-lintStarCoercion g
-  = do { (k1, k2, t1, t2, r) <- lintCoercion g
+lintStarCoercion = lintStarCoercionX lintCoercion
+
+lintStarCoercionRep :: CoercionRep -> LintM (LintedType, LintedType)
+lintStarCoercionRep = lintStarCoercionX lintCoercionRep
+
+lintStarCoercionX :: Outputable a
+                  => (a -> LintM (LintedKind, LintedKind, LintedType, LintedType, Role))
+                  -> a -> LintM (LintedType, LintedType)
+lintStarCoercionX lint g
+  = do { (k1, k2, t1, t2, r) <- lint g
        ; lintStar (text "the kind of the left type in" <+> ppr g) k1
        ; lintStar (text "the kind of the right type in" <+> ppr g) k2
        ; lintRole g Nominal r
@@ -1250,15 +1258,74 @@ lintCoercion :: OutCoercion -> LintM (LintedKind, LintedKind, LintedType, Linted
 
 -- If you edit this function, you may need to update the GHC formalism
 -- See Note [GHC Formalism]
-lintCoercion (Refl r ty)
+lintCoercion co@(CachedCoercion { coercionKind = Pair cached_ty1 cached_ty2
+                                , coercionRole = role
+                                , coercionRep  = rep } )
+  = do { cached_ty1 <- applySubstTy cached_ty1
+       ; cached_ty2 <- applySubstTy cached_ty2
+       ; (k1, k2, ty1, ty2, role') <- lintCoercionRep rep
+       ; ensureEqTys ty1 cached_ty1 (cached_type_mismatch "left"  ty1 cached_ty1)
+       ; ensureEqTys ty2 cached_ty2 (cached_type_mismatch "right" ty2 cached_ty2)
+       ; lintRole co role role'
+
+          -- See Note [Bad coercions]
+       ; when (role /= Phantom && classifiesTypeWithValues k1
+                               && classifiesTypeWithValues k2)
+              (check_types ty1 ty2)
+
+       ; return (k1, k2, ty1, ty2, role) }
+  where
+    cached_type_mismatch which found cached
+      = vcat [ text "Incorrect cached" <+> text which <> text "-hand type for coercion."
+             , text "  Cached type:" <+> ppr cached
+             , text "   Found type:" <+> ppr found
+             , text "     Coercion:" <+> ppr co ]
+
+    check_types t1 t2
+       = case (repType t1, repType t2) of
+           (UnaryRep _, UnaryRep _) ->
+              validate_co (typePrimRep t1) (typePrimRep t2)
+           (UbxTupleRep rep1, UbxTupleRep rep2) -> do
+              checkWarnL (length rep1 == length rep2)
+                         (report "unboxed tuples of different length")
+              zipWithM_ check_types rep1 rep2
+           _  -> addWarnL (report "unboxed tuple and ordinary type")
+
+    validate_co :: PrimRep -> PrimRep -> LintM ()
+    validate_co rep1 rep2
+      = do { dflags <- getDynFlags
+           ; checkWarnL (is_unboxed rep1 == is_unboxed rep2)
+                        (report "unboxed and boxed value")
+           ; checkWarnL (TyCon.primRepSizeW dflags rep1
+                          == TyCon.primRepSizeW dflags rep2)
+                        (report "unboxed values of different size")
+           ; let fl = liftM2 (==) (TyCon.primRepIsFloat rep1)
+                                  (TyCon.primRepIsFloat rep2)
+           ; case fl of
+               Nothing    -> addWarnL (report "vector types")
+               Just False -> addWarnL (report "float and integral values")
+               _          -> return ()
+           }
+
+    is_unboxed :: PrimRep -> Bool
+    is_unboxed PtrRep = False
+    is_unboxed _      = True
+
+    report s = hang (text $ "Bad coercion between " ++ s)
+                    2 (vcat [ text "From:" <+> ppr cached_ty1
+                            , text "  To:" <+> ppr cached_ty2])
+
+lintCoercionRep :: CoercionRep
+                -> LintM (LintedKind, LintedKind, LintedType, LintedType, Role)
+lintCoercionRep (Refl r ty)
   = do { k <- lintType ty
        ; return (k, k, ty, ty, r) }
 
-lintCoercion co@(TyConAppCo r tc cos)
+lintCoercionRep co@(TyConAppCo r tc cos)
   | tc `hasKey` funTyConKey
   , [co1,co2] <- cos
-  = do { (k1,k'1,s1,t1,r1) <- lintCoercion co1
-       ; (k2,k'2,s2,t2,r2) <- lintCoercion co2
+  = do { (k1,k'1,s1,t1,r1) <- lintCoercionRep co1
+       ; (k2,k'2,s2,t2,r2) <- lintCoercionRep co2
        ; k <- lintArrow (text "coercion" <+> quotes (ppr co)) k1 k2
        ; k' <- lintArrow (text "coercion" <+> quotes (ppr co)) k'1 k'2
        ; lintRole co1 r r1
@@ -1270,20 +1337,20 @@ lintCoercion co@(TyConAppCo r tc cos)
 
   | otherwise
   = do { checkTyCon tc
-       ; (k's, ks, ss, ts, rs) <- mapAndUnzip5M lintCoercion cos
+       ; (k's, ks, ss, ts, rs) <- mapAndUnzip5M lintCoercionRep cos
        ; k' <- lint_co_app co (tyConKind tc) (ss `zip` k's)
        ; k <- lint_co_app co (tyConKind tc) (ts `zip` ks)
        ; _ <- zipWith3M lintRole cos (tyConRolesX r tc) rs
        ; return (k', k, mkTyConApp tc ss, mkTyConApp tc ts, r) }
 
-lintCoercion co@(AppCo co1 co2)
+lintCoercionRep co@(AppCo co1 co2)
   | TyConAppCo {} <- co1
   = failWithL (text "TyConAppCo to the left of AppCo:" <+> ppr co)
   | Refl _ (TyConApp {}) <- co1
   = failWithL (text "Refl (TyConApp ...) to the left of AppCo:" <+> ppr co)
   | otherwise
-  = do { (k1,  k2,  s1, s2, r1) <- lintCoercion co1
-       ; (k'1, k'2, t1, t2, r2) <- lintCoercion co2
+  = do { (k1,  k2,  s1, s2, r1) <- lintCoercionRep co1
+       ; (k'1, k'2, t1, t2, r2) <- lintCoercionRep co2
        ; k3 <- lint_co_app co k1 [(t1,k'1)]
        ; k4 <- lint_co_app co k2 [(t2,k'2)]
        ; if r1 == Phantom
@@ -1294,16 +1361,16 @@ lintCoercion co@(AppCo co1 co2)
        ; return (k3, k4, mkAppTy s1 t1, mkAppTy s2 t2, r1) }
 
 ----------
-lintCoercion (ForAllCo tv1 kind_co co)
+lintCoercionRep (ForAllCo tv1 _vis kind_co co)
   = do { (_, k2) <- lintStarCoercion kind_co
        ; let tv2 = setTyVarKind tv1 k2
-       ; (k3, k4, t1, t2, r) <- addInScopeVar tv1 $ lintCoercion co
+       ; (k3, k4, t1, t2, r) <- addInScopeVar tv1 $ lintCoercionRep co
        ; let tyl = mkNamedForAllTy tv1 Invisible t1
              tyr = mkNamedForAllTy tv2 Invisible $
                    substTyWithUnchecked [tv1] [TyVarTy tv2 `mkCastTy` mkSymCo kind_co] t2
        ; return (k3, k4, tyl, tyr, r) }
 
-lintCoercion (CoVarCo cv)
+lintCoercionRep (CoVarCo cv)
   | not (isCoVar cv)
   = failWithL (hang (text "Bad CoVarCo:" <+> ppr cv)
                   2 (text "With offending type:" <+> ppr (varType cv)))
@@ -1313,8 +1380,7 @@ lintCoercion (CoVarCo cv)
        ; lintUnliftedCoVar cv
        ; return $ coVarKindsTypesRole cv' }
 
--- See Note [Bad unsafe coercion]
-lintCoercion co@(UnivCo prov r ty1 ty2)
+lintCoercionRep co@(UnivCo prov r ty1 ty2)
   = do { k1 <- lintType ty1
        ; k2 <- lintType ty2
        ; case prov of
@@ -1333,63 +1399,27 @@ lintCoercion co@(UnivCo prov r ty1 ty2)
            HoleProv h       -> addErrL $
                                text "Unfilled coercion hole:" <+> ppr h
 
-       ; when (r /= Phantom && classifiesTypeWithValues k1
-                            && classifiesTypeWithValues k2)
-              (checkTypes ty1 ty2)
        ; return (k1, k2, ty1, ty2, r) }
-   where
-     report s = hang (text $ "Unsafe coercion between " ++ s)
-                     2 (vcat [ text "From:" <+> ppr ty1
-                             , text "  To:" <+> ppr ty2])
-     isUnBoxed :: PrimRep -> Bool
-     isUnBoxed PtrRep = False
-     isUnBoxed _      = True
-     checkTypes t1 t2
-       = case (repType t1, repType t2) of
-           (UnaryRep _, UnaryRep _) ->
-              validateCoercion (typePrimRep t1)
-                               (typePrimRep t2)
-           (UbxTupleRep rep1, UbxTupleRep rep2) -> do
-              checkWarnL (length rep1 == length rep2)
-                         (report "unboxed tuples of different length")
-              zipWithM_ checkTypes rep1 rep2
-           _  -> addWarnL (report "unboxed tuple and ordinary type")
-     validateCoercion :: PrimRep -> PrimRep -> LintM ()
-     validateCoercion rep1 rep2
-       = do { dflags <- getDynFlags
-            ; checkWarnL (isUnBoxed rep1 == isUnBoxed rep2)
-                         (report "unboxed and boxed value")
-            ; checkWarnL (TyCon.primRepSizeW dflags rep1
-                           == TyCon.primRepSizeW dflags rep2)
-                         (report "unboxed values of different size")
-            ; let fl = liftM2 (==) (TyCon.primRepIsFloat rep1)
-                                   (TyCon.primRepIsFloat rep2)
-            ; case fl of
-                Nothing    -> addWarnL (report "vector types")
-                Just False -> addWarnL (report "float and integral values")
-                _          -> return ()
-            }
-
-     check_kinds kco k1 k2 = do { (k1', k2') <- lintStarCoercion kco
+  where
+     check_kinds kco k1 k2 = do { (k1', k2') <- lintStarCoercionRep kco
                                 ; ensureEqTys k1 k1' (mkBadUnivCoMsg CLeft  co)
                                 ; ensureEqTys k2 k2' (mkBadUnivCoMsg CRight co) }
 
-
-lintCoercion (SymCo co)
-  = do { (k1, k2, ty1, ty2, r) <- lintCoercion co
+lintCoercionRep (SymCo co)
+  = do { (k1, k2, ty1, ty2, r) <- lintCoercionRep co
        ; return (k2, k1, ty2, ty1, r) }
 
-lintCoercion co@(TransCo co1 co2)
-  = do { (k1a, _k1b, ty1a, ty1b, r1) <- lintCoercion co1
-       ; (_k2a, k2b, ty2a, ty2b, r2) <- lintCoercion co2
+lintCoercionRep co@(TransCo co1 co2)
+  = do { (k1a, _k1b, ty1a, ty1b, r1) <- lintCoercionRep co1
+       ; (_k2a, k2b, ty2a, ty2b, r2) <- lintCoercionRep co2
        ; ensureEqTys ty1b ty2a
                (hang (text "Trans coercion mis-match:" <+> ppr co)
                    2 (vcat [ppr ty1a, ppr ty1b, ppr ty2a, ppr ty2b]))
        ; lintRole co r1 r2
        ; return (k1a, k2b, ty1a, ty2b, r1) }
 
-lintCoercion the_co@(NthCo n co)
-  = do { (_, _, s, t, r) <- lintCoercion co
+lintCoercionRep the_co@(NthCo n co)
+  = do { (_, _, s, t, r) <- lintCoercionRep co
        ; case (splitForAllTy_maybe s, splitForAllTy_maybe t) of
          { (Just (tv_s, _ty_s), Just (tv_t, _ty_t))
              |  n == 0
@@ -1418,8 +1448,8 @@ lintCoercion the_co@(NthCo n co)
          ; _ -> failWithL (hang (text "Bad getNth:")
                               2 (ppr the_co $$ ppr s $$ ppr t)) }}}
 
-lintCoercion the_co@(LRCo lr co)
-  = do { (_,_,s,t,r) <- lintCoercion co
+lintCoercionRep the_co@(LRCo lr co)
+  = do { (_,_,s,t,r) <- lintCoercionRep co
        ; lintRole co Nominal r
        ; case (splitAppTy_maybe s, splitAppTy_maybe t) of
            (Just s_pr, Just t_pr)
@@ -1433,22 +1463,22 @@ lintCoercion the_co@(LRCo lr co)
            _ -> failWithL (hang (text "Bad LRCo:")
                               2 (ppr the_co $$ ppr s $$ ppr t)) }
 
-lintCoercion (InstCo co arg)
-  = do { (k3, k4, t1',t2', r) <- lintCoercion co
-       ; (k1',k2',s1,s2, r') <- lintCoercion arg
+lintCoercionRep (InstCo co arg)
+  = do { (k3, k4, t1',t2', r) <- lintCoercionRep co
+       ; (k1',k2',s1,s2, r') <- lintCoercionRep arg
        ; lintRole arg Nominal r'
        ; case (splitForAllTy_maybe t1', splitForAllTy_maybe t2') of
           (Just (tv1,t1), Just (tv2,t2))
             | k1' `eqType` tyVarKind tv1
             , k2' `eqType` tyVarKind tv2
             -> return (k3, k4,
-                       substTyWith [tv1] [s1] t1,
-                       substTyWith [tv2] [s2] t2, r)
+                       substTyWithAddInScope [tv1] [s1] t1,
+                       substTyWithAddInScope [tv2] [s2] t2, r)
             | otherwise
             -> failWithL (text "Kind mis-match in inst coercion")
           _ -> failWithL (text "Bad argument of inst") }
 
-lintCoercion co@(AxiomInstCo con ind cos)
+lintCoercionRep co@(AxiomInstCo con ind cos)
   = do { unless (0 <= ind && ind < numBranches (coAxiomBranches con))
                 (bad_ax (text "index out of range"))
        ; let CoAxBranch { cab_tvs   = ktvs
@@ -1476,7 +1506,7 @@ lintCoercion co@(AxiomInstCo con ind cos)
                         2 (ppr co))
 
     check_ki (subst_l, subst_r) (ktv, role, arg)
-      = do { (k', k'', s', t', r) <- lintCoercion arg
+      = do { (k', k'', s', t', r) <- lintCoercionRep arg
            ; lintRole arg role r
            ; let ktv_kind_l = substTy subst_l (tyVarKind ktv)
                  ktv_kind_r = substTy subst_r (tyVarKind ktv)
@@ -1487,23 +1517,26 @@ lintCoercion co@(AxiomInstCo con ind cos)
            ; return (extendTCvSubst subst_l ktv s',
                      extendTCvSubst subst_r ktv t') }
 
-lintCoercion (CoherenceCo co1 co2)
-  = do { (_, k2, t1, t2, r) <- lintCoercion co1
+lintCoercionRep (CoherenceCo co1 co2)
+  = do { (_, k2, t1, t2, r) <- lintCoercionRep co1
        ; let lhsty = mkCastTy t1 co2
        ; k1' <- lintType lhsty
        ; return (k1', k2, lhsty, t2, r) }
 
-lintCoercion (KindCo co)
-  = do { (k1, k2, _, _, _) <- lintCoercion co
+lintCoercionRep (KindCo co)
+  = do { (k1, k2, _, _, _) <- lintCoercionRep co
        ; return (liftedTypeKind, liftedTypeKind, k1, k2, Nominal) }
 
-lintCoercion (SubCo co')
-  = do { (k1,k2,s,t,r) <- lintCoercion co'
-       ; lintRole co' Nominal r
-       ; return (k1,k2,s,t,Representational) }
+lintCoercionRep co@(SubCo r co')
+  = do { (k1,k2,s,t,r') <- lintCoercionRep co'
+       ; lintL (r' `ltRole` r || r' == r)
+               (vcat [ text "SubCo makes a role stricter, from" <+> ppr r' <+>
+                       text "to" <+> ppr r
+                     , text "Coercion:" <+> ppr co ])
+       ; return (k1,k2,s,t,r) }
 
-lintCoercion this@(AxiomRuleCo co cs)
-  = do { eqs <- mapM lintCoercion cs
+lintCoercionRep this@(AxiomRuleCo co cs)
+  = do { eqs <- mapM lintCoercionRep cs
        ; lintRoles 0 (coaxrAsmpRoles co) eqs
        ; case coaxrProves co [ Pair l r | (_,_,l,r,_) <- eqs ] of
            Nothing -> err "Malformed use of AxiomRuleCo" [ ppr this ]
@@ -1740,8 +1773,7 @@ lintInScope loc_msg var =
              (hsep [pprBndr LetBind var, loc_msg]) }
 
 ensureEqTys :: OutType -> OutType -> MsgDoc -> LintM ()
--- check ty2 is subtype of ty1 (ie, has same structure but usage
--- annotations need only be consistent, not equal)
+-- check ty2 equals ty1
 -- Assumes ty1,ty2 are have alrady had the substitution applied
 ensureEqTys ty1 ty2 msg = lintL (ty1 `eqType` ty2) msg
 
@@ -1965,12 +1997,12 @@ mkCastErr expr co from_ty expr_ty
           text "Coercion used in cast:" <+> ppr co
          ]
 
-mkBadUnivCoMsg :: LeftOrRight -> Coercion -> SDoc
+mkBadUnivCoMsg :: LeftOrRight -> CoercionRep -> SDoc
 mkBadUnivCoMsg lr co
   = text "Kind mismatch on the" <+> pprLeftOrRight lr <+>
     text "side of a UnivCo:" <+> ppr co
 
-mkBadProofIrrelMsg :: Type -> Coercion -> SDoc
+mkBadProofIrrelMsg :: Type -> CoercionRep -> SDoc
 mkBadProofIrrelMsg ty co
   = hang (text "Found a non-coercion in a proof-irrelevance UnivCo:")
        2 (vcat [ text "type:" <+> ppr ty

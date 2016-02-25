@@ -3,6 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE MultiWayIf #-}
 
 module Unify (
         tcMatchTy, tcMatchTys, tcMatchTyX, tcMatchTysX, tcUnifyTyWithTFs,
@@ -17,9 +18,6 @@ module Unify (
         tcUnifyTysFG,
         BindFlag(..),
         UnifyResult, UnifyResultM(..),
-
-        -- Matching a type against a lifted type (coercion)
-        liftCoMatch
    ) where
 
 #include "HsVersions.h"
@@ -34,7 +32,6 @@ import Coercion hiding ( getCvSubstEnv )
 import TyCon
 import TyCoRep hiding ( getTvSubstEnv, getCvSubstEnv )
 import Util
-import Pair
 import Outputable
 
 import Control.Monad
@@ -720,23 +717,23 @@ unify_ty (ForAllTy (Named tv1 _) ty1) (ForAllTy (Named tv2 _) ty2) kco
 unify_ty (CoercionTy co1) (CoercionTy co2) kco
   = do { unif <- amIUnifying
        ; c_subst <- getCvSubstEnv
-       ; case co1 of
-           CoVarCo cv
-             |  not unif
-             ,  not (cv `elemVarEnv` c_subst)
-             -> do { b <- tvBindFlagL cv
-                   ; if b == BindMe
-                       then do { checkRnEnvRCo co2
-                               ; let [_, _, co_l, co_r] = decomposeCo 4 kco
+       ; if | Just cv <- isCoVar_maybe co1
+              ,  not unif
+              ,  not (cv `elemVarEnv` c_subst)
+              -> do { b <- tvBindFlagL cv
+                    ; if b == BindMe
+                      then do { checkRnEnvRCo co2
+                              ; let [_, _, co_l, co_r] = decomposeCo 4 kco
                                   -- cv :: t1 ~ t2
                                   -- co2 :: s1 ~ s2
                                   -- co_l :: t1 ~ s1
                                   -- co_r :: t2 ~ s2
-                               ; extendCvEnv cv (co_l `mkTransCo`
-                                                 co2 `mkTransCo`
-                                                 mkSymCo co_r) }
-                       else return () }
-           _ -> return () }
+                              ; extendCvEnv cv (co_l `mkTransCo`
+                                                co2 `mkTransCo`
+                                                mkSymCo co_r) }
+                      else return () }
+            | otherwise
+              -> return () }
 
 unify_ty ty1 _ _
   | Just (tc1, _) <- splitTyConApp_maybe ty1
@@ -1020,195 +1017,3 @@ maybeApart = UM (\_ state -> MaybeApart (state, ()))
 
 surelyApart :: UM a
 surelyApart = UM (\_ _ -> SurelyApart)
-
-{-
-%************************************************************************
-%*                                                                      *
-            Matching a (lifted) type against a coercion
-%*                                                                      *
-%************************************************************************
-
-This section defines essentially an inverse to liftCoSubst. It is defined
-here to avoid a dependency from Coercion on this module.
-
--}
-
-data MatchEnv = ME { me_tmpls :: TyVarSet
-                   , me_env   :: RnEnv2 }
-
--- | 'liftCoMatch' is sort of inverse to 'liftCoSubst'.  In particular, if
---   @liftCoMatch vars ty co == Just s@, then @tyCoSubst s ty == co@,
---   where @==@ there means that the result of tyCoSubst has the same
---   type as the original co; but may be different under the hood.
---   That is, it matches a type against a coercion of the same
---   "shape", and returns a lifting substitution which could have been
---   used to produce the given coercion from the given type.
---   Note that this function is incomplete -- it might return Nothing
---   when there does indeed exist a possible lifting context.
---
--- This function is incomplete in that it doesn't respect the equality
--- in `eqType`. That is, it's possible that this will succeed for t1 and
--- fail for t2, even when t1 `eqType` t2. That's because it depends on
--- there being a very similar structure between the type and the coercion.
--- This incompleteness shouldn't be all that surprising, especially because
--- it depends on the structure of the coercion, which is a silly thing to do.
---
--- The lifting context produced doesn't have to be exacting in the roles
--- of the mappings. This is because any use of the lifting context will
--- also require a desired role. Thus, this algorithm prefers mapping to
--- nominal coercions where it can do so.
-liftCoMatch :: TyCoVarSet -> Type -> Coercion -> Maybe LiftingContext
-liftCoMatch tmpls ty co
-  = do { cenv1 <- ty_co_match menv emptyVarEnv ki ki_co ki_ki_co ki_ki_co
-       ; cenv2 <- ty_co_match menv cenv1       ty co
-                              (mkNomReflCo co_lkind) (mkNomReflCo co_rkind)
-       ; return (LC (mkEmptyTCvSubst in_scope) cenv2) }
-  where
-    menv     = ME { me_tmpls = tmpls, me_env = mkRnEnv2 in_scope }
-    in_scope = mkInScopeSet (tmpls `unionVarSet` tyCoVarsOfCo co)
-    -- Like tcMatchTy, assume all the interesting variables
-    -- in ty are in tmpls
-
-    ki       = typeKind ty
-    ki_co    = promoteCoercion co
-    ki_ki_co = mkNomReflCo liftedTypeKind
-
-    Pair co_lkind co_rkind = coercionKind ki_co
-
--- | 'ty_co_match' does all the actual work for 'liftCoMatch'.
-ty_co_match :: MatchEnv   -- ^ ambient helpful info
-            -> LiftCoEnv  -- ^ incoming subst
-            -> Type       -- ^ ty, type to match
-            -> Coercion   -- ^ co, coercion to match against
-            -> Coercion   -- ^ :: kind of L type of substed ty ~N L kind of co
-            -> Coercion   -- ^ :: kind of R type of substed ty ~N R kind of co
-            -> Maybe LiftCoEnv
-ty_co_match menv subst ty co lkco rkco
-  | Just ty' <- coreViewOneStarKind ty = ty_co_match menv subst ty' co lkco rkco
-
-  -- handle Refl case:
-  | tyCoVarsOfType ty `isNotInDomainOf` subst
-  , Just (ty', _) <- isReflCo_maybe co
-  , ty `eqType` ty'
-  = Just subst
-
-  where
-    isNotInDomainOf :: VarSet -> VarEnv a -> Bool
-    isNotInDomainOf set env
-      = noneSet (\v -> elemVarEnv v env) set
-
-    noneSet :: (Var -> Bool) -> VarSet -> Bool
-    noneSet f = foldVarSet (\v rest -> rest && (not $ f v)) True
-
-ty_co_match menv subst ty co lkco rkco
-  | CastTy ty' co' <- ty
-  = ty_co_match menv subst ty' co (co' `mkTransCo` lkco) (co' `mkTransCo` rkco)
-
-  | CoherenceCo co1 co2 <- co
-  = ty_co_match menv subst ty co1 (lkco `mkTransCo` mkSymCo co2) rkco
-
-  | SymCo co' <- co
-  = swapLiftCoEnv <$> ty_co_match menv (swapLiftCoEnv subst) ty co' rkco lkco
-
-  -- Match a type variable against a non-refl coercion
-ty_co_match menv subst (TyVarTy tv1) co lkco rkco
-  | Just co1' <- lookupVarEnv subst tv1' -- tv1' is already bound to co1
-  = if eqCoercionX (nukeRnEnvL rn_env) co1' co
-    then Just subst
-    else Nothing       -- no match since tv1 matches two different coercions
-
-  | tv1' `elemVarSet` me_tmpls menv           -- tv1' is a template var
-  = if any (inRnEnvR rn_env) (tyCoVarsOfCoList co)
-    then Nothing      -- occurs check failed
-    else Just $ extendVarEnv subst tv1' $
-                castCoercionKind co (mkSymCo lkco) (mkSymCo rkco)
-
-  | otherwise
-  = Nothing
-
-  where
-    rn_env = me_env menv
-    tv1' = rnOccL rn_env tv1
-
-  -- just look through SubCo's. We don't really care about roles here.
-ty_co_match menv subst ty (SubCo co) lkco rkco
-  = ty_co_match menv subst ty co lkco rkco
-
-ty_co_match menv subst (AppTy ty1a ty1b) co _lkco _rkco
-  | Just (co2, arg2) <- splitAppCo_maybe co     -- c.f. Unify.match on AppTy
-  = ty_co_match_app menv subst ty1a ty1b co2 arg2
-ty_co_match menv subst ty1 (AppCo co2 arg2) _lkco _rkco
-  | Just (ty1a, ty1b) <- repSplitAppTy_maybe ty1
-       -- yes, the one from Type, not TcType; this is for coercion optimization
-  = ty_co_match_app menv subst ty1a ty1b co2 arg2
-
-ty_co_match menv subst (TyConApp tc1 tys) (TyConAppCo _ tc2 cos) _lkco _rkco
-  = ty_co_match_tc menv subst tc1 tys tc2 cos
-ty_co_match menv subst (ForAllTy (Anon ty1) ty2) (TyConAppCo _ tc cos) _lkco _rkco
-  = ty_co_match_tc menv subst funTyCon [ty1, ty2] tc cos
-
-ty_co_match menv subst (ForAllTy (Named tv1 _) ty1)
-                       (ForAllCo tv2 kind_co2 co2)
-                       lkco rkco
-  = do { subst1 <- ty_co_match menv subst (tyVarKind tv1) kind_co2
-                               ki_ki_co ki_ki_co
-       ; let rn_env0 = me_env menv
-             rn_env1 = rnBndr2 rn_env0 tv1 tv2
-             menv'   = menv { me_env = rn_env1 }
-       ; ty_co_match menv' subst1 ty1 co2 lkco rkco }
-  where
-    ki_ki_co = mkNomReflCo liftedTypeKind
-
-ty_co_match _ subst (CoercionTy {}) _ _ _
-  = Just subst -- don't inspect coercions
-
-ty_co_match menv subst ty co lkco rkco
-  | Just co' <- pushRefl co = ty_co_match menv subst ty co' lkco rkco
-  | otherwise               = Nothing
-
-ty_co_match_tc :: MatchEnv -> LiftCoEnv
-               -> TyCon -> [Type]
-               -> TyCon -> [Coercion]
-               -> Maybe LiftCoEnv
-ty_co_match_tc menv subst tc1 tys1 tc2 cos2
-  = do { guard (tc1 == tc2)
-       ; ty_co_match_args menv subst tys1 cos2 lkcos rkcos }
-  where
-    Pair lkcos rkcos
-      = traverse (fmap mkNomReflCo . coercionKind) cos2
-
-ty_co_match_app :: MatchEnv -> LiftCoEnv
-                -> Type -> Type -> Coercion -> Coercion
-                -> Maybe LiftCoEnv
-ty_co_match_app menv subst ty1a ty1b co2a co2b
-  = do { -- TODO (RAE): Remove this exponential behavior.
-         subst1 <- ty_co_match menv subst  ki1a ki2a ki_ki_co ki_ki_co
-       ; let Pair lkco rkco = mkNomReflCo <$> coercionKind ki2a
-       ; subst2 <- ty_co_match menv subst1 ty1a co2a lkco rkco
-       ; ty_co_match menv subst2 ty1b co2b (mkNthCo 0 lkco) (mkNthCo 0 rkco) }
-  where
-    ki1a = typeKind ty1a
-    ki2a = promoteCoercion co2a
-    ki_ki_co = mkNomReflCo liftedTypeKind
-
-ty_co_match_args :: MatchEnv -> LiftCoEnv -> [Type]
-                 -> [Coercion] -> [Coercion] -> [Coercion]
-                 -> Maybe LiftCoEnv
-ty_co_match_args _    subst []       []         _ _ = Just subst
-ty_co_match_args menv subst (ty:tys) (arg:args) (lkco:lkcos) (rkco:rkcos)
-  = do { subst' <- ty_co_match menv subst ty arg lkco rkco
-       ; ty_co_match_args menv subst' tys args lkcos rkcos }
-ty_co_match_args _    _     _        _          _ _ = Nothing
-
-pushRefl :: Coercion -> Maybe Coercion
-pushRefl (Refl Nominal (AppTy ty1 ty2))
-  = Just (AppCo (Refl Nominal ty1) (mkNomReflCo ty2))
-pushRefl (Refl r (ForAllTy (Anon ty1) ty2))
-  = Just (TyConAppCo r funTyCon [mkReflCo r ty1, mkReflCo r ty2])
-pushRefl (Refl r (TyConApp tc tys))
-  = Just (TyConAppCo r tc (zipWith mkReflCo (tyConRolesX r tc) tys))
-pushRefl (Refl r (ForAllTy (Named tv _) ty))
-  = Just (mkHomoForAllCos_NoRefl [tv] (Refl r ty))
-    -- NB: NoRefl variant. Otherwise, we get a loop!
-pushRefl (Refl r (CastTy ty co))  = Just (castCoercionKind (Refl r ty) co co)
-pushRefl _                        = Nothing

@@ -8,6 +8,8 @@ listTyCon :: TyCon
 typeNatKind, typeSymbolKind :: Type
 mkBoxedTupleTy :: [Type] -> Type
 
+unitTy :: Type
+
 liftedTypeKind :: Kind
 constraintKind :: Kind
 

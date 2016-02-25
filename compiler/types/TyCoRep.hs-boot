@@ -7,6 +7,7 @@ data Type
 data TyBinder
 data TyThing
 data Coercion
+data CoercionRep
 data LeftOrRight
 data UnivCoProvenance
 data TCvSubst

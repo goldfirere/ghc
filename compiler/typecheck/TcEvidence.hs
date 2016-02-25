@@ -26,7 +26,7 @@ module TcEvidence (
   Role(..), LeftOrRight(..), pickLR,
   mkTcReflCo, mkTcNomReflCo, mkTcRepReflCo,
   mkTcTyConAppCo, mkTcAppCo, mkTcFunCo,
-  mkTcAxInstCo, mkTcUnbranchedAxInstCo, mkTcForAllCo, mkTcForAllCos,
+  mkTcAxInstCo, mkTcUnbranchedAxInstCo, mkTcForAllCos,
   mkTcSymCo, mkTcTransCo, mkTcNthCo, mkTcLRCo, mkTcSubCo, maybeTcSubCo,
   tcDowngradeRole,
   mkTcAxiomRuleCo, mkTcCoherenceLeftCo, mkTcCoherenceRightCo, mkTcPhantomCo,
@@ -95,8 +95,7 @@ mkTcAxInstCo           :: Role -> CoAxiom br -> BranchIndex
                        -> [TcType] -> [TcCoercion] -> TcCoercion
 mkTcUnbranchedAxInstCo :: CoAxiom Unbranched -> [TcType]
                        -> [TcCoercion] -> TcCoercionR
-mkTcForAllCo           :: TyVar -> TcCoercionN -> TcCoercion -> TcCoercion
-mkTcForAllCos          :: [(TyVar, TcCoercionN)] -> TcCoercion -> TcCoercion
+mkTcForAllCos          :: [(TyVar, VisibilityFlag, TcCoercionN)] -> TcCoercion -> TcCoercion
 mkTcNthCo              :: Int -> TcCoercion -> TcCoercion
 mkTcLRCo               :: LeftOrRight -> TcCoercion -> TcCoercion
 mkTcSubCo              :: TcCoercionN -> TcCoercionR
@@ -124,7 +123,6 @@ mkTcAppCo              = mkAppCo
 mkTcFunCo              = mkFunCo
 mkTcAxInstCo           = mkAxInstCo
 mkTcUnbranchedAxInstCo = mkUnbranchedAxInstCo Representational
-mkTcForAllCo           = mkForAllCo
 mkTcForAllCos          = mkForAllCos
 mkTcNthCo              = mkNthCo
 mkTcLRCo               = mkLRCo

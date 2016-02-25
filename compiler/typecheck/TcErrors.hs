@@ -646,7 +646,9 @@ addDeferredBinding ctxt err ct
              -> do { -- See Note [Deferred errors for coercion holes]
                      evar <- newEvVar pred
                    ; addTcEvBind ev_binds_var $ mkWantedEvBind evar err_tm
-                   ; fillCoercionHole hole (mkTcCoVarCo evar) }}
+                   ; fillCoercionHole hole (mkTcCoVarCo evar) }
+           ReflDest
+             -> pprPanic "addDeferredBinding" (ppr ct) }
 
   | otherwise   -- Do not set any evidence for Given/Derived
   = return ()
@@ -1496,7 +1498,7 @@ mkExpectedActualMsg ty1 ty2 (TypeEqOrigin { uo_actual = act
       _ | not (act `pickyEqType` exp)
         -> vcat [ text "Expected" <+> sort <> colon <+> ppr exp
                 , text "  Actual" <+> sort <> colon <+> ppr act
-                , if printExpanded then expandedTys else empty ]
+                , ppWhen printExpanded expandedTys ]
 
         | otherwise
         -> empty

@@ -9,7 +9,7 @@ import Control.Monad.ST	( runST )
 type IndTree s t = STArray s (Int,Int) t
 
 itgen :: Constructed a => (Int,Int) -> a -> IndTree s a
-itgen n x = 
+itgen n x =
 	runST (
 	newSTArray ((1,1),n) x)
 

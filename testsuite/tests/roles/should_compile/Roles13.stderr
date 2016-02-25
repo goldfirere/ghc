@@ -1,18 +1,19 @@
 
 ==================== Tidy Core ====================
-Result size of Tidy Core = {terms: 51, types: 20, coercions: 5}
+Result size of Tidy Core = {terms: 51, types: 20, coercions: 7}
 
 -- RHS size: {terms: 2, types: 2, coercions: 0}
 a :: Wrap Age -> Wrap Age
 [GblId, Arity=1, Caf=NoCafRefs, Str=DmdType]
 a = \ (ds :: Wrap Age) -> ds
 
--- RHS size: {terms: 1, types: 0, coercions: 5}
+-- RHS size: {terms: 1, types: 0, coercions: 7}
 convert :: Wrap Age -> Int
 [GblId, Arity=1, Caf=NoCafRefs, Str=DmdType]
 convert =
   a
-  `cast` (<Wrap Age>_R -> Roles13.N:Wrap[0] Roles13.N:Age[0]
+  `cast` (<Wrap Age>_R
+          -> Roles13.N:Wrap[0] <Age>_R ; Roles13.N:Age[0]
           :: (Wrap Age -> Wrap Age) ~R# (Wrap Age -> Int))
 
 -- RHS size: {terms: 2, types: 0, coercions: 0}

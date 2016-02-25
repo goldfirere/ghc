@@ -41,6 +41,7 @@ import Type             ( Type, substTy, mkTCvSubst )
 import TcType           ( tcSplitTyConApp_maybe )
 import TysPrim          ( anyTypeOfKind )
 import Coercion
+import TyCoRep          ( Coercion(..), CoercionRep(..) )
 import CoreTidy         ( tidyRules )
 import Id
 import IdInfo           ( RuleInfo( RuleInfo ) )
@@ -790,38 +791,38 @@ match_co :: RuleMatchEnv
          -> Coercion
          -> Coercion
          -> Maybe RuleSubst
-match_co renv subst co1 co2
-  | Just cv <- getCoVar_maybe co1
-  = match_var renv subst cv (Coercion co2)
-  | Just (ty1, r1) <- isReflCo_maybe co1
-  = do { (ty2, r2) <- isReflCo_maybe co2
-       ; guard (r1 == r2)
-       ; match_ty renv subst ty1 ty2 }
-match_co renv subst co1 co2
-  | Just (tc1, cos1) <- splitTyConAppCo_maybe co1
-  = case splitTyConAppCo_maybe co2 of
-      Just (tc2, cos2)
-        |  tc1 == tc2
-        -> match_cos renv subst cos1 cos2
-      _ -> Nothing
-match_co _ _ _co1 _co2
-    -- Currently just deals with CoVarCo, TyConAppCo and Refl
+match_co renv orig_subst co1 co2
+  = go orig_subst (coercionRep co1) (coercionRep co2)
+  where
+    go subst (CoVarCo cv) co2 = match_var renv subst cv
+                                          (Coercion (mkCachedCoercion co2))
+    go subst (Refl r1 ty1) (Refl r2 ty2)
+      = do { guard (r1 == r2)
+           ; match_ty renv subst ty1 ty2 }
+    go subst co1 co2
+      | Just (tc1, cos1) <- splitTyConAppCo_maybe co1
+      = case splitTyConAppCo_maybe co2 of
+          Just (tc2, cos2)
+            |  tc1 == tc2
+            -> gos subst cos1 cos2
+          _ -> Nothing
+    go _ _co1 _co2
+        -- Currently just deals with CoVarCo, TyConAppCo and Refl
 #ifdef DEBUG
-  = pprTrace "match_co: needs more cases" (ppr _co1 $$ ppr _co2) Nothing
+      = pprTrace "match_co: needs more cases" (ppr _co1 $$ ppr _co2) Nothing
 #else
-  = Nothing
+      = Nothing
 #endif
 
-match_cos :: RuleMatchEnv
-         -> RuleSubst
-         -> [Coercion]
-         -> [Coercion]
-         -> Maybe RuleSubst
-match_cos renv subst (co1:cos1) (co2:cos2) =
-  do { subst' <- match_co renv subst co1 co2
-     ; match_cos renv subst' cos1 cos2 }
-match_cos _ subst [] [] = Just subst
-match_cos _ _ cos1 cos2 = pprTrace "match_cos: not same length" (ppr cos1 $$ ppr cos2) Nothing
+    gos :: RuleSubst
+        -> [CoercionRep]
+        -> [CoercionRep]
+        -> Maybe RuleSubst
+    gos subst (co1:cos1) (co2:cos2) =
+      do { subst' <- go subst co1 co2
+         ; gos subst' cos1 cos2 }
+    gos subst [] [] = Just subst
+    gos _ cos1 cos2 = pprTrace "match_cos: not same length" (ppr cos1 $$ ppr cos2) Nothing
 
 -------------
 rnMatchBndr2 :: RuleMatchEnv -> RuleSubst -> Var -> Var -> RuleMatchEnv

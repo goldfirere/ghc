@@ -1268,7 +1268,7 @@ freeNamesIfCoercion (IfaceTyConAppCo _ tc cos)
   = freeNamesIfTc tc &&& fnList freeNamesIfCoercion cos
 freeNamesIfCoercion (IfaceAppCo c1 c2)
   = freeNamesIfCoercion c1 &&& freeNamesIfCoercion c2
-freeNamesIfCoercion (IfaceForAllCo _ kind_co co)
+freeNamesIfCoercion (IfaceForAllCo _ _ kind_co co)
   = freeNamesIfCoercion kind_co &&& freeNamesIfCoercion co
 freeNamesIfCoercion (IfaceCoVarCo _)
   = emptyNameSet
@@ -1290,7 +1290,7 @@ freeNamesIfCoercion (IfaceCoherenceCo c1 c2)
   = freeNamesIfCoercion c1 &&& freeNamesIfCoercion c2
 freeNamesIfCoercion (IfaceKindCo c)
   = freeNamesIfCoercion c
-freeNamesIfCoercion (IfaceSubCo co)
+freeNamesIfCoercion (IfaceSubCo _ co)
   = freeNamesIfCoercion co
 freeNamesIfCoercion (IfaceAxiomRuleCo _ax cos)
   -- the axiom is just a string, so we don't count it as a name.

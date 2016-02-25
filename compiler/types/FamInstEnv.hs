@@ -1182,6 +1182,13 @@ coercion. Because coercions are irrelevant anyway, there is no point in doing
 this. So, whenever we encounter a coercion, we just say that it won't change.
 That's what the CoercionTy case is doing within normalise_type.
 
+---------------
+
+Separately, you might wonder why all the normaliseType functions return pairs
+of coercions and types, when it's so easy to extract the type from the coercion.
+The answer is that the coercions might have synonyms expanded (a TyConAppCo never
+wraps a type synonym) and we don't want this behavior. So we have to return pairs.
+
 -}
 
 topNormaliseType :: FamInstEnvs -> Type -> Type
@@ -1313,7 +1320,7 @@ normalise_type
       = do { (lc', tv', h, ki') <- normalise_tyvar_bndr tyvar
            ; (co, nty)          <- withLC lc' $ normalise_type ty
            ; let tv2 = setTyVarKind tv' ki'
-           ; return (mkForAllCo tv' h co, mkNamedForAllTy tv2 vis nty) }
+           ; return (mkForAllCo tv' vis h co, mkNamedForAllTy tv2 vis nty) }
     go (TyVarTy tv)    = normalise_tyvar tv
     go (CastTy ty co)
       = do { (nco, nty) <- go ty
@@ -1343,7 +1350,9 @@ normalise_tyvar_bndr :: TyVar -> NormM (LiftingContext, TyVar, Coercion, Kind)
 normalise_tyvar_bndr tv
   = do { lc1 <- getLC
        ; env <- getEnv
-       ; let callback lc ki = runNormM (normalise_type ki) env lc Nominal
+       ; let callback lc ki
+               = let (co, rhs_ki) = runNormM (normalise_type ki) env lc Nominal in
+                 (co, ki, rhs_ki)
        ; return $ liftCoSubstVarBndrCallback callback lc1 tv }
 
 -- | a monad for the normalisation functions, reading 'FamInstEnvs',
@@ -1565,29 +1574,31 @@ allTyVarsInTy = go
     go (CastTy ty co)    = go ty `unionVarSet` go_co co
     go (CoercionTy co)   = go_co co
 
-    go_co (Refl _ ty)           = go ty
-    go_co (TyConAppCo _ _ args) = go_cos args
-    go_co (AppCo co arg)        = go_co co `unionVarSet` go_co arg
-    go_co (ForAllCo tv h co)
-      = unionVarSets [unitVarSet tv, go_co co, go_co h]
-    go_co (CoVarCo cv)          = unitVarSet cv
-    go_co (AxiomInstCo _ _ cos) = go_cos cos
-    go_co (UnivCo p _ t1 t2)    = go_prov p `unionVarSet` go t1 `unionVarSet` go t2
-    go_co (SymCo co)            = go_co co
-    go_co (TransCo c1 c2)       = go_co c1 `unionVarSet` go_co c2
-    go_co (NthCo _ co)          = go_co co
-    go_co (LRCo _ co)           = go_co co
-    go_co (InstCo co arg)       = go_co co `unionVarSet` go_co arg
-    go_co (CoherenceCo c1 c2)   = go_co c1 `unionVarSet` go_co c2
-    go_co (KindCo co)           = go_co co
-    go_co (SubCo co)            = go_co co
-    go_co (AxiomRuleCo _ cs)    = go_cos cs
+    go_co (CachedCoercion { coercionRep = rep }) = go_rep rep
 
-    go_cos = foldr (unionVarSet . go_co) emptyVarSet
+    go_rep (Refl _ ty)           = go ty
+    go_rep (TyConAppCo _ _ args) = go_reps args
+    go_rep (AppCo co arg)        = go_rep co `unionVarSet` go_rep arg
+    go_rep (ForAllCo tv _ h co)
+      = unionVarSets [unitVarSet tv, go_rep co, go_co h]
+    go_rep (CoVarCo cv)          = unitVarSet cv
+    go_rep (AxiomInstCo _ _ cos) = go_reps cos
+    go_rep (UnivCo p _ t1 t2)    = go_prov p `unionVarSet` go t1 `unionVarSet` go t2
+    go_rep (SymCo co)            = go_rep co
+    go_rep (TransCo c1 c2)       = go_rep c1 `unionVarSet` go_rep c2
+    go_rep (NthCo _ co)          = go_rep co
+    go_rep (LRCo _ co)           = go_rep co
+    go_rep (InstCo co arg)       = go_rep co `unionVarSet` go_rep arg
+    go_rep (CoherenceCo c1 c2)   = go_rep c1 `unionVarSet` go_co c2
+    go_rep (KindCo co)           = go_rep co
+    go_rep (SubCo _ co)          = go_rep co
+    go_rep (AxiomRuleCo _ cs)    = go_reps cs
+
+    go_reps = foldr (unionVarSet . go_rep) emptyVarSet
 
     go_prov UnsafeCoerceProv    = emptyVarSet
-    go_prov (PhantomProv co)    = go_co co
-    go_prov (ProofIrrelProv co) = go_co co
+    go_prov (PhantomProv co)    = go_rep co
+    go_prov (ProofIrrelProv co) = go_rep co
     go_prov (PluginProv _)      = emptyVarSet
     go_prov (HoleProv _)        = emptyVarSet
 

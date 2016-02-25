@@ -73,6 +73,7 @@ import TysPrim( funTyConName )
 import Coercion
 import Maybes( orElse )
 import Util
+import Pair
 import BasicTypes( Activation )
 import Outputable
 import FV
@@ -305,33 +306,46 @@ orphNamesOfTypes :: [Type] -> NameSet
 orphNamesOfTypes = orphNamesOfThings orphNamesOfType
 
 orphNamesOfCo :: Coercion -> NameSet
-orphNamesOfCo (Refl _ ty)           = orphNamesOfType ty
-orphNamesOfCo (TyConAppCo _ tc cos) = unitNameSet (getName tc) `unionNameSet` orphNamesOfCos cos
-orphNamesOfCo (AppCo co1 co2)       = orphNamesOfCo co1 `unionNameSet` orphNamesOfCo co2
-orphNamesOfCo (ForAllCo _ kind_co co)
-  = orphNamesOfCo kind_co `unionNameSet` orphNamesOfCo co
-orphNamesOfCo (CoVarCo _)           = emptyNameSet
-orphNamesOfCo (AxiomInstCo con _ cos) = orphNamesOfCoCon con `unionNameSet` orphNamesOfCos cos
-orphNamesOfCo (UnivCo p _ t1 t2)    = orphNamesOfProv p `unionNameSet` orphNamesOfType t1 `unionNameSet` orphNamesOfType t2
-orphNamesOfCo (SymCo co)            = orphNamesOfCo co
-orphNamesOfCo (TransCo co1 co2)     = orphNamesOfCo co1 `unionNameSet` orphNamesOfCo co2
-orphNamesOfCo (NthCo _ co)          = orphNamesOfCo co
-orphNamesOfCo (LRCo  _ co)          = orphNamesOfCo co
-orphNamesOfCo (InstCo co arg)       = orphNamesOfCo co `unionNameSet` orphNamesOfCo arg
-orphNamesOfCo (CoherenceCo co1 co2) = orphNamesOfCo co1 `unionNameSet` orphNamesOfCo co2
-orphNamesOfCo (KindCo co)           = orphNamesOfCo co
-orphNamesOfCo (SubCo co)            = orphNamesOfCo co
-orphNamesOfCo (AxiomRuleCo _ cs)    = orphNamesOfCos cs
+orphNamesOfCo (CachedCoercion { coercionKind = Pair k1 k2
+                              , coercionRep  = rep })
+  = orphNamesOfTypes [k1, k2] `unionNameSet` orphNamesOfCoRep rep
+
+orphNamesOfCoRep :: CoercionRep -> NameSet
+orphNamesOfCoRep (Refl _ ty)           = orphNamesOfType ty
+orphNamesOfCoRep (TyConAppCo _ tc cos) = unitNameSet (getName tc) `unionNameSet`
+                                         orphNamesOfCoReps cos
+orphNamesOfCoRep (AppCo co1 co2)       = orphNamesOfCoRep co1 `unionNameSet`
+                                         orphNamesOfCoRep co2
+orphNamesOfCoRep (ForAllCo _ _ kind_co co)
+  = orphNamesOfCo kind_co `unionNameSet` orphNamesOfCoRep co
+orphNamesOfCoRep (CoVarCo _)           = emptyNameSet
+orphNamesOfCoRep (AxiomInstCo con _ cos) = orphNamesOfCoCon con `unionNameSet`
+                                           orphNamesOfCoReps cos
+orphNamesOfCoRep (UnivCo p _ t1 t2)    = orphNamesOfProv p `unionNameSet`
+                                         orphNamesOfType t1 `unionNameSet`
+                                         orphNamesOfType t2
+orphNamesOfCoRep (SymCo co)            = orphNamesOfCoRep co
+orphNamesOfCoRep (TransCo co1 co2)     = orphNamesOfCoRep co1 `unionNameSet`
+                                         orphNamesOfCoRep co2
+orphNamesOfCoRep (NthCo _ co)          = orphNamesOfCoRep co
+orphNamesOfCoRep (LRCo  _ co)          = orphNamesOfCoRep co
+orphNamesOfCoRep (InstCo co arg)       = orphNamesOfCoRep co `unionNameSet`
+                                         orphNamesOfCoRep arg
+orphNamesOfCoRep (CoherenceCo co1 co2) = orphNamesOfCoRep co1 `unionNameSet`
+                                         orphNamesOfCo co2
+orphNamesOfCoRep (KindCo co)           = orphNamesOfCoRep co
+orphNamesOfCoRep (SubCo _ co)          = orphNamesOfCoRep co
+orphNamesOfCoRep (AxiomRuleCo _ cs)    = orphNamesOfCoReps cs
 
 orphNamesOfProv :: UnivCoProvenance -> NameSet
 orphNamesOfProv UnsafeCoerceProv    = emptyNameSet
-orphNamesOfProv (PhantomProv co)    = orphNamesOfCo co
-orphNamesOfProv (ProofIrrelProv co) = orphNamesOfCo co
+orphNamesOfProv (PhantomProv co)    = orphNamesOfCoRep co
+orphNamesOfProv (ProofIrrelProv co) = orphNamesOfCoRep co
 orphNamesOfProv (PluginProv _)      = emptyNameSet
 orphNamesOfProv (HoleProv _)        = emptyNameSet
 
-orphNamesOfCos :: [Coercion] -> NameSet
-orphNamesOfCos = orphNamesOfThings orphNamesOfCo
+orphNamesOfCoReps :: [CoercionRep] -> NameSet
+orphNamesOfCoReps = orphNamesOfThings orphNamesOfCoRep
 
 orphNamesOfCoCon :: CoAxiom br -> NameSet
 orphNamesOfCoCon (CoAxiom { co_ax_tc = tc, co_ax_branches = branches })

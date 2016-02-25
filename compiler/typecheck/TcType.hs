@@ -780,31 +780,7 @@ exactTyCoVarsOfType ty
     go (CastTy ty co)       = go ty `unionVarSet` goCo co
     go (CoercionTy co)      = goCo co
 
-    goCo (Refl _ ty)        = go ty
-    goCo (TyConAppCo _ _ args)= goCos args
-    goCo (AppCo co arg)     = goCo co `unionVarSet` goCo arg
-    goCo (ForAllCo tv k_co co)
-      = goCo co `delVarSet` tv `unionVarSet` goCo k_co
-    goCo (CoVarCo v)         = unitVarSet v `unionVarSet` go (varType v)
-    goCo (AxiomInstCo _ _ args) = goCos args
-    goCo (UnivCo p _ t1 t2)  = goProv p `unionVarSet` go t1 `unionVarSet` go t2
-    goCo (SymCo co)          = goCo co
-    goCo (TransCo co1 co2)   = goCo co1 `unionVarSet` goCo co2
-    goCo (NthCo _ co)        = goCo co
-    goCo (LRCo _ co)         = goCo co
-    goCo (InstCo co arg)     = goCo co `unionVarSet` goCo arg
-    goCo (CoherenceCo c1 c2) = goCo c1 `unionVarSet` goCo c2
-    goCo (KindCo co)         = goCo co
-    goCo (SubCo co)          = goCo co
-    goCo (AxiomRuleCo _ c)   = goCos c
-
-    goCos cos = foldr (unionVarSet . goCo) emptyVarSet cos
-
-    goProv UnsafeCoerceProv     = emptyVarSet
-    goProv (PhantomProv kco)    = goCo kco
-    goProv (ProofIrrelProv kco) = goCo kco
-    goProv (PluginProv _)       = emptyVarSet
-    goProv (HoleProv _)         = emptyVarSet
+    goCo = tyCoVarsOfCo   -- coercions don't have synonyms
 
 exactTyCoVarsOfTypes :: [Type] -> TyVarSet
 exactTyCoVarsOfTypes tys = mapUnionVarSet exactTyCoVarsOfType tys
@@ -1543,56 +1519,65 @@ occurCheckExpand dflags tv ty
     go env (CoercionTy co) = do { co' <- go_co env co
                                 ; return (mkCoercionTy co') }
 
-    go_co env (Refl r ty)               = do { ty' <- go env ty
-                                             ; return (mkReflCo r ty') }
+    go_co env co
+      = do { co_kind <- traverse (go env) (coercionKind co)
+           ; rep     <- go_rep env (coercionRep co)
+           ; return $ co { coercionKind    = co_kind
+                         , tyCoVarsOfCoAcc = tyCoVarsOfCoRepAcc rep
+                         , coercionInfo    = NoCachedInfo
+                         , coercionRep     = rep } }
+
+    go_rep :: VarEnv TyVar -> CoercionRep -> OccCheckResult CoercionRep
+    go_rep env (Refl r ty)               = do { ty' <- go env ty
+                                              ; return (mkReflCoRep r ty') }
       -- Note: Coercions do not contain type synonyms
-    go_co env (TyConAppCo r tc args)    = do { args' <- mapM (go_co env) args
-                                             ; return (mkTyConAppCo r tc args') }
-    go_co env (AppCo co arg)            = do { co' <- go_co env co
-                                             ; arg' <- go_co env arg
-                                             ; return (mkAppCo co' arg') }
-    go_co env co@(ForAllCo tv' kind_co body_co)
+    go_rep env (TyConAppCo r tc args)    = do { args' <- mapM (go_rep env) args
+                                              ; return (mkTyConAppCoRep r tc args') }
+    go_rep env (AppCo co arg)            = do { co' <- go_rep env co
+                                              ; arg' <- go_rep env arg
+                                              ; return (mkAppCoRep co' arg') }
+    go_rep env co@(ForAllCo tv' vis kind_co body_co)
       | not impredicative = OC_Forall
       | tv == tv'         = return co
       | otherwise         = do { kind_co' <- go_co env kind_co
                                ; let tv'' = setTyVarKind tv' $
                                             pFst (coercionKind kind_co')
                                      env' = extendVarEnv env tv' tv''
-                               ; body' <- go_co env' body_co
-                               ; return (ForAllCo tv'' kind_co' body') }
-    go_co env (CoVarCo c)               = do { k' <- go env (varType c)
-                                             ; return (mkCoVarCo (setVarType c k')) }
-    go_co env (AxiomInstCo ax ind args) = do { args' <- mapM (go_co env) args
-                                             ; return (mkAxiomInstCo ax ind args') }
-    go_co env (UnivCo p r ty1 ty2)      = do { p' <- go_prov env p
-                                             ; ty1' <- go env ty1
-                                             ; ty2' <- go env ty2
-                                             ; return (mkUnivCo p' r ty1' ty2') }
-    go_co env (SymCo co)                = do { co' <- go_co env co
-                                             ; return (mkSymCo co') }
-    go_co env (TransCo co1 co2)         = do { co1' <- go_co env co1
-                                             ; co2' <- go_co env co2
-                                             ; return (mkTransCo co1' co2') }
-    go_co env (NthCo n co)              = do { co' <- go_co env co
-                                             ; return (mkNthCo n co') }
-    go_co env (LRCo lr co)              = do { co' <- go_co env co
-                                             ; return (mkLRCo lr co') }
-    go_co env (InstCo co arg)           = do { co' <- go_co env co
-                                             ; arg' <- go_co env arg
-                                             ; return (mkInstCo co' arg') }
-    go_co env (CoherenceCo co1 co2)     = do { co1' <- go_co env co1
-                                             ; co2' <- go_co env co2
-                                             ; return (mkCoherenceCo co1' co2') }
-    go_co env (KindCo co)               = do { co' <- go_co env co
-                                             ; return (mkKindCo co') }
-    go_co env (SubCo co)                = do { co' <- go_co env co
-                                             ; return (mkSubCo co') }
-    go_co env (AxiomRuleCo ax cs)       = do { cs' <- mapM (go_co env) cs
-                                             ; return (mkAxiomRuleCo ax cs') }
+                               ; body' <- go_rep env' body_co
+                               ; return (mkForAllCoRep tv'' vis kind_co' body') }
+    go_rep env (CoVarCo c)               = do { k' <- go env (varType c)
+                                              ; return (mkCoVarCoRep (setVarType c k')) }
+    go_rep env (AxiomInstCo ax ind args) = do { args' <- mapM (go_rep env) args
+                                              ; return (mkAxiomInstCoRep ax ind args') }
+    go_rep env (UnivCo p r ty1 ty2)      = do { p' <- go_prov env p
+                                              ; ty1' <- go env ty1
+                                              ; ty2' <- go env ty2
+                                              ; return (mkUnivCoRep p' r ty1' ty2') }
+    go_rep env (SymCo co)                = do { co' <- go_rep env co
+                                              ; return (mkSymCoRep co') }
+    go_rep env (TransCo co1 co2)         = do { co1' <- go_rep env co1
+                                              ; co2' <- go_rep env co2
+                                              ; return (mkTransCoRep co1' co2') }
+    go_rep env (NthCo n co)              = do { co' <- go_rep env co
+                                              ; return (mkNthCoRep n co') }
+    go_rep env (LRCo lr co)              = do { co' <- go_rep env co
+                                              ; return (mkLRCoRep lr co') }
+    go_rep env (InstCo co arg)           = do { co' <- go_rep env co
+                                              ; arg' <- go_rep env arg
+                                              ; return (mkInstCoRep co' arg') }
+    go_rep env (CoherenceCo co1 co2)     = do { co1' <- go_rep env co1
+                                              ; co2' <- go_co env co2
+                                              ; return (mkCoherenceCoRep co1' co2') }
+    go_rep env (KindCo co)               = do { co' <- go_rep env co
+                                              ; return (mkKindCoRep co') }
+    go_rep env (SubCo r co)              = do { co' <- go_rep env co
+                                              ; return (mkSubRoleCoRep r co') }
+    go_rep env (AxiomRuleCo ax cs)       = do { cs' <- mapM (go_rep env) cs
+                                              ; return (mkAxiomRuleCoRep ax cs') }
 
     go_prov _   UnsafeCoerceProv    = return UnsafeCoerceProv
-    go_prov env (PhantomProv co)    = PhantomProv <$> go_co env co
-    go_prov env (ProofIrrelProv co) = ProofIrrelProv <$> go_co env co
+    go_prov env (PhantomProv co)    = PhantomProv <$> go_rep env co
+    go_prov env (ProofIrrelProv co) = ProofIrrelProv <$> go_rep env co
     go_prov _   p@(PluginProv _)    = return p
     go_prov _   p@(HoleProv _)      = return p
 
@@ -1992,15 +1977,15 @@ to_tc_mapper
       = do { kind' <- to_tc_type ftvs (tyVarKind tv)
            ; return $ TyVarTy $ mkTcTyVar (tyVarName tv) kind' vanillaSkolemTv }
 
-    covar :: VarSet -> CoVar -> Identity Coercion
+    covar :: VarSet -> CoVar -> Identity CoVar
     covar ftvs cv
-      | Just var <- lookupVarSet ftvs cv = return $ CoVarCo var
-      | otherwise = CoVarCo <$> updateVarTypeM (to_tc_type ftvs) cv
+      | Just var <- lookupVarSet ftvs cv = return var
+      | otherwise                        = updateVarTypeM (to_tc_type ftvs) cv
 
     hole :: VarSet -> CoercionHole -> Role -> Type -> Type
-         -> Identity Coercion
-    hole ftvs h r t1 t2 = mkHoleCo h r <$> to_tc_type ftvs t1
-                                       <*> to_tc_type ftvs t2
+         -> Identity CoercionRep
+    hole ftvs h r t1 t2 = mkHoleCoRep h r <$> to_tc_type ftvs t1
+                                          <*> to_tc_type ftvs t2
 
     tybinder :: VarSet -> TyVar -> VisibilityFlag -> Identity (VarSet, TyVar)
     tybinder ftvs tv _vis = do { kind' <- to_tc_type ftvs (tyVarKind tv)

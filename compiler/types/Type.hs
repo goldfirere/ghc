@@ -4,7 +4,6 @@
 -- Type - public interface
 
 {-# LANGUAGE CPP #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | Main functions for manipulating types and type-related things
 module Type (
@@ -60,7 +59,7 @@ module Type (
         synTyConResKind,
 
         -- Analyzing types
-        TyCoMapper(..), mapType, mapCoercion,
+        TyCoMapper(..), mapType, mapCoercion, mapCoercionRep,
 
         -- (Newtypes)
         newTyConInstRhs,
@@ -163,7 +162,8 @@ module Type (
         isEmptyTCvSubst, unionTCvSubst,
 
         -- ** Performing substitution on types and kinds
-        substTy, substTys, substTyWith, substTysWith, substTheta,
+        substTy, substTys, substTyWith, substTysWith, substTyWithAddInScope,
+        substTheta,
         substTyAddInScope,
         substTyUnchecked, substTysUnchecked, substThetaUnchecked,
         substTyWithBindersUnchecked, substTyWithUnchecked,
@@ -209,10 +209,13 @@ import Class
 import TyCon
 import TysPrim
 import {-# SOURCE #-} TysWiredIn ( listTyCon, typeNatKind
-                                 , typeSymbolKind, liftedTypeKind )
+                                 , typeSymbolKind, liftedTypeKind
+                                 , unitTy )
 import PrelNames
 import CoAxiom
-import {-# SOURCE #-} Coercion
+import {-# SOURCE #-} Coercion   ( mkReflCo, mkTransCo, isReflexiveCo
+                                 , mkFunCos, coercionSize, seqCo
+                                 , coercionType )
 
 -- others
 import BasicTypes       ( Arity, RepArity )
@@ -321,9 +324,11 @@ coreViewOneStarKind ty
 
 -----------------------------------------------
 expandTypeSynonyms :: Type -> Type
--- ^ Expand out all type synonyms.  Actually, it'd suffice to expand out
+-- ^ Expand out all parameterized type synonyms.
+-- Actually, it'd suffice to expand out
 -- just the ones that discard type variables (e.g.  type Funny a = Int)
--- But we don't know which those are currently, so we just expand all.
+-- But we don't know which those are currently, so we just expand all
+-- synonyms with parameters.
 --
 -- 'expandTypeSynonyms' only expands out type synonyms mentioned in the type,
 -- not in the kinds of any TyCon or TyVar mentioned in the type.
@@ -359,43 +364,51 @@ expandTypeSynonyms ty
     go subst (CastTy ty co)  = mkCastTy (go subst ty) (go_co subst co)
     go subst (CoercionTy co) = mkCoercionTy (go_co subst co)
 
-    go_co subst (Refl r ty)
-      = mkReflCo r (go subst ty)
+    go_co subst co = CachedCoercion { coercionKind    = go subst <$> coercionKind co
+                                    , coercionRole    = coercionRole co
+                                    , tyCoVarsOfCoAcc = tyCoVarsOfCoRepAcc rep
+                                    , coercionInfo    = NoCachedInfo
+                                    , coercionRep     = rep }
+      where
+        rep = go_rep subst (coercionRep co)
+
+    go_rep subst (Refl r ty)
+      = mkReflCoRep r (go subst ty)
        -- NB: coercions are always expanded upon creation
-    go_co subst (TyConAppCo r tc args)
-      = mkTyConAppCo r tc (map (go_co subst) args)
-    go_co subst (AppCo co arg)
-      = mkAppCo (go_co subst co) (go_co subst arg)
-    go_co subst (ForAllCo tv kind_co co)
+    go_rep subst (TyConAppCo r tc args)
+      = mkTyConAppCoRep r tc (map (go_rep subst) args)
+    go_rep subst (AppCo co arg)
+      = mkAppCoRep (go_rep subst co) (go_rep subst arg)
+    go_rep subst (ForAllCo tv vis kind_co co)
       = let (subst', tv', kind_co') = go_cobndr subst tv kind_co in
-        mkForAllCo tv' kind_co' (go_co subst' co)
-    go_co subst (CoVarCo cv)
-      = substCoVar subst cv
-    go_co subst (AxiomInstCo ax ind args)
-      = mkAxiomInstCo ax ind (map (go_co subst) args)
-    go_co subst (UnivCo p r t1 t2)
-      = mkUnivCo (go_prov subst p) r (go subst t1) (go subst t2)
-    go_co subst (SymCo co)
-      = mkSymCo (go_co subst co)
-    go_co subst (TransCo co1 co2)
-      = mkTransCo (go_co subst co1) (go_co subst co2)
-    go_co subst (NthCo n co)
-      = mkNthCo n (go_co subst co)
-    go_co subst (LRCo lr co)
-      = mkLRCo lr (go_co subst co)
-    go_co subst (InstCo co arg)
-      = mkInstCo (go_co subst co) (go_co subst arg)
-    go_co subst (CoherenceCo co1 co2)
-      = mkCoherenceCo (go_co subst co1) (go_co subst co2)
-    go_co subst (KindCo co)
-      = mkKindCo (go_co subst co)
-    go_co subst (SubCo co)
-      = mkSubCo (go_co subst co)
-    go_co subst (AxiomRuleCo ax cs) = AxiomRuleCo ax (map (go_co subst) cs)
+        mkForAllCoRep tv' vis kind_co' (go_rep subst' co)
+    go_rep subst (CoVarCo cv)
+      = coercionRep (substCoVar subst cv)
+    go_rep subst (AxiomInstCo ax ind args)
+      = mkAxiomInstCoRep ax ind (map (go_rep subst) args)
+    go_rep subst (UnivCo p r t1 t2)
+      = mkUnivCoRep (go_prov subst p) r (go subst t1) (go subst t2)
+    go_rep subst (SymCo co)
+      = mkSymCoRep (go_rep subst co)
+    go_rep subst (TransCo co1 co2)
+      = mkTransCoRep (go_rep subst co1) (go_rep subst co2)
+    go_rep subst (NthCo n co)
+      = mkNthCoRep n (go_rep subst co)
+    go_rep subst (LRCo lr co)
+      = mkLRCoRep lr (go_rep subst co)
+    go_rep subst (InstCo co arg)
+      = mkInstCoRep (go_rep subst co) (go_rep subst arg)
+    go_rep subst (CoherenceCo co1 co2)
+      = mkCoherenceCoRep (go_rep subst co1) (go_co subst co2)
+    go_rep subst (KindCo co)
+      = mkKindCoRep (go_rep subst co)
+    go_rep subst (SubCo r co)
+      = mkSubRoleCoRep r (go_rep subst co)
+    go_rep subst (AxiomRuleCo ax cs) = AxiomRuleCo ax (map (go_rep subst) cs)
 
     go_prov _     UnsafeCoerceProv    = UnsafeCoerceProv
-    go_prov subst (PhantomProv co)    = PhantomProv (go_co subst co)
-    go_prov subst (ProofIrrelProv co) = ProofIrrelProv (go_co subst co)
+    go_prov subst (PhantomProv co)    = PhantomProv (go_rep subst co)
+    go_prov subst (ProofIrrelProv co) = ProofIrrelProv (go_rep subst co)
     go_prov _     p@(PluginProv _)    = p
     go_prov _     (HoleProv h)        = pprPanic "expandTypeSynonyms hit a hole" (ppr h)
 
@@ -424,7 +437,7 @@ not when mapping a function over a coercion.
 
 The problem is that tcm_tybinder will affect the TyVar's kind and
 mapCoercion will affect the Coercion, and we hope that the results will be
-the same. Even if they are the same (which should generally happen with
+the same. Even if they are the same (which will happen with
 correct algorithms), then there is an efficiency issue. In particular,
 this problem seems to make what should be a linear algorithm into a potentially
 exponential one. But it's only going to be bad in the case where there's
@@ -451,9 +464,9 @@ data TyCoMapper env m
       { tcm_smart :: Bool -- ^ Should the new type be created with smart
                          -- constructors?
       , tcm_tyvar :: env -> TyVar -> m Type
-      , tcm_covar :: env -> CoVar -> m Coercion
+      , tcm_covar :: env -> CoVar -> m CoVar
       , tcm_hole  :: env -> CoercionHole -> Role
-                  -> Type -> Type -> m Coercion
+                  -> Type -> Type -> m CoercionRep
           -- ^ What to do with coercion holes. See Note [Coercion holes] in
           -- TyCoRep.
 
@@ -477,7 +490,8 @@ mapType mapper@(TyCoMapper { tcm_smart = smart, tcm_tyvar = tyvar
            ; inner' <- mapType mapper env' inner
            ; return $ ForAllTy (Named tv' vis) inner' }
     go ty@(LitTy {}) = return ty
-    go (CastTy ty co) = mkcastty <$> go ty <*> mapCoercion mapper env co
+    go (CastTy ty co) | isReflCo co = go ty  -- avoid zonking (or whatever) the co
+                      | otherwise   = mkcastty <$> go ty <*> mapCoercion mapper env co
     go (CoercionTy co) = CoercionTy <$> mapCoercion mapper env co
 
     (mktyconapp, mkappty, mkcastty, mkfunty)
@@ -487,54 +501,67 @@ mapType mapper@(TyCoMapper { tcm_smart = smart, tcm_tyvar = tyvar
 {-# INLINABLE mapCoercion #-}  -- See Note [Specialising mappers]
 mapCoercion :: Monad m
             => TyCoMapper env m -> env -> Coercion -> m Coercion
-mapCoercion mapper@(TyCoMapper { tcm_smart = smart, tcm_covar = covar
-                               , tcm_hole = cohole, tcm_tybinder = tybinder })
-            env co
-  = go co
+mapCoercion mapper orig_env (CachedCoercion { coercionKind = co_kind
+                                            , coercionRole = role
+                                            , coercionRep  = rep })
+  = do { rep' <- mapCoercionRep mapper orig_env rep
+       ; co_kind' <- traverse (mapType mapper orig_env) co_kind
+       ; return $ CachedCoercion { coercionKind    = co_kind'
+                                 , coercionRole    = role
+                                 , tyCoVarsOfCoAcc = tyCoVarsOfCoRepAcc rep'
+                                 , coercionInfo    = NoCachedInfo
+                                 , coercionRep     = rep' } }
+
+{-# INLINABLE mapCoercionRep #-}  -- See Note [Specialising mappers]
+mapCoercionRep :: Monad m
+               => TyCoMapper env m -> env -> CoercionRep -> m CoercionRep
+mapCoercionRep mapper@(TyCoMapper { tcm_smart = smart, tcm_covar = covar
+                                  , tcm_hole = cohole, tcm_tybinder = tybinder })
+  = go
   where
-    go (Refl r ty) = Refl r <$> mapType mapper env ty
-    go (TyConAppCo r tc args)
-      = mktyconappco r tc <$> mapM go args
-    go (AppCo c1 c2) = mkappco <$> go c1 <*> go c2
-    go (ForAllCo tv kind_co co)
-      = do { kind_co' <- go kind_co
-           ; (env', tv') <- tybinder env tv Invisible
-           ; co' <- mapCoercion mapper env' co
-           ; return $ mkforallco tv' kind_co' co' }
+    go e (Refl r ty) = mkrefl r <$> mapType mapper e ty
+    go e (TyConAppCo r tc args)
+      = mktyconappco r tc <$> mapM (go e) args
+    go e (AppCo c1 c2) = mkappco <$> go e c1 <*> go e c2
+    go e (ForAllCo tv vis kind_co co)
+      = do { kind_co' <- mapCoercion mapper e kind_co
+           ; (e', tv') <- tybinder e tv vis
+           ; co' <- go e' co
+           ; return $ mkforallco tv' vis kind_co' co' }
         -- See Note [Efficiency for mapCoercion ForAllCo case]
-    go (CoVarCo cv) = covar env cv
-    go (AxiomInstCo ax i args)
-      = mkaxiominstco ax i <$> mapM go args
-    go (UnivCo (HoleProv hole) r t1 t2)
-      = cohole env hole r t1 t2
-    go (UnivCo p r t1 t2)
-      = mkunivco <$> go_prov p <*> pure r
-                 <*> mapType mapper env t1 <*> mapType mapper env t2
-    go (SymCo co) = mksymco <$> go co
-    go (TransCo c1 c2) = mktransco <$> go c1 <*> go c2
-    go (AxiomRuleCo r cos) = AxiomRuleCo r <$> mapM go cos
-    go (NthCo i co)        = mknthco i <$> go co
-    go (LRCo lr co)        = mklrco lr <$> go co
-    go (InstCo co arg)     = mkinstco <$> go co <*> go arg
-    go (CoherenceCo c1 c2) = mkcoherenceco <$> go c1 <*> go c2
-    go (KindCo co)         = mkkindco <$> go co
-    go (SubCo co)          = mksubco <$> go co
+    go e (CoVarCo cv) = CoVarCo <$> covar e cv
+    go e (AxiomInstCo ax i args)
+      = mkaxiominstco ax i <$> mapM (go e) args
+    go e (UnivCo (HoleProv hole) r t1 t2)
+      = cohole e hole r t1 t2
+    go e (UnivCo p r t1 t2)
+      = mkunivco <$> go_prov e p <*> pure r
+                 <*> mapType mapper e t1 <*> mapType mapper e t2
+    go e (SymCo co) = mksymco <$> go e co
+    go e (TransCo c1 c2) = mktransco <$> go e c1 <*> go e c2
+    go e (AxiomRuleCo r cos) = AxiomRuleCo r <$> mapM (go e) cos
+    go e (NthCo i co)        = mknthco i <$> go e co
+    go e (LRCo lr co)        = mklrco lr <$> go e co
+    go e (InstCo co arg)     = mkinstco <$> go e co <*> go e arg
+    go e (CoherenceCo c1 c2) = mkcoherenceco <$> go e c1 <*> mapCoercion mapper e c2
+    go e (KindCo co)         = mkkindco <$> go e co
+    go e (SubCo r co)        = mksubroleco r <$> go e co
 
-    go_prov UnsafeCoerceProv    = return UnsafeCoerceProv
-    go_prov (PhantomProv co)    = PhantomProv <$> go co
-    go_prov (ProofIrrelProv co) = ProofIrrelProv <$> go co
-    go_prov p@(PluginProv _)    = return p
-    go_prov (HoleProv _)        = panic "mapCoercion"
+    go_prov _ UnsafeCoerceProv    = return UnsafeCoerceProv
+    go_prov e (PhantomProv co)    = PhantomProv <$> go e co
+    go_prov e (ProofIrrelProv co) = ProofIrrelProv <$> go e co
+    go_prov _ p@(PluginProv _)    = return p
+    go_prov _ (HoleProv _)        = panic "mapCoercion"
 
-    ( mktyconappco, mkappco, mkaxiominstco, mkunivco
+    ( mkrefl, mktyconappco, mkappco, mkaxiominstco, mkunivco
       , mksymco, mktransco, mknthco, mklrco, mkinstco, mkcoherenceco
-      , mkkindco, mksubco, mkforallco)
+      , mkkindco, mksubroleco, mkforallco)
       | smart
-      = ( mkTyConAppCo, mkAppCo, mkAxiomInstCo, mkUnivCo
-        , mkSymCo, mkTransCo, mkNthCo, mkLRCo, mkInstCo, mkCoherenceCo
-        , mkKindCo, mkSubCo, mkForAllCo )
+      = ( mkReflCoRep, mkTyConAppCoRep, mkAppCoRep, mkAxiomInstCoRep, mkUnivCoRep
+        , mkSymCoRep, mkTransCoRep, mkNthCoRep, mkLRCoRep, mkInstCoRep
+        , mkCoherenceCoRep, mkKindCoRep, mkSubRoleCoRep, mkForAllCoRep )
       | otherwise
-      = ( TyConAppCo, AppCo, AxiomInstCo, UnivCo
+      = ( Refl, TyConAppCo, AppCo, AxiomInstCo, UnivCo
         , SymCo, TransCo, NthCo, LRCo, InstCo, CoherenceCo
         , KindCo, SubCo, ForAllCo )
 
@@ -1430,11 +1457,11 @@ dropForAlls ty | Just ty' <- coreView ty = dropForAlls ty'
 
 -- | Given a tycon and its arguments, filters out any invisible arguments
 filterOutInvisibleTypes :: TyCon -> [Type] -> [Type]
-filterOutInvisibleTypes tc tys = snd $ partitionInvisibles tc id tys
+filterOutInvisibleTypes tc tys = snd $ partitionInvisibles tc (Just id) tys
 
 -- | Like 'filterOutInvisibles', but works on 'TyVar's
 filterOutInvisibleTyVars :: TyCon -> [TyVar] -> [TyVar]
-filterOutInvisibleTyVars tc tvs = snd $ partitionInvisibles tc mkTyVarTy tvs
+filterOutInvisibleTyVars tc tvs = snd $ partitionInvisibles tc (Just mkTyVarTy) tvs
 
 -- | Given a tycon and a list of things (which correspond to arguments),
 -- partitions the things into the invisible ones and the visible ones.
@@ -1450,12 +1477,16 @@ filterOutInvisibleTyVars tc tvs = snd $ partitionInvisibles tc mkTyVarTy tvs
 -- Thus, the first argument is invisible, @S@ is visible, @R@ is invisible again,
 -- and @Q@ is visible.
 --
--- If you're absolutely sure that your tycon's kind doesn't end in a variable,
--- it's OK if the callback function panics, as that's the only time it's
--- consulted.
-partitionInvisibles :: TyCon -> (a -> Type) -> [a] -> ([a], [a])
-partitionInvisibles tc get_ty = go emptyTCvSubst (tyConKind tc)
+-- If you can't define a suitable callback, then just pass in Nothing. In the
+-- scenario above, we'll just assume that everything is visible past the
+-- obvious component of the tycon arguments.
+partitionInvisibles :: TyCon -> Maybe (a -> Type) -> [a] -> ([a], [a])
+partitionInvisibles tc to_type = go emptyTCvSubst (tyConKind tc)
   where
+    get_ty = case to_type of
+      Just fun -> fun
+      Nothing  -> const unitTy
+
     go _ _ [] = ([], [])
     go subst (ForAllTy bndr res_ki) (x:xs)
       | isVisibleBinder bndr = second (x :) (go subst' res_ki xs)
@@ -1464,7 +1495,8 @@ partitionInvisibles tc get_ty = go emptyTCvSubst (tyConKind tc)
         subst' = extendTvSubstBinder subst bndr (get_ty x)
     go subst (TyVarTy tv) xs
       | Just ki <- lookupTyVar subst tv = go subst ki xs
-    go _ _ xs = ([], xs)  -- something is ill-kinded. But this can happen
+    go _ _ xs = ([], xs)  -- something is ill-kinded (or we don't have a callback).
+                          -- But this can happen
                           -- when printing errors. Assume everything is visible.
 
 -- like splitPiTys, but returns only *invisible* binders, including constraints
@@ -2255,33 +2287,35 @@ tyConsOfType ty
      go (CastTy ty co)             = go ty `plusNameEnv` go_co co
      go (CoercionTy co)            = go_co co
 
-     go_co (Refl _ ty)             = go ty
-     go_co (TyConAppCo _ tc args)  = go_tc tc `plusNameEnv` go_cos args
-     go_co (AppCo co arg)          = go_co co `plusNameEnv` go_co arg
-     go_co (ForAllCo _ kind_co co) = go_co kind_co `plusNameEnv` go_co co
-     go_co (CoVarCo {})            = emptyNameEnv
-     go_co (AxiomInstCo ax _ args) = go_ax ax `plusNameEnv` go_cos args
-     go_co (UnivCo p _ t1 t2)      = go_prov p `plusNameEnv` go t1 `plusNameEnv` go t2
-     go_co (SymCo co)              = go_co co
-     go_co (TransCo co1 co2)       = go_co co1 `plusNameEnv` go_co co2
-     go_co (NthCo _ co)            = go_co co
-     go_co (LRCo _ co)             = go_co co
-     go_co (InstCo co arg)         = go_co co `plusNameEnv` go_co arg
-     go_co (CoherenceCo co1 co2)   = go_co co1 `plusNameEnv` go_co co2
-     go_co (KindCo co)             = go_co co
-     go_co (SubCo co)              = go_co co
-     go_co (AxiomRuleCo _ cs)      = go_cos cs
+     go_co = go_rep . coercionRep
+
+     go_rep (Refl _ ty)             = go ty
+     go_rep (TyConAppCo _ tc args)  = go_tc tc `plusNameEnv` go_reps args
+     go_rep (AppCo co arg)          = go_rep co `plusNameEnv` go_rep arg
+     go_rep (ForAllCo _ _ kind_co co) = go_co kind_co `plusNameEnv` go_rep co
+     go_rep (CoVarCo {})            = emptyNameEnv
+     go_rep (AxiomInstCo ax _ args) = go_ax ax `plusNameEnv` go_reps args
+     go_rep (UnivCo p _ t1 t2)      = go_prov p `plusNameEnv` go t1 `plusNameEnv` go t2
+     go_rep (SymCo co)              = go_rep co
+     go_rep (TransCo co1 co2)       = go_rep co1 `plusNameEnv` go_rep co2
+     go_rep (NthCo _ co)            = go_rep co
+     go_rep (LRCo _ co)             = go_rep co
+     go_rep (InstCo co arg)         = go_rep co `plusNameEnv` go_rep arg
+     go_rep (CoherenceCo co1 co2)   = go_rep co1 `plusNameEnv` go_co co2
+     go_rep (KindCo co)             = go_rep co
+     go_rep (SubCo _ co)            = go_rep co
+     go_rep (AxiomRuleCo _ cs)      = go_reps cs
 
      go_prov UnsafeCoerceProv    = emptyNameEnv
-     go_prov (PhantomProv co)    = go_co co
-     go_prov (ProofIrrelProv co) = go_co co
+     go_prov (PhantomProv co)    = go_rep co
+     go_prov (ProofIrrelProv co) = go_rep co
      go_prov (PluginProv _)      = emptyNameEnv
      go_prov (HoleProv _)        = emptyNameEnv
         -- this last case can happen from the tyConsOfType used from
         -- checkTauTvUpdate
 
      go_s tys     = foldr (plusNameEnv . go)     emptyNameEnv tys
-     go_cos cos   = foldr (plusNameEnv . go_co)  emptyNameEnv cos
+     go_reps cos  = foldr (plusNameEnv . go_rep)  emptyNameEnv cos
 
      go_tc tc = unitNameEnv (tyConName tc) tc
      go_ax ax = go_tc $ coAxiomTyCon ax
@@ -2346,7 +2380,7 @@ splitVisVarsOfType orig_ty = Pair invis_vars vis_vars
 
     invisible vs = Pair vs emptyVarSet
 
-    go_tc tc tys = let (invis, vis) = partitionInvisibles tc id tys in
+    go_tc tc tys = let (invis, vis) = partitionInvisibles tc (Just id) tys in
                    invisible (tyCoVarsOfTypes invis) `mappend` foldMap go vis
 
 splitVisVarsOfTypes :: [Type] -> Pair TyCoVarSet

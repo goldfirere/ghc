@@ -312,7 +312,7 @@ zonkEvBndr env var
 zonkEvVarOcc :: ZonkEnv -> EvVar -> TcM EvTerm
 zonkEvVarOcc env v
   | isCoVar v
-  = EvCoercion <$> zonkCoVarOcc env v
+  = EvCoercion <$> (mkCoVarCo <$> zonkCoVarOcc env v)
   | otherwise
   = return (EvId $ zonkIdOcc env v)
 
@@ -1547,23 +1547,22 @@ zonkTyVarOcc env@(ZonkEnv zonk_unbound_tyvar tv_env _) tv
           Nothing  -> mkTyVarTy <$> updateTyVarKindM (zonkTcTypeToType env) tv
           Just tv' -> return (mkTyVarTy tv')
 
-zonkCoVarOcc :: ZonkEnv -> CoVar -> TcM Coercion
+zonkCoVarOcc :: ZonkEnv -> CoVar -> TcM CoVar
 zonkCoVarOcc env@(ZonkEnv _ tyco_env _) cv
   | Just cv' <- lookupVarEnv tyco_env cv  -- don't look in the knot-tied env
-  = return $ mkCoVarCo cv'
+  = return cv'
   | otherwise
-  = mkCoVarCo <$> updateVarTypeM (zonkTcTypeToType env) cv
+  = updateVarTypeM (zonkTcTypeToType env) cv
 
 zonkCoHole :: ZonkEnv -> CoercionHole
            -> Role -> Type -> Type  -- these are all redundant with
                                     -- the details in the hole,
                                     -- unzonked
-           -> TcM Coercion
+           -> TcM CoercionRep
 zonkCoHole env h r t1 t2
   = do { contents <- unpackCoercionHole_maybe h
        ; case contents of
-           Just co -> do { co <- zonkCoToCo env co
-                         ; checkCoercionHole co h r t1 t2 }
+           Just co -> zonkCoRepToCoRep env co
 
               -- This next case should happen only in the presence of
               -- (undeferred) type errors. Originally, I put in a panic
@@ -1576,7 +1575,7 @@ zonkCoHole env h r t1 t2
                                      <+> ppr h )
                          ; t1 <- zonkTcTypeToType env t1
                          ; t2 <- zonkTcTypeToType env t2
-                         ; return $ mkHoleCo h r t1 t2 } }
+                         ; return $ mkHoleCoRep h r t1 t2 } }
 
 zonk_tycomapper :: TyCoMapper ZonkEnv TcM
 zonk_tycomapper = TyCoMapper
@@ -1604,6 +1603,9 @@ zonkTcKindToKind binders res_kind
 
 zonkCoToCo :: ZonkEnv -> Coercion -> TcM Coercion
 zonkCoToCo = mapCoercion zonk_tycomapper
+
+zonkCoRepToCoRep :: ZonkEnv -> CoercionRep -> TcM CoercionRep
+zonkCoRepToCoRep = mapCoercionRep zonk_tycomapper
 
 zonkTvCollecting :: TyVarSet -> TcRef TyVarSet -> UnboundTyVarZonker
 -- This variant collects unbound type variables in a mutable variable

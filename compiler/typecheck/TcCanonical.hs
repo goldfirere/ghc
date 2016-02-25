@@ -1120,7 +1120,9 @@ canDecomposableTyConAppOK ev eq_rel tc tys1 tys2
               ; setWantedEq dest (mkTyConAppCo role tc cos) }
 
      CtGiven { ctev_evar = evar }
-        -> do { let ev_co = mkCoVarCo evar
+        -> do { ev_co <- zonkCo $ mkCoVarCo evar
+                  -- need to zonk here, because the mkNthCo needs to see that
+                  -- evar's types are indeed TyConApps.
               ; given_evs <- newGivenEvVars loc $
                              [ ( mkPrimEqPredRole r ty1 ty2
                                , EvCoercion (mkNthCo i ev_co) )

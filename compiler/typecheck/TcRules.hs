@@ -362,4 +362,5 @@ simplifyRule name lhs_wanted rhs_wanted
                   ; fillCoercionHole hole (mkTcCoVarCo ev_id)
                   ; return (Just ev_id) }
           EvVarDest evar -> return (Just evar)
+          ReflDest       -> return Nothing
     quantify_normal ct = pprPanic "simplifyRule.quantify_normal" (ppr ct)

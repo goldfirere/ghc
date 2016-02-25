@@ -158,7 +158,6 @@ Various possibilities suggest themselves:
  - Expand synonyms on the fly, when the problem arises. That is what
    we are doing here.  It's not too expensive, I think.
 
-Note that there might be existentially quantified coercion variables, too.
 -}
 
 -- Not defined with applyTypeToArg because you can't print from CoreSyn.

@@ -2178,12 +2178,16 @@ So a Given has EvVar inside it rather than (as previously) an EvTerm.
 -}
 
 -- | A place for type-checking evidence to go after it is generated.
--- Wanted equalities are always HoleDest; other wanteds are always
+-- Wanted equalities are always HoleDest or ReflDest; other wanteds are always
 -- EvVarDest.
 data TcEvDest
   = EvVarDest EvVar         -- ^ bind this var to the evidence
   | HoleDest  CoercionHole  -- ^ fill in this hole with the evidence
               -- See Note [Coercion holes] in TyCoRep
+  | ReflDest  -- ^ Only if the equality is reflexive; no evidence nec'y
+              -- Without this, we end up creating CoercionHoles for reflexive
+              -- coercions, and then manipulating these holes, etc. Much better
+              -- not to bother.
 
 data CtEvidence
   = CtGiven { ctev_pred :: TcPredType      -- See Note [Ct/evidence invariant]
@@ -2223,6 +2227,7 @@ ctEvRole = eqRelRole . ctEvEqRel
 
 ctEvTerm :: CtEvidence -> EvTerm
 ctEvTerm ev@(CtWanted { ctev_dest = HoleDest _ }) = EvCoercion $ ctEvCoercion ev
+ctEvTerm ev@(CtWanted { ctev_dest = ReflDest })   = EvCoercion $ ctEvCoercion ev
 ctEvTerm ev = EvId (ctEvId ev)
 
 ctEvCoercion :: CtEvidence -> Coercion
@@ -2230,6 +2235,10 @@ ctEvCoercion ev@(CtWanted { ctev_dest = HoleDest hole, ctev_pred = pred })
   = case getEqPredTys_maybe pred of
       Just (role, ty1, ty2) -> mkHoleCo hole role ty1 ty2
       _                     -> pprPanic "ctEvTerm" (ppr ev)
+ctEvCoercion ev@(CtWanted { ctev_dest = ReflDest, ctev_pred = pred })
+  = case getEqPredTys_maybe pred of
+      Just (role, ty, _)    -> mkTcReflCo role ty
+      _                     -> pprPanic "ctEvCoercion (2)" (ppr ev)
 ctEvCoercion (CtGiven { ctev_evar = ev_id }) = mkTcCoVarCo ev_id
 ctEvCoercion ev = pprPanic "ctEvCoercion" (ppr ev)
 
@@ -2240,6 +2249,7 @@ ctEvId ctev = pprPanic "ctEvId:" (ppr ctev)
 
 instance Outputable TcEvDest where
   ppr (HoleDest h)   = text "hole" <> ppr h
+  ppr ReflDest       = text "<refl>"
   ppr (EvVarDest ev) = ppr ev
 
 instance Outputable CtEvidence where

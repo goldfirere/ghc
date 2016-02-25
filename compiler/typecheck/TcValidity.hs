@@ -1799,29 +1799,9 @@ fvTypes :: [Type] -> [TyVar]
 fvTypes tys                = concat (map fvType tys)
 
 fvCo :: Coercion -> [TyCoVar]
-fvCo (Refl _ ty)            = fvType ty
-fvCo (TyConAppCo _ _ args)  = concatMap fvCo args
-fvCo (AppCo co arg)         = fvCo co ++ fvCo arg
-fvCo (ForAllCo tv h co)     = filter (/= tv) (fvCo co) ++ fvCo h
-fvCo (CoVarCo v)            = [v]
-fvCo (AxiomInstCo _ _ args) = concatMap fvCo args
-fvCo (UnivCo p _ t1 t2)     = fvProv p ++ fvType t1 ++ fvType t2
-fvCo (SymCo co)             = fvCo co
-fvCo (TransCo co1 co2)      = fvCo co1 ++ fvCo co2
-fvCo (NthCo _ co)           = fvCo co
-fvCo (LRCo _ co)            = fvCo co
-fvCo (InstCo co arg)        = fvCo co ++ fvCo arg
-fvCo (CoherenceCo co1 co2)  = fvCo co1 ++ fvCo co2
-fvCo (KindCo co)            = fvCo co
-fvCo (SubCo co)             = fvCo co
-fvCo (AxiomRuleCo _ cs)     = concatMap fvCo cs
-
-fvProv :: UnivCoProvenance -> [TyCoVar]
-fvProv UnsafeCoerceProv    = []
-fvProv (PhantomProv co)    = fvCo co
-fvProv (ProofIrrelProv co) = fvCo co
-fvProv (PluginProv _)      = []
-fvProv (HoleProv h)        = pprPanic "fvProv falls into a hole" (ppr h)
+fvCo = tyCoVarsOfCoList
+  -- doesn't retain repetitions, but intricate details of coercions should
+  -- be opaque anyway
 
 sizeType :: Type -> Int
 -- Size of a type: the number of variables and constructors
