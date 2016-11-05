@@ -612,7 +612,8 @@ mkCoAxBranch :: [TyVar] -- original, possibly stale, tyvars
              -> [CoVar] -- possibly stale covars
              -> [Type]  -- LHS patterns
              -> Type    -- RHS
-             -> [Role]
+             -> [Role]  -- See Note [CoAxBranch roles] in CoAxiom
+                        -- Must be in correspondence with the TyVars
              -> SrcSpan
              -> CoAxBranch
 mkCoAxBranch tvs cvs lhs rhs roles loc

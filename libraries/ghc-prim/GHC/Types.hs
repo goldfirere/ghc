@@ -32,7 +32,9 @@ module GHC.Types (
         Nat, Symbol,
         Any,
         type (~~), Coercible,
-        TYPE, RuntimeRep(..), Type, type (*), type (★), Constraint,
+        TYPE, RuntimeRep, UnaryRep(..), Lifted,
+        ConcatRuntimeReps, AppendRuntimeReps,
+        Type, type (*), type (★), Constraint,
           -- The historical type * should ideally be written as
           -- `type *`, without the parentheses. But that's a true
           -- pain to parse, and for little gain.
@@ -60,13 +62,13 @@ infixr 5 :
 data Constraint
 
 -- | The kind of types with values. For example @Int :: Type@.
-type Type = TYPE 'PtrRepLifted
+type Type = TYPE Lifted
 
 -- | A backward-compatible (pre-GHC 8.0) synonym for 'Type'
-type * = TYPE 'PtrRepLifted
+type * = TYPE Lifted
 
 -- | A unicode backward-compatible (pre-GHC 8.0) synonym for 'Type'
-type ★ = TYPE 'PtrRepLifted
+type ★ = TYPE Lifted
 
 {- *********************************************************************
 *                                                                      *
@@ -365,7 +367,12 @@ data SPEC = SPEC | SPEC2
 -- | GHC maintains a property that the kind of all inhabited types
 -- (as distinct from type constructors or type-level data) tells us
 -- the runtime representation of values of that type. This datatype
--- encodes the choice of runtime value.
+-- encodes the choice of runtime value, as a list of the components
+-- of the value. This list is necessary because of the presence of
+-- unboxed tuples, which are really several values glued together.
+-- Types other than unboxed tuples will have a single-element list
+-- in their kind.
+--
 -- Note that 'TYPE' is parameterised by 'RuntimeRep'; this is precisely
 -- what we mean by the fact that a type's kind encodes the runtime
 -- representation.
@@ -373,19 +380,19 @@ data SPEC = SPEC | SPEC2
 -- For boxed values (that is, values that are represented by a pointer),
 -- a further distinction is made, between lifted types (that contain ⊥),
 -- and unlifted ones (that don't).
-data RuntimeRep = VecRep VecCount VecElem   -- ^ a SIMD vector type
-                | PtrRepLifted    -- ^ lifted; represented by a pointer
-                | PtrRepUnlifted  -- ^ unlifted; represented by a pointer
-                | VoidRep         -- ^ erased entirely
-                | IntRep          -- ^ signed, word-sized value
-                | WordRep         -- ^ unsigned, word-sized value
-                | Int64Rep        -- ^ signed, 64-bit value (on 32-bit only)
-                | Word64Rep       -- ^ unsigned, 64-bit value (on 32-bit only)
-                | AddrRep         -- ^ A pointer, but /not/ to a Haskell value
-                | FloatRep        -- ^ a 32-bit floating point number
-                | DoubleRep       -- ^ a 64-bit floating point number
-                | UnboxedTupleRep -- ^ An unboxed tuple; this doesn't specify a concrete rep
-                | UnboxedSumRep   -- ^ An unboxed sum; this doesn't specify a concrete rep
+type RuntimeRep = [UnaryRep]
+
+data UnaryRep = VecRep VecCount VecElem     -- ^ a SIMD vector type
+              | UnboxedSumRep [RuntimeRep]  -- ^ unboxed sum w/ RRs of disjuncts
+              | PtrRepLifted    -- ^ lifted; represented by a pointer
+              | PtrRepUnlifted  -- ^ unlifted; represented by a pointer
+              | IntRep          -- ^ signed, word-sized value
+              | WordRep         -- ^ unsigned, word-sized value
+              | Int64Rep        -- ^ signed, 64-bit value (on 32-bit only)
+              | Word64Rep       -- ^ unsigned, 64-bit value (on 32-bit only)
+              | AddrRep         -- ^ A pointer, but /not/ to a Haskell value
+              | FloatRep        -- ^ a 32-bit floating point number
+              | DoubleRep       -- ^ a 64-bit floating point number
 
 -- See also Note [Wiring in RuntimeRep] in TysWiredIn
 
@@ -408,6 +415,19 @@ data VecElem = Int8ElemRep
              | Word64ElemRep
              | FloatElemRep
              | DoubleElemRep
+
+-- | The RuntimeRep for ordinary lifted types
+type Lifted = '[PtrRepLifted]
+
+-- | Concatenate RuntimeReps for the result kind of an unboxed tuple
+type family ConcatRuntimeReps (rs :: [RuntimeRep]) :: RuntimeRep where
+  ConcatRuntimeReps '[] = '[]
+  ConcatRuntimeReps (r ': rs) = AppendRuntimeReps r (ConcatRuntimeReps rs)
+
+-- | Append RuntimeReps for the result kind of an unboxed tuple
+type family AppendRuntimeReps (r1 :: RuntimeRep) (r2 :: RuntimeRep) :: RuntimeRep where
+  AppendRuntimeReps '[]       r2 = r2
+  AppendRuntimeReps (r ': rs) r2 = r ': AppendRuntimeReps rs r2
 
 {- *********************************************************************
 *                                                                      *

@@ -1642,18 +1642,21 @@ eitherTyConKey                          = mkPreludeTyConUnique 84
 
 -- Kind constructors
 liftedTypeKindTyConKey, tYPETyConKey,
-  unliftedTypeKindTyConKey, constraintKindTyConKey,
+  constraintKindTyConKey, concatRuntimeRepsTyConKey, appendRuntimeRepsTyConKey,
   starKindTyConKey, unicodeStarKindTyConKey, runtimeRepTyConKey,
   vecCountTyConKey, vecElemTyConKey :: Unique
 liftedTypeKindTyConKey                  = mkPreludeTyConUnique 87
 tYPETyConKey                            = mkPreludeTyConUnique 88
-unliftedTypeKindTyConKey                = mkPreludeTyConUnique 89
+concatRuntimeRepsTyConKey               = mkPreludeTyConUnique 89
+appendRuntimeRepsTyConKey               = mkPreludeTyConUnique 90
 constraintKindTyConKey                  = mkPreludeTyConUnique 92
 starKindTyConKey                        = mkPreludeTyConUnique 93
 unicodeStarKindTyConKey                 = mkPreludeTyConUnique 94
 runtimeRepTyConKey                      = mkPreludeTyConUnique 95
 vecCountTyConKey                        = mkPreludeTyConUnique 96
 vecElemTyConKey                         = mkPreludeTyConUnique 97
+unaryRepTyConKey                        = mkPreludeTyConUnique 98
+liftedTyConKey                          = mkPreludeTyConUnique 99
 
 pluginTyConKey, frontendPluginTyConKey :: Unique
 pluginTyConKey                          = mkPreludeTyConUnique 102
@@ -1775,6 +1778,18 @@ typeRepTyConKey = mkPreludeTyConUnique 184
 {-
 ************************************************************************
 *                                                                      *
+  Uniques for wired-in Axioms
+*                                                                      *
+************************************************************************
+-}
+
+concatRuntimeRepsAxiomKey, appendRuntimeRepsAxiomKey :: Unique
+concatRuntimeRepsAxiomKey = mkPreludeAxiomUnique  1
+appendRuntimeRepsAxiomKey = mkPreludeAxiomUnique  2
+
+{-
+************************************************************************
+*                                                                      *
 \subsubsection[Uniques-prelude-DataCons]{@Uniques@ for wired-in @DataCons@}
 *                                                                      *
 ************************************************************************
@@ -1887,25 +1902,26 @@ metaDataDataConKey                      = mkPreludeDataConUnique 68
 metaConsDataConKey                      = mkPreludeDataConUnique 69
 metaSelDataConKey                       = mkPreludeDataConUnique 70
 
-vecRepDataConKey :: Unique
+vecRepDataConKey, unboxedSumRepDataConKey :: Unique
 vecRepDataConKey                        = mkPreludeDataConUnique 71
+unboxedSumRepDataConKey                 = mkPreludeDataConUnique 72
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
 runtimeRepSimpleDataConKeys :: [Unique]
 ptrRepLiftedDataConKey, ptrRepUnliftedDataConKey :: Unique
 runtimeRepSimpleDataConKeys@(
   ptrRepLiftedDataConKey : ptrRepUnliftedDataConKey : _)
-  = map mkPreludeDataConUnique [72..83]
+  = map mkPreludeDataConUnique [73..81]
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
 -- VecCount
 vecCountDataConKeys :: [Unique]
-vecCountDataConKeys = map mkPreludeDataConUnique [84..89]
+vecCountDataConKeys = map mkPreludeDataConUnique [82..87]
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
 -- VecElem
 vecElemDataConKeys :: [Unique]
-vecElemDataConKeys = map mkPreludeDataConUnique [90..99]
+vecElemDataConKeys = map mkPreludeDataConUnique [88..97]
 
 ---------------- Template Haskell -------------------
 --      THNames.hs: USES DataUniques 100-150
@@ -2298,5 +2314,4 @@ pretendNameIsInScope :: Name -> Bool
 pretendNameIsInScope n
   = any (n `hasKey`)
     [ starKindTyConKey, liftedTypeKindTyConKey, tYPETyConKey
-    , unliftedTypeKindTyConKey
     , runtimeRepTyConKey, ptrRepLiftedDataConKey, ptrRepUnliftedDataConKey ]

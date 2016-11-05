@@ -2920,7 +2920,6 @@ pprTcApp_help to_type p pp tc tys dflags style
 
   |  tc_name `hasKey` starKindTyConKey
   || tc_name `hasKey` unicodeStarKindTyConKey
-  || tc_name `hasKey` unliftedTypeKindTyConKey
   = pp_tc   -- Do not wrap *, # in parens
 
   | otherwise  -- Unsaturated operator

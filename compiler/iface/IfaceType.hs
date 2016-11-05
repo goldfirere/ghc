@@ -838,7 +838,7 @@ ppr_iface_tc_app pp ctxt_prec tc tys
                       -- we know nothing of precedence though
   = pprIfaceInfixApp pp ctxt_prec (ppr tc) ty1 ty2
 
-  |  tc_name == starKindTyConName || tc_name == unliftedTypeKindTyConName
+  |  tc_name == starKindTyConName
   || tc_name == unicodeStarKindTyConName
   = ppr tc   -- Do not wrap *, # in parens
 

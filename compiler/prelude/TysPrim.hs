@@ -24,7 +24,7 @@ module TysPrim(
         openAlphaTy, openBetaTy, openAlphaTyVar, openBetaTyVar,
 
         -- Kind constructors...
-        tYPETyConName, unliftedTypeKindTyConName,
+        tYPETyConName,
 
         -- Kinds
         tYPE,
@@ -82,7 +82,7 @@ module TysPrim(
 
 import {-# SOURCE #-} TysWiredIn
   ( runtimeRepTy, liftedTypeKind
-  , vecRepDataConTyCon, ptrRepUnliftedDataConTyCon
+  , vecRepDataConTyCon, ptrRepUnliftedDataConTy
   , voidRepDataConTy, intRepDataConTy
   , wordRepDataConTy, int64RepDataConTy, word64RepDataConTy, addrRepDataConTy
   , floatRepDataConTy, doubleRepDataConTy
@@ -151,7 +151,6 @@ primTyCons
     , eqReprPrimTyCon
     , eqPhantPrimTyCon
 
-    , unliftedTypeKindTyCon
     , tYPETyCon
 
 #include "primop-vector-tycons.hs-incl"
@@ -355,28 +354,32 @@ Note [TYPE and RuntimeRep]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 All types that classify values have a kind of the form (TYPE rr), where
 
-    data RuntimeRep     -- Defined in ghc-prim:GHC.Types
+    type RuntimeRep = [UnaryRep]  -- Defined in ghc-prim:GHC.Types
+                                  -- and wired-in as runtimeRepTyCon
+
+    data UnaryRep     -- Defined in ghc-prim:GHC.Types; wired-in unaryRepTyCon
       = PtrRepLifted
       | PtrRepUnlifted
       | IntRep
       | FloatRep
       .. etc ..
 
-    rr :: RuntimeRep
+    type Lifted = '[PtrRepLifted]      -- ghc-prim:GHC.Types; liftedTyCon
 
-    TYPE :: RuntimeRep -> TYPE 'PtrRepLifted  -- Built in
+    TYPE :: RuntimeRep -> TYPE Lifted  -- GHC.Prim
 
 So for example:
-    Int        :: TYPE 'PtrRepLifted
-    Array# Int :: TYPE 'PtrRepUnlifted
-    Int#       :: TYPE 'IntRep
-    Float#     :: TYPE 'FloatRep
-    Maybe      :: TYPE 'PtrRepLifted -> TYPE 'PtrRepLifted
+    Int        :: TYPE '[PtrRepLifted]
+    Array# Int :: TYPE '[PtrRepUnlifted]
+    Int#       :: TYPE '[IntRep]
+    Float#     :: TYPE '[FloatRep]
+    Maybe      :: TYPE '[PtrRepLifted] -> TYPE '[PtrRepLifted]
 
 We abbreviate '*' specially:
-    type * = TYPE 'PtrRepLifted
+    type * = TYPE Lifted
 
 The 'rr' parameter tells us how the value is represented at runime.
+See Note [Unboxed tuple kinds] for why we use a list.
 
 Generally speaking, you can't be polymorphic in 'rr'.  E.g
    f :: forall (rr:RuntimeRep) (a:TYPE rr). a -> [a]
@@ -402,17 +405,56 @@ generator never has to manipulate a value of type 'a :: TYPE rr'.
   Always inlined, and hence specialised to the call site
      (#,#) :: forall (r1 :: RuntimeRep) (r2 :: RuntimeRep)
                      (a :: TYPE r1) (b :: TYPE r2).
-                     a -> b -> TYPE 'UnboxedTupleRep
-     See Note [Unboxed tuple kinds]
+                     a -> b -> TYPE (ConcatRuntimeReps [r1, r2])
+     See Note [Unboxed tuple kinds] and Note [Unboxed sum kinds]
 
 Note [Unboxed tuple kinds]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-What kind does (# Int, Float# #) have?
-The "right" answer would be
-    TYPE ('UnboxedTupleRep [PtrRepLifted, FloatRep])
-Currently we do not do this.  We just have
-    (# Int, Float# #) :: TYPE 'UnboxedTupleRep
-which does not tell us exactly how is is represented.
+What kind does (# Int, Float# #) have? It has kind
+TYPE '[PtrRepLifted, FloatRep]. The whole reason that
+RuntimeRep is a list of UnaryReps is to support unboxed tuples.
+Note that the empty list (TYPE '[]) is used to represent the
+nullary unboxed tuple, and also Void#.
+
+When constructing an unboxed tuple type from its constituent types,
+we must also produce the right kind. But this kind must be flattened,
+because unboxed tuple representations do not care about nesting
+of tuples. That is:
+
+  type T1 = (# (# Bool, Float# #), Int# #)
+  type T2 = (# Bool, Float#, Int# #)
+
+These two types are identical at runtime. It therefore makes sense
+for their kinds to be the same. So we flatten the RuntimeReps when
+combining the kinds.
+
+Note [Unboxed sum kinds]
+~~~~~~~~~~~~~~~~~~~~~~~~
+The current scheme with unboxed tuples means that the RuntimeRep
+for an unboxed tuple type really tells you what the runtime representation
+would be. But doing the same for unboxed *sums* is nightmarish. It's
+easy to go from the types in an unboxed tuple to its runtime representation:
+just concatenate. But going from the types in an unboxed sum to the representation
+is very involved. See Note [Translating unboxed sums to unboxed tuples] in
+UnariseStg.
+
+I (Richard E) do think it's possible to do the Right Thing
+w.r.t unboxed sums. It would involve implementing the unboxed-sum translation
+in type families, something I don't wish to contemplate at the moment. And,
+perhaps worse, doing this all would essentially expose our sum-compaction
+algorithm to users, as you could write a function polymorphic over all unboxed
+sums with the same compact representation. So, at least for now, we just have
+an UnboxedSumRep type in UnaryRep. This is a small lie, because an unboxed
+sum certainly isn't unary. But this lie doesn't bite in practice.
+
+The danger of doing the wrong thing in RuntimeReps is when two types have the
+same RuntimeRep but different runtime representations. If we did this, then
+a user could write a polymorphic function over a variable whose kind mentioned
+the shared RuntimeRep, and this function could be called with an improper concrete
+type. This is *not* what we're doing here, which is having multiple RuntimeReps
+for one runtime representation. So the worst that can happen is missed opportunities
+for polymorphism... not so bad. Note that we could do this with unboxed tuples, too,
+but the Right Thing is easy enough there that it's not necessary.
 
 Note [PrimRep and kindPrimRep]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -439,8 +481,8 @@ PrimRep in the promoted data constructor itself: see TyCon.promDcRepInfo.
 
 -}
 
-tYPETyCon, unliftedTypeKindTyCon :: TyCon
-tYPETyConName, unliftedTypeKindTyConName :: Name
+tYPETyCon :: TyCon
+tYPETyConName :: Name
 
 tYPETyCon = mkKindTyCon tYPETyConName
                         (mkTemplateAnonTyConBinders [runtimeRepTy])
@@ -448,22 +490,12 @@ tYPETyCon = mkKindTyCon tYPETyConName
                         [Nominal]
                         (mkPrelTyConRepName tYPETyConName)
 
-   -- See Note [TYPE and RuntimeRep]
-   -- NB: unlifted is wired in because there is no way to parse it in
-   -- Haskell. That's the only reason for wiring it in.
-unliftedTypeKindTyCon = mkSynonymTyCon unliftedTypeKindTyConName
-                          [] liftedTypeKind []
-                          (tYPE (TyConApp ptrRepUnliftedDataConTyCon []))
-                          True   -- no foralls
-                          True   -- family free
-
 --------------------------
 -- ... and now their names
 
 -- If you edit these, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.hs
 tYPETyConName             = mkPrimTyConName (fsLit "TYPE") tYPETyConKey tYPETyCon
-unliftedTypeKindTyConName = mkPrimTyConName (fsLit "#") unliftedTypeKindTyConKey unliftedTypeKindTyCon
 
 mkPrimTyConName :: FastString -> Unique -> TyCon -> Name
 mkPrimTyConName = mkPrimTcName BuiltInSyntax
@@ -496,17 +528,19 @@ pcPrimTyCon name roles rep
     binders     = mkTemplateAnonTyConBinders (map (const liftedTypeKind) roles)
     result_kind = tYPE rr
 
+    nil     = TyConApp promotedNilDataCon [unaryRepTy]
+    unary r = TyConApp promotedConsDataCon [unaryRepTy, r, nil]
     rr = case rep of
-      VoidRep       -> voidRepDataConTy
-      PtrRep        -> TyConApp ptrRepUnliftedDataConTyCon []
-      IntRep        -> intRepDataConTy
-      WordRep       -> wordRepDataConTy
-      Int64Rep      -> int64RepDataConTy
-      Word64Rep     -> word64RepDataConTy
-      AddrRep       -> addrRepDataConTy
-      FloatRep      -> floatRepDataConTy
-      DoubleRep     -> doubleRepDataConTy
-      VecRep n elem -> TyConApp vecRepDataConTyCon [n', elem']
+      VoidRep       -> nil
+      PtrRep        -> unary ptrRepUnliftedDataConTy
+      IntRep        -> unary intRepDataConTy
+      WordRep       -> unary wordRepDataConTy
+      Int64Rep      -> unary int64RepDataConTy
+      Word64Rep     -> unary word64RepDataConTy
+      AddrRep       -> unary addrRepDataConTy
+      FloatRep      -> unary floatRepDataConTy
+      DoubleRep     -> unary doubleRepDataConTy
+      VecRep n elem -> unary (TyConApp vecRepDataConTyCon [n', elem'])
         where
           n' = case n of
             2  -> vec2DataConTy
@@ -528,7 +562,6 @@ pcPrimTyCon name roles rep
             Word64ElemRep -> word64ElemRepDataConTy
             FloatElemRep  -> floatElemRepDataConTy
             DoubleElemRep -> doubleElemRepDataConTy
-
 
 pcPrimTyCon0 :: Name -> PrimRep -> TyCon
 pcPrimTyCon0 name rep

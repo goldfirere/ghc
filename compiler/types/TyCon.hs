@@ -340,15 +340,18 @@ N.
 
 Note [Unboxed tuple RuntimeRep vars]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The contents of an unboxed tuple may have any representation. Accordingly,
-the kind of the unboxed tuple constructor is runtime-representation
+The contents of an unboxed tuple (or sum) may have any representation.
+Accordingly,
+the kind of the unboxed tuple (resp. sum) constructor is runtime-representation
 polymorphic. For example,
 
-   (#,#) :: forall (q :: RuntimeRep) (r :: RuntimeRep). TYPE q -> TYPE r -> #
+   (#,#) :: forall (q :: RuntimeRep) (r :: RuntimeRep). TYPE q -> TYPE r
+         -> TYPE '(ConcatRuntimeReps [q,r])
 
-These extra tyvars (v and w) cause some delicate processing around tuples,
+These extra tyvars (q and r) cause some delicate processing around tuples,
 where we used to be able to assume that the tycon arity and the
-datacon arity were the same.
+datacon arity were the same. For more info about the return kind, see
+Note [Unboxed tuple kinds] in TysPrim.
 
 Note [Injective type families]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -894,7 +897,8 @@ data AlgTyConFlav
     VanillaAlgTyCon
        TyConRepName
 
-    -- | An unboxed type constructor. Note that this carries no TyConRepName
+    -- | An unboxed type constructor (sum or tuple).
+    -- Note that this carries no TyConRepName
     -- as it is not representable.
   | UnboxedAlgTyCon
 
@@ -1436,7 +1440,7 @@ mkClassTyCon name binders roles rhs clas tc_rep_name
 mkTupleTyCon :: Name
              -> [TyConBinder]
              -> Kind    -- ^ Result kind of the 'TyCon'
-             -> Arity   -- ^ Arity of the tuple
+             -> Arity   -- ^ Arity of the 'TyCon' (might differ from tuple)
              -> DataCon
              -> TupleSort    -- ^ Whether the tuple is boxed or unboxed
              -> AlgTyConFlav
@@ -1461,19 +1465,18 @@ mkTupleTyCon name binders res_kind arity con sort parent
     }
 
 mkSumTyCon :: Name
-             -> [TyConBinder]
-             -> Kind    -- ^ Kind of the resulting 'TyCon'
-             -> Arity   -- ^ Arity of the sum
-             -> [TyVar] -- ^ 'TyVar's scoped over: see 'tyConTyVars'
-             -> [DataCon]
-             -> AlgTyConFlav
-             -> TyCon
-mkSumTyCon name binders res_kind arity tyvars cons parent
+           -> [TyConBinder]
+           -> Kind    -- ^ Kind of the resulting 'TyCon'
+           -> Arity   -- ^ Arity of the 'TyCon' (twice the arity of the sum)
+                      -- See Note [Unboxed tuple RuntimeRep vars]
+           -> [DataCon]
+           -> TyCon
+mkSumTyCon name binders res_kind arity cons
   = AlgTyCon {
         tyConUnique      = nameUnique name,
         tyConName        = name,
         tyConBinders     = binders,
-        tyConTyVars      = tyvars,
+        tyConTyVars      = binderVars binders,
         tyConResKind     = res_kind,
         tyConKind        = mkTyConKind binders res_kind,
         tyConArity       = arity,
@@ -1483,7 +1486,7 @@ mkSumTyCon name binders res_kind arity tyvars cons parent
         algTcStupidTheta = [],
         algTcRhs         = SumTyCon { data_cons = cons },
         algTcFields      = emptyDFsEnv,
-        algTcParent      = parent
+        algTcParent      = UnboxedAlgTyCon
     }
 
 -- | Makes a tycon suitable for use during type-checking.
