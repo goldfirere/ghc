@@ -384,6 +384,7 @@ type RuntimeRep = [UnaryRep]
 
 data UnaryRep = VecRep VecCount VecElem     -- ^ a SIMD vector type
               | UnboxedSumRep [RuntimeRep]  -- ^ unboxed sum w/ RRs of disjuncts
+                                            -- (length >= 2)
               | PtrRepLifted    -- ^ lifted; represented by a pointer
               | PtrRepUnlifted  -- ^ unlifted; represented by a pointer
               | IntRep          -- ^ signed, word-sized value

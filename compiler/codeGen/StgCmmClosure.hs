@@ -15,7 +15,7 @@ module StgCmmClosure (
         DynTag,  tagForCon, isSmallFamily,
         ConTagZ, dataConTagZ,
 
-        idPrimRep, isVoidRep, isGcPtrRep, addIdReps, addArgReps,
+        idPrimRep, isGcPtrRep, addIdReps, addArgReps,
         argPrimRep,
 
         NonVoid(..), fromNonVoid, nonVoidIds, nonVoidStgArgs,

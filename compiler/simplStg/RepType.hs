@@ -4,7 +4,7 @@
 module RepType
   ( -- * Code generator views onto Types
     UnaryType, NvUnaryType, isNvUnaryType,
-    RepType(..), repType, repTypeArgs, isUnaryRep, isMultiRep,
+    RepType(..), repType, isUnaryRep, isMultiRep,
 
     -- * Predicates on types
     isVoidTy, typePrimRep,
@@ -13,8 +13,7 @@ module RepType
     countConRepArgs, idFunRepArity, tyConPrimRep,
 
     -- * Unboxed sum representation type
-    ubxSumRepType, layout, typeSlotTy, SlotTy (..), slotTyToType,
-    slotPrimRep, repTypeSlots
+    ubxSumRepType, lookupUbxSumSlots
   ) where
 
 #include "HsVersions.h"
@@ -41,30 +40,25 @@ import qualified Data.IntSet as IS
 *                                                                       *
 ********************************************************************** -}
 
-type NvUnaryType = Type
 type UnaryType   = Type
-     -- Both are always a value type; i.e. its kind is TYPE rr
+     -- A value type; i.e. its kind is TYPE rr
      -- for some rr; moreover the rr is never a variable.
      --
-     --   NvUnaryType : never an unboxed tuple or sum, or void
-     --
-     --   UnaryType   : never an unboxed tuple or sum;
-     --                 can be Void# (but not (# #))
+     --   UnaryType   : never an unboxed tuple or sum, nor void
 
-isNvUnaryType :: Type -> Bool
-isNvUnaryType ty
-  = case repType ty of
-      UnaryRep _  -> True
-      MultiRep ss -> not (null ss)
+isUnaryType :: Type -> Bool
+isUnaryType = isUnaryRep . repType
 
 data RepType
-  = MultiRep [SlotTy]     -- Represented by multiple values (e.g. unboxed tuple or sum)
-  | UnaryRep NvUnaryType  -- Represented by a single value; but never Void#, or any
-                          -- other zero-width type (isVoidTy)
+  = MultiRep [PrimRep]   -- Represented by multiple values (e.g. unboxed tuple or sum);
+                        -- INVARIANT: List is never a singleton (but may be empty)
+  | UnaryRep UnaryType PrimRep
+                        -- Represented by a single non-void value
+                        -- The UnaryType in there has no foralls, newtypes, etc.
 
 instance Outputable RepType where
-  ppr (MultiRep slots) = text "MultiRep" <+> ppr slots
-  ppr (UnaryRep ty)    = text "UnaryRep" <+> ppr ty
+  ppr (MultiRep reps) = text "MultiRep" <+> ppr reps
+  ppr (UnaryRep ty)   = text "UnaryRep" <+> ppr ty
 
 isMultiRep :: RepType -> Bool
 isMultiRep (MultiRep _) = True
@@ -74,64 +68,48 @@ isUnaryRep :: RepType -> Bool
 isUnaryRep (UnaryRep _) = True
 isUnaryRep _            = False
 
--- INVARIANT: the result list is never empty.
-repTypeArgs :: Type -> [UnaryType]
-repTypeArgs ty = case repType ty of
-                    MultiRep []    -> [voidPrimTy]
-                    MultiRep slots -> map slotTyToType slots
-                    UnaryRep ty    -> [ty]
-
-repTypeSlots :: RepType -> [SlotTy]
-repTypeSlots (MultiRep slots) = slots
-repTypeSlots (UnaryRep ty)    = maybeToList (typeSlotTy ty)
-
--- | 'repType' figure out how a type will be represented at runtime. It looks
--- through
---
---      1. For-alls
---      2. Synonyms
---      3. Predicates
---      4. All newtypes, including recursive ones, but not newtype families
---      5. Casts
---
+-- | 'repType' figure out how a type will be represented at runtime. It
+-- simply looks at the kind of the type, as described in
+-- Note [TYPE and RuntimeRep] in TysPrim
 repType :: Type -> RepType
 repType ty
-  = go initRecTc ty
+  | [_] <- prim_reps
+  = UnaryRep (unwrap ty)
+  | otherwise
+  = MultiRep prim_reps
   where
-    go :: RecTcChecker -> Type -> RepType
-    go rec_nts ty                       -- Expand predicates and synonyms
-      | Just ty' <- coreView ty
-      = go rec_nts ty'
+    prim_reps = kindRepType (text "repType ty" <+> ppr ty $$ ppr (typeKind ty))
+                            (typeKind ty)
 
-    go rec_nts (ForAllTy _ ty2)         -- Drop type foralls
-      = go rec_nts ty2
+-- | Gets rid of the stuff that prevents us from understanding the
+-- runtime representation of a type. Including:
+--   1. Casts
+--   2. Newtypes
+--   3. Foralls
+--   4. Synonyms
+-- But not type/data families, because we don't have the envs to hand.
+unwrap :: Type -> Type
+unwrap ty
+  | Just unwrapped <- topNormaliseTypeX stepper mappend inner_ty
+  = unwrapped
+  | otherwise
+  = inner_ty
+  where
+    inner_ty = go ty
 
-    go rec_nts ty@(TyConApp tc tys)     -- Expand newtypes
-      | isNewTyCon tc
-      , tys `lengthAtLeast` tyConArity tc
-      , Just rec_nts' <- checkRecTc rec_nts tc   -- See Note [Expanding newtypes] in TyCon
-      = go rec_nts' (newTyConInstRhs tc tys)
+    go t | Just t' <- coreView t = go t'
+    go (ForAllTy _ t)            = go t
+    go (CastTy t _)              = go t
+    go t                         = t
 
-      | isUnboxedTupleTyCon tc
-      = MultiRep (concatMap (repTypeSlots . go rec_nts) non_rr_tys)
-
-      | isUnboxedSumTyCon tc
-      = MultiRep (ubxSumRepType non_rr_tys)
-
-      | isVoidTy ty
-      = MultiRep []
-      where
-        -- See Note [Unboxed tuple RuntimeRep vars] in TyCon
-        non_rr_tys = dropRuntimeRepArgs tys
-
-    go rec_nts (CastTy ty _)
-      = go rec_nts ty
-
-    go _ ty@(CoercionTy _)
-      = pprPanic "repType" (ppr ty)
-
-    go _ ty = UnaryRep ty
-
+     -- cf. Coercion.unwrapNewTypeStepper
+    stepper rec_nts tc tys
+      | Just (ty', _) <- instNewTyCon_maybe tc tys
+      = case checkRecTc rec_nts tc of
+          Just rec_nts' -> NS_Step rec_nts' (go ty') ()
+          Nothing       -> NS_Abort   -- infinite newtypes
+      | otherwise
+      = NS_Done
 
 idFunRepArity :: Id -> RepArity
 idFunRepArity x = countFunRepArgs (idArity x) (idType x)
@@ -140,8 +118,8 @@ countFunRepArgs :: Arity -> Type -> RepArity
 countFunRepArgs 0 _
   = 0
 countFunRepArgs n ty
-  | UnaryRep (FunTy arg res) <- repType ty
-  = length (repTypeArgs arg) + countFunRepArgs (n - 1) res
+  | FunTy arg res <- unwrap ty
+  = length (typePrimRep arg) + countFunRepArgs (n - 1) res
   | otherwise
   = pprPanic "countFunRepArgs: arity greater than type can handle" (ppr (n, ty, repType ty))
 
@@ -152,7 +130,7 @@ countConRepArgs dc = go (dataConRepArity dc) (dataConRepType dc)
     go 0 _
       = 0
     go n ty
-      | UnaryRep (FunTy arg res) <- repType ty
+      | UnaryRep (FunTy arg res) _ <- repType ty
       = length (repTypeSlots (repType arg)) + go (n - 1) res
       | otherwise
       = pprPanic "countConRepArgs: arity greater than type can handle" (ppr (n, ty, repType ty))
@@ -169,7 +147,7 @@ isVoidTy ty = typePrimRep ty == VoidRep
 *                                                                       *
 ********************************************************************** -}
 
-type SortedSlotTys = [SlotTy]
+type SortedPrimReps = [PrimRep]
 
 -- | Given the arguments of a sum type constructor application,
 --   return the unboxed sum rep type.
@@ -178,20 +156,20 @@ type SortedSlotTys = [SlotTy]
 --
 --   (# Int | Maybe Int | (# Int, Bool #) #)
 --
--- We call `ubxSumRepType [ Int, Maybe Int, (# Int,Bool #) ]`,
--- which returns [Tag#, PtrSlot, PtrSlot]
+-- We call `ubxSumRepType [ [PtrRep], [PtrRep], [PtrRep,PtrRep] ]`,
+-- which returns [WordRep, PtrRep, PtrRep]
 --
--- INVARIANT: Result slots are sorted (via Ord SlotTy), except that at the head
+-- INVARIANT: Result slots are sorted (via compareSlots), except that at the head
 -- of the list we have the slot for the tag.
-ubxSumRepType :: [Type] -> [SlotTy]
+ubxSumRepType :: [[PrimRep]] -> [PrimRep]
 ubxSumRepType constrs0 =
   ASSERT2( length constrs0 > 1, ppr constrs0 ) -- otherwise it isn't a sum type
   let
-    combine_alts :: [SortedSlotTys]  -- slots of constructors
-                 -> SortedSlotTys    -- final slots
+    combine_alts :: [SortedPrimReps]  -- slots of constructors
+                 -> SortedPrimReps    -- final slots
     combine_alts constrs = foldl' merge [] constrs
 
-    merge :: SortedSlotTys -> SortedSlotTys -> SortedSlotTys
+    merge :: SortedPrimReps -> SortedPrimReps -> SortedPrimReps
     merge existing_slots []
       = existing_slots
     merge [] needed_slots
@@ -200,7 +178,7 @@ ubxSumRepType constrs0 =
       | Just s' <- s `fitsIn` es
       = -- found a slot, use it
         s' : merge ess ss
-      | s < es
+      | LT <- compareSlots s es
       = -- we need a new slot and this is the right place for it
         s : merge (es : ess) ss
       | otherwise
@@ -208,33 +186,34 @@ ubxSumRepType constrs0 =
         es : merge ess (s : ss)
 
     -- Nesting unboxed tuples and sums is OK, so we need to flatten first.
-    rep :: Type -> SortedSlotTys
-    rep ty = sort (repTypeSlots (repType ty))
+    rep :: [PrimRep] -> SortedPrimReps
+    rep ty = sortBy compareSlots (typePrimRep ty)
 
-    sumRep = WordSlot : combine_alts (map rep constrs0)
-             -- WordSlot: for the tag of the sum
+    sumRep = WordRep : combine_alts (map rep constrs0)
+             -- WordRep: for the tag of the sum
   in
     sumRep
 
-layout :: SortedSlotTys -- Layout of sum. Does not include tag.
-                        -- We assume that they are in increasing order
-       -> [SlotTy]      -- Slot types of things we want to map to locations in the
-                        -- sum layout
-       -> [Int]         -- Where to map 'things' in the sum layout
-layout sum_slots0 arg_slots0 =
+lookupUbxSumSlots
+       :: SortedPrimReps -- Layout of sum. Does not include tag.
+                         -- We assume that they are in increasing order
+       -> [PrimRep]      -- Reps of things we want to map to locations in the
+                         -- sum layout
+       -> [Int]          -- Where to map 'things' in the sum layout
+lookupUbxSumSlots sum_slots0 arg_slots0 =
     go arg_slots0 IS.empty
   where
-    go :: [SlotTy] -> IS.IntSet -> [Int]
+    go :: [PrimRep] -> IS.IntSet -> [Int]
     go [] _
       = []
     go (arg : args) used
       = let slot_idx = findSlot arg 0 sum_slots0 used
          in slot_idx : go args (IS.insert slot_idx used)
 
-    findSlot :: SlotTy -> Int -> SortedSlotTys -> IS.IntSet -> Int
+    findSlot :: PrimRep -> Int -> SortedPrimReps -> IS.IntSet -> Int
     findSlot arg slot_idx (slot : slots) useds
       | not (IS.member slot_idx useds)
-      , Just slot == arg `fitsIn` slot
+      , Just EQ <- compareSlots slot <$> (arg `fitsIn` slot)
       = slot_idx
       | otherwise
       = findSlot arg (slot_idx + 1) slots useds
@@ -243,87 +222,75 @@ layout sum_slots0 arg_slots0 =
 
 --------------------------------------------------------------------------------
 
--- We have 3 kinds of slots:
---
---   - Pointer slot: Only shared between actual pointers to Haskell heap (i.e.
---     boxed objects)
---
---   - Word slots: Shared between IntRep, WordRep, Int64Rep, Word64Rep, AddrRep.
---
---   - Float slots: Shared between floating point types.
---
---   - Void slots: Shared between void types. Not used in sums.
-data SlotTy = PtrSlot | WordSlot | Word64Slot | FloatSlot | DoubleSlot
-  deriving (Eq, Ord)
-    -- Constructor order is important! If slot A could fit into slot B
-    -- then slot A must occur first.  E.g.  FloatSlot before DoubleSlot
-    --
-    -- We are assuming that WordSlot is smaller than or equal to Word64Slot
-    -- (would not be true on a 128-bit machine)
+{- Note [Slot types]
+~~~~~~~~~~~~~~~~~~~~
+We have 5 kinds of slots:
 
-instance Outputable SlotTy where
-  ppr PtrSlot    = text "PtrSlot"
-  ppr Word64Slot = text "Word64Slot"
-  ppr WordSlot   = text "WordSlot"
-  ppr DoubleSlot = text "DoubleSlot"
-  ppr FloatSlot  = text "FloatSlot"
+  - Pointer slot: Only shared between actual pointers to Haskell heap (i.e.
+    boxed objects)
 
-typeSlotTy :: UnaryType -> Maybe SlotTy
-typeSlotTy ty
-  | isVoidTy ty
-  = Nothing
-  | otherwise
-  = Just (primRepSlot (typePrimRep ty))
+  - Word slots: Shared between IntRep, WordRep, AddrRep.
 
-primRepSlot :: PrimRep -> SlotTy
-primRepSlot VoidRep     = pprPanic "primRepSlot" (text "No slot for VoidRep")
-primRepSlot PtrRep      = PtrSlot
-primRepSlot IntRep      = WordSlot
-primRepSlot WordRep     = WordSlot
-primRepSlot Int64Rep    = Word64Slot
-primRepSlot Word64Rep   = Word64Slot
-primRepSlot AddrRep     = WordSlot
-primRepSlot FloatRep    = FloatSlot
-primRepSlot DoubleRep   = DoubleSlot
-primRepSlot VecRep{}    = pprPanic "primRepSlot" (text "No slot for VecRep")
+  - Word64 slots: Shared between Int64Rep and Word64Rep
 
--- Used when unarising sum binders (need to give unarised Ids types)
-slotTyToType :: SlotTy -> Type
-slotTyToType PtrSlot    = anyTypeOfKind liftedTypeKind
-slotTyToType Word64Slot = int64PrimTy
-slotTyToType WordSlot   = intPrimTy
-slotTyToType DoubleSlot = doublePrimTy
-slotTyToType FloatSlot  = floatPrimTy
+  - Float slots: FloatRep
 
-slotPrimRep :: SlotTy -> PrimRep
-slotPrimRep PtrSlot     = PtrRep
-slotPrimRep Word64Slot  = Word64Rep
-slotPrimRep WordSlot    = WordRep
-slotPrimRep DoubleSlot  = DoubleRep
-slotPrimRep FloatSlot   = FloatRep
+  - Double slots: DoubleRep
+
+Order is important! If slot A could fit into slot B
+then slot A must occur first.  E.g.  FloatSlot before DoubleSlot
+
+We are assuming that WordSlot is smaller than or equal to Word64Slot
+(would not be true on a 128-bit machine)
+
+At one point, there was a SlotTy type that had 5 constructors. But it
+seems easier just to write the following function:
+-}
+
+-- | Compare PrimReps according to their "slot type"; see
+-- Note [Slot types].
+compareSlots :: PrimRep -> PrimRep -> Ordering
+compareSlots = compare `on` get_slot
+  where
+    get_slot PtrRep = 1
+    get_slot IntRep = 2
+    get_slot WordRep = 2
+    get_slot Int64Rep = 3
+    get_slot Word64Rep = 3
+    get_slot AddrRep = 2
+    get_slot FloatRep = 4
+    get_slot DoubleRep = 5
+    get_slot (VecRep {}) = pprPanic "compareSlots" (text "No slot for VecRep")
 
 -- | Returns the bigger type if one fits into the other. (commutative)
-fitsIn :: SlotTy -> SlotTy -> Maybe SlotTy
+fitsIn :: PrimRep -> PrimRep -> Maybe PrimRep
 fitsIn ty1 ty2
-  | isWordSlot ty1 && isWordSlot ty2
-  = Just (max ty1 ty2)
-  | isFloatSlot ty1 && isFloatSlot ty2
-  = Just (max ty1 ty2)
+  | isWordRep ty1 && isWordRep ty2
+  = Just bigger
+  | isFloatRep ty1 && isFloatRep ty2
+  = Just bigger
   | isPtrSlot ty1 && isPtrSlot ty2
-  = Just PtrSlot
+  = Just PtrRep
   | otherwise
   = Nothing
   where
-    isPtrSlot PtrSlot = True
-    isPtrSlot _       = False
+    bigger
+      | LT <- compareSlots ty1 ty2 = ty2
+      | otherwise                  = ty1
 
-    isWordSlot Word64Slot = True
-    isWordSlot WordSlot   = True
-    isWordSlot _          = False
+    isPtrRep PtrRep = True
+    isPtrRep _      = False
 
-    isFloatSlot DoubleSlot = True
-    isFloatSlot FloatSlot  = True
-    isFloatSlot _          = False
+    isWordRep Word64Rep = True
+    isWordRep WordRep   = True
+    isWordRep Int64Rep  = True
+    isWordRep IntRep    = True
+    isWordRep AddrRep   = True
+    isWordRep _         = False
+
+    isFloatRep DoubleRep = True
+    isFloatRep FloatRep  = True
+    isFloatRep _         = False
 
 
 {- **********************************************************************
@@ -333,25 +300,23 @@ fitsIn ty1 ty2
 ********************************************************************** -}
 
 -- | Discovers the primitive representation of a more abstract 'UnaryType'
-typePrimRep :: HasDebugCallStack => UnaryType -> PrimRep
+typePrimRep :: HasDebugCallStack => Type -> [PrimRep]
 typePrimRep ty = kindPrimRep (text "kindRep ty" <+> ppr ty $$ ppr (typeKind ty))
                              (typeKind ty)
 
--- | Find the runtime representation of a 'TyCon'. Defined here to
--- avoid module loops. Do not call this on unboxed tuples or sums,
--- because they don't /have/ a runtime representation
-tyConPrimRep :: HasDebugCallStack => TyCon -> PrimRep
+-- | Find the runtime representation of a 'TyCon', as a list of PrimReps
+-- of the components of its runtime representation. Defined here to
+-- avoid module loops.
+-- NB: These days, this function /can/ handle unboxed tuples/sums.
+tyConPrimRep :: HasDebugCallStack => TyCon -> [PrimRep]
 tyConPrimRep tc
-  = ASSERT2( not (isUnboxedTupleTyCon tc), ppr tc )
-    ASSERT2( not (isUnboxedSumTyCon   tc), ppr tc )
-    kindPrimRep (text "kindRep tc" <+> ppr tc $$ ppr res_kind)
+  = kindPrimRep (text "kindRep tc" <+> ppr tc $$ ppr res_kind)
                 res_kind
   where
     res_kind = tyConResKind tc
 
--- | Take a kind (of shape @TYPE rr@) and produce the 'PrimRep'
--- of values of types of this kind.
-kindPrimRep :: HasDebugCallStack => SDoc -> Kind -> PrimRep
+-- | Returns the representation of types of this kind
+kindPrimRep :: HasDebugCallStack => SDoc -> Kind -> [PrimRep]
 kindPrimRep doc ki
   | Just ki' <- coreViewOneStarKind ki
   = kindPrimRep doc ki'
@@ -359,14 +324,75 @@ kindPrimRep _ (TyConApp typ [runtime_rep])
   = ASSERT( typ `hasKey` tYPETyConKey )
     go runtime_rep
   where
-    go rr
-      | Just rr' <- coreView rr
-      = go rr'
-    go (TyConApp rr_dc args)
-      | RuntimeRep fun <- tyConRuntimeRepInfo rr_dc
+    go :: Type  -- of kind RuntimeRep
+       -> [PrimRep]
+    go = concat $ map_type_list go_unary
+
+    go_unary :: Type  -- of kind UnaryRep
+             -> [PrimRep]   -- returns a list b/c of UnboxedSumRep
+    go_unary u | Just u' <- coreView u = go_unary u'
+    go_unary (TyConApp u_dc args)
+      | u_dc `hasKey` unboxedSumRepDataConKey
+      , [rrs] <- args   -- rrs is a Type of kind [[UnaryRep]]
+      = let prim_rep_lists = map_type_list go rrs
+      | RuntimeRep fun <- tyConRuntimeRepInfo u_dc
       = fun args
-    go rr
-      = pprPanic "kindPrimRep.go" (ppr rr)
+    go_unary u
+      = pprPanic "kindPrimRep.go_unary" (ppr u $$ doc)
+
+    map_type_list :: (Type {- :: a -} -> b) -> Type {- :: [a] -} -> [b]
+    map_type_list f ty
+      | Just ty' <- coreView ty = map_type_list f ty'
+    map_type_list _ (TyConApp nil _)
+      | nil `hasKey` nilDataConKey
+      = []
+    map_type_list f (TyConApp cons [_ki, x, xs])
+      = ASSERT( cons `hasKey` consDataConKey )
+          -- if this fails, the call is ill-kinded
+        f x : map_type_list f xs
+    map_type_list _ ty
+      = pprPanic "kindPrimRep.map_type_list" (ppr ty $$ doc)
+
 kindPrimRep doc ki
   = WARN( True, text "kindPrimRep defaulting to PtrRep on" <+> ppr ki $$ doc )
     PtrRep  -- this can happen legitimately for, e.g., Any
+            -- TODO (RAE): Check above comment.
+
+-- | Convert a PrimRep to a Type with that representation.
+-- This is needed during unarisation when we need to cons up fresh
+-- Ids to take the place of components of an unboxed tuple.
+primRepToType :: PrimRep -> Type
+primRepToType rep
+  = anyTypeOfKind (tYPE (mkPromotedListTy unaryRepTy [primRepToUnaryRep rep]))
+
+-- | Convert a PrimRep to the corresponding promoted UnaryRep constructor
+primRepToUnaryRep :: PrimRep -> Type -- of kind UnaryRep
+  -- TODO (RAE): Why lifted? It's what was here before, but I'm skeptical
+primRepToUnaryRep PtrRep       = ptrRepLiftedDataConTy
+primRepToUnaryRep IntRep       = intRepDataConTy
+primRepToUnaryRep WordRep      = wordRepDataConTy
+primRepToUnaryRep Int64Rep     = int64RepDataConTy
+primRepToUnaryRep Word64Rep    = word64RepDataConTy
+primRepToUnaryRep AddrRep      = addrRepDataConTy
+primRepToUnaryRep FloatRep     = floatRepDataConTy
+primRepToUnaryRep DoubleRep    = doubleRepDataConTy
+primRepToUnaryRep (VecRep c e) = mkTyConApp vecRepDataConTyCon [ to_count c
+                                                               , to_elem e ]
+  where
+    to_count 2 = vec2DataConTy
+    to_count 4 = vec4DataConTy
+    to_count 8 = vec8DataConTy
+    to_count 16 = vec16DataConTy
+    to_count 32 = vec32DataConTy
+    to_count 64 = vec64DataConTy
+
+    to_elem Int8ElemRep   = int8ElemRepDataConTy
+    to_elem Int16ElemRep  = int16ElemRepDataConTy
+    to_elem Int32ElemRep  = int32ElemRepDataConTy
+    to_elem Int64ElemRep  = int64ElemRepDataConTy
+    to_elem Word8ElemRep  = word8ElemRepDataConTy
+    to_elem Word16ElemRep = word16ElemRepDataConTy
+    to_elem Word32ElemRep = word32ElemRepDataConTy
+    to_elem Word64ElemRep = word64ElemRepDataConTy
+    to_elem FloatElemRep  = floatElemRepDataConTy
+    to_elem DoubleElemRep = doubleElemRepDataConTy

@@ -43,7 +43,6 @@ import FastString
 data ArgRep = P   -- GC Ptr
             | N   -- Word-sized non-ptr
             | L   -- 64-bit non-ptr (long)
-            | V   -- Void
             | F   -- Float
             | D   -- Double
             | V16 -- 16-byte (128-bit) vectors of Float/Double/Int8/Word32/etc.
@@ -55,7 +54,6 @@ argRepString :: ArgRep -> String
 argRepString P = "P"
 argRepString N = "N"
 argRepString L = "L"
-argRepString V = "V"
 argRepString F = "F"
 argRepString D = "D"
 argRepString V16 = "V16"
@@ -63,7 +61,6 @@ argRepString V32 = "V32"
 argRepString V64 = "V64"
 
 toArgRep :: PrimRep -> ArgRep
-toArgRep VoidRep           = V
 toArgRep PtrRep            = P
 toArgRep IntRep            = N
 toArgRep WordRep           = N

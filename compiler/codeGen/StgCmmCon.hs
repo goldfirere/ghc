@@ -154,7 +154,7 @@ premature looking at the args will cause the compiler to black-hole!
 -- if at all, but it does no harm, and sets the scene for characters.
 --
 -- In the case of zero-arity constructors, or, more accurately, those
--- which have exclusively size-zero (VoidRep) args, we generate no code
+-- which have exclusively size-zero args, we generate no code
 -- at all.
 
 buildDynCon' dflags _ binder _ _cc con []

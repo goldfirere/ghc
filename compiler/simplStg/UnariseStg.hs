@@ -501,7 +501,7 @@ mapTupleIdBinders ids args0 rho0
       map_ids rho [] _  = rho
       map_ids rho ((x, x_rep) : xs) args =
         let
-          x_arity = length (repTypeSlots x_rep)
+          x_arity = length (typePrimRep x_rep)
           (x_args, args') =
             ASSERT(args `lengthAtLeast` x_arity)
             splitAt x_arity args
@@ -528,9 +528,12 @@ mapSumIdBinders
 mapSumIdBinders [id] args rho0
   = ASSERT(not (any (isVoidTy . stgArgType) args))
     let
-      arg_slots = concatMap (repTypeSlots . repType . stgArgType) args
-      id_slots  = repTypeSlots (repType (idType id))
-      layout1   = layout arg_slots id_slots
+      arg_reps  = map (primRep . stgArgType) args
+                     -- all the sum components should really be unary
+      arg_slots = ASSERT( all isSingleton arg_reps )
+                  concat arg_reps
+      id_slots  = typePrimRep (idType id)
+      layout1   = lookupUbxSumSlots arg_slots id_slots
     in
       if isMultiValBndr id
         then extendRho rho0 id (MultiVal [ args !! i | i <- layout1 ])
@@ -562,11 +565,12 @@ mkUbxSum dc ty_args args0
 
       tag = dataConTag dc
 
-      layout'  = layout sum_slots (mapMaybe (typeSlotTy . stgArgType) args0)
+      layout'  = lookupUbxSumSlots sum_slots $
+                 map (typePrimRep . stgArgType) args0
       tag_arg  = StgLitArg (MachInt (fromIntegral tag))
       arg_idxs = IM.fromList (zipEqual "mkUbxSum" layout' args0)
 
-      mkTupArgs :: Int -> [SlotTy] -> IM.IntMap StgArg -> [StgArg]
+      mkTupArgs :: Int -> SortedPrimReps -> IM.IntMap StgArg -> [StgArg]
       mkTupArgs _ [] _
         = []
       mkTupArgs arg_idx (slot : slots_left) arg_map
@@ -575,12 +579,16 @@ mkUbxSum dc ty_args args0
         | otherwise
         = slotRubbishArg slot : mkTupArgs (arg_idx + 1) slots_left arg_map
 
-      slotRubbishArg :: SlotTy -> StgArg
-      slotRubbishArg PtrSlot    = StgVarArg aBSENT_ERROR_ID
-      slotRubbishArg WordSlot   = StgLitArg (MachWord 0)
-      slotRubbishArg Word64Slot = StgLitArg (MachWord64 0)
-      slotRubbishArg FloatSlot  = StgLitArg (MachFloat 0)
-      slotRubbishArg DoubleSlot = StgLitArg (MachDouble 0)
+      slotRubbishArg :: PrimRep -> StgArg
+      slotRubbishArg PtrRep     = StgVarArg aBSENT_ERROR_ID
+      slotRubbishArg IntRep     = StgLitArg (MachWord 0)
+      slotRubbishArg WordRep    = StgLitArg (MachWord 0)
+      slotRubbishArg AddrRep    = StgLitArg (MachWord 0)
+      slotRubbishArg Int64Rep   = StgLitArg (MachWord64 0)
+      slotRubbishArg Word64Rep  = StgLitArg (MachWord64 0)
+      slotRubbishArg FloatRep   = StgLitArg (MachFloat 0)
+      slotRubbishArg DoubleRep  = StgLitArg (MachDouble 0)
+      slotRubbishArg (VecRep{}) = pprPanic "mkUbxSum with VecRep" (ppr ty_args)
     in
       tag_arg : mkTupArgs 0 sum_slots arg_idxs
 
@@ -668,7 +676,7 @@ unariseFunArgBinder rho x  =
     MultiRep []    -> return (extendRho rho x (MultiVal []), [voidArgId])
                             -- NB: do not remove void binders
     MultiRep slots -> do
-      xs <- mkIds (mkFastString "us") (map slotTyToType slots)
+      xs <- mkIds (mkFastString "us") (map primRepToType slots)
       return (extendRho rho x (MultiVal (map StgVarArg xs)), xs)
 
 --------------------------------------------------------------------------------
@@ -697,7 +705,7 @@ unariseConArgBinder rho x =
   case repType (idType x) of
     UnaryRep _     -> return (rho, [x])
     MultiRep slots -> do
-      xs <- mkIds (mkFastString "us") (map slotTyToType slots)
+      xs <- mkIds (mkFastString "us") (map primRepToType slots)
       return (extendRho rho x (MultiVal (map StgVarArg xs)), xs)
 
 unariseFreeVars :: UnariseEnv -> [InId] -> [OutId]

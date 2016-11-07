@@ -10,7 +10,7 @@
 
 module CmmUtils(
         -- CmmType
-        primRepCmmType, slotCmmType, slotForeignHint,
+        primRepCmmType,
         typeCmmType, typeForeignHint,
 
         -- CmmLit
@@ -65,7 +65,7 @@ module CmmUtils(
 #include "HsVersions.h"
 
 import TyCon    ( PrimRep(..), PrimElemRep(..) )
-import RepType  ( UnaryType, SlotTy (..), typePrimRep )
+import RepType  ( UnaryType, typePrimRep )
 
 import SMRep
 import Cmm
@@ -89,7 +89,6 @@ import Hoopl
 ---------------------------------------------------
 
 primRepCmmType :: DynFlags -> PrimRep -> CmmType
-primRepCmmType _      VoidRep          = panic "primRepCmmType:VoidRep"
 primRepCmmType dflags PtrRep           = gcWord dflags
 primRepCmmType dflags IntRep           = bWord dflags
 primRepCmmType dflags WordRep          = bWord dflags
@@ -99,13 +98,6 @@ primRepCmmType dflags AddrRep          = bWord dflags
 primRepCmmType _      FloatRep         = f32
 primRepCmmType _      DoubleRep        = f64
 primRepCmmType _      (VecRep len rep) = vec len (primElemRepCmmType rep)
-
-slotCmmType :: DynFlags -> SlotTy -> CmmType
-slotCmmType dflags PtrSlot    = gcWord dflags
-slotCmmType dflags WordSlot   = bWord dflags
-slotCmmType _      Word64Slot = b64
-slotCmmType _      FloatSlot  = f32
-slotCmmType _      DoubleSlot = f64
 
 primElemRepCmmType :: PrimElemRep -> CmmType
 primElemRepCmmType Int8ElemRep   = b8
@@ -123,7 +115,6 @@ typeCmmType :: DynFlags -> UnaryType -> CmmType
 typeCmmType dflags ty = primRepCmmType dflags (typePrimRep ty)
 
 primRepForeignHint :: PrimRep -> ForeignHint
-primRepForeignHint VoidRep      = panic "primRepForeignHint:VoidRep"
 primRepForeignHint PtrRep       = AddrHint
 primRepForeignHint IntRep       = SignedHint
 primRepForeignHint WordRep      = NoHint
@@ -133,13 +124,6 @@ primRepForeignHint AddrRep      = AddrHint -- NB! AddrHint, but NonPtrArg
 primRepForeignHint FloatRep     = NoHint
 primRepForeignHint DoubleRep    = NoHint
 primRepForeignHint (VecRep {})  = NoHint
-
-slotForeignHint :: SlotTy -> ForeignHint
-slotForeignHint PtrSlot       = AddrHint
-slotForeignHint WordSlot      = NoHint
-slotForeignHint Word64Slot    = NoHint
-slotForeignHint FloatSlot     = NoHint
-slotForeignHint DoubleSlot    = NoHint
 
 typeForeignHint :: UnaryType -> ForeignHint
 typeForeignHint = primRepForeignHint . typePrimRep

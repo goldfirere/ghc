@@ -1263,8 +1263,7 @@ CmmType GcPtrCat W32 on a 64-bit machine.
 -- the code generator needs in order to pass arguments, return results,
 -- and store values of this type.
 data PrimRep
-  = VoidRep
-  | PtrRep
+  = PtrRep
   | IntRep        -- ^ Signed, word-sized value
   | WordRep       -- ^ Unsigned, word-sized value
   | Int64Rep      -- ^ Signed, 64 bit value (with 32-bit words only)
