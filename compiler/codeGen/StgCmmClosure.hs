@@ -162,10 +162,8 @@ assertNonVoidStgArgs args = ASSERT(not (any (isVoidTy . stgArgType) args))
 
 -- Why are these here?
 
-idPrimRep :: Id -> PrimRep
+idPrimRep :: Id -> [PrimRep]
 idPrimRep id = typePrimRep (idType id)
-    -- NB: typePrimRep fails on unboxed tuples,
-    --     but by StgCmm no Ids have unboxed tuple type
 
 addIdReps :: [NonVoid Id] -> [NonVoid (PrimRep, Id)]
 addIdReps = map (\id -> let id' = fromNonVoid id
@@ -175,7 +173,7 @@ addArgReps :: [NonVoid StgArg] -> [NonVoid (PrimRep, StgArg)]
 addArgReps = map (\arg -> let arg' = fromNonVoid arg
                            in NonVoid (argPrimRep arg', arg'))
 
-argPrimRep :: StgArg -> PrimRep
+argPrimRep :: StgArg -> [PrimRep]
 argPrimRep arg = typePrimRep (stgArgType arg)
 
 

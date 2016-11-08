@@ -249,11 +249,11 @@ mkProtoBCO dflags nm instrs_ordlist origin arity bitmap_size bitmap is_ret ffis
         peep []
            = []
 
-argBits :: DynFlags -> [ArgRep] -> [Bool]
+argBits :: DynFlags -> [Maybe ArgRep] -> [Bool]
 argBits _      [] = []
 argBits dflags (rep : args)
   | isFollowableArg rep  = False : argBits dflags args
-  | otherwise = take (argRepSizeW dflags rep) (repeat True) ++ argBits dflags args
+  | otherwise = take (maybeArgRepSizeW dflags rep) (repeat True) ++ argBits dflags args
 
 -- -----------------------------------------------------------------------------
 -- schemeTopBind
@@ -340,7 +340,7 @@ schemeR_wrk fvs nm original_body (args, body)
          p_init    = Map.fromList (zip all_args (mkStackOffsets 0 szsw_args))
 
          -- make the arg bitmap
-         bits = argBits dflags (reverse (map bcIdArgRep all_args))
+         bits = argBits dflags (reverse (map bcIdArgRep_maybe all_args))
          bitmap_size = genericLength bits
          bitmap = mkBitmap dflags bits
      body_code <- schemeER_wrk szw_args p_init body
@@ -401,7 +401,7 @@ fvsToEnv p fvs = [v | v <- dVarSetElems fvs,
 -- schemeE
 
 returnUnboxedAtom :: Word -> Sequel -> BCEnv
-                 -> AnnExpr' Id DVarSet -> ArgRep
+                 -> AnnExpr' Id DVarSet -> Maybe ArgRep
                  -> BcM BCInstrList
 -- Returning an unlifted value.
 -- Heave it on the stack, SLIDE, and RETURN.
@@ -423,10 +423,10 @@ schemeE d s p e
 schemeE d s p e@(AnnApp _ _) = schemeT d s p e
 
 schemeE d s p e@(AnnLit lit)     = returnUnboxedAtom d s p e (typeArgRep (literalType lit))
-schemeE d s p e@(AnnCoercion {}) = returnUnboxedAtom d s p e V
+schemeE d s p e@(AnnCoercion {}) = returnUnboxedAtom d s p e Nothing
 
 schemeE d s p e@(AnnVar v)
-    | isUnliftedType (idType v) = returnUnboxedAtom d s p e (bcIdArgRep v)
+    | isUnliftedType (idType v) = returnUnboxedAtom d s p e (bcIdArgRep_maybe v)
     | otherwise                 = schemeT d s p e
 
 schemeE d s p (AnnLet (AnnNonRec x (_,rhs)) (_,body))
@@ -724,7 +724,8 @@ mkConAppCode orig_d _ p con args_r_to_l
 unboxedTupleReturn
         :: Word -> Sequel -> BCEnv
         -> AnnExpr' Id DVarSet -> BcM BCInstrList
-unboxedTupleReturn d s p arg = returnUnboxedAtom d s p arg (atomRep arg)
+unboxedTupleReturn d s p arg
+  = returnUnboxedAtom d s p arg (atomRep arg)
 
 -- -----------------------------------------------------------------------------
 -- Generate code for a tail-call
@@ -758,28 +759,28 @@ doTailCall init_d s p fn args
     return (final_d, push_code `appOL` more_push_code)
 
 -- v. similar to CgStackery.findMatch, ToDo: merge
-findPushSeq :: [ArgRep] -> (BCInstr, Int, [ArgRep])
-findPushSeq (P: P: P: P: P: P: rest)
+findPushSeq :: [Maybe ArgRep] -> (BCInstr, Int, [ArgRep])
+findPushSeq (Just P: Just P: Just P: Just P: Just P: Just P: rest)
   = (PUSH_APPLY_PPPPPP, 6, rest)
-findPushSeq (P: P: P: P: P: rest)
+findPushSeq (Just P: Just P: Just P: Just P: Just P: rest)
   = (PUSH_APPLY_PPPPP, 5, rest)
-findPushSeq (P: P: P: P: rest)
+findPushSeq (Just P: Just P: Just P: Just P: rest)
   = (PUSH_APPLY_PPPP, 4, rest)
-findPushSeq (P: P: P: rest)
+findPushSeq (Just P: Just P: Just P: rest)
   = (PUSH_APPLY_PPP, 3, rest)
-findPushSeq (P: P: rest)
+findPushSeq (Just P: Just P: rest)
   = (PUSH_APPLY_PP, 2, rest)
-findPushSeq (P: rest)
+findPushSeq (Just P: rest)
   = (PUSH_APPLY_P, 1, rest)
-findPushSeq (V: rest)
+findPushSeq (Nothing: rest)
   = (PUSH_APPLY_V, 1, rest)
-findPushSeq (N: rest)
+findPushSeq (Just N: rest)
   = (PUSH_APPLY_N, 1, rest)
-findPushSeq (F: rest)
+findPushSeq (Just F: rest)
   = (PUSH_APPLY_F, 1, rest)
-findPushSeq (D: rest)
+findPushSeq (Just D: rest)
   = (PUSH_APPLY_D, 1, rest)
-findPushSeq (L: rest)
+findPushSeq (Just L: rest)
   = (PUSH_APPLY_L, 1, rest)
 findPushSeq _
   = panic "ByteCodeGen.findPushSeq"
@@ -852,7 +853,7 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
            -- algebraic alt with some binders
            | otherwise =
              let
-                 (ptrs,nptrs) = partition (isFollowableArg.bcIdArgRep) real_bndrs
+                 (ptrs,nptrs) = partition (isFollowableArg.bcIdArgRep_maybe) real_bndrs
                  ptr_sizes    = map (fromIntegral . idSizeW dflags) ptrs
                  nptrs_sizes  = map (fromIntegral . idSizeW dflags) nptrs
                  bind_sizes   = ptr_sizes ++ nptrs_sizes
@@ -914,7 +915,7 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
           -- NB: unboxed tuple cases bind the scrut binder to the same offset
           -- as one of the alt binders, so we have to remove any duplicates here:
           rel_slots = nub $ map fromIntegral $ concat (map spread binds)
-          spread (id, offset) | isFollowableArg (bcIdArgRep id) = [ rel_offset ]
+          spread (id, offset) | isFollowableArg (bcIdArgRep_maybe id) = [ rel_offset ]
                               | otherwise                      = []
                 where rel_offset = trunc16 $ d - fromIntegral offset - 1
 
@@ -970,32 +971,34 @@ generateCCall d0 s p (CCallSpec target cconv safety) fn args_r_to_l
 
          pargs _ [] = return []
          pargs d (a:az)
-            = let UnaryRep arg_ty _ = repType (exprType (deAnnotate' a))
-
-              in case tyConAppTyCon_maybe arg_ty of
+            = case repType (exprType (deAnnotate' a)) of
+                MultiRep [] -> deflt Nothing
+                UnaryRep arg_ty arg_rep
+                  -> case tyConAppTyCon_maybe arg_ty of
                     -- Don't push the FO; instead push the Addr# it
                     -- contains.
                     Just t
                      | t == arrayPrimTyCon || t == mutableArrayPrimTyCon
                        -> do rest <- pargs (d + fromIntegral addr_sizeW) az
                              code <- parg_ArrayishRep (fromIntegral (arrPtrsHdrSize dflags)) d p a
-                             return ((code,AddrRep):rest)
+                             return ((code,Just AddrRep):rest)
 
                      | t == smallArrayPrimTyCon || t == smallMutableArrayPrimTyCon
                        -> do rest <- pargs (d + fromIntegral addr_sizeW) az
                              code <- parg_ArrayishRep (fromIntegral (smallArrPtrsHdrSize dflags)) d p a
-                             return ((code,AddrRep):rest)
+                             return ((code,Just AddrRep):rest)
 
                      | t == byteArrayPrimTyCon || t == mutableByteArrayPrimTyCon
                        -> do rest <- pargs (d + fromIntegral addr_sizeW) az
                              code <- parg_ArrayishRep (fromIntegral (arrWordsHdrSize dflags)) d p a
-                             return ((code,AddrRep):rest)
+                             return ((code,Just AddrRep):rest)
 
                     -- Default case: push taggedly, but otherwise intact.
-                    _
-                       -> do (code_a, sz_a) <- pushAtom d p a
-                             rest <- pargs (d + fromIntegral sz_a) az
-                             return ((code_a, atomPrimRep a) : rest)
+                    _  -> deflt (Just arg_rep)
+           where
+             deflt mar = do (code_a, sz_a) <- pushAtom d p a
+                            rest <- pargs (d + fromIntegral sz_a) az
+                            return ((code_a, mar) : rest)
 
          -- Do magic for Ptr/Byte arrays.  Push a ptr to the array on
          -- the stack but then advance it over the headers, so as to
@@ -1011,12 +1014,13 @@ generateCCall d0 s p (CCallSpec target cconv safety) fn args_r_to_l
      code_n_reps <- pargs d0 args_r_to_l
      let
          (pushs_arg, a_reps_pushed_r_to_l) = unzip code_n_reps
-         a_reps_sizeW = fromIntegral (sum (map (primRepSizeW dflags) a_reps_pushed_r_to_l))
+         a_reps_sizeW = fromIntegral (sum (map (primRepSizeW dflags) $
+                                           catMaybes a_reps_pushed_r_to_l))
 
          push_args    = concatOL pushs_arg
          d_after_args = d0 + a_reps_sizeW
          a_reps_pushed_RAW
-            | null a_reps_pushed_r_to_l || head a_reps_pushed_r_to_l /= VoidRep
+            | null a_reps_pushed_r_to_l || isJust (head a_reps_pushed_r_to_l)
             = panic "ByteCodeGen.generateCCall: missing or invalid World token?"
             | otherwise
             = reverse (tail a_reps_pushed_r_to_l)
@@ -1028,8 +1032,8 @@ generateCCall d0 s p (CCallSpec target cconv safety) fn args_r_to_l
          -- Get the result rep.
          (returns_void, r_rep)
             = case maybe_getCCallReturnRep (idType fn) of
-                 Nothing -> (True,  VoidRep)
-                 Just rr -> (False, rr)
+                 Nothing -> (True,  Nothing)
+                 Just rr -> (False, Just rr)
          {-
          Because the Haskell stack grows down, the a_reps refer to
          lowest to highest addresses in that order.  The args for the call
@@ -1100,12 +1104,14 @@ generateCCall d0 s p (CCallSpec target cconv safety) fn args_r_to_l
             = (nilOL, d_after_args)
 
          -- Push the return placeholder.  For a call returning nothing,
-         -- this is a V (tag).
-         r_sizeW   = fromIntegral (primRepSizeW dflags r_rep)
+         -- this is Nothing (tag).
+         (push_r, r_sizeW)
+           | Just rep <- r_rep
+           = ( unitOL (PUSH_UBX (mkDummyLiteral r_rep) r_sizeW)
+             , fromIntegral (primRepSizeW dflags r_rep) )
+           | otherwise
+           = ( nilOL, 0 )
          d_after_r = d_after_Addr + fromIntegral r_sizeW
-         push_r    = (if   returns_void
-                      then nilOL
-                      else unitOL (PUSH_UBX (mkDummyLiteral r_rep) r_sizeW))
 
          -- generate the marshalling code we're going to call
 
@@ -1137,24 +1143,24 @@ generateCCall d0 s p (CCallSpec target cconv safety) fn args_r_to_l
                                  (fromIntegral (fromEnum (playInterruptible safety))))
          -- slide and return
          wrapup       = mkSLIDE r_sizeW (d_after_r - fromIntegral r_sizeW - s)
-                        `snocOL` RETURN_UBX (toArgRep r_rep)
+                        `snocOL` RETURN_UBX (toArgRep <$> r_rep)
          --trace (show (arg1_offW, args_offW  ,  (map argRepSizeW a_reps) )) $
      return (
          push_args `appOL`
          push_Addr `appOL` push_r `appOL` do_call `appOL` wrapup
          )
 
-primRepToFFIType :: DynFlags -> PrimRep -> FFIType
+primRepToFFIType :: DynFlags -> Maybe PrimRep -> FFIType
 primRepToFFIType dflags r
   = case r of
-     VoidRep     -> FFIVoid
-     IntRep      -> signed_word
-     WordRep     -> unsigned_word
-     Int64Rep    -> FFISInt64
-     Word64Rep   -> FFIUInt64
-     AddrRep     -> FFIPointer
-     FloatRep    -> FFIFloat
-     DoubleRep   -> FFIDouble
+     Nothing          -> FFIVoid
+     Just IntRep      -> signed_word
+     Just WordRep     -> unsigned_word
+     Just Int64Rep    -> FFISInt64
+     Just Word64Rep   -> FFIUInt64
+     Just AddrRep     -> FFIPointer
+     Just FloatRep    -> FFIFloat
+     Just DoubleRep   -> FFIDouble
      _           -> panic "primRepToFFIType"
   where
     (signed_word, unsigned_word)
@@ -1533,23 +1539,24 @@ lookupBCEnv_maybe :: Id -> BCEnv -> Maybe Word
 lookupBCEnv_maybe = Map.lookup
 
 idSizeW :: DynFlags -> Id -> Int
-idSizeW dflags = argRepSizeW dflags . bcIdArgRep
+idSizeW dflags = maybeArgRepSizeW dflags . bcIdArgRep_maybe
 
-bcIdArgRep :: Id -> ArgRep
-bcIdArgRep = toArgRep . bcIdPrimRep
+maybeArgRepSizeW :: DynFlags -> Maybe ArgRep -> WordOff
+maybeArgRepSizeW _      Nothing  = 0
+maybeArgRepSizeW dflags (Just r) = argRepSizeW dflags r
+
+bcIdArgRep_maybe :: Id -> Maybe ArgRep
+bcIdArgRep_maybe = fmap toArgRep . bcIdPrimRep_maybe
 
 bcIdPrimRep_maybe :: Id -> Maybe PrimRep
-bcIdPrimRep_maybe x = case repType (idType x) of
-  UnaryRep _ rep -> Just rep
-  MultiRep []    -> Nothing
-  MultiRep reps  ->
+bcIdPrimRep_maybe x = case typePrimRep (idType x) of
+  []    -> Nothing
+  [rep] -> Just rep
     pprPanic "bcIdPrimRep_maybe" (ppr x $$ ppr (idType x) $$ ppr reps)
 
-bcIdPrimRep = typePrimRep . bcIdUnaryType
-
-isFollowableArg :: ArgRep -> Bool
-isFollowableArg P = True
-isFollowableArg _ = False
+isFollowableArg :: Maybe ArgRep -> Bool
+isFollowableArg (Just P) = True
+isFollowableArg _        = False
 
 isVoidArg :: ArgRep -> Bool
 isVoidArg V = True
@@ -1616,24 +1623,29 @@ bcView _                             = Nothing
 
 isVAtom :: AnnExpr' Var ann -> Bool
 isVAtom e | Just e' <- bcView e = isVAtom e'
-isVAtom (AnnVar v)              = isVoidArg (bcIdArgRep v)
+isVAtom (AnnVar v)              = isNothing (bcIdArgRep_maybe v)
 isVAtom (AnnCoercion {})        = True
 isVAtom _                     = False
 
-atomPrimRep :: AnnExpr' Id ann -> PrimRep
+atomPrimRep :: AnnExpr' Id ann -> Maybe PrimRep
 atomPrimRep e | Just e' <- bcView e = atomPrimRep e'
-atomPrimRep (AnnVar v)              = bcIdPrimRep v
-atomPrimRep (AnnLit l)              = typePrimRep (literalType l)
+atomPrimRep (AnnVar v)              = bcIdPrimRep_maybe v
+atomPrimRep (AnnLit l)
+  | [rep] <- typePrimRep (literalType l)
+  = Just rep
+  | otherwise
+  = pprPanic "atomPrimRep AnnLit" (ppr l $$ ppr (literalType l))
 
 -- Trac #12128:
 -- A case expresssion can be an atom because empty cases evaluate to bottom.
 -- See Note [Empty case alternatives] in coreSyn/CoreSyn.hs
-atomPrimRep (AnnCase _ _ ty _)      = ASSERT(typePrimRep ty == PtrRep) PtrRep
-atomPrimRep (AnnCoercion {})        = VoidRep
+atomPrimRep (AnnCase _ _ ty _)      = ASSERT(typePrimRep ty == [PtrRep])
+                                      Just PtrRep
+atomPrimRep (AnnCoercion {})        = Nothing
 atomPrimRep other = pprPanic "atomPrimRep" (ppr (deAnnotate' other))
 
-atomRep :: AnnExpr' Id ann -> ArgRep
-atomRep e = toArgRep (atomPrimRep e)
+atomRep :: AnnExpr' Id ann -> Maybe ArgRep
+atomRep e = fmap toArgRep (atomPrimRep e)
 
 isPtrAtom :: AnnExpr' Id ann -> Bool
 isPtrAtom e = isFollowableArg (atomRep e)
@@ -1645,8 +1657,11 @@ mkStackOffsets :: Word -> [Word] -> [Word]
 mkStackOffsets original_depth szsw
    = map (subtract 1) (tail (scanl (+) original_depth szsw))
 
-typeArgRep :: Type -> ArgRep
-typeArgRep = toArgRep . typePrimRep
+typeArgRep :: Type -> Maybe ArgRep
+typeArgRep ty = case typePrimRep ty of
+  []    -> Nothing
+  [rep] -> Just $ toArgRep rep
+  _     -> pprPanic "typeArgRep" (ppr ty)
 
 -- -----------------------------------------------------------------------------
 -- The bytecode generator's monad

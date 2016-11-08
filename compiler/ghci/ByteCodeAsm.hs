@@ -450,27 +450,27 @@ assembleI dflags i = case i of
 isLarge :: Word -> Bool
 isLarge n = n > 65535
 
-push_alts :: ArgRep -> Word16
-push_alts V   = bci_PUSH_ALTS_V
-push_alts P   = bci_PUSH_ALTS_P
-push_alts N   = bci_PUSH_ALTS_N
-push_alts L   = bci_PUSH_ALTS_L
-push_alts F   = bci_PUSH_ALTS_F
-push_alts D   = bci_PUSH_ALTS_D
-push_alts V16 = error "push_alts: vector"
-push_alts V32 = error "push_alts: vector"
-push_alts V64 = error "push_alts: vector"
+push_alts :: Maybe ArgRep -> Word16
+push_alts Nothing    = bci_PUSH_ALTS_V
+push_alts (Just P)   = bci_PUSH_ALTS_P
+push_alts (Just N)   = bci_PUSH_ALTS_N
+push_alts (Just L)   = bci_PUSH_ALTS_L
+push_alts (Just F)   = bci_PUSH_ALTS_F
+push_alts (Just D)   = bci_PUSH_ALTS_D
+push_alts (Just V16) = error "push_alts: vector"
+push_alts (Just V32) = error "push_alts: vector"
+push_alts (Just V64) = error "push_alts: vector"
 
-return_ubx :: ArgRep -> Word16
-return_ubx V   = bci_RETURN_V
-return_ubx P   = bci_RETURN_P
-return_ubx N   = bci_RETURN_N
-return_ubx L   = bci_RETURN_L
-return_ubx F   = bci_RETURN_F
-return_ubx D   = bci_RETURN_D
-return_ubx V16 = error "return_ubx: vector"
-return_ubx V32 = error "return_ubx: vector"
-return_ubx V64 = error "return_ubx: vector"
+return_ubx :: Maybe ArgRep -> Word16
+return_ubx Nothing    = bci_RETURN_V
+return_ubx (Just P)   = bci_RETURN_P
+return_ubx (Just N)   = bci_RETURN_N
+return_ubx (Just L)   = bci_RETURN_L
+return_ubx (Just F)   = bci_RETURN_F
+return_ubx (Just D)   = bci_RETURN_D
+return_ubx (Just V16) = error "return_ubx: vector"
+return_ubx (Just V32) = error "return_ubx: vector"
+return_ubx (Just V64) = error "return_ubx: vector"
 
 -- Make lists of host-sized words for literals, so that when the
 -- words are placed in memory at increasing addresses, the

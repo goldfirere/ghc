@@ -131,13 +131,13 @@ countConRepArgs dc = go (dataConRepArity dc) (dataConRepType dc)
       = 0
     go n ty
       | UnaryRep (FunTy arg res) _ <- repType ty
-      = length (repTypeSlots (repType arg)) + go (n - 1) res
+      = length (typePrimRep arg) + go (n - 1) res
       | otherwise
       = pprPanic "countConRepArgs: arity greater than type can handle" (ppr (n, ty, repType ty))
 
 -- | True if the type has zero width.
 isVoidTy :: Type -> Bool
-isVoidTy ty = typePrimRep ty == VoidRep
+isVoidTy ty = null (typePrimRep ty)
 
 
 {- **********************************************************************

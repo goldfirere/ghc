@@ -122,10 +122,10 @@ isDllConApp dflags this_mod con args
 --    $WT1 :: T Int
 --    $WT1 = T1 Int (Coercion (Refl Int))
 -- The coercion argument here gets VoidRep
-isAddrRep :: PrimRep -> Bool
-isAddrRep AddrRep = True
-isAddrRep PtrRep  = True
-isAddrRep _       = False
+isAddrRep :: [PrimRep] -> Bool
+isAddrRep [AddrRep] = True
+isAddrRep [PtrRep]  = True
+isAddrRep _         = False
 
 -- | Type of an @StgArg@
 --

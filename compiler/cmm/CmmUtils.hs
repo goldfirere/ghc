@@ -11,7 +11,7 @@
 module CmmUtils(
         -- CmmType
         primRepCmmType,
-        typeCmmType, typeForeignHint,
+        typeCmmType,
 
         -- CmmLit
         zeroCLit, mkIntCLit,
@@ -112,7 +112,11 @@ primElemRepCmmType FloatElemRep  = f32
 primElemRepCmmType DoubleElemRep = f64
 
 typeCmmType :: DynFlags -> UnaryType -> CmmType
-typeCmmType dflags ty = primRepCmmType dflags (typePrimRep ty)
+typeCmmType dflags ty
+  | [rep] <- typePrimRep ty
+  = primRepCmmType dflags rep
+  | otherwise
+  = pprPanic "typeCmmType" (ppr ty)
 
 primRepForeignHint :: PrimRep -> ForeignHint
 primRepForeignHint PtrRep       = AddrHint
@@ -124,9 +128,6 @@ primRepForeignHint AddrRep      = AddrHint -- NB! AddrHint, but NonPtrArg
 primRepForeignHint FloatRep     = NoHint
 primRepForeignHint DoubleRep    = NoHint
 primRepForeignHint (VecRep {})  = NoHint
-
-typeForeignHint :: UnaryType -> ForeignHint
-typeForeignHint = primRepForeignHint . typePrimRep
 
 ---------------------------------------------------
 --

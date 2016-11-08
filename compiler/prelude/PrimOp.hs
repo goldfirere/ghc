@@ -568,7 +568,7 @@ primOpSig op
         GenPrimOp _occ tyvars arg_tys res_ty -> (tyvars, arg_tys, res_ty   )
 
 data PrimOpResultInfo
-  = ReturnsPrim     PrimRep
+  = ReturnsPrim     [PrimRep]
   | ReturnsAlg      TyCon
 
 -- Some PrimOps need not return a manifest primitive or algebraic value

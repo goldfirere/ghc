@@ -524,16 +524,19 @@ getFCallArgs args
   = do  { mb_cmms <- mapM get args
         ; return (catMaybes mb_cmms) }
   where
-    get arg | isVoidRep arg_rep
+    get arg | null arg_reps
             = return Nothing
             | otherwise
             = do { cmm <- getArgAmode (NonVoid arg)
                  ; dflags <- getDynFlags
                  ; return (Just (add_shim dflags arg_ty cmm, hint)) }
             where
-              arg_ty  = stgArgType arg
-              arg_rep = typePrimRep arg_ty
-              hint    = typeForeignHint arg_ty
+              arg_ty    = stgArgType arg
+              arg_reps  = typePrimRep arg_ty
+              arg_rep   = case arg_reps of
+                            [rep] -> rep
+                            _     -> pprPanic "getFCallArgs" (ppr arg_ty)
+              hint      = primRepForeignHint arg_rep
 
 add_shim :: DynFlags -> Type -> CmmExpr -> CmmExpr
 add_shim dflags arg_ty expr

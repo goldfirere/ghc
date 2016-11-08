@@ -100,11 +100,11 @@ cgOpApp (StgPrimOp primop) args res_ty = do
           emitCall (NativeNodeCall, NativeReturn) fun cmm_args
 
         Just f  -- inline
-          | ReturnsPrim VoidRep <- result_info
+          | ReturnsPrim [] <- result_info
           -> do f []
                 emitReturn []
 
-          | ReturnsPrim rep <- result_info
+          | ReturnsPrim [rep] <- result_info
           -> do dflags <- getDynFlags
                 res <- newTemp (primRepCmmType dflags rep)
                 f [res]

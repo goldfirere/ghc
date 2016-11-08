@@ -1399,15 +1399,10 @@ lintCoercion co@(UnivCo prov r ty1 ty2)
      isUnBoxed :: PrimRep -> Bool
      isUnBoxed PtrRep = False
      isUnBoxed _      = True
-     checkTypes t1 t2
-       = case (repType t1, repType t2) of
-           (UnaryRep _, UnaryRep _) ->
-              validateCoercion (typePrimRep t1) (typePrimRep t2)
-           (MultiRep rep1, MultiRep rep2) ->
-              checkWarnL (rep1 == rep2) (report "multi values with different reps")
-           _  -> addWarnL (report "multi rep and unary rep")
-     validateCoercion :: PrimRep -> PrimRep -> LintM ()
-     validateCoercion rep1 rep2
+     checkTypes t1 t2 = checkPrimReps (typePrimRep t1) (typePrimRep t2)
+
+     checkPrimReps :: [PrimRep] -> [PrimRep] -> LintM ()
+     checkPrimReps (rep1 : reps1) (rep2 : reps2)
        = do { dflags <- getDynFlags
             ; checkWarnL (isUnBoxed rep1 == isUnBoxed rep2)
                          (report "unboxed and boxed value")
@@ -1420,7 +1415,11 @@ lintCoercion co@(UnivCo prov r ty1 ty2)
                 Nothing    -> addWarnL (report "vector types")
                 Just False -> addWarnL (report "float and integral values")
                 _          -> return ()
+
+            ; checkPrimReps reps1 reps2
             }
+     checkPrimReps [] [] = return ()
+     checkPrimReps _  _  = addWarnL (report "different length reps")
 
      check_kinds kco k1 k2 = do { (k1', k2') <- lintStarCoercion kco
                                 ; ensureEqTys k1 k1' (mkBadUnivCoMsg CLeft  co)

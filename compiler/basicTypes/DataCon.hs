@@ -1253,7 +1253,7 @@ promoteDataCon (MkData { dcPromoted = tc }) = tc
 ************************************************************************
 -}
 
--- | Extract the type constructor, type argument, data constructor and it's
+-- | Extract the type constructor, type argument, data constructor and its
 -- /representation/ argument types from a type if it is a product type.
 --
 -- Precisely, we return @Just@ for any type that is all of:

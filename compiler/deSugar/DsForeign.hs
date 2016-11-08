@@ -793,14 +793,14 @@ primTyDescChar dflags ty
  | ty `eqType` unitTy = 'v'
  | otherwise
  = case typePrimRep (getPrimTyOf ty) of
-     IntRep      -> signed_word
-     WordRep     -> unsigned_word
-     Int64Rep    -> 'L'
-     Word64Rep   -> 'l'
-     AddrRep     -> 'p'
-     FloatRep    -> 'f'
-     DoubleRep   -> 'd'
-     _           -> pprPanic "primTyDescChar" (ppr ty)
+     [IntRep]      -> signed_word
+     [WordRep]     -> unsigned_word
+     [Int64Rep]    -> 'L'
+     [Word64Rep]   -> 'l'
+     [AddrRep]     -> 'p'
+     [FloatRep]    -> 'f'
+     [DoubleRep]   -> 'd'
+     _             -> pprPanic "primTyDescChar" (ppr ty)
   where
     (signed_word, unsigned_word)
        | wORD_SIZE dflags == 4  = ('W','w')
