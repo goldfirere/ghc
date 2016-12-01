@@ -1,0 +1,62 @@
+- stack:
+  StgCmmEnv.hs
+  NonVoid
+  VoidRep
+  repTypeArgs usages now may have an empty list
+  UnaryRep payload is very very suspect
+    - families are not looked through
+    - should we store the PrimRep there too?
+    - the SlotTy?
+  kindPrimRep now returns a list
+  tyConPrimRep
+  typePrimRep
+  idPrimRep
+  argPrimRep
+
+- removed:
+  VoidRep
+  V
+  UnboxedTupleRep
+  voidRepDataConTy
+  unboxedTupleRepDataConTy
+  unboxedSumRepDataConTy
+
+- changed:
+  RuntimeRep
+  TYPE
+  ptrRepLiftedTy --> liftedTy
+  UnboxedSumRep
+
+- added:
+  UnaryRep
+  Lifted
+
+type (# , #) :: forall (r1, r2 :: RuntimeRep). TYPE r1 -> TYPE r2
+             -> TYPE (ConcatRuntimeReps [r1, r2])
+
+type (# | #) :: forall (r1, r2 :: RuntimeRep). TYPE r1 -> TYPE r2
+             -> TYPE (UnboxedSumRep [r1, r2])
+
+
+1. Reshuffle RuntimeRep, TYPE, and UnaryRep as described in the ticket
+
+2. Remove UnboxedTupleRep and VoidRep from Unary Rep
+
+3. Re-do UnboxedSumRep to be more honest. See Note [Unboxed sum kinds] in TysPrim
+
+4. Remove # entirely. It was utterly unused.
+
+5. Clean up the implementation of TysWiredIn.mk_sum/TyCon.mkSumTyCon a bit
+
+6. Add ConcatRuntimeReps & AppendRuntimeReps in order to support the
+   scheme in Note [Unboxed tuple kinds] in TysPrim
+
+7. Major refactoring of RepType. The idea here is that you should be able
+   to get a runtime representation straight from the kind of any type. This
+   means that we have a much simpler story for going from a type to its
+   representation. The work is all done in RepType.kindPrimRep, which now
+   returns a *list* of PrimReps; the list is necessary because of unboxed
+   tuples and sums.
+
+   Along the way, SlotTy was causing impedence mismatches with PrimReps,
+   so I got rid of SlotTy, while preserving the ordering action it inspired.
