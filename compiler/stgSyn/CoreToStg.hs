@@ -650,8 +650,7 @@ coreToStgArgs (arg : args) = do         -- Non-type argument
         arg_ty = exprType arg
         stg_arg_ty = stgArgType stg_arg
         bad_args = (isUnliftedType arg_ty && not (isUnliftedType stg_arg_ty))
-                || (map typePrimRep (repTypeArgs arg_ty)
-                        /= map typePrimRep (repTypeArgs stg_arg_ty))
+                || (map typePrimRep arg_ty /= map typePrimRep stg_arg_ty)
         -- In GHCi we coerce an argument of type BCO# (unlifted) to HValue (lifted),
         -- and pass it to a function expecting an HValue (arg_ty).  This is ok because
         -- we can treat an unlifted value as lifted.  But the other way round

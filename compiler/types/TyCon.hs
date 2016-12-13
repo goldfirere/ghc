@@ -870,7 +870,7 @@ instance Binary HowAbstract where
 -- up things like @RuntimeRep@'s @PrimRep@ by known-key every time.
 data RuntimeRepInfo
   = NoRRI       -- ^ an ordinary promoted data con
-  | RuntimeRep ([Type] -> PrimRep)
+  | RuntimeRep ([Type] -> [PrimRep])
       -- ^ A constructor of @RuntimeRep@. The argument to the function should
       -- be the list of arguments to the promoted datacon.
   | VecCount Int         -- ^ A constructor of @VecCount@

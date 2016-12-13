@@ -723,8 +723,7 @@ toCType = f False
 
 typeTyCon :: Type -> TyCon
 typeTyCon ty
-  | UnaryRep rep_ty <- repType ty
-  , Just (tc, _) <- tcSplitTyConApp_maybe rep_ty
+  | Just (tc, _) <- tcSplitTyConApp_maybe (unwrapType ty)
   = tc
   | otherwise
   = pprPanic "DsForeign.typeTyCon" (ppr ty)
@@ -783,7 +782,7 @@ getPrimTyOf ty
         prim_ty
      _other -> pprPanic "DsForeign.getPrimTyOf" (ppr ty)
   where
-        UnaryRep rep_ty = repType ty
+        rep_ty = unwrapType ty
 
 -- represent a primitive type as a Char, for building a string that
 -- described the foreign function type.  The types are size-dependent,
@@ -792,7 +791,7 @@ primTyDescChar :: DynFlags -> Type -> Char
 primTyDescChar dflags ty
  | ty `eqType` unitTy = 'v'
  | otherwise
- = case typePrimRep (getPrimTyOf ty) of
+ = case typePrimRep1 (getPrimTyOf ty) of
      IntRep      -> signed_word
      WordRep     -> unsigned_word
      Int64Rep    -> 'L'

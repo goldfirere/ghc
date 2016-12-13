@@ -104,10 +104,10 @@ isDllConApp dflags this_mod con args
     = isDllName dflags this_mod (dataConName con) || any is_dll_arg args
  | otherwise = False
   where
-    -- NB: typePrimRep is legit because any free variables won't have
+    -- NB: typePrimRep1 is legit because any free variables won't have
     -- unlifted type (there are no unlifted things at top level)
     is_dll_arg :: StgArg -> Bool
-    is_dll_arg (StgVarArg v) =  isAddrRep (typePrimRep (idType v))
+    is_dll_arg (StgVarArg v) =  isAddrRep (typePrimRep1 (idType v))
                              && isDllName dflags this_mod (idName v)
     is_dll_arg _             = False
 

@@ -65,7 +65,7 @@ module CmmUtils(
 #include "HsVersions.h"
 
 import TyCon    ( PrimRep(..), PrimElemRep(..) )
-import RepType  ( UnaryType, SlotTy (..), typePrimRep )
+import RepType  ( UnaryType, SlotTy (..), typePrimRep1 )
 
 import SMRep
 import Cmm
@@ -142,7 +142,7 @@ slotForeignHint FloatSlot     = NoHint
 slotForeignHint DoubleSlot    = NoHint
 
 typeForeignHint :: UnaryType -> ForeignHint
-typeForeignHint = primRepForeignHint . typePrimRep
+typeForeignHint = primRepForeignHint . typePrimRep1
 
 ---------------------------------------------------
 --

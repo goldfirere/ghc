@@ -318,7 +318,7 @@ coreView (TyConApp tc tys) | Just (tenv, rhs, tys') <- expandSynTyCon_maybe tc t
 coreView _ = Nothing
 
 -- | Like 'coreView', but it also "expands" @Constraint@ to become
--- @TYPE PtrRepLifted@.
+-- @TYPE LiftedRep@.
 {-# INLINE coreViewOneStarKind #-}
 coreViewOneStarKind :: Type -> Maybe Type
 coreViewOneStarKind ty
@@ -1862,8 +1862,7 @@ getRuntimeRep :: String   -- ^ Printed in case of an error
 getRuntimeRep err ty = getRuntimeRepFromKind err (typeKind ty)
 
 -- | Extract the RuntimeRep classifier of a type from its kind.
--- For example, getRuntimeRepFromKind * = PtrRepLifted;
---              getRuntimeRepFromKind # = PtrRepUnlifted.
+-- For example, getRuntimeRepFromKind * = LiftedRep;
 -- Panics if this is not possible.
 getRuntimeRepFromKind :: String  -- ^ Printed in case of an error
                       -> Type -> Type

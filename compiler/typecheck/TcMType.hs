@@ -1016,7 +1016,7 @@ zonkQuantifiedTyVar default_kind tv
     zonk_meta_tv :: TcTyVar -> TcM (Maybe TcTyVar)
     zonk_meta_tv tv
       | isRuntimeRepVar tv   -- Never quantify over a RuntimeRep var
-      = do { writeMetaTyVar tv ptrRepLiftedTy
+      = do { writeMetaTyVar tv liftedRepTy
            ; return Nothing }
 
       | default_kind         -- -XNoPolyKinds and this is a kind var
@@ -1583,67 +1583,8 @@ tidySkolemInfo _   info                 = info
 *                                                                      *
 ************************************************************************
 
-Note [Unboxed tuples in representation polymorphism check]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Recall that all types that have values (that is, lifted and unlifted
-types) have kinds that look like (TYPE rep), where (rep :: RuntimeRep)
-tells how the values are represented at runtime. Lifted types have
-kind (TYPE PtrRepLifted) (for which * is just a synonym) and, say,
-Int# has kind (TYPE IntRep).
+See Note [Levity polymorphism checking] in DsMonad
 
-It would be terrible if the code generator came upon a binder of a type
-whose kind is something like TYPE r, where r is a skolem type variable.
-The code generator wouldn't know what to do. So we eliminate that case
-here.
-
-Although representation polymorphism and the RuntimeRep type catch
-most ways of abusing unlifted types, it still isn't quite satisfactory
-around unboxed tuples. That's because all unboxed tuple types have kind
-TYPE UnboxedTupleRep, which is clearly a lie: it doesn't actually tell
-you what the representation is.
-
-Naively, when checking for representation polymorphism, you might think we can
-just look for free variables in a type's RuntimeRep. But this misses the
-UnboxedTupleRep case.
-
-So, instead, we handle unboxed tuples specially. Only after unboxed tuples
-are handled do we look for free tyvars in a RuntimeRep.
-
-We must still be careful in the UnboxedTupleRep case. A binder whose type
-has kind UnboxedTupleRep is OK -- only as long as the type is really an
-unboxed tuple, which the code generator treats specially. So we do this:
- 1. Check if the type is an unboxed tuple. If so, recur.
- 2. Check if the kind is TYPE UnboxedTupleRep. If so, error.
- 3. Check if the kind has any free variables. If so, error.
-
-In case 1, we have a type that looks like
-
-  (# , #) PtrRepLifted IntRep Bool Int#
-
-recalling that
-
-  (# , #) :: forall (r1 :: RuntimeRep) (r2 :: RuntimeRep).
-             TYPE r1 -> TYPE r2 -> TYPE UnboxedTupleRep
-
-It's tempting just to look at the RuntimeRep arguments to make sure
-that they are devoid of free variables and not UnboxedTupleRep. This
-naive check, though, fails on nested unboxed tuples, like
-(# Int#, (# Bool, Void# #) #). Thus, instead of looking at the RuntimeRep
-args to the unboxed tuple constructor, we look at the types themselves.
-
-Here are a few examples:
-
-   type family F r :: TYPE r
-
-   x :: (F r :: TYPE r)   -- REJECTED: simple representation polymorphism
-     where r is an in-scope type variable of kind RuntimeRep
-
-   x :: (F PtrRepLifted :: TYPE PtrRepLifted)   -- OK
-   x :: (F IntRep       :: TYPE IntRep)         -- OK
-
-   x :: (F UnboxedTupleRep :: TYPE UnboxedTupleRep)  -- REJECTED
-
-   x :: ((# Int, Bool #) :: TYPE UnboxedTupleRep)    -- OK
 -}
 
 -- | According to the rules around representation polymorphism
@@ -1672,20 +1613,9 @@ checkForLevPolyX :: Monad m
                  => (SDoc -> m ())  -- how to report an error
                  -> SDoc -> Type -> m ()
 checkForLevPolyX add_err extra ty
-  | Just (tc, tys) <- splitTyConApp_maybe ty
-  , isUnboxedTupleTyCon tc || isUnboxedSumTyCon tc
-  = mapM_ (checkForLevPolyX add_err extra) (dropRuntimeRepArgs tys)
-
-  | tuple_rep || sum_rep
-  = add_err (vcat [ text "The type" <+> quotes (ppr tidy_ty) <+>
-                      (text "is not an unboxed" <+> tuple_or_sum <> comma)
-                  , text "and yet its kind suggests that it has the representation"
-                  , text "of an unboxed" <+> tuple_or_sum <> text ". This is not allowed." ] $$
-             extra)
-
   | not (noFreeVarsOfType runtime_rep)
   = add_err $
-    hang (text "A representation-polymorphic type is not allowed here:")
+    hang (text "A levity-polymorphic type is not allowed here:")
        2 (vcat [ text "Type:" <+> ppr tidy_ty
                , text "Kind:" <+> ppr tidy_ki ]) $$
     extra
@@ -1693,10 +1623,6 @@ checkForLevPolyX add_err extra ty
   | otherwise
   = return ()
   where
-    tuple_rep    = runtime_rep `eqType` unboxedTupleRepDataConTy
-    sum_rep      = runtime_rep `eqType` unboxedSumRepDataConTy
-    tuple_or_sum = text (if tuple_rep then "tuple" else "sum")
-
     ki          = typeKind ty
     runtime_rep = getRuntimeRepFromKind "checkForLevPolyX" ki
 

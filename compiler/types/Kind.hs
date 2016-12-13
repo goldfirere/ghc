@@ -120,7 +120,7 @@ isStarKind :: Kind -> Bool
 isStarKind k | Just k' <- coreViewOneStarKind k = isStarKind k'
 isStarKind (TyConApp tc [TyConApp ptr_rep []])
   =  tc      `hasKey` tYPETyConKey
-  && ptr_rep `hasKey` ptrRepLiftedDataConKey
+  && ptr_rep `hasKey` liftedRepDataConKey
 isStarKind _ = False
                               -- See Note [Kind Constraint and kind *]
 

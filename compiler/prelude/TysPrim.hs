@@ -24,7 +24,7 @@ module TysPrim(
         openAlphaTy, openBetaTy, openAlphaTyVar, openBetaTyVar,
 
         -- Kind constructors...
-        tYPETyConName, unliftedTypeKindTyConName,
+        tYPETyConName,
 
         -- Kinds
         tYPE,
@@ -82,7 +82,7 @@ module TysPrim(
 
 import {-# SOURCE #-} TysWiredIn
   ( runtimeRepTy, liftedTypeKind
-  , vecRepDataConTyCon, ptrRepUnliftedDataConTyCon
+  , vecRepDataConTyCon,
   , voidRepDataConTy, intRepDataConTy
   , wordRepDataConTy, int64RepDataConTy, word64RepDataConTy, addrRepDataConTy
   , floatRepDataConTy, doubleRepDataConTy
@@ -151,7 +151,6 @@ primTyCons
     , eqReprPrimTyCon
     , eqPhantPrimTyCon
 
-    , unliftedTypeKindTyCon
     , tYPETyCon
 
 #include "primop-vector-tycons.hs-incl"
@@ -356,25 +355,26 @@ Note [TYPE and RuntimeRep]
 All types that classify values have a kind of the form (TYPE rr), where
 
     data RuntimeRep     -- Defined in ghc-prim:GHC.Types
-      = PtrRepLifted
-      | PtrRepUnlifted
+      = LiftedRep
+      | UnliftedRep
       | IntRep
       | FloatRep
       .. etc ..
 
     rr :: RuntimeRep
 
-    TYPE :: RuntimeRep -> TYPE 'PtrRepLifted  -- Built in
+    TYPE :: RuntimeRep -> TYPE 'LiftedRep  -- Built in
 
 So for example:
-    Int        :: TYPE 'PtrRepLifted
-    Array# Int :: TYPE 'PtrRepUnlifted
+    Int        :: TYPE 'LiftedRep
+    Array# Int :: TYPE 'UnliftedRep
     Int#       :: TYPE 'IntRep
     Float#     :: TYPE 'FloatRep
-    Maybe      :: TYPE 'PtrRepLifted -> TYPE 'PtrRepLifted
+    Maybe      :: TYPE 'LiftedRep -> TYPE 'LiftedRep
+    (# , #)    :: TYPE r1 -> TYPE r2 -> TYPE (TupleRep [r1, r2])
 
 We abbreviate '*' specially:
-    type * = TYPE 'PtrRepLifted
+    type * = TYPE 'LiftedRep
 
 The 'rr' parameter tells us how the value is represented at runime.
 
@@ -402,17 +402,7 @@ generator never has to manipulate a value of type 'a :: TYPE rr'.
   Always inlined, and hence specialised to the call site
      (#,#) :: forall (r1 :: RuntimeRep) (r2 :: RuntimeRep)
                      (a :: TYPE r1) (b :: TYPE r2).
-                     a -> b -> TYPE 'UnboxedTupleRep
-     See Note [Unboxed tuple kinds]
-
-Note [Unboxed tuple kinds]
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-What kind does (# Int, Float# #) have?
-The "right" answer would be
-    TYPE ('UnboxedTupleRep [PtrRepLifted, FloatRep])
-Currently we do not do this.  We just have
-    (# Int, Float# #) :: TYPE 'UnboxedTupleRep
-which does not tell us exactly how is is represented.
+                     a -> b -> TYPE ('TupleRep '[r1, r2])
 
 Note [PrimRep and kindPrimRep]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -439,8 +429,8 @@ PrimRep in the promoted data constructor itself: see TyCon.promDcRepInfo.
 
 -}
 
-tYPETyCon, unliftedTypeKindTyCon :: TyCon
-tYPETyConName, unliftedTypeKindTyConName :: Name
+tYPETyCon :: TyCon
+tYPETyConName :: Name
 
 tYPETyCon = mkKindTyCon tYPETyConName
                         (mkTemplateAnonTyConBinders [runtimeRepTy])
@@ -448,22 +438,12 @@ tYPETyCon = mkKindTyCon tYPETyConName
                         [Nominal]
                         (mkPrelTyConRepName tYPETyConName)
 
-   -- See Note [TYPE and RuntimeRep]
-   -- NB: unlifted is wired in because there is no way to parse it in
-   -- Haskell. That's the only reason for wiring it in.
-unliftedTypeKindTyCon = mkSynonymTyCon unliftedTypeKindTyConName
-                          [] liftedTypeKind []
-                          (tYPE (TyConApp ptrRepUnliftedDataConTyCon []))
-                          True   -- no foralls
-                          True   -- family free
-
 --------------------------
 -- ... and now their names
 
 -- If you edit these, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.hs
 tYPETyConName             = mkPrimTyConName (fsLit "TYPE") tYPETyConKey tYPETyCon
-unliftedTypeKindTyConName = mkPrimTyConName (fsLit "#") unliftedTypeKindTyConKey unliftedTypeKindTyCon
 
 mkPrimTyConName :: FastString -> Unique -> TyCon -> Name
 mkPrimTyConName = mkPrimTcName BuiltInSyntax
@@ -494,41 +474,43 @@ pcPrimTyCon name roles rep
   = mkPrimTyCon name binders result_kind roles
   where
     binders     = mkTemplateAnonTyConBinders (map (const liftedTypeKind) roles)
-    result_kind = tYPE rr
+    result_kind = tYPE (primRepToRuntimRep rep)
 
-    rr = case rep of
-      VoidRep       -> voidRepDataConTy
-      PtrRep        -> TyConApp ptrRepUnliftedDataConTyCon []
-      IntRep        -> intRepDataConTy
-      WordRep       -> wordRepDataConTy
-      Int64Rep      -> int64RepDataConTy
-      Word64Rep     -> word64RepDataConTy
-      AddrRep       -> addrRepDataConTy
-      FloatRep      -> floatRepDataConTy
-      DoubleRep     -> doubleRepDataConTy
-      VecRep n elem -> TyConApp vecRepDataConTyCon [n', elem']
-        where
-          n' = case n of
-            2  -> vec2DataConTy
-            4  -> vec4DataConTy
-            8  -> vec8DataConTy
-            16 -> vec16DataConTy
-            32 -> vec32DataConTy
-            64 -> vec64DataConTy
-            _  -> pprPanic "Disallowed VecCount" (ppr n)
+-- | Convert a 'PrimRep' to a 'Type' of kind RuntimeRep
+-- Defined here to avoid (more) module loops
+primRepToRuntimeRep :: PrimRep -> Type
+primRepToRuntimeRep rep = case rep of
+  VoidRep       -> voidRepDataConTy
+  PtrRep        -> unliftedRepDataConTy
+  IntRep        -> intRepDataConTy
+  WordRep       -> wordRepDataConTy
+  Int64Rep      -> int64RepDataConTy
+  Word64Rep     -> word64RepDataConTy
+  AddrRep       -> addrRepDataConTy
+  FloatRep      -> floatRepDataConTy
+  DoubleRep     -> doubleRepDataConTy
+  VecRep n elem -> TyConApp vecRepDataConTyCon [n', elem']
+    where
+      n' = case n of
+        2  -> vec2DataConTy
+        4  -> vec4DataConTy
+        8  -> vec8DataConTy
+        16 -> vec16DataConTy
+        32 -> vec32DataConTy
+        64 -> vec64DataConTy
+        _  -> pprPanic "Disallowed VecCount" (ppr n)
 
-          elem' = case elem of
-            Int8ElemRep   -> int8ElemRepDataConTy
-            Int16ElemRep  -> int16ElemRepDataConTy
-            Int32ElemRep  -> int32ElemRepDataConTy
-            Int64ElemRep  -> int64ElemRepDataConTy
-            Word8ElemRep  -> word8ElemRepDataConTy
-            Word16ElemRep -> word16ElemRepDataConTy
-            Word32ElemRep -> word32ElemRepDataConTy
-            Word64ElemRep -> word64ElemRepDataConTy
-            FloatElemRep  -> floatElemRepDataConTy
-            DoubleElemRep -> doubleElemRepDataConTy
-
+      elem' = case elem of
+        Int8ElemRep   -> int8ElemRepDataConTy
+        Int16ElemRep  -> int16ElemRepDataConTy
+        Int32ElemRep  -> int32ElemRepDataConTy
+        Int64ElemRep  -> int64ElemRepDataConTy
+        Word8ElemRep  -> word8ElemRepDataConTy
+        Word16ElemRep -> word16ElemRepDataConTy
+        Word32ElemRep -> word32ElemRepDataConTy
+        Word64ElemRep -> word64ElemRepDataConTy
+        FloatElemRep  -> floatElemRepDataConTy
+        DoubleElemRep -> doubleElemRepDataConTy
 
 pcPrimTyCon0 :: Name -> PrimRep -> TyCon
 pcPrimTyCon0 name rep

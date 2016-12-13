@@ -204,8 +204,8 @@ lintStgExpr (StgCase scrut bndr alts_type alts) = runMaybeT $ do
     MaybeT $ addInScopeVars [bndr | in_scope] $
              lintStgAlts alts scrut_ty
   where
-    scrut_ty          = idType bndr
-    UnaryRep scrut_rep = repType scrut_ty -- Not used if scrutinee is unboxed tuple or sum
+    scrut_ty      = idType bndr
+    scrut_rep     = unwrapType scrut_ty -- Not used if scrutinee is unboxed tuple or sum
     check_bndr tc = case tyConAppTyCon_maybe scrut_rep of
                         Just bndr_tc -> checkL (tc == bndr_tc) bad_bndr
                         Nothing      -> addErrL bad_bndr

@@ -1642,12 +1642,11 @@ eitherTyConKey                          = mkPreludeTyConUnique 84
 
 -- Kind constructors
 liftedTypeKindTyConKey, tYPETyConKey,
-  unliftedTypeKindTyConKey, constraintKindTyConKey,
+  constraintKindTyConKey,
   starKindTyConKey, unicodeStarKindTyConKey, runtimeRepTyConKey,
   vecCountTyConKey, vecElemTyConKey :: Unique
 liftedTypeKindTyConKey                  = mkPreludeTyConUnique 87
 tYPETyConKey                            = mkPreludeTyConUnique 88
-unliftedTypeKindTyConKey                = mkPreludeTyConUnique 89
 constraintKindTyConKey                  = mkPreludeTyConUnique 92
 starKindTyConKey                        = mkPreludeTyConUnique 93
 unicodeStarKindTyConKey                 = mkPreludeTyConUnique 94
@@ -1887,15 +1886,17 @@ metaDataDataConKey                      = mkPreludeDataConUnique 68
 metaConsDataConKey                      = mkPreludeDataConUnique 69
 metaSelDataConKey                       = mkPreludeDataConUnique 70
 
-vecRepDataConKey :: Unique
+vecRepDataConKey, tupleRepDataConKey, sumRepDataConKey :: Unique
 vecRepDataConKey                        = mkPreludeDataConUnique 71
+tupleRepDataConKey                      = mkPreludeDataConUnique 72
+sumRepDataConKey                        = mkPreludeDataConUnique 73
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
 runtimeRepSimpleDataConKeys :: [Unique]
-ptrRepLiftedDataConKey, ptrRepUnliftedDataConKey :: Unique
+liftedRepDataConKey :: Unique
 runtimeRepSimpleDataConKeys@(
-  ptrRepLiftedDataConKey : ptrRepUnliftedDataConKey : _)
-  = map mkPreludeDataConUnique [72..83]
+  liftedRepDataConKey : _)
+  = map mkPreludeDataConUnique [74..83]
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
 -- VecCount
@@ -2298,5 +2299,4 @@ pretendNameIsInScope :: Name -> Bool
 pretendNameIsInScope n
   = any (n `hasKey`)
     [ starKindTyConKey, liftedTypeKindTyConKey, tYPETyConKey
-    , unliftedTypeKindTyConKey
-    , runtimeRepTyConKey, ptrRepLiftedDataConKey, ptrRepUnliftedDataConKey ]
+    , runtimeRepTyConKey, liftedRepDataConKey ]

@@ -693,14 +693,14 @@ isLiftedTypeKind :: Kind -> Bool
 isLiftedTypeKind ki | Just ki' <- coreView ki = isLiftedTypeKind ki'
 isLiftedTypeKind (TyConApp tc [TyConApp ptr_rep []])
   =  tc      `hasKey` tYPETyConKey
-  && ptr_rep `hasKey` ptrRepLiftedDataConKey
+  && ptr_rep `hasKey` liftedRepDataConKey
 isLiftedTypeKind _                = False
 
 isUnliftedTypeKind :: Kind -> Bool
 isUnliftedTypeKind ki | Just ki' <- coreView ki = isUnliftedTypeKind ki'
 isUnliftedTypeKind (TyConApp tc [TyConApp ptr_rep []])
   | tc       `hasKey` tYPETyConKey
-  , ptr_rep  `hasKey` ptrRepLiftedDataConKey
+  , ptr_rep  `hasKey` liftedRepDataConKey
   = False
 isUnliftedTypeKind (TyConApp tc [arg])
   = tc `hasKey` tYPETyConKey && noFreeVarsOfType arg
@@ -724,7 +724,7 @@ isRuntimeRepVar = isRuntimeRepTy . tyVarKind
 -- | Drops prefix of RuntimeRep constructors in 'TyConApp's. Useful for e.g.
 -- dropping 'PtrRep arguments of unboxed tuple TyCon applications:
 --
---   dropRuntimeRepArgs [ 'PtrRepLifted, 'PtrRepUnlifted
+--   dropRuntimeRepArgs [ 'LiftedRep, 'IntRep
 --                      , String, Int# ] == [String, Int#]
 --
 dropRuntimeRepArgs :: [Type] -> [Type]
