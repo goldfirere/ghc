@@ -1870,21 +1870,22 @@ getRuntimeRepFromKind err = go
   where
     go k | Just k' <- coreViewOneStarKind k = go k'
     go k
-      | Just (tc, [arg]) <- splitTyConApp_maybe k
-      , tc `hasKey` tYPETyConKey
-      = arg
+      | (_tc, [arg]) <- splitTyConApp k
+      = ASSERT2( _tc `hasKey` tYPETyConKey, text err $$ ppr k )
+        arg
     go k = pprPanic "getRuntimeRep" (text err $$
                                      ppr k <+> dcolon <+> ppr (typeKind k))
 
 isUnboxedTupleType :: Type -> Bool
-isUnboxedTupleType ty = case tyConAppTyCon_maybe ty of
-                           Just tc -> isUnboxedTupleTyCon tc
-                           _       -> False
+isUnboxedTupleType ty
+  = tyConAppTyCon (getRuntimeRep "isUnboxedTupleType" ty) `hasKey` tupleRepDataConKey
+  -- NB: Do not use typePrimRep, as that can't tell the difference between
+  -- unboxed tuples and unboxed sums
+
 
 isUnboxedSumType :: Type -> Bool
-isUnboxedSumType ty = case tyConAppTyCon_maybe ty of
-                        Just tc -> isUnboxedSumTyCon tc
-                        _       -> False
+isUnboxedSumType ty
+  = tyConAppTyCon (getRuntimeRep "isUnboxedSumType" ty) `hasKey` sumRepDataConKey
 
 -- | See "Type#type_classification" for what an algebraic type is.
 -- Should only be applied to /types/, as opposed to e.g. partially
