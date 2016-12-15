@@ -892,6 +892,8 @@ addDFunPrags dfun_id sc_meth_ids
  where
    con_app    = mkLams dfun_bndrs $
                 mkApps (Var (dataConWrapId dict_con)) dict_args
+                 -- mkApps is OK because of the checkForLevPoly call in checkValidClass
+                 -- See Note [Levity polymorphism checking] in TysPrim
    dict_args  = map Type inst_tys ++
                 [mkVarApps (Var id) dfun_bndrs | id <- sc_meth_ids]
 

@@ -795,6 +795,9 @@ lintCoreArg fun_ty arg
   = do { arg_ty <- lintCoreExpr arg
        ; checkL (not (isUnliftedType arg_ty) || exprOkForSpeculation arg)
                 (mkLetAppMsg arg)
+       ; lintL (not (isLevityPolymorphic (typeKind arg_ty)))
+           (text "Levity-polymorphic argument:" <+>
+             (ppr arg <+> dcolon <+> parens (ppr arg_ty <+> dcolon <+> ppr (typeKind arg_ty))))
        ; lintValApp arg fun_ty arg_ty }
 
 -----------------
@@ -1029,7 +1032,7 @@ lintIdBndr top_lvl id linterF
 
        -- Check for levity polymorphism
        ; lintL (not (isLevityPolymorphic k))
-           (text "RuntimeRep-polymorphic binder:" <+>
+           (text "Levity-polymorphic binder:" <+>
                  (ppr id <+> dcolon <+> parens (ppr ty <+> dcolon <+> ppr k)))
 
        ; let id' = setIdType id ty

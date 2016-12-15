@@ -8,7 +8,7 @@ Desugaring exporessions.
 
 {-# LANGUAGE CPP #-}
 
-module DsExpr ( dsExpr, dsLExpr, dsLocalBinds
+module DsExpr ( dsExpr, dsLExpr, dsLExprNoLP, dsLocalBinds
               , dsValBinds, dsLit, dsSyntaxExpr ) where
 
 #include "HsVersions.h"
@@ -201,6 +201,15 @@ dsLExpr :: LHsExpr Id -> DsM CoreExpr
 
 dsLExpr (L loc e) = putSrcSpanDs loc $ dsExpr e
 
+-- | Variant of 'dsLExpr' that ensures that the result is not levity
+-- polymorphic
+dsLExprNoLP :: LHsExpr Id -> DsM CoreExpr
+dsLExprNoLP (L loc e)
+  = putSrcSpanDs loc $
+    do { ds_expr <- dsExpr e
+       ; dsNoLevPolyExpr ds_expr e
+       ; return ds_expr }
+
 dsExpr :: HsExpr Id -> DsM CoreExpr
 dsExpr (HsPar e)              = dsLExpr e
 dsExpr (ExprWithTySigOut e _) = dsLExpr e
@@ -216,7 +225,7 @@ dsExpr (HsWrap co_fn e)
   = do { e' <- dsExpr e
        ; wrap' <- dsHsWrapper co_fn
        ; dflags <- getDynFlags
-       ; let wrapped_e = wrap' e'
+       ; wrapped_e <- wrap' e'
        ; warnAboutIdentities dflags e' (exprType wrapped_e)
        ; return wrapped_e }
 
@@ -232,7 +241,7 @@ dsExpr (HsLamCase matches)
        ; return $ Lam discrim_var matching_code }
 
 dsExpr e@(HsApp fun arg)
-  = mkCoreAppDs (text "HsApp" <+> ppr e) <$> dsLExpr fun <*> dsLExpr arg
+  = mkCoreAppDs (text "HsApp" <+> ppr e) <$> dsLExpr fun <*> dsLExprNoLP arg
 
 dsExpr (HsAppTypeOut e _)
     -- ignore type arguments here; they're in the wrappers instead at this point
@@ -280,10 +289,10 @@ will sort it out.
 
 dsExpr e@(OpApp e1 op _ e2)
   = -- for the type of y, we need the type of op's 2nd argument
-    mkCoreAppsDs (text "opapp" <+> ppr e) <$> dsLExpr op <*> mapM dsLExpr [e1, e2]
+    mkCoreAppsDs (text "opapp" <+> ppr e) <$> dsLExpr op <*> mapM dsLExprNoLP [e1, e2]
 
 dsExpr (SectionL expr op)       -- Desugar (e !) to ((!) e)
-  = mkCoreAppDs (text "sectionl" <+> ppr expr) <$> dsLExpr op <*> dsLExpr expr
+  = mkCoreAppDs (text "sectionl" <+> ppr expr) <$> dsLExpr op <*> dsLExprNoLP expr
 
 -- dsLExpr (SectionR op expr)   -- \ x -> op x expr
 dsExpr e@(SectionR op expr) = do
@@ -396,7 +405,7 @@ dsExpr (ExplicitPArr ty []) = do
 dsExpr (ExplicitPArr ty xs) = do
     singletonP <- dsDPHBuiltin singletonPVar
     appP       <- dsDPHBuiltin appPVar
-    xs'        <- mapM dsLExpr xs
+    xs'        <- mapM dsLExprNoLP xs
     let unary  fn x   = mkApps (Var fn) [Type ty, x]
         binary fn x y = mkApps (Var fn) [Type ty, x, y]
 
@@ -409,10 +418,10 @@ dsExpr (ArithSeq expr witness seq)
                    ; dsSyntaxExpr fl [newArithSeq] }
 
 dsExpr (PArrSeq expr (FromTo from to))
-  = mkApps <$> dsExpr expr <*> mapM dsLExpr [from, to]
+  = mkApps <$> dsExpr expr <*> mapM dsLExprNoLP [from, to]
 
 dsExpr (PArrSeq expr (FromThenTo from thn to))
-  = mkApps <$> dsExpr expr <*> mapM dsLExpr [from, thn, to]
+  = mkApps <$> dsExpr expr <*> mapM dsLExprNoLP [from, thn, to]
 
 dsExpr (PArrSeq _ _)
   = panic "DsExpr.dsExpr: Infinite parallel array!"
@@ -438,6 +447,7 @@ Where we obtain w0 and w1 from
 
 dsExpr (HsStatic _ expr@(L loc _)) = do
     expr_ds <- dsLExpr expr
+    dsNoLevPolyLExpr expr_ds expr
     let ty = exprType expr_ds
     staticPtrInfoDataCon <- dsLookupDataCon staticPtrInfoDataConName
     staticPtrDataCon     <- dsLookupDataCon staticPtrDataConName
@@ -529,7 +539,7 @@ dsExpr (RecordCon { rcon_con_expr = con_expr, rcon_flds = rbinds
              mk_arg (arg_ty, fl)
                = case findField (rec_flds rbinds) (flSelector fl) of
                    (rhs:rhss) -> ASSERT( null rhss )
-                                 dsLExpr rhs
+                                 dsLExprNoLP rhs
                    []         -> mkErrorAppDs rEC_CON_ERROR_ID arg_ty (ppr (flLabel fl))
              unlabelled_bottom arg_ty = mkErrorAppDs rEC_CON_ERROR_ID arg_ty Outputable.empty
 
@@ -752,8 +762,13 @@ dsSyntaxExpr (SyntaxExpr { syn_expr      = expr
   = do { fun            <- dsExpr expr
        ; core_arg_wraps <- mapM dsHsWrapper arg_wraps
        ; core_res_wrap  <- dsHsWrapper res_wrap
-       ; let wrapped_args = zipWith ($) core_arg_wraps arg_exprs
-       ; return (core_res_wrap (mkApps fun wrapped_args)) }
+       ; wrapped_args   <- zipWithM ($) core_arg_wraps arg_exprs
+       ; zipWithM_ no_lev_poly [1..] wrapped_args
+       ; core_res_wrap (mkApps fun wrapped_args) }
+  where
+    no_lev_poly n arg
+      = dsNoLevPoly (exprType arg)
+          (text "In the" <+> speakNth n <+> text "argument of" <+> quotes (ppr expr))
 
 findField :: [LHsRecField Id arg] -> Name -> [arg]
 findField rbinds sel
@@ -825,7 +840,7 @@ dsExplicitList :: Type -> Maybe (SyntaxExpr Id) -> [LHsExpr Id]
 -- See Note [Desugaring explicit lists]
 dsExplicitList elt_ty Nothing xs
   = do { dflags <- getDynFlags
-       ; xs' <- mapM dsLExpr xs
+       ; xs' <- mapM dsLExprNoLP xs
        ; if length xs' > maxBuildLength
                 -- Don't generate builds if the list is very long.
          || length xs' == 0
@@ -846,23 +861,23 @@ dsExplicitList elt_ty (Just fln) xs
 
 dsArithSeq :: PostTcExpr -> (ArithSeqInfo Id) -> DsM CoreExpr
 dsArithSeq expr (From from)
-  = App <$> dsExpr expr <*> dsLExpr from
+  = App <$> dsExpr expr <*> dsLExprNoLP from
 dsArithSeq expr (FromTo from to)
   = do dflags <- getDynFlags
        warnAboutEmptyEnumerations dflags from Nothing to
        expr' <- dsExpr expr
-       from' <- dsLExpr from
-       to'   <- dsLExpr to
+       from' <- dsLExprNoLP from
+       to'   <- dsLExprNoLP to
        return $ mkApps expr' [from', to']
 dsArithSeq expr (FromThen from thn)
-  = mkApps <$> dsExpr expr <*> mapM dsLExpr [from, thn]
+  = mkApps <$> dsExpr expr <*> mapM dsLExprNoLP [from, thn]
 dsArithSeq expr (FromThenTo from thn to)
   = do dflags <- getDynFlags
        warnAboutEmptyEnumerations dflags from (Just thn) to
        expr' <- dsExpr expr
-       from' <- dsLExpr from
-       thn'  <- dsLExpr thn
-       to'   <- dsLExpr to
+       from' <- dsLExprNoLP from
+       thn'  <- dsLExprNoLP thn
+       to'   <- dsLExprNoLP to
        return $ mkApps expr' [from', thn', to']
 
 {-

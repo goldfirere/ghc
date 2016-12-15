@@ -145,7 +145,10 @@ matchExpectedFunTys herald arity orig_ty thing_inside
         do { (result, wrap_res) <- go (mkCheckExpType arg_ty : acc_arg_tys)
                                       (n-1) res_ty
            ; return ( result
-                    , mkWpFun idHsWrapper wrap_res arg_ty res_ty ) }
+                    , mkWpFun idHsWrapper wrap_res arg_ty res_ty doc ) }
+      where
+        doc = text "When inferring the argument type of a function with type" <+>
+              quotes (ppr orig_ty)
 
     go acc_arg_tys n ty@(TyVarTy tv)
       | isMetaTyVar tv
@@ -271,8 +274,11 @@ matchActualFunTysPart herald ct_orig mb_thing arity orig_ty
     go n acc_args (FunTy arg_ty res_ty)
       = ASSERT( not (isPredTy arg_ty) )
         do { (wrap_res, tys, ty_r) <- go (n-1) (arg_ty : acc_args) res_ty
-           ; return ( mkWpFun idHsWrapper wrap_res arg_ty ty_r
+           ; return ( mkWpFun idHsWrapper wrap_res arg_ty ty_r doc
                     , arg_ty : tys, ty_r ) }
+      where
+        doc = text "When inferring the argument type of a function with type" <+>
+              quotes (ppr orig_ty)
 
     go n acc_args ty@(TyVarTy tv)
       | isMetaTyVar tv
@@ -718,9 +724,12 @@ tc_sub_type_ds eq_orig inst_orig ctxt ty_actual ty_expected
                <- tc_sub_tc_type eq_orig (GivenOrigin
                                           (SigSkol GenSigCtxt exp_arg))
                                  ctxt exp_arg act_arg
-           ; return (mkWpFun arg_wrap res_wrap exp_arg exp_res) }
+           ; return (mkWpFun arg_wrap res_wrap exp_arg exp_res doc) }
                -- arg_wrap :: exp_arg ~> act_arg
                -- res_wrap :: act-res ~> exp_res
+      where
+        doc = text "When checking that" <+> quotes (ppr ty_actual) <+>
+              text "is more polymorphic than" <+> quotes (ppr ty_expected)
 
     go ty_a ty_e
       | let (tvs, theta, _) = tcSplitSigmaTy ty_a

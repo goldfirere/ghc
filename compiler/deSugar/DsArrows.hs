@@ -25,9 +25,10 @@ import qualified HsUtils
 --     So WATCH OUT; check each use of split*Ty functions.
 -- Sigh.  This is a pain.
 
-import {-# SOURCE #-} DsExpr ( dsExpr, dsLExpr, dsLocalBinds, dsSyntaxExpr )
+import {-# SOURCE #-} DsExpr ( dsExpr, dsLExpr, dsLExprNoLP, dsLocalBinds, dsSyntaxExpr )
 
 import TcType
+import Type ( splitPiTy )
 import TcEvidence
 import CoreSyn
 import CoreFVs
@@ -46,7 +47,7 @@ import Outputable
 import Bag
 import VarSet
 import SrcLoc
-import ListSetOps( assocDefault )
+import ListSetOps( assocMaybe )
 import Data.List
 import Util
 import UniqDFM
@@ -59,13 +60,43 @@ mkCmdEnv :: CmdSyntaxTable Id -> DsM ([CoreBind], DsCmdEnv)
 -- See Note [CmdSyntaxTable] in HsExpr
 mkCmdEnv tc_meths
   = do { (meth_binds, prs) <- mapAndUnzipM mk_bind tc_meths
+
+       -- NB: Some of these lookups might fail, but that's OK if the
+       -- symbol is never used. That's why we use Maybe first and then
+       -- panic. An eager panic caused trouble in typecheck/should_compile/tc192
+       ; let the_arr_id     = assocMaybe prs arrAName
+             the_compose_id = assocMaybe prs composeAName
+             the_first_id   = assocMaybe prs firstAName
+             the_app_id     = assocMaybe prs appAName
+             the_choice_id  = assocMaybe prs choiceAName
+             the_loop_id    = assocMaybe prs loopAName
+
+           -- used as an argument in, e.g., do_premap
+       ; check_lev_poly 3 the_arr_id
+
+           -- used as an argument in, e.g., dsCmdStmt/BodyStmt
+       ; check_lev_poly 5 the_compose_id
+
+           -- used as an argument in, e.g., dsCmdStmt/BodyStmt
+       ; check_lev_poly 4 the_first_id
+
+           -- the result of the_app_id is used as an argument in, e.g.,
+           -- dsCmd/HsCmdArrApp/HsHigherOrderApp
+       ; check_lev_poly 2 the_app_id
+
+           -- used as an argument in, e.g., HsCmdIf
+       ; check_lev_poly 5 the_choice_id
+
+           -- used as an argument in, e.g., RecStmt
+       ; check_lev_poly 4 the_loop_id
+
        ; return (meth_binds, DsCmdEnv {
-               arr_id     = Var (find_meth prs arrAName),
-               compose_id = Var (find_meth prs composeAName),
-               first_id   = Var (find_meth prs firstAName),
-               app_id     = Var (find_meth prs appAName),
-               choice_id  = Var (find_meth prs choiceAName),
-               loop_id    = Var (find_meth prs loopAName)
+               arr_id     = Var (unmaybe the_arr_id arrAName),
+               compose_id = Var (unmaybe the_compose_id composeAName),
+               first_id   = Var (unmaybe the_first_id firstAName),
+               app_id     = Var (unmaybe the_app_id appAName),
+               choice_id  = Var (unmaybe the_choice_id choiceAName),
+               loop_id    = Var (unmaybe the_loop_id loopAName)
              }) }
   where
     mk_bind (std_name, expr)
@@ -73,9 +104,23 @@ mkCmdEnv tc_meths
            ; id <- newSysLocalDs (exprType rhs)
            ; return (NonRec id rhs, (std_name, id)) }
 
-    find_meth prs std_name
-      = assocDefault (mk_panic std_name) prs std_name
-    mk_panic std_name = pprPanic "mkCmdEnv" (text "Not found:" <+> ppr std_name)
+    unmaybe Nothing name = pprPanic "mkCmdEnv" (text "Not found:" <+> ppr name)
+    unmaybe (Just id) _  = id
+
+      -- returns the result type of a pi-type (that is, a forall or a function)
+      -- Note that this result type may be ill-scoped.
+    res_type :: Type -> Type
+    res_type ty = res_ty
+      where
+        (_, res_ty) = splitPiTy ty
+
+    check_lev_poly :: Int -- arity
+                   -> Maybe Id -> DsM ()
+    check_lev_poly _     Nothing = return ()
+    check_lev_poly arity (Just id)
+      = dsNoLevPoly (nTimes arity res_type (idType id))
+          (text "In the result of the function" <+> quotes (ppr id))
+
 
 -- arr :: forall b c. (b -> c) -> a b c
 do_arr :: DsCmdEnv -> Type -> Type -> CoreExpr -> CoreExpr
@@ -320,7 +365,7 @@ dsCmd ids local_vars stack_ty res_ty
     let
         (a_arg_ty, _res_ty') = tcSplitAppTy arrow_ty
         (_a_ty, arg_ty) = tcSplitAppTy a_arg_ty
-    core_arrow <- dsLExpr arrow
+    core_arrow <- dsLExprNoLP arrow
     core_arg   <- dsLExpr arg
     stack_id   <- newSysLocalDs stack_ty
     core_make_arg <- matchEnvStack env_ids stack_id core_arg
@@ -590,8 +635,11 @@ dsCmd ids local_vars stack_ty res_ty (HsCmdLet (L _ binds) body) env_ids = do
 --
 --              ---> premap (\ (env,stk) -> env) c
 
-dsCmd ids local_vars stack_ty res_ty (HsCmdDo (L _ stmts) _) env_ids = do
+dsCmd ids local_vars stack_ty res_ty do_block@(HsCmdDo (L loc stmts) _) env_ids = do
     (core_stmts, env_ids') <- dsCmdDo ids local_vars res_ty stmts env_ids
+    putSrcSpanDs loc $
+      dsNoLevPoly (exprType core_stmts)
+        (text "In the do-command:" <+> ppr do_block)
     let env_ty = mkBigCoreVarTupTy env_ids
     core_fst <- mkFstExpr env_ty stack_ty
     return (do_premap ids
@@ -617,7 +665,8 @@ dsCmd _ids local_vars _stack_ty _res_ty (HsCmdArrForm op _ _ args) env_ids = do
 dsCmd ids local_vars stack_ty res_ty (HsCmdWrap wrap cmd) env_ids = do
     (core_cmd, env_ids') <- dsCmd ids local_vars stack_ty res_ty cmd env_ids
     core_wrap <- dsHsWrapper wrap
-    return (core_wrap core_cmd, env_ids')
+    core_expr <- core_wrap core_cmd
+    return (core_expr, env_ids')
 
 dsCmd _ _ _ _ _ c = pprPanic "dsCmd" (ppr c)
 
@@ -656,7 +705,11 @@ dsfixCmd
                 DIdSet,         -- subset of local vars that occur free
                 [Id])           -- the same local vars as a list, fed back
 dsfixCmd ids local_vars stk_ty cmd_ty cmd
-  = trimInput (dsLCmd ids local_vars stk_ty cmd_ty cmd)
+  = do { result@(expr, _, _) <- trimInput (dsLCmd ids local_vars stk_ty cmd_ty cmd)
+       ; putSrcSpanDs (getLoc cmd) $
+         dsNoLevPoly (exprType expr)
+           (text "When desugaring the command:" <+> ppr cmd)
+       ; return result }
 
 -- Feed back the list of local variables actually used a command,
 -- for use as the input tuple of the generated arrow.
@@ -697,8 +750,10 @@ dsCmdDo _ _ _ [] _ = panic "dsCmdDo"
 --
 --              ---> premap (\ (xs) -> ((xs), ())) c
 
-dsCmdDo ids local_vars res_ty [L _ (LastStmt body _ _)] env_ids = do
+dsCmdDo ids local_vars res_ty [L loc (LastStmt body _ _)] env_ids = do
     (core_body, env_ids') <- dsLCmd ids local_vars unitTy res_ty body env_ids
+    putSrcSpanDs loc $ dsNoLevPoly (exprType core_body)
+                         (text "In the command:" <+> ppr body)
     let env_ty = mkBigCoreVarTupTy env_ids
     env_var <- newSysLocalDs env_ty
     let core_map = Lam env_var (mkCorePairExpr (Var env_var) mkCoreUnitExpr)
@@ -1003,7 +1058,10 @@ dsfixCmdStmts
                 [Id])           -- same local vars as a list
 
 dsfixCmdStmts ids local_vars out_ids stmts
-  = trimInput (dsCmdStmts ids local_vars out_ids stmts)
+  = do { result@(expr, _, _) <- trimInput (dsCmdStmts ids local_vars out_ids stmts)
+       ; dsNoLevPoly (exprType expr)
+           (text "When desugaring the statements:" <+> ppr stmts)
+       ; return result }
 
 dsCmdStmts
         :: DsCmdEnv             -- arrow combinators

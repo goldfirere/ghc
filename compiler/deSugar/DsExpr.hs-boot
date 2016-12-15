@@ -5,6 +5,6 @@ import DsMonad  ( DsM )
 import CoreSyn  ( CoreExpr )
 
 dsExpr  :: HsExpr  Id -> DsM CoreExpr
-dsLExpr :: LHsExpr Id -> DsM CoreExpr
+dsLExpr, dsLExprNoLP :: LHsExpr Id -> DsM CoreExpr
 dsSyntaxExpr :: SyntaxExpr Id -> [CoreExpr] -> DsM CoreExpr
 dsLocalBinds :: HsLocalBinds Id -> CoreExpr -> DsM CoreExpr

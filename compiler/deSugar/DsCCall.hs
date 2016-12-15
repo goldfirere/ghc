@@ -130,6 +130,8 @@ unboxArg :: CoreExpr                    -- The supplied argument
 --      (x#::Int#, \W. case x of I# x# -> W)
 -- where W is a CoreExpr that probably mentions x#
 
+-- always returns a non-levity-polymorphic expression
+
 unboxArg arg
   -- Primtive types: nothing to unbox
   | isPrimitiveType arg_ty

@@ -32,9 +32,6 @@ module TcHsSyn (
         zonkTcTypeToType, zonkTcTypeToTypes, zonkTyVarOcc,
         zonkCoToCo, zonkSigType,
         zonkEvBinds,
-
-        -- * Validity checking
-        checkForRepresentationPolymorphism
   ) where
 
 #include "HsVersions.h"
@@ -49,7 +46,6 @@ import TcEvidence
 import TysPrim
 import TysWiredIn
 import Type
-import TyCon
 import Coercion
 import ConLike
 import DataCon
@@ -57,7 +53,6 @@ import HscTypes
 import Name
 import NameEnv
 import Var
-import VarSet
 import VarEnv
 import DynFlags
 import Literal
@@ -298,7 +293,7 @@ zonkIdOccs env ids = map (zonkIdOcc env) ids
 zonkIdBndr :: ZonkEnv -> TcId -> TcM Id
 zonkIdBndr env id
   = do ty' <- zonkTcTypeToType env (idType id)
-       ensureNotRepresentationPolymorphic ty'
+       ensureNotLevPoly ty'
          (text "In the type of binder" <+> quotes (ppr id))
        return (setIdType id ty')
 
@@ -938,10 +933,10 @@ zonkCoFn env WpHole   = return (env, WpHole)
 zonkCoFn env (WpCompose c1 c2) = do { (env1, c1') <- zonkCoFn env c1
                                     ; (env2, c2') <- zonkCoFn env1 c2
                                     ; return (env2, WpCompose c1' c2') }
-zonkCoFn env (WpFun c1 c2 t1) = do { (env1, c1') <- zonkCoFn env c1
-                                   ; (env2, c2') <- zonkCoFn env1 c2
-                                   ; t1'         <- zonkTcTypeToType env2 t1
-                                   ; return (env2, WpFun c1' c2' t1') }
+zonkCoFn env (WpFun c1 c2 t1 d) = do { (env1, c1') <- zonkCoFn env c1
+                                     ; (env2, c2') <- zonkCoFn env1 c2
+                                     ; t1'         <- zonkTcTypeToType env2 t1
+                                     ; return (env2, WpFun c1' c2' t1' d) }
 zonkCoFn env (WpCast co) = do { co' <- zonkCoToCo env co
                               ; return (env, WpCast co') }
 zonkCoFn env (WpEvLam ev)   = do { (env', ev') <- zonkEvBndrX env ev
@@ -1181,7 +1176,7 @@ zonk_pat env (ParPat p)
 
 zonk_pat env (WildPat ty)
   = do  { ty' <- zonkTcTypeToType env ty
-        ; ensureNotRepresentationPolymorphic ty'
+        ; ensureNotLevPoly ty'
             (text "In a wildcard pattern")
         ; return (env, WildPat ty') }
 
@@ -1670,118 +1665,4 @@ We do this in two stages.
 Quantifying here is awkward because (a) the data type is big and (b)
 finding the free type vars of an expression is necessarily monadic
 operation. (consider /\a -> f @ b, where b is side-effected to a)
-
-Note [Unboxed tuples in representation polymorphism check]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Recall that all types that have values (that is, lifted and unlifted
-types) have kinds that look like (TYPE rep), where (rep :: RuntimeRep)
-tells how the values are represented at runtime. Lifted types have
-kind (TYPE PtrRepLifted) (for which * is just a synonym) and, say,
-Int# has kind (TYPE IntRep).
-
-It would be terrible if the code generator came upon a binder of a type
-whose kind is something like TYPE r, where r is a skolem type variable.
-The code generator wouldn't know what to do. So we eliminate that case
-here.
-
-Although representation polymorphism and the RuntimeRep type catch
-most ways of abusing unlifted types, it still isn't quite satisfactory
-around unboxed tuples. That's because all unboxed tuple types have kind
-TYPE UnboxedTupleRep, which is clearly a lie: it doesn't actually tell
-you what the representation is.
-
-Naively, when checking for representation polymorphism, you might think we can
-just look for free variables in a type's RuntimeRep. But this misses the
-UnboxedTupleRep case.
-
-So, instead, we handle unboxed tuples specially. Only after unboxed tuples
-are handled do we look for free tyvars in a RuntimeRep.
-
-We must still be careful in the UnboxedTupleRep case. A binder whose type
-has kind UnboxedTupleRep is OK -- only as long as the type is really an
-unboxed tuple, which the code generator treats specially. So we do this:
- 1. Check if the type is an unboxed tuple. If so, recur.
- 2. Check if the kind is TYPE UnboxedTupleRep. If so, error.
- 3. Check if the kind has any free variables. If so, error.
-
-In case 1, we have a type that looks like
-
-  (# , #) PtrRepLifted IntRep Bool Int#
-
-recalling that
-
-  (# , #) :: forall (r1 :: RuntimeRep) (r2 :: RuntimeRep).
-             TYPE r1 -> TYPE r2 -> TYPE UnboxedTupleRep
-
-It's tempting just to look at the RuntimeRep arguments to make sure
-that they are devoid of free variables and not UnboxedTupleRep. This
-naive check, though, fails on nested unboxed tuples, like
-(# Int#, (# Bool, Void# #) #). Thus, instead of looking at the RuntimeRep
-args to the unboxed tuple constructor, we look at the types themselves.
-
-Here are a few examples:
-
-   type family F r :: TYPE r
-
-   x :: (F r :: TYPE r)   -- REJECTED: simple representation polymorphism
-     where r is an in-scope type variable of kind RuntimeRep
-
-   x :: (F PtrRepLifted :: TYPE PtrRepLifted)   -- OK
-   x :: (F IntRep       :: TYPE IntRep)         -- OK
-
-   x :: (F UnboxedTupleRep :: TYPE UnboxedTupleRep)  -- REJECTED
-
-   x :: ((# Int, Bool #) :: TYPE UnboxedTupleRep)    -- OK
 -}
-
--- | According to the rules around representation polymorphism
--- (see https://ghc.haskell.org/trac/ghc/wiki/NoSubKinds), no binder
--- can have a representation-polymorphic type. This check ensures
--- that we respect this rule. It is a bit regrettable that this error
--- occurs in zonking, after which we should have reported all errors.
--- But it's hard to see where else to do it, because this can be discovered
--- only after all solving is done. And, perhaps most importantly, this
--- isn't really a compositional property of a type system, so it's
--- not a terrible surprise that the check has to go in an awkward spot.
-ensureNotRepresentationPolymorphic
-  :: Type  -- its zonked type
-  -> SDoc  -- where this happened
-  -> TcM ()
-ensureNotRepresentationPolymorphic ty doc
-  = whenNoErrs $   -- sometimes we end up zonking bogus definitions of type
-                   -- forall a. a. See, for example, test ghci/scripts/T9140
-    checkForRepresentationPolymorphism doc ty
-
-   -- See Note [Unboxed tuples in representation polymorphism check]
-checkForRepresentationPolymorphism :: SDoc -> Type -> TcM ()
-checkForRepresentationPolymorphism extra ty
-  | Just (tc, tys) <- splitTyConApp_maybe ty
-  , isUnboxedTupleTyCon tc || isUnboxedSumTyCon tc
-  = mapM_ (checkForRepresentationPolymorphism extra) (dropRuntimeRepArgs tys)
-
-  | tuple_rep || sum_rep
-  = addErr (vcat [ text "The type" <+> quotes (ppr tidy_ty) <+>
-                     (text "is not an unboxed" <+> tuple_or_sum <> comma)
-                 , text "and yet its kind suggests that it has the representation"
-                 , text "of an unboxed" <+> tuple_or_sum <> text ". This is not allowed." ] $$
-            extra)
-
-  | not (isEmptyVarSet (tyCoVarsOfType runtime_rep))
-  = addErr $
-    hang (text "A representation-polymorphic type is not allowed here:")
-       2 (vcat [ text "Type:" <+> ppr tidy_ty
-               , text "Kind:" <+> ppr tidy_ki ]) $$
-    extra
-
-  | otherwise
-  = return ()
-  where
-    tuple_rep    = runtime_rep `eqType` unboxedTupleRepDataConTy
-    sum_rep      = runtime_rep `eqType` unboxedSumRepDataConTy
-    tuple_or_sum = text (if tuple_rep then "tuple" else "sum")
-
-    ki          = typeKind ty
-    runtime_rep = getRuntimeRepFromKind "check_type" ki
-
-    (tidy_env, tidy_ty) = tidyOpenType emptyTidyEnv ty
-    tidy_ki             = tidyType tidy_env (typeKind ty)

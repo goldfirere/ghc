@@ -36,20 +36,25 @@ module DsMonad (
         -- Iterations for pm checking
         incrCheckPmIterDs, resetPmIterDs,
 
-        -- Warnings
-        DsWarning, warnDs, failWithDs, discardWarningsDs,
+        -- Warnings and errors
+        DsWarning, warnDs, errDs, failWithDs, discardWarningsDs,
 
         -- Data types
         DsMatchContext(..),
         EquationInfo(..), MatchResult(..), DsWrapper, idDsWrapper,
-        CanItFail(..), orFail
+        CanItFail(..), orFail,
+
+        -- Levity polymorphism
+        dsNoLevPoly, dsNoLevPolyLExpr, dsNoLevPolyExpr
     ) where
 
 import TcRnMonad
 import FamInstEnv
 import CoreSyn
+import CoreUtils ( exprType )
 import HsSyn
 import TcIface
+import TcMType ( checkForLevPolyX )
 import LoadIface
 import Finder
 import PrelNames
@@ -316,7 +321,7 @@ it easier to read debugging output.
 
 -- Make a new Id with the same print name, but different type, and new unique
 newUniqueId :: Id -> Type -> DsM Id
-newUniqueId id = mkSysLocalOrCoVarM (occNameFS (nameOccName (idName id)))
+newUniqueId id = mk_local (occNameFS (nameOccName (idName id)))
 
 duplicateLocalDs :: Id -> DsM Id
 duplicateLocalDs old_local
@@ -328,11 +333,17 @@ newPredVarDs pred
  = newSysLocalDs pred
 
 newSysLocalDs, newFailLocalDs :: Type -> DsM Id
-newSysLocalDs  = mkSysLocalOrCoVarM (fsLit "ds")
-newFailLocalDs = mkSysLocalOrCoVarM (fsLit "fail")
+newSysLocalDs  = mk_local (fsLit "ds")
+newFailLocalDs = mk_local (fsLit "fail")
 
 newSysLocalsDs :: [Type] -> DsM [Id]
 newSysLocalsDs tys = mapM newSysLocalDs tys
+
+mk_local :: FastString -> Type -> DsM Id
+mk_local fs ty = do { dsNoLevPoly ty (text "When trying to create a variable of type:" <+>
+                                      ppr ty)  -- could improve the msg with another
+                                               -- parameter indicating context
+                    ; mkSysLocalOrCoVarM fs ty }
 
 {-
 We can also reach out and either set/grab location information from
@@ -396,13 +407,17 @@ warnDs reason warn
                    mkWarnMsg dflags loc (ds_unqual env) warn
        ; updMutVar (ds_msgs env) (\ (w,e) -> (w `snocBag` msg, e)) }
 
-failWithDs :: SDoc -> DsM a
-failWithDs err
+errDs :: SDoc -> DsM ()
+errDs err
   = do  { env <- getGblEnv
         ; loc <- getSrcSpanDs
         ; dflags <- getDynFlags
         ; let msg = mkErrMsg dflags loc (ds_unqual env) err
-        ; updMutVar (ds_msgs env) (\ (w,e) -> (w, e `snocBag` msg))
+        ; updMutVar (ds_msgs env) (\ (w,e) -> (w, e `snocBag` msg)) }
+
+failWithDs :: SDoc -> DsM a
+failWithDs err
+  = do  { errDs err
         ; failM }
 
 mkPrintUnqualifiedDs :: DsM PrintUnqualified
@@ -529,3 +544,18 @@ discardWarningsDs thing_inside
         ; writeTcRef (ds_msgs env) old_msgs
 
         ; return result }
+
+-- See Note [Levity polymorphism checking] in TysPrim
+dsNoLevPoly :: Type -> SDoc -> DsM ()
+dsNoLevPoly ty doc = checkForLevPolyX errDs doc ty
+
+-- | If the type passed in is levity-polymorphic, fail with an error message.
+dsNoLevPolyLExpr :: CoreExpr -> LHsExpr Id -> DsM ()
+dsNoLevPolyLExpr expr (L _ hs_expr)
+  = dsNoLevPolyExpr expr hs_expr
+
+dsNoLevPolyExpr :: CoreExpr -> HsExpr Id -> DsM ()
+dsNoLevPolyExpr expr hs_expr
+  = dsNoLevPoly (exprType expr) doc
+  where
+    doc = text "In the type of expression:" <+> ppr hs_expr

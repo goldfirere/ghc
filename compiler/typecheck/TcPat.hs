@@ -406,10 +406,11 @@ tc_pat penv (ViewPat expr pat _) overall_pat_ty thing_inside
 
         ; overall_pat_ty <- readExpType overall_pat_ty
         ; let expr_wrap2' = mkWpFun expr_wrap2 idHsWrapper
-                                    overall_pat_ty inf_res_ty
+                                    overall_pat_ty inf_res_ty doc
                -- expr_wrap2' :: (inf_arg_ty -> inf_res_ty) "->"
                --                (overall_pat_ty -> inf_res_ty)
               expr_wrap = expr_wrap2' <.> expr_wrap1
+              doc = text "When checking the view pattern function:" <+> (ppr expr)
         ; return (ViewPat (mkLHsWrap expr_wrap expr') pat' overall_pat_ty, res) }
 
 -- Type signatures in patterns

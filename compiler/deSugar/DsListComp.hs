@@ -12,7 +12,7 @@ module DsListComp ( dsListComp, dsPArrComp, dsMonadComp ) where
 
 #include "HsVersions.h"
 
-import {-# SOURCE #-} DsExpr ( dsExpr, dsLExpr, dsLocalBinds, dsSyntaxExpr )
+import {-# SOURCE #-} DsExpr ( dsExpr, dsLExpr, dsLExprNoLP, dsLocalBinds, dsSyntaxExpr )
 
 import HsSyn
 import TcHsSyn
@@ -79,12 +79,15 @@ dsListComp lquals res_ty = do
 -- of that comprehension that we need in the outer comprehension into such an expression
 -- and the type of the elements that it outputs (tuples of binders)
 dsInnerListComp :: (ParStmtBlock Id Id) -> DsM (CoreExpr, Type)
-dsInnerListComp (ParStmtBlock stmts bndrs _)
+dsInnerListComp block@(ParStmtBlock stmts bndrs _)
   = do { let bndrs_tuple_type = mkBigCoreVarTupTy bndrs
 
              -- really use original bndrs below!
        ; expr <- dsListComp (stmts ++ [noLoc $ mkLastStmt (mkBigLHsVarTupId bndrs)])
                             (mkListTy bndrs_tuple_type)
+
+          -- inner list comprehensions are always used as arguments
+       ; dsNoLevPoly (exprType expr) (text "The list comprehension block:" <+> ppr block)
 
        ; return (expr, bndrs_tuple_type) }
 
@@ -134,6 +137,9 @@ dsTransStmt (TransStmt { trS_form = form, trS_stmts = stmts, trS_bndrs = binderM
                 , Type to_bndrs_tup_ty
                 , Var unzip_fn'
                 , inner_list_expr' ]
+
+    dsNoLevPoly (exprType inner_list_expr')
+      (text "In the result of a" <+> quotes (text "using") <+> text "function:" <+> ppr using)
 
     -- Build a pattern that ensures the consumer binds into the NEW binders,
     -- which hold lists rather than single values
@@ -234,7 +240,7 @@ deListComp (stmt@(TransStmt {}) : quals) list = do
     deBindComp pat inner_list_expr quals list
 
 deListComp (BindStmt pat list1 _ _ _ : quals) core_list2 = do -- rule A' above
-    core_list1 <- dsLExpr list1
+    core_list1 <- dsLExprNoLP list1
     deBindComp pat core_list1 quals core_list2
 
 deListComp (ParStmt stmtss_w_bndrs _ _ _ : quals) list
@@ -320,7 +326,7 @@ dfListComp _ _ [] = panic "dfListComp"
 
 dfListComp c_id n_id (LastStmt body _ _ : quals)
   = ASSERT( null quals )
-    do { core_body <- dsLExpr body
+    do { core_body <- dsLExprNoLP body
        ; return (mkApps (Var c_id) [core_body, Var n_id]) }
 
         -- Non-last: must be a guard
@@ -489,7 +495,7 @@ dsPArrComp (ParStmt qss _ _ _ : quals) = dePArrParComp qss quals
 --
 dsPArrComp (BindStmt p e _ _ _ : qs) = do
     filterP <- dsDPHBuiltin filterPVar
-    ce <- dsLExpr e
+    ce <- dsLExprNoLP e
     let ety'ce  = parrElemType ce
         false   = Var falseDataConId
         true    = Var trueDataConId
@@ -839,7 +845,10 @@ dsInnerMonadComp :: [ExprLStmt Id]
                  -> SyntaxExpr Id   -- The monomorphic "return" operator
                  -> DsM CoreExpr
 dsInnerMonadComp stmts bndrs ret_op
-  = dsMcStmts (stmts ++ [noLoc (LastStmt (mkBigLHsVarTupId bndrs) False ret_op)])
+  = do { expr <- dsMcStmts (stmts ++ [noLoc (LastStmt (mkBigLHsVarTupId bndrs) False ret_op)])
+       ; dsNoLevPoly (exprType expr) (text "In the monad comprehension block:" <+> ppr stmts)
+       ; return expr }
+
 
 -- The `unzip` function for `GroupStmt` in a monad comprehensions
 --
