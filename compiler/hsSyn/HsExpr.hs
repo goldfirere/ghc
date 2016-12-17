@@ -288,10 +288,13 @@ data HsExpr id
                              --   deferred type errors.
 
   | HsRecFld (AmbiguousFieldOcc id) -- ^ Variable pointing to record selector
+                                    -- Not in use after typechecking
 
   | HsOverLabel FastString   -- ^ Overloaded label (See Note [Overloaded labels]
                              --   in GHC.OverloadedLabels)
-  | HsIPVar   HsIPName       -- ^ Implicit parameter
+                             --   NB: Not in use after typechecking
+
+  | HsIPVar   HsIPName       -- ^ Implicit parameter (not in use after typechecking)
   | HsOverLit (HsOverLit id) -- ^ Overloaded literals
 
   | HsLit     HsLit          -- ^ Simple (non-overloaded) literals
@@ -559,6 +562,7 @@ data HsExpr id
                            -- renamed expression, plus
       [PendingTcSplice]    -- _typechecked_ splices to be
                            -- pasted back in by the desugarer
+      Type                 -- of the bracket expression
 
   -- | - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnOpen',
   --         'ApiAnnotation.AnnClose'
@@ -578,6 +582,7 @@ data HsExpr id
   | HsProc      (LPat id)               -- arrow abstraction, proc
                 (LHsCmdTop id)          -- body of the abstraction
                                         -- always has an empty stack
+                (PostTc id Type)        -- type of the whole expression
 
   ---------------------------------------
   -- static pointers extension
@@ -586,6 +591,7 @@ data HsExpr id
   -- For details on above see note [Api annotations] in ApiAnnotation
   | HsStatic (PostRn id NameSet) -- Free variables of the body
              (LHsExpr id)        -- Body
+             (PostTc id Type)    -- type of the whole expression
 
   ---------------------------------------
   -- The following are commands, not expressions proper
@@ -958,13 +964,13 @@ ppr_expr (HsSpliceE s)         = pprSplice s
 ppr_expr (HsBracket b)         = pprHsBracket b
 ppr_expr (HsRnBracketOut e []) = ppr e
 ppr_expr (HsRnBracketOut e ps) = ppr e $$ text "pending(rn)" <+> ppr ps
-ppr_expr (HsTcBracketOut e []) = ppr e
-ppr_expr (HsTcBracketOut e ps) = ppr e $$ text "pending(tc)" <+> ppr ps
+ppr_expr (HsTcBracketOut e [] _) = ppr e
+ppr_expr (HsTcBracketOut e ps _) = ppr e $$ text "pending(tc)" <+> ppr ps
 
-ppr_expr (HsProc pat (L _ (HsCmdTop cmd _ _ _)))
+ppr_expr (HsProc pat (L _ (HsCmdTop cmd _ _ _)) _)
   = hsep [text "proc", ppr pat, ptext (sLit "->"), ppr cmd]
 
-ppr_expr (HsStatic _ e)
+ppr_expr (HsStatic _ e _)
   = hsep [text "static", pprParendLExpr e]
 
 ppr_expr (HsTick tickish exp)

@@ -2386,7 +2386,7 @@ exp10_top :: { LHsExpr RdrName }
                        {% checkPattern empty $2 >>= \ p ->
                            checkCommand $4 >>= \ cmd ->
                            ams (sLL $1 $> $ HsProc p (sLL $1 $> $ HsCmdTop cmd placeHolderType
-                                                placeHolderType []))
+                                                placeHolderType []) placeHolderType)
                                             -- TODO: is LL right here?
                                [mj AnnProc $1,mu AnnRarrow $3] }
 
@@ -2444,7 +2444,7 @@ fexp    :: { LHsExpr RdrName }
         : fexp aexp                  { sLL $1 $> $ HsApp $1 $2 }
         | fexp TYPEAPP atype         {% ams (sLL $1 $> $ HsAppType $1 (mkHsWildCardBndrs $3))
                                             [mj AnnAt $2] }
-        | 'static' aexp              {% ams (sLL $1 $> $ HsStatic placeHolderNames $2)
+        | 'static' aexp              {% ams (sLL $1 $> $ HsStatic placeHolderNames $2 placeHolderType)
                                             [mj AnnStatic $1] }
         | aexp                       { $1 }
 

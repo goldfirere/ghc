@@ -587,7 +587,7 @@ addTickHsExpr (ExplicitPArr ty es) =
                 (return ty)
                 (mapM (addTickLHsExpr) es)
 
-addTickHsExpr (HsStatic fvs e) = HsStatic fvs <$> addTickLHsExpr e
+addTickHsExpr (HsStatic fvs e ty) = HsStatic fvs <$> addTickLHsExpr e <*> pure ty
 
 addTickHsExpr expr@(RecordCon { rcon_flds = rec_binds })
   = do { rec_binds' <- addTickHsRecordBinds rec_binds
@@ -640,10 +640,11 @@ addTickHsExpr e@(HsBracket     {})   = return e
 addTickHsExpr e@(HsTcBracketOut  {}) = return e
 addTickHsExpr e@(HsRnBracketOut  {}) = return e
 addTickHsExpr e@(HsSpliceE  {})      = return e
-addTickHsExpr (HsProc pat cmdtop) =
-        liftM2 HsProc
+addTickHsExpr (HsProc pat cmdtop ty) =
+        liftM3 HsProc
                 (addTickLPat pat)
                 (liftL (addTickHsCmdTop) cmdtop)
+                (return ty)
 addTickHsExpr (HsWrap w e) =
         liftM2 HsWrap
                 (return w)

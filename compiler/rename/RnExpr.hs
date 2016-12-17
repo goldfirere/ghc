@@ -359,7 +359,7 @@ value bindings. This is done by checking that the name is external or
 wired-in. See the Notes about the NameSorts in Name.hs.
 -}
 
-rnExpr e@(HsStatic _ expr) = do
+rnExpr e@(HsStatic _ expr _) = do
     target <- fmap hscTarget getDynFlags
     case target of
       -- SPT entries are expected to exist in object code so far, and this is
@@ -379,7 +379,7 @@ rnExpr e@(HsStatic _ expr) = do
       _ -> return ()
     mod <- getModule
     let fvExpr' = filterNameSet (nameIsLocalOrFrom mod) fvExpr
-    return (HsStatic fvExpr' expr', fvExpr)
+    return (HsStatic fvExpr' expr' placeHolderType, fvExpr)
 
 {-
 ************************************************************************
@@ -389,11 +389,11 @@ rnExpr e@(HsStatic _ expr) = do
 ************************************************************************
 -}
 
-rnExpr (HsProc pat body)
+rnExpr (HsProc pat body _)
   = newArrowScope $
     rnPat ProcExpr pat $ \ pat' -> do
       { (body',fvBody) <- rnCmdTop body
-      ; return (HsProc pat' body', fvBody) }
+      ; return (HsProc pat' body' placeHolderType, fvBody) }
 
 -- Ideally, these would be done in parsing, but to keep parsing simple, we do it here.
 rnExpr e@(HsArrApp {})  = arrowFail e

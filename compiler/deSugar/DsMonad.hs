@@ -45,13 +45,12 @@ module DsMonad (
         CanItFail(..), orFail,
 
         -- Levity polymorphism
-        dsNoLevPoly, dsNoLevPolyLExpr, dsNoLevPolyExpr
+        dsNoLevPoly
     ) where
 
 import TcRnMonad
 import FamInstEnv
 import CoreSyn
-import CoreUtils ( exprType )
 import HsSyn
 import TcIface
 import TcMType ( checkForLevPolyX )
@@ -548,14 +547,3 @@ discardWarningsDs thing_inside
 -- See Note [Levity polymorphism checking] in TysPrim
 dsNoLevPoly :: Type -> SDoc -> DsM ()
 dsNoLevPoly ty doc = checkForLevPolyX errDs doc ty
-
--- | If the type passed in is levity-polymorphic, fail with an error message.
-dsNoLevPolyLExpr :: CoreExpr -> LHsExpr Id -> DsM ()
-dsNoLevPolyLExpr expr (L _ hs_expr)
-  = dsNoLevPolyExpr expr hs_expr
-
-dsNoLevPolyExpr :: CoreExpr -> HsExpr Id -> DsM ()
-dsNoLevPolyExpr expr hs_expr
-  = dsNoLevPoly (exprType expr) doc
-  where
-    doc = text "In the type of expression:" <+> ppr hs_expr

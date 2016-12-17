@@ -171,9 +171,10 @@ tcTypedBracket brack@(TExpBr expr) res_ty
        ; meta_ty <- tcTExpTy expr_ty
        ; ps' <- readMutVar ps_ref
        ; texpco <- tcLookupId unsafeTExpCoerceName
+       ; expQty <- tcMetaTy expQTyConName
        ; tcWrapResultO (Shouldn'tHappenOrigin "TExpBr")
                        (unLoc (mkHsApp (nlHsTyApp texpco [expr_ty])
-                                              (noLoc (HsTcBracketOut brack ps'))))
+                                              (noLoc (HsTcBracketOut brack ps' expQty))))
                        meta_ty res_ty }
 tcTypedBracket other_brack _
   = pprPanic "tcTypedBracket" (ppr other_brack)
@@ -185,7 +186,7 @@ tcUntypedBracket brack ps res_ty
        ; meta_ty <- tcBrackTy brack
        ; traceTc "tc_bracket done untyped" (ppr meta_ty)
        ; tcWrapResultO (Shouldn'tHappenOrigin "untyped bracket")
-                       (HsTcBracketOut brack ps') meta_ty res_ty }
+                       (HsTcBracketOut brack ps' meta_ty) meta_ty res_ty }
 
 ---------------
 tcBrackTy :: HsBracket Name -> TcM TcType

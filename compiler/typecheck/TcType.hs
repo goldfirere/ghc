@@ -60,7 +60,8 @@ module TcType (
   tcSplitForAllTy_maybe,
   tcSplitForAllTys, tcSplitPiTys, tcSplitForAllTyVarBndrs,
   tcSplitPhiTy, tcSplitPredFunTy_maybe,
-  tcSplitFunTy_maybe, tcSplitFunTys, tcFunArgTy, tcFunResultTy, tcSplitFunTysN,
+  tcSplitFunTy_maybe, tcSplitFunTys, tcFunArgTy, tcFunResultTy, tcFunResultTyN,
+  tcSplitFunTysN,
   tcSplitTyConApp, tcSplitTyConApp_maybe, tcRepSplitTyConApp_maybe,
   tcTyConAppTyCon, tcTyConAppArgs,
   tcSplitAppTy_maybe, tcSplitAppTy, tcSplitAppTys, tcRepSplitAppTy_maybe,
@@ -1398,7 +1399,7 @@ tcSplitFunTy_maybe _                                    = Nothing
 tcSplitFunTysN :: Arity                      -- N: Number of desired args
                -> TcRhoType
                -> Either Arity               -- Number of missing arrows
-                        ([TcSigmaType],      -- Arg types (N or fewer)
+                        ([TcSigmaType],      -- Arg types (always N types)
                          TcSigmaType)        -- The rest of the type
 -- ^ Split off exactly the specified number argument types
 -- Returns
@@ -1422,6 +1423,14 @@ tcFunArgTy    ty = fst (tcSplitFunTy ty)
 
 tcFunResultTy :: Type -> Type
 tcFunResultTy ty = snd (tcSplitFunTy ty)
+
+-- | Strips off n *visible* arguments and returns the resulting type
+tcFunResultTyN :: HasDebugCallStack => Arity -> Type -> Type
+tcFunResultTyN n ty
+  | Right (_, res_ty) <- tcSplitFunTysN n ty
+  = res_ty
+  | otherwise
+  = pprPanic "tcFunResultTyN" (ppr n <+> ppr ty)
 
 -----------------------
 tcSplitAppTy_maybe :: Type -> Maybe (Type, Type)

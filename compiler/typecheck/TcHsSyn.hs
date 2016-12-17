@@ -12,8 +12,12 @@ checker.
 {-# LANGUAGE CPP, TupleSections #-}
 
 module TcHsSyn (
+        -- * Extracting types from HsSyn
+        hsLExprType, hsExprType, hsLitType, hsLPatType, hsPatType,
+        hsWrapperType, hsSyntaxExprType,
+
+        -- * Other HsSyn functions
         mkHsDictLet, mkHsApp,
-        hsLitType, hsLPatType, hsPatType,
         mkHsAppTy, mkHsCaseAlt,
         nlHsIntLit,
         shortCutLit, hsOverLitName,
@@ -63,6 +67,7 @@ import Bag
 import Outputable
 import Util
 import UniqFM
+import Pair
 
 import Control.Monad
 import Data.List  ( partition )
@@ -71,13 +76,127 @@ import Control.Arrow ( second )
 {-
 ************************************************************************
 *                                                                      *
-\subsection[mkFailurePair]{Code for pattern-matching and other failures}
+       Extracting the type from HsSyn
 *                                                                      *
 ************************************************************************
 
-Note: If @hsLPatType@ doesn't bear a strong resemblance to @exprType@,
-then something is wrong.
 -}
+
+-- | Get the type of an expression. This should be done only after zonking.
+hsLExprType :: LHsExpr Id -> Type
+hsLExprType (L _ expr) = hsExprType expr
+
+-- | Get the type of an expression. This should be done only after zonking.
+hsExprType :: HsExpr Id -> Type
+hsExprType (HsVar (L _ id))            = idType id
+hsExprType HsUnboundVar{}              = panic "hsExprType HsUnboundVar"
+hsExprType HsRecFld{}                  = panic "hsExprType HsRecFld"
+hsExprType HsOverLabel{}               = panic "hsExprType HsOverLabel"
+hsExprType HsIPVar{}                   = panic "hsExprType HsIPVar"
+hsExprType (HsOverLit lit)             = overLitType lit
+hsExprType (HsLit lit)                 = hsLitType lit
+hsExprType (HsLam matches)             = hsMatchGroupType matches
+hsExprType (HsLamCase matches)         = hsMatchGroupType matches
+hsExprType (HsApp fun _)               = tcFunResultTyN 1 (hsLExprType fun)
+hsExprType HsAppType{}                 = panic "hsExprType HsAppType"
+hsExprType (HsAppTypeOut expr _)       = hsLExprType expr
+hsExprType (OpApp _ op _ _)            = tcFunResultTyN 2 (hsLExprType op)
+hsExprType (NegApp _ neg)              = tcFunResultTyN 1 (hsSyntaxExprType neg)
+hsExprType (HsPar expr)                = hsLExprType expr
+hsExprType (SectionL _ op)             = tcFunResultTyN 1 (hsLExprType op)
+hsExprType (SectionR op _)
+  | Right (arg1_ty : _, res_ty) <- tcSplitFunTysN 2 (hsLExprType op)
+  = mkFunTy arg1_ty res_ty
+  | otherwise
+  = pprPanic "hsExprType SectionR" (ppr op <+> dcolon <+> ppr (hsLExprType op))
+hsExprType (ExplicitTuple args boxity)
+  = mkFunTys [ ty | L _ (Missing ty) <- args ]
+             (mkTupleTy boxity (map hsLTupArgType args))
+hsExprType (ExplicitSum _ _ _ tys)     = mkSumTy tys
+hsExprType (HsCase _ matches)          = tcFunResultTyN 1 (hsMatchGroupType matches)
+hsExprType (HsIf Nothing _ expr _)     = hsLExprType expr
+hsExprType (HsIf (Just if_expr) _ _ _) = tcFunResultTyN 3 (hsSyntaxExprType if_expr)
+hsExprType (HsMultiIf ty _)            = ty
+hsExprType (HsLet _ expr)              = hsLExprType expr
+hsExprType (HsDo _ _ ty)               = ty
+hsExprType (ExplicitList ty Nothing _) = mkListTy ty
+hsExprType (ExplicitList _ (Just from_list) _)
+  = tcFunResultTyN 2 (hsSyntaxExprType from_list)
+hsExprType (ExplicitPArr ty _)         = mkPArrTy ty
+hsExprType (RecordCon { rcon_con_expr = expr })
+  = snd (tcSplitFunTys (hsExprType expr))
+hsExprType (RecordUpd { rupd_cons    = cons
+                      , rupd_out_tys = arg_tys })
+  = conLikeResTy (head cons) arg_tys
+hsExprType ExprWithTySig{}             = panic "hsExprType ExprWithTySig"
+hsExprType (ExprWithTySigOut expr _)   = hsLExprType expr
+hsExprType (ArithSeq expr Nothing info)
+  = tcFunResultTyN (arithSeqInfoArity info) (hsExprType expr)
+hsExprType (ArithSeq _ (Just from_list) _)
+  = tcFunResultTyN 1 (hsSyntaxExprType from_list)
+hsExprType (PArrSeq expr info)
+  = tcFunResultTyN (arithSeqInfoArity info) (hsExprType expr)
+hsExprType (HsSCC _ _ expr)            = hsLExprType expr
+hsExprType (HsCoreAnn _ _ expr)        = hsLExprType expr
+hsExprType HsBracket{}                 = panic "hsExprType HsBracket"
+hsExprType HsRnBracketOut{}            = panic "hsExprType HsRnBracketOut"
+hsExprType (HsTcBracketOut _ _ ty)     = ty
+hsExprType HsSpliceE{}                 = panic "hsExprType HsSpliceE"
+hsExprType (HsProc _ _ ty)             = ty
+hsExprType (HsStatic _ _ ty)           = ty
+hsExprType HsArrApp{}                  = panic "hsExprType HsArrApp"
+hsExprType HsArrForm{}                 = panic "hsExprType HsArrForm"
+hsExprType (HsTick _ expr)             = hsLExprType expr
+hsExprType (HsBinTick _ _ expr)        = hsLExprType expr
+hsExprType (HsTickPragma _ _ _ expr)   = hsLExprType expr
+hsExprType EWildPat{}                  = panic "hsExprType EWildPat"
+hsExprType EAsPat{}                    = panic "hsExprType EAsPat"
+hsExprType EViewPat{}                  = panic "hsExprType EViewPat"
+hsExprType ELazyPat{}                  = panic "hsExprType ELazyPat"
+hsExprType (HsWrap wrap expr)          = hsWrapperType wrap (hsExprType expr)
+
+hsMatchGroupType :: MatchGroup Id a -> Type
+hsMatchGroupType (MG { mg_arg_tys = arg_tys
+                     , mg_res_ty  = res_ty })
+  = mkFunTys arg_tys res_ty
+
+hsSyntaxExprType :: SyntaxExpr Id -> Type
+hsSyntaxExprType e@(SyntaxExpr { syn_expr      = expr
+                               , syn_arg_wraps = arg_wraps
+                               , syn_res_wrap  = res_wrap })
+  | Right (arg_tys, res_ty) <- tcSplitFunTysN (length arg_wraps) (hsExprType expr)
+  = mkFunTys (zipWith hsWrapperType arg_wraps arg_tys) (hsWrapperType res_wrap res_ty)
+  | otherwise
+  = pprPanic "hsSyntaxExprType" (ppr e)
+
+hsLTupArgType :: LHsTupArg Id -> Type
+hsLTupArgType (L _ (Present expr)) = hsLExprType expr
+hsLTupArgType (L _ (Missing ty))   = ty
+
+arithSeqInfoArity :: ArithSeqInfo id -> Arity
+arithSeqInfoArity From{}       = 1
+arithSeqInfoArity FromThen{}   = 2
+arithSeqInfoArity FromTo{}     = 2
+arithSeqInfoArity FromThenTo{} = 3
+
+hsWrapperType :: HsWrapper
+              -> Type  -- type of the thing wrapped
+              -> Type
+hsWrapperType WpHole                  ty = ty
+hsWrapperType (WpCompose wrap1 wrap2) ty = hsWrapperType wrap1 $
+                                           hsWrapperType wrap2 ty
+hsWrapperType (WpFun _ wrap_res arg_ty _) ty
+  = mkFunTy arg_ty $ hsWrapperType wrap_res $ tcFunResultTyN 1 ty
+hsWrapperType (WpCast co)             _  = pSnd $ tcCoercionKind co
+hsWrapperType (WpEvLam ev_var)        ty = mkFunTy (idType ev_var) ty
+hsWrapperType (WpEvApp _)             ty
+  | Just (_, res_ty) <- tcSplitPredFunTy_maybe ty
+  = res_ty
+  | otherwise
+  = pprPanic "hsWrapperType WpEvApp" (ppr ty)
+hsWrapperType (WpTyLam tv)            ty = mkInvForAllTy tv ty
+hsWrapperType (WpTyApp arg)           ty = piResultTy ty arg
+hsWrapperType (WpLet _)               ty = ty
 
 hsLPatType :: OutPat Id -> Type
 hsLPatType (L _ pat) = hsPatType pat
@@ -103,7 +222,6 @@ hsPatType (NPat _ _ _ ty)             = ty
 hsPatType (NPlusKPat _ _ _ _ _ ty)    = ty
 hsPatType (CoPat _ _ ty)              = ty
 hsPatType p                           = pprPanic "hsPatType" (ppr p)
-
 
 hsLitType :: HsLit -> TcType
 hsLitType (HsChar _ _)       = charTy
@@ -652,9 +770,10 @@ zonkExpr env (HsAppTypeOut e t)
 zonkExpr _ e@(HsRnBracketOut _ _)
   = pprPanic "zonkExpr: HsRnBracketOut" (ppr e)
 
-zonkExpr env (HsTcBracketOut body bs)
+zonkExpr env (HsTcBracketOut body bs ty)
   = do bs' <- mapM zonk_b bs
-       return (HsTcBracketOut body bs')
+       ty' <- zonkTcTypeToType env ty
+       return (HsTcBracketOut body bs' ty')
   where
     zonk_b (PendingTcSplice n e) = do e' <- zonkLExpr env e
                                       return (PendingTcSplice n e')
@@ -800,14 +919,15 @@ zonkExpr env (HsCoreAnn src lbl expr)
        return (HsCoreAnn src lbl new_expr)
 
 -- arrow notation extensions
-zonkExpr env (HsProc pat body)
+zonkExpr env (HsProc pat body ty)
   = do  { (env1, new_pat) <- zonkPat env pat
         ; new_body <- zonkCmdTop env1 body
-        ; return (HsProc new_pat new_body) }
+        ; ty' <- zonkTcTypeToType env ty
+        ; return (HsProc new_pat new_body ty') }
 
 -- StaticPointers extension
-zonkExpr env (HsStatic fvs expr)
-  = HsStatic fvs <$> zonkLExpr env expr
+zonkExpr env (HsStatic fvs expr ty)
+  = HsStatic fvs <$> zonkLExpr env expr <*> zonkTcTypeToType env ty
 
 zonkExpr env (HsWrap co_fn expr)
   = do (env1, new_co_fn) <- zonkCoFn env co_fn

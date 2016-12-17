@@ -451,7 +451,10 @@ At one point, I (Richard) thought we could check in the zonker, but it's hard
 to know where precisely are the abstracted variables and the arguments. So
 we check in the desugarer, the only place where we can see the Core code and
 still report respectable syntax to the user. This covers the vast majority
-of cases; see calls to DsMonad.dsNoLevPoly and friends.
+of cases; see calls to DsMonad.dsNoLevPoly and friends. Note that it is
+important here to use hsExprType to get the types of expressions: the use
+of fixM when checking arrow notation means that we cannot look at the desugared
+expression and use exprType.
 
 However, the desugarer is the wrong place for certain checks. In particular,
 the desugarer can't report a sensible error message if an HsWrapper is malformed.

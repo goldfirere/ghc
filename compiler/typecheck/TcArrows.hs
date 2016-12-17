@@ -78,7 +78,8 @@ Note that
 
 tcProc :: InPat Name -> LHsCmdTop Name          -- proc pat -> expr
        -> ExpRhoType                            -- Expected type of whole proc expression
-       -> TcM (OutPat TcId, LHsCmdTop TcId, TcCoercion)
+       -> TcM (OutPat TcId, LHsCmdTop TcId, TcCoercion, TcType)
+         -- last return is type of whole proc
 
 tcProc pat cmd exp_ty
   = newArrowScope $
@@ -90,7 +91,7 @@ tcProc pat cmd exp_ty
                           tcCmdTop cmd_env cmd (unitTy, res_ty)
         ; let res_co = mkTcTransCo co
                          (mkTcAppCo co1 (mkTcNomReflCo res_ty))
-        ; return (pat', cmd', res_co) }
+        ; return (pat', cmd', res_co, exp_ty) }
 
 {-
 ************************************************************************

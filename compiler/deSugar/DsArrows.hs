@@ -101,7 +101,7 @@ mkCmdEnv tc_meths
   where
     mk_bind (std_name, expr)
       = do { rhs <- dsExpr expr
-           ; id <- newSysLocalDs (exprType rhs)
+           ; id <- newSysLocalDs (hsExprType expr)
            ; return (NonRec id rhs, (std_name, id)) }
 
     unmaybe Nothing name = pprPanic "mkCmdEnv" (text "Not found:" <+> ppr name)
@@ -635,11 +635,11 @@ dsCmd ids local_vars stack_ty res_ty (HsCmdLet (L _ binds) body) env_ids = do
 --
 --              ---> premap (\ (env,stk) -> env) c
 
-dsCmd ids local_vars stack_ty res_ty do_block@(HsCmdDo (L loc stmts) _) env_ids = do
-    (core_stmts, env_ids') <- dsCmdDo ids local_vars res_ty stmts env_ids
+dsCmd ids local_vars stack_ty res_ty do_block@(HsCmdDo (L loc stmts) stmts_ty) env_ids = do
     putSrcSpanDs loc $
-      dsNoLevPoly (exprType core_stmts)
+      dsNoLevPoly stmts_ty
         (text "In the do-command:" <+> ppr do_block)
+    (core_stmts, env_ids') <- dsCmdDo ids local_vars res_ty stmts env_ids
     let env_ty = mkBigCoreVarTupTy env_ids
     core_fst <- mkFstExpr env_ty stack_ty
     return (do_premap ids
@@ -705,11 +705,9 @@ dsfixCmd
                 DIdSet,         -- subset of local vars that occur free
                 [Id])           -- the same local vars as a list, fed back
 dsfixCmd ids local_vars stk_ty cmd_ty cmd
-  = do { result@(expr, _, _) <- trimInput (dsLCmd ids local_vars stk_ty cmd_ty cmd)
-       ; putSrcSpanDs (getLoc cmd) $
-         dsNoLevPoly (exprType expr)
+  = do { putSrcSpanDs (getLoc cmd) $ dsNoLevPoly cmd_ty
            (text "When desugaring the command:" <+> ppr cmd)
-       ; return result }
+       ; trimInput (dsLCmd ids local_vars stk_ty cmd_ty cmd) }
 
 -- Feed back the list of local variables actually used a command,
 -- for use as the input tuple of the generated arrow.
@@ -751,9 +749,9 @@ dsCmdDo _ _ _ [] _ = panic "dsCmdDo"
 --              ---> premap (\ (xs) -> ((xs), ())) c
 
 dsCmdDo ids local_vars res_ty [L loc (LastStmt body _ _)] env_ids = do
-    (core_body, env_ids') <- dsLCmd ids local_vars unitTy res_ty body env_ids
-    putSrcSpanDs loc $ dsNoLevPoly (exprType core_body)
+    putSrcSpanDs loc $ dsNoLevPoly res_ty
                          (text "In the command:" <+> ppr body)
+    (core_body, env_ids') <- dsLCmd ids local_vars unitTy res_ty body env_ids
     let env_ty = mkBigCoreVarTupTy env_ids
     env_var <- newSysLocalDs env_ty
     let core_map = Lam env_var (mkCorePairExpr (Var env_var) mkCoreUnitExpr)
@@ -1058,10 +1056,9 @@ dsfixCmdStmts
                 [Id])           -- same local vars as a list
 
 dsfixCmdStmts ids local_vars out_ids stmts
-  = do { result@(expr, _, _) <- trimInput (dsCmdStmts ids local_vars out_ids stmts)
-       ; dsNoLevPoly (exprType expr)
-           (text "When desugaring the statements:" <+> ppr stmts)
-       ; return result }
+  = trimInput (dsCmdStmts ids local_vars out_ids stmts)
+   -- TODO: Add levity polymorphism check for the resulting expression.
+   -- But I (Richard E.) don't know enough about arrows to do so.
 
 dsCmdStmts
         :: DsCmdEnv             -- arrow combinators

@@ -206,9 +206,8 @@ dsLExpr (L loc e) = putSrcSpanDs loc $ dsExpr e
 dsLExprNoLP :: LHsExpr Id -> DsM CoreExpr
 dsLExprNoLP (L loc e)
   = putSrcSpanDs loc $
-    do { ds_expr <- dsExpr e
-       ; dsNoLevPolyExpr ds_expr e
-       ; return ds_expr }
+    do { dsNoLevPoly (hsExprType e) (text "In the type of expression:" <+> ppr e)
+       ; dsExpr e }
 
 dsExpr :: HsExpr Id -> DsM CoreExpr
 dsExpr (HsPar e)              = dsLExpr e
@@ -445,9 +444,8 @@ Where we obtain w0 and w1 from
    Fingerprint w0 w1 = fingerprintString "pkgKey:module:N"
 -}
 
-dsExpr (HsStatic _ expr@(L loc _)) = do
-    expr_ds <- dsLExpr expr
-    dsNoLevPolyLExpr expr_ds expr
+dsExpr (HsStatic _ expr@(L loc _) _ty) = do
+    expr_ds <- dsLExprNoLP expr
     let ty = exprType expr_ds
     staticPtrInfoDataCon <- dsLookupDataCon staticPtrInfoDataConName
     staticPtrDataCon     <- dsLookupDataCon staticPtrDataConName
@@ -709,11 +707,11 @@ dsExpr expr@(RecordUpd { rupd_expr = record_expr, rupd_flds = fields
 -- Template Haskell stuff
 
 dsExpr (HsRnBracketOut _ _) = panic "dsExpr HsRnBracketOut"
-dsExpr (HsTcBracketOut x ps) = dsBracket x ps
+dsExpr (HsTcBracketOut x ps _ty) = dsBracket x ps
 dsExpr (HsSpliceE s)  = pprPanic "dsExpr:splice" (ppr s)
 
 -- Arrow notation extension
-dsExpr (HsProc pat cmd) = dsProcExpr pat cmd
+dsExpr (HsProc pat cmd _ty) = dsProcExpr pat cmd
 
 -- Hpc Support
 
@@ -766,9 +764,7 @@ dsSyntaxExpr (SyntaxExpr { syn_expr      = expr
        ; zipWithM_ no_lev_poly [1..] wrapped_args
        ; core_res_wrap (mkApps fun wrapped_args) }
   where
-    no_lev_poly n arg
-      = dsNoLevPoly (exprType arg)
-          (text "In the" <+> speakNth n <+> text "argument of" <+> quotes (ppr expr))
+    mk_doc n = text "In the" <+> speakNth n <+> text "argument of" <+> quotes (ppr expr)
 
 findField :: [LHsRecField Id arg] -> Name -> [arg]
 findField rbinds sel
