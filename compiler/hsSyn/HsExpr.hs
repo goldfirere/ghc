@@ -1510,7 +1510,7 @@ pprMatch match
 
             LambdaExpr -> (char '\\', m_pats match)
 
-            _  -> ASSERT( null pats1 )
+            _  -> ASSERT2( null pats1, ppr ctxt $$ ppr pat1 $$ ppr pats1 )
                   (ppr pat1, [])        -- No parens around the single pat
 
     (pat1:pats1) = m_pats match
@@ -2306,6 +2306,19 @@ data HsMatchContext id
   | PatSyn                 -- ^A pattern synonym declaration
   deriving Functor
 deriving instance (DataIdPost id) => Data (HsMatchContext id)
+
+instance OutputableBndr id => Outputable (HsMatchContext id) where
+  ppr (FunRhs (L _ id) fix) = text "FunRhs" <+> ppr id <+> ppr fix
+  ppr LambdaExpr            = text "LambdaExpr"
+  ppr CaseAlt               = text "CaseAlt"
+  ppr IfAlt                 = text "IfAlt"
+  ppr ProcExpr              = text "ProcExpr"
+  ppr PatBindRhs            = text "PatBindRhs"
+  ppr RecUpd                = text "RecUpd"
+  ppr (StmtCtxt _)          = text "StmtCtxt _"
+  ppr ThPatSplice           = text "ThPatSplice"
+  ppr ThPatQuote            = text "ThPatQuote"
+  ppr PatSyn                = text "PatSyn"
 
 isPatSynCtxt :: HsMatchContext id -> Bool
 isPatSynCtxt ctxt =
