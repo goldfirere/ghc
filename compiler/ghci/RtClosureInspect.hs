@@ -822,14 +822,14 @@ extractSubTerms recurse clos = liftM thdOf3 . go 0 (nonPtrs clos)
       (ptr_i, ws, terms1) <- go_unary_types ptr_i ws rep_tys
       return (ptr_i, ws, term0 : terms1)
 
-    go_rep ptr_i ws ty rep = case rep of
-      PtrRep -> do
-        t <- appArr (recurse ty) (ptrs clos) ptr_i
-        return (ptr_i + 1, ws, t)
-      _ -> do
-        dflags <- getDynFlags
-        let (ws0, ws1) = splitAt (primRepSizeW dflags rep) ws
-        return (ptr_i, ws1, Prim ty ws0)
+    go_rep ptr_i ws ty rep
+      | isGcPtrRep rep
+      = do t <- appArr (recurse ty) (ptrs clos) ptr_i
+           return (ptr_i + 1, ws, t)
+      | otherwise
+      = do dflags <- getDynFlags
+           let (ws0, ws1) = splitAt (primRepSizeW dflags rep) ws
+           return (ptr_i, ws1, Prim ty ws0)
 
     unboxedTupleTerm ty terms
       = Term ty (Right (tupleDataCon Unboxed (length terms)))
@@ -920,11 +920,11 @@ findPtrTys i ty
 
   | otherwise
   = case typePrimRep ty of
-      [PtrRep]  -> return (i + 1, [(i, ty)])
-      [_]       -> return (i,     [])
-      prim_reps ->
+      [rep] | isGcPtrRep rep -> return (i + 1, [(i, ty)])
+            | otherwise      -> return (i,     [])
+      prim_reps              ->
         foldM (\(i, extras) prim_rep ->
-                if prim_rep == PtrRep
+                if isGcPtrRep prim_rep
                   then newVar liftedTypeKind >>= \tv -> return (i + 1, extras ++ [(i, tv)])
                   else return (i, extras))
               (i, []) prim_reps

@@ -713,7 +713,7 @@ isRuntimeRepTy ty | Just ty' <- coreView ty = isRuntimeRepTy ty'
 isRuntimeRepTy (TyConApp tc []) = tc `hasKey` runtimeRepTyConKey
 isRuntimeRepTy _ = False
 
--- | Is this a type of kind RuntimeRep? (e.g. PtrRep)
+-- | Is this a type of kind RuntimeRep? (e.g. LiftedRep)
 isRuntimeRepKindedTy :: Type -> Bool
 isRuntimeRepKindedTy = isRuntimeRepTy . typeKind
 
@@ -722,7 +722,7 @@ isRuntimeRepVar :: TyVar -> Bool
 isRuntimeRepVar = isRuntimeRepTy . tyVarKind
 
 -- | Drops prefix of RuntimeRep constructors in 'TyConApp's. Useful for e.g.
--- dropping 'PtrRep arguments of unboxed tuple TyCon applications:
+-- dropping 'LiftedRep arguments of unboxed tuple TyCon applications:
 --
 --   dropRuntimeRepArgs [ 'LiftedRep, 'IntRep
 --                      , String, Int# ] == [String, Int#]

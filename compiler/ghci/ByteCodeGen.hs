@@ -1202,13 +1202,15 @@ maybe_getCCallReturnRep fn_ty
                          (pprType fn_ty)
      in
        case r_reps of
-         []        -> panic "empty typePrimRepArgs"
-         [PtrRep]  -> blargh
-         [VoidRep] -> Nothing
-         [rep]     -> Just rep
+         []            -> panic "empty typePrimRepArgs"
+         [VoidRep]     -> Nothing
+         [rep]
+           | isGcPtrRep -> blargh
+           | otherwise  -> Just rep
+
                  -- if it was, it would be impossible to create a
                  -- valid return value placeholder on the stack
-         _         -> blargh
+         _             -> blargh
 
 maybe_is_tagToEnum_call :: AnnExpr' Id DVarSet -> Maybe (AnnExpr' Id DVarSet, [Name])
 -- Detect and extract relevant info for the tagToEnum kludge.
@@ -1624,7 +1626,7 @@ atomPrimRep (AnnLit l)              = typePrimRep1 (literalType l)
 -- Trac #12128:
 -- A case expresssion can be an atom because empty cases evaluate to bottom.
 -- See Note [Empty case alternatives] in coreSyn/CoreSyn.hs
-atomPrimRep (AnnCase _ _ ty _)      = ASSERT(typePrimRep ty == [PtrRep]) PtrRep
+atomPrimRep (AnnCase _ _ ty _)      = ASSERT(typePrimRep ty == [LiftedRep]) LiftedRep
 atomPrimRep (AnnCoercion {})        = VoidRep
 atomPrimRep other = pprPanic "atomPrimRep" (ppr (deAnnotate' other))
 

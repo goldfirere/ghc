@@ -519,8 +519,9 @@ bindLocalsAtBreakpoint hsc_env apStack_fhv (Just BreakInfo{..}) = do
            -- Filter out any unboxed ids;
            -- we can't bind these at the prompt
        pointers = filter (\(id,_) -> isPointer id) vars
-       isPointer id | [PtrRep] <- typePrimRep (idType id) = True
-                    | otherwise                           = False
+       isPointer id | [rep] <- typePrimRep (idType id)
+                    , isGcPtrRep                       = True
+                    | otherwise                        = False
 
        (ids, offsets) = unzip pointers
 

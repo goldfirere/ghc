@@ -1850,11 +1850,9 @@ isUnliftedType :: Type -> Bool
         -- I found bindings like these were getting floated to the top level.
         -- They are pretty bogus types, mind you.  It would be better never to
         -- construct them
-
-isUnliftedType ty | Just ty' <- coreView ty = isUnliftedType ty'
-isUnliftedType (ForAllTy _ ty) = isUnliftedType ty
-isUnliftedType (TyConApp tc _) = isUnliftedTyCon tc
-isUnliftedType _               = False
+isUnliftedType ty
+  | [LiftedRep] <- typePrimRep ty = True
+  | otherwise                     = False
 
 -- | Extract the RuntimeRep classifier of a type. Panics if this is not possible.
 getRuntimeRep :: String   -- ^ Printed in case of an error

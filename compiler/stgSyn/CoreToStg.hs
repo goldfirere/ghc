@@ -472,15 +472,16 @@ coreToStgExpr (Let bind body) = do
 coreToStgExpr e = pprPanic "coreToStgExpr" (ppr e)
 
 mkStgAltType :: Id -> [CoreAlt] -> AltType
-mkStgAltType bndr alts = case repType (idType bndr) of
-    UnaryRep rep_ty -> case tyConAppTyCon_maybe rep_ty of
-        Just tc | isUnliftedTyCon tc -> PrimAlt tc
-                | isAbstractTyCon tc -> look_for_better_tycon
-                | isAlgTyCon tc      -> AlgAlt tc
-                | otherwise          -> ASSERT2( _is_poly_alt_tycon tc, ppr tc )
-                                        PolyAlt
-        Nothing                      -> PolyAlt
-    MultiRep slots -> MultiValAlt (length slots)
+mkStgAltType bndr alts = case typePrimRep bndr_ty of
+  [LiftedRep] -> case tyConAppTyCon_maybe (unwrapType bndr_ty) of
+    Just tc
+      | isAbstractTyCon tc -> look_for_better_tycon
+      | isAlgTyCon tc      -> AlgAlt tc
+      | otherwise          -> ASSERT2( _is_poly_alt_tycon tc, ppr tc )
+                              PolyAlt
+    Nothing                -> PolyAlt
+  [unlifted] -> PrimAlt unlifted
+  not_unary  -> MultiValAlt (length not_unary)
   where
    _is_poly_alt_tycon tc
         =  isFunTyCon tc

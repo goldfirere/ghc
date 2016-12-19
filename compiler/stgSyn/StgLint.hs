@@ -196,19 +196,17 @@ lintStgExpr (StgCase scrut bndr alts_type alts) = runMaybeT $ do
 
     in_scope <- MaybeT $ liftM Just $
      case alts_type of
-        AlgAlt tc     -> check_bndr tc >> return True
-        PrimAlt tc    -> check_bndr tc >> return True
+        AlgAlt tc     -> check_bndr (tyConPrimRep tc) >> return True
+        PrimAlt reps  -> check_bndr reps              >> return True
         MultiValAlt _ -> return False -- Binder is always dead in this case
         PolyAlt       -> return True
 
     MaybeT $ addInScopeVars [bndr | in_scope] $
              lintStgAlts alts scrut_ty
   where
-    scrut_ty      = idType bndr
-    scrut_rep     = unwrapType scrut_ty -- Not used if scrutinee is unboxed tuple or sum
-    check_bndr tc = case tyConAppTyCon_maybe scrut_rep of
-                        Just bndr_tc -> checkL (tc == bndr_tc) bad_bndr
-                        Nothing      -> addErrL bad_bndr
+    scrut_ty        = idType bndr
+    scrut_reps      = typePrimRep scrut_ty
+    check_bndr reps = checkL (scrut_reps == reps) bad_bndr
                   where
                      bad_bndr = mkDefltMsg bndr tc
 
@@ -462,10 +460,10 @@ _mkCaseAltMsg _alts
   = ($$) (text "In some case alternatives, type of alternatives not all same:")
             (Outputable.empty) -- LATER: ppr alts
 
-mkDefltMsg :: Id -> TyCon -> MsgDoc
-mkDefltMsg bndr tc
-  = ($$) (text "Binder of a case expression doesn't match type of scrutinee:")
-         (ppr bndr $$ ppr (idType bndr) $$ ppr tc)
+mkDefltMsg :: Id -> [PrimRep] -> MsgDoc
+mkDefltMsg bndr reps
+  = ($$) (text "Binder of a case expression doesn't match representation of scrutinee:")
+         (ppr bndr $$ ppr (idType bndr) $$ ppr reps)
 
 mkFunAppMsg :: Type -> [Type] -> StgExpr -> MsgDoc
 mkFunAppMsg fun_ty arg_tys expr

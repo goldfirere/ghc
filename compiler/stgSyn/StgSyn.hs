@@ -124,9 +124,10 @@ isDllConApp dflags this_mod con args
 --    $WT1 = T1 Int (Coercion (Refl Int))
 -- The coercion argument here gets VoidRep
 isAddrRep :: PrimRep -> Bool
-isAddrRep AddrRep = True
-isAddrRep PtrRep  = True
-isAddrRep _       = False
+isAddrRep AddrRep     = True
+isAddrRep LiftedRep   = True
+isAddrRep UnliftedRep = True
+isAddrRep _           = False
 
 -- | Type of an @StgArg@
 --
@@ -533,10 +534,10 @@ type GenStgAlt bndr occ
      GenStgExpr bndr occ)       -- ...right-hand side.
 
 data AltType
-  = PolyAlt             -- Polymorphic (a type variable)
+  = PolyAlt             -- Polymorphic (a lifted type variable)
   | MultiValAlt Int     -- Multi value of this arity (unboxed tuple or sum)
   | AlgAlt      TyCon   -- Algebraic data type; the AltCons will be DataAlts
-  | PrimAlt     TyCon   -- Primitive data type; the AltCons will be LitAlts
+  | PrimAlt     TyCon   -- Primitive data type; the AltCons (if any) will be LitAlts
 
 {-
 ************************************************************************

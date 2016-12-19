@@ -143,8 +143,8 @@ Trac #12708):
   data T rep (a :: TYPE rep)
      = MkT (a -> Int)
 
-  x1 :: T LiftedPtrRep Int
-  x1 =  MkT LiftedPtrRep Int  (\x::Int -> 3)
+  x1 :: T LiftedRep Int
+  x1 =  MkT LiftedRep Int  (\x::Int -> 3)
 
   x2 :: T IntRep Int#
   x2 = MkT IntRep Int# (\x:Int# -> 3)

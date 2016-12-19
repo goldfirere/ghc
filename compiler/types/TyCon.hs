@@ -1261,12 +1261,13 @@ CmmType GcPtrCat W32 on a 64-bit machine.
 -- and store values of this type.
 data PrimRep
   = VoidRep
-  | PtrRep
+  | LiftedRep
+  | UnliftedRep   -- ^ Unlifted pointer
   | IntRep        -- ^ Signed, word-sized value
   | WordRep       -- ^ Unsigned, word-sized value
   | Int64Rep      -- ^ Signed, 64 bit value (with 32-bit words only)
   | Word64Rep     -- ^ Unsigned, 64 bit value (with 32-bit words only)
-  | AddrRep       -- ^ A pointer, but /not/ to a Haskell value (use 'PtrRep')
+  | AddrRep       -- ^ A pointer, but /not/ to a Haskell value (use '(Un)liftedRep')
   | FloatRep
   | DoubleRep
   | VecRep Int PrimElemRep  -- ^ A vector
@@ -1296,8 +1297,9 @@ isVoidRep VoidRep = True
 isVoidRep _other  = False
 
 isGcPtrRep :: PrimRep -> Bool
-isGcPtrRep PtrRep = True
-isGcPtrRep _      = False
+isGcPtrRep LiftedRep   = True
+isGcPtrRep UnliftedRep = True
+isGcPtrRep _           = False
 
 -- | Find the size of a 'PrimRep', in words
 primRepSizeW :: DynFlags -> PrimRep -> Int
@@ -1308,7 +1310,8 @@ primRepSizeW dflags Word64Rep        = wORD64_SIZE `quot` wORD_SIZE dflags
 primRepSizeW _      FloatRep         = 1    -- NB. might not take a full word
 primRepSizeW dflags DoubleRep        = dOUBLE_SIZE dflags `quot` wORD_SIZE dflags
 primRepSizeW _      AddrRep          = 1
-primRepSizeW _      PtrRep           = 1
+primRepSizeW _      LiftedRep        = 1
+primRepSizeW _      UnliftedRep      = 1
 primRepSizeW _      VoidRep          = 0
 primRepSizeW dflags (VecRep len rep) = len * primElemRepSizeB rep `quot` wORD_SIZE dflags
 

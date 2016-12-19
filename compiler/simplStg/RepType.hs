@@ -250,7 +250,8 @@ typeSlotTy ty
 
 primRepSlot :: PrimRep -> SlotTy
 primRepSlot VoidRep     = pprPanic "primRepSlot" (text "No slot for VoidRep")
-primRepSlot PtrRep      = PtrSlot
+primRepSlot LiftedRep   = PtrSlot
+primRepSlot UnliftedRep = PtrSlot
 primRepSlot IntRep      = WordSlot
 primRepSlot WordRep     = WordSlot
 primRepSlot Int64Rep    = Word64Slot
@@ -261,7 +262,7 @@ primRepSlot DoubleRep   = DoubleSlot
 primRepSlot VecRep{}    = pprPanic "primRepSlot" (text "No slot for VecRep")
 
 slotPrimRep :: SlotTy -> PrimRep
-slotPrimRep PtrSlot     = PtrRep
+slotPrimRep PtrSlot     = LiftedRep   -- choice between lifted & unlifted seems arbitrary
 slotPrimRep Word64Slot  = Word64Rep
 slotPrimRep WordSlot    = WordRep
 slotPrimRep DoubleSlot  = DoubleRep
@@ -339,8 +340,11 @@ kindPrimRep _ (TyConApp typ [runtime_rep])
   = ASSERT( typ `hasKey` tYPETyConKey )
     runtimeRepPrimRep doc runtime_rep
 kindPrimRep doc ki
-  = WARN( True, text "kindPrimRep defaulting to PtrRep on" <+> ppr ki $$ doc )
-    [PtrRep]  -- this can happen legitimately for, e.g., Any
+  = pprPanic "kindPrimRep" (ppr ki $$ ppr doc)
+
+  -- TODO (RAE): Remove:
+  -- WARN( True, text "kindPrimRep defaulting to LiftedRep on" <+> ppr ki $$ doc )
+  -- [LiftedRep]  -- this can happen legitimately for, e.g., Any
 
 -- | Take a type of kind RuntimeRep and extract the list of 'PrimRep' that
 -- it encodes.

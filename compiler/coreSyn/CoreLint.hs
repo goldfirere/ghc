@@ -1399,8 +1399,8 @@ lintCoercion co@(UnivCo prov r ty1 ty2)
                      2 (vcat [ text "From:" <+> ppr ty1
                              , text "  To:" <+> ppr ty2])
      isUnBoxed :: PrimRep -> Bool
-     isUnBoxed PtrRep = False
-     isUnBoxed _      = True
+     isUnBoxed = not . isGcPtrRep
+
      checkTypes t1 t2
        = do { checkWarnL (reps1 `equalLength` reps2)
                          (report "values with different # of reps")

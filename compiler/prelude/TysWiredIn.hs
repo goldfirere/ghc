@@ -1152,7 +1152,7 @@ runtimeRepSimpleDataCons :: [DataCon]
 liftedRepDataCon :: DataCon
 runtimeRepSimpleDataCons@(liftedRepDataCon : _)
   = zipWithLazy mk_runtime_rep_dc
-    [ PtrRep, PtrRep, VoidRep, IntRep, WordRep, Int64Rep
+    [ LiftedRep, UnliftedRep, VoidRep, IntRep, WordRep, Int64Rep
     , Word64Rep, AddrRep, FloatRep, DoubleRep ]
     runtimeRepSimpleDataConNames
   where

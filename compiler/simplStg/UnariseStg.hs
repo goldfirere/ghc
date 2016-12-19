@@ -736,7 +736,7 @@ mkTuple :: [StgArg] -> StgExpr
 mkTuple args = StgConApp (tupleDataCon Unboxed (length args)) args (map stgArgType args)
 
 tagAltTy :: AltType
-tagAltTy = PrimAlt intPrimTyCon
+tagAltTy = PrimAlt [IntRep]
 
 tagTy :: Type
 tagTy = intPrimTy
