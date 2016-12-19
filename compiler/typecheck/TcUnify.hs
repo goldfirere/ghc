@@ -398,7 +398,7 @@ matchExpectedTyConApp tc orig_ty
     -- This happened in Trac #7368
     defer
       = do { (_, arg_tvs) <- newMetaTyVars (tyConTyVars tc)
-           ; traceTc "mtca" (ppr tc $$ ppr (tyConTyVars tc) $$ ppr arg_tvs)
+           ; traceTc "matchExpectedTyConApp" (ppr tc $$ ppr (tyConTyVars tc) $$ ppr arg_tvs)
            ; let args = mkTyVarTys arg_tvs
                  tc_template = mkTyConApp tc args
            ; co <- unifyType noThing tc_template orig_ty

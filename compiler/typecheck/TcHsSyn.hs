@@ -1368,7 +1368,7 @@ zonk_pat env p@(ConPatOut { pat_arg_tys = tys, pat_tvs = tyvars
         ; case con of
             RealDataCon dc
               | isUnboxedTupleTyCon (dataConTyCon dc)
-              -> mapM_ (checkForLevPoly doc) tys
+              -> mapM_ (checkForLevPoly doc) (dropRuntimeRepArgs new_tys)
             _ -> return ()
 
         ; (env0, new_tyvars) <- zonkTyBndrsX env tyvars

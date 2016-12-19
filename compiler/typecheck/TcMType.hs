@@ -1698,7 +1698,7 @@ checkForLevPolyX add_err extra ty
     tuple_or_sum = text (if tuple_rep then "tuple" else "sum")
 
     ki          = typeKind ty
-    runtime_rep = getRuntimeRepFromKind "check_type" ki
+    runtime_rep = getRuntimeRepFromKind "checkForLevPolyX" ki
 
     (tidy_env, tidy_ty) = tidyOpenType emptyTidyEnv ty
     tidy_ki             = tidyType tidy_env (typeKind ty)
