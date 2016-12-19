@@ -427,7 +427,7 @@ mkPArrCase dflags var ty sorted_alts fail = do
     len lengthP = mkApps (Var lengthP) [Type elemTy, Var var]
     --
     unboxAlt = do
-        l      <- newSysLocalDs intPrimTy
+        l      <- newSysLocalDsNoCheck intPrimTy
         indexP <- dsDPHBuiltin indexPVar
         alts   <- mapM (mkAlt indexP) sorted_alts
         return (DataAlt intDataCon, [l], mkWildCase (Var l) intPrimTy ty (dft : alts))
@@ -754,7 +754,7 @@ mkSelectorBinds ticks pat val_expr
        ; return ( val_var, (val_var, val_expr) : binds) }
 
   | otherwise                          -- General case (C)
-  = do { tuple_var  <- newSysLocalDs tuple_ty
+  = do { tuple_var  <- newSysLocalDsNoCheck tuple_ty
        ; error_expr <- mkErrorAppDs iRREFUT_PAT_ERROR_ID tuple_ty (ppr pat')
        ; tuple_expr <- matchSimply val_expr PatBindRhs pat
                                    local_tuple error_expr
@@ -901,8 +901,8 @@ mkFailurePair :: CoreExpr       -- Result type of the whole case expression
                       CoreExpr) -- Fail variable applied to realWorld#
 -- See Note [Failure thunks and CPR]
 mkFailurePair expr
-  = do { fail_fun_var <- newFailLocalDs (voidPrimTy `mkFunTy` ty)
-       ; fail_fun_arg <- newSysLocalDs voidPrimTy
+  = do { fail_fun_var <- newFailLocalDsNoCheck (voidPrimTy `mkFunTy` ty)
+       ; fail_fun_arg <- newSysLocalDsNoCheck voidPrimTy
        ; let real_arg = setOneShotLambda fail_fun_arg
        ; return (NonRec fail_fun_var (Lam real_arg expr),
                  App (Var fail_fun_var) (Var voidPrimId)) }

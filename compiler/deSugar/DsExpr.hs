@@ -297,7 +297,7 @@ dsExpr (SectionL expr op)       -- Desugar (e !) to ((!) e)
 dsExpr e@(SectionR op expr) = do
     core_op <- dsLExpr op
     -- for the type of x, we need the type of op's 2nd argument
-    let (x_ty:y_ty:_, _) = splitFunTys (exprType core_op)
+    let (x_ty:y_ty:_, _) = splitFunTys (hsLExprType op)
         -- See comment with SectionL
     y_core <- dsLExpr expr
     x_id <- newSysLocalDs x_ty
@@ -621,7 +621,7 @@ dsExpr expr@(RecordUpd { rupd_expr = record_expr, rupd_flds = fields
       -- Hence 'lcl_id'.  Cf Trac #2735
     ds_field (L _ rec_field) = do { rhs <- dsLExpr (hsRecFieldArg rec_field)
                                   ; let fld_id = unLoc (hsRecUpdFieldId rec_field)
-                                  ; lcl_id <- newSysLocalDs (idType fld_id)
+                                  ; lcl_id <- newSysLocalDsNoCheck (idType fld_id)
                                   ; return (idName fld_id, lcl_id, rhs) }
 
     add_field_binds [] expr = expr
@@ -645,7 +645,7 @@ dsExpr expr@(RecordUpd { rupd_expr = record_expr, rupd_flds = fields
                 -- I'm not bothering to clone the ex_tvs
            ; eqs_vars   <- mapM newPredVarDs (substTheta subst (eqSpecPreds eq_spec))
            ; theta_vars <- mapM newPredVarDs (substTheta subst prov_theta)
-           ; arg_ids    <- newSysLocalsDs (substTysUnchecked subst arg_tys)
+           ; arg_ids    <- newSysLocalsDsNoCheck (substTysUnchecked subst arg_tys)
            ; let field_labels = conLikeFieldLabels con
                  val_args = zipWithEqual "dsExpr:RecordUpd" mk_val_arg
                                          field_labels arg_ids

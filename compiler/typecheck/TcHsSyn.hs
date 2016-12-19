@@ -48,6 +48,7 @@ import TcType
 import TcMType
 import TcEvidence
 import TysPrim
+import TyCon   ( isUnboxedTupleTyCon )
 import TysWiredIn
 import Type
 import Coercion
@@ -1045,6 +1046,11 @@ zonk_cmd_top env (HsCmdTop cmd stack_tys ty ids)
        new_stack_tys <- zonkTcTypeToType env stack_tys
        new_ty <- zonkTcTypeToType env ty
        new_ids <- mapSndM (zonkExpr env) ids
+
+       MASSERT( isLiftedTypeKind (typeKind new_stack_tys) )
+         -- desugarer assumes that this is not levity polymorphic...
+         -- but indeed it should always be lifted
+
        return (HsCmdTop new_cmd new_stack_tys new_ty new_ids)
 
 -------------------------------------------------------------------------
@@ -1352,9 +1358,19 @@ zonk_pat env (SumPat pat alt arity tys)
 
 zonk_pat env p@(ConPatOut { pat_arg_tys = tys, pat_tvs = tyvars
                           , pat_dicts = evs, pat_binds = binds
-                          , pat_args = args, pat_wrap = wrapper })
+                          , pat_args = args, pat_wrap = wrapper
+                          , pat_con = L _ con })
   = ASSERT( all isImmutableTyVar tyvars )
     do  { new_tys <- mapM (zonkTcTypeToType env) tys
+
+          -- an unboxed tuple pattern (but only an unboxed tuple pattern)
+          -- might have levity-polymorphic arguments. Check for this badness.
+        ; case con of
+            RealDataCon dc
+              | isUnboxedTupleTyCon (dataConTyCon dc)
+              -> mapM_ (checkForLevPoly doc) tys
+            _ -> return ()
+
         ; (env0, new_tyvars) <- zonkTyBndrsX env tyvars
           -- Must zonk the existential variables, because their
           -- /kind/ need potential zonking.
@@ -1369,6 +1385,8 @@ zonk_pat env p@(ConPatOut { pat_arg_tys = tys, pat_tvs = tyvars
                             pat_binds = new_binds,
                             pat_args = new_args,
                             pat_wrap = new_wrapper}) }
+  where
+    doc = text "In the type of an element of an unboxed tuple pattern:" $$ ppr p
 
 zonk_pat env (LitPat lit) = return (env, LitPat lit)
 

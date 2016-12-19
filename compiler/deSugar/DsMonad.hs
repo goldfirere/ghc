@@ -15,8 +15,9 @@ module DsMonad (
         foldlM, foldrM, whenGOptM, unsetGOptM, unsetWOptM,
         Applicative(..),(<$>),
 
-        duplicateLocalDs, newSysLocalDs, newSysLocalsDs, newUniqueId,
-        newFailLocalDs, newPredVarDs,
+        duplicateLocalDs, newSysLocalDs, newSysLocalDsNoCheck,
+        newSysLocalsDs, newSysLocalsDsNoCheck, newUniqueId,
+        newFailLocalDsNoCheck, newPredVarDs,
         getSrcSpanDs, putSrcSpanDs,
         mkPrintUnqualifiedDs,
         newUnique,
@@ -331,12 +332,20 @@ newPredVarDs :: PredType -> DsM Var
 newPredVarDs pred
  = newSysLocalDs pred
 
-newSysLocalDs, newFailLocalDs :: Type -> DsM Id
+newSysLocalDs, newSysLocalDsNoCheck, newFailLocalDsNoCheck :: Type -> DsM Id
 newSysLocalDs  = mk_local (fsLit "ds")
-newFailLocalDs = mk_local (fsLit "fail")
 
-newSysLocalsDs :: [Type] -> DsM [Id]
-newSysLocalsDs tys = mapM newSysLocalDs tys
+-- this variant should be used when the caller can be sure that the variable type
+-- is not levity-polymorphic. It is necessary when the type is knot-tied because
+-- of the fixM used in DsArrows
+newSysLocalDsNoCheck = mkSysLocalOrCoVarM (fsLit "ds")
+newFailLocalDsNoCheck = mkSysLocalOrCoVarM (fsLit "fail")
+  -- the fail variable is used only in a situation where we can tell that
+  -- levity-polymorphism is impossible.
+
+newSysLocalsDs, newSysLocalsDsNoCheck :: [Type] -> DsM [Id]
+newSysLocalsDs = mapM newSysLocalDs
+newSysLocalsDsNoCheck = mapM newSysLocalDsNoCheck
 
 mk_local :: FastString -> Type -> DsM Id
 mk_local fs ty = do { dsNoLevPoly ty (text "When trying to create a variable of type:" <+>
