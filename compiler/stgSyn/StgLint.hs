@@ -416,20 +416,19 @@ stgEqType :: Type -> Type -> Bool
 -- Fundamentally this is a losing battle because of unsafeCoerce
 
 stgEqType orig_ty1 orig_ty2
-  = gos (repType orig_ty1) (repType orig_ty2)
+  = gos (typePrimRep orig_ty1) (typePrimRep orig_ty2)
   where
-    gos :: RepType -> RepType -> Bool
-    gos (MultiRep slots1) (MultiRep slots2)
-      = slots1 == slots2
-    gos (UnaryRep ty1) (UnaryRep ty2) = go ty1 ty2
-    gos _ _ = False
+    gos :: [PrimRep] -> [PrimRep] -> Bool
+    gos [_]   [_]   = go orig_ty1 orig_ty2
+    gos reps1 reps1 = slots1 == slots2
+    gos _     _     = False
 
     go :: UnaryType -> UnaryType -> Bool
     go ty1 ty2
       | Just (tc1, tc_args1) <- splitTyConApp_maybe ty1
       , Just (tc2, tc_args2) <- splitTyConApp_maybe ty2
       , let res = if tc1 == tc2
-                  then equalLength tc_args1 tc_args2 && and (zipWith (gos `on` repType) tc_args1 tc_args2)
+                  then equalLength tc_args1 tc_args2 && and (zipWith (gos `on` typePrimRep) tc_args1 tc_args2)
                   else  -- TyCons don't match; but don't bleat if either is a
                         -- family TyCon because a coercion might have made it
                         -- equal to something else

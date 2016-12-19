@@ -78,7 +78,8 @@ typePrimRepArgs ty
 -- But not type/data families, because we don't have the envs to hand.
 unwrapType :: Type -> Type
 unwrapType ty
-  | Just unwrapped <- topNormaliseTypeX stepper mappend inner_ty
+  | Just unwrapped <- ASSERT( all (not . isFamilyTyCon) $ nameEnvElts $ tyConsOfType ty )
+                      topNormaliseTypeX stepper mappend inner_ty
   = unwrapped
   | otherwise
   = inner_ty

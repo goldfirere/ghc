@@ -139,7 +139,8 @@ data IdDetails
                                 -- or class operation of a class
 
   | PrimOpId PrimOp             -- ^ The 'Id' is for a primitive operator
-  | FCallId ForeignCall         -- ^ The 'Id' is for a foreign call
+  | FCallId ForeignCall         -- ^ The 'Id' is for a foreign call.
+                                -- Type will be simple: no type families, newtypes, etc
 
   | TickBoxOpId TickBoxOp       -- ^ The 'Id' is for a HPC tick box (both traditional and binary)
 
