@@ -403,7 +403,7 @@ cgCase (StgApp v []) bndr alt_type@(PrimAlt _) alts
        ; unless reps_compatible $
            panic "cgCase: reps do not match, perhaps a dodgy unsafeCoerce?"
        ; v_info <- getCgIdInfo v
-       ; emitAssign (CmmLocal (idToReg dflags (pprTraceIt "RAE7" $ NonVoid bndr)))
+       ; emitAssign (CmmLocal (idToReg dflags (NonVoid bndr)))
                     (idInfoToAmode v_info)
        ; bindArgToReg (NonVoid bndr)
        ; cgAlts (NoGcInAlts,AssignedDirectly) (NonVoid bndr) alt_type alts }
@@ -423,7 +423,7 @@ it would be better to invoke some kind of panic function here.
 cgCase scrut@(StgApp v []) _ (PrimAlt _) _
   = do { dflags <- getDynFlags
        ; mb_cc <- maybeSaveCostCentre True
-       ; withSequel (AssignTo [idToReg dflags (pprTraceIt "RAE8" $ NonVoid v)] False) (cgExpr scrut)
+       ; withSequel (AssignTo [idToReg dflags (NonVoid v)] False) (cgExpr scrut)
        ; restoreCurrentCostCentre mb_cc
        ; emitComment $ mkFastString "should be unreachable code"
        ; l <- newBlockId
@@ -456,7 +456,7 @@ cgCase scrut bndr alt_type alts
     do { dflags <- getDynFlags
        ; up_hp_usg <- getVirtHp        -- Upstream heap usage
        ; let ret_bndrs = chooseReturnBndrs bndr alt_type alts
-             alt_regs  = map (idToReg dflags) (pprTraceIt "RAE9" ret_bndrs)
+             alt_regs  = map (idToReg dflags) ret_bndrs
        ; simple_scrut <- isSimpleScrut scrut alt_type
        ; let do_gc  | not simple_scrut = True
                     | isSingleton alts = False
@@ -559,7 +559,7 @@ cgAlts gc_plan bndr (PrimAlt _) alts
 
         ; tagged_cmms <- cgAltRhss gc_plan bndr alts
 
-        ; let bndr_reg = CmmLocal (idToReg dflags (pprTraceIt "RAE10" bndr))
+        ; let bndr_reg = CmmLocal (idToReg dflags bndr)
               (DEFAULT,deflt) = head tagged_cmms
                 -- PrimAlts always have a DEFAULT case
                 -- and it always comes first
@@ -575,7 +575,7 @@ cgAlts gc_plan bndr (AlgAlt tycon) alts
         ; (mb_deflt, branches) <- cgAlgAltRhss gc_plan bndr alts
 
         ; let fam_sz   = tyConFamilySize tycon
-              bndr_reg = CmmLocal (idToReg dflags (pprTraceIt "RAE11" bndr))
+              bndr_reg = CmmLocal (idToReg dflags bndr)
 
                     -- Is the constructor tag in the node reg?
         ; if isSmallFamily dflags fam_sz
@@ -645,7 +645,7 @@ cgAltRhss :: (GcPlan,ReturnKind) -> NonVoid Id -> [StgAlt]
 cgAltRhss gc_plan bndr alts = do
   dflags <- getDynFlags
   let
-    base_reg = idToReg dflags (pprTraceIt "RAE12" bndr)
+    base_reg = idToReg dflags bndr
     cg_alt :: StgAlt -> FCode (AltCon, CmmAGraphScoped)
     cg_alt (con, bndrs, rhs)
       = getCodeScoped             $

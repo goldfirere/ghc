@@ -530,7 +530,7 @@ emitClosureProcAndInfoTable top_lvl bndr lf_info info_tbl args body
         -- Bind the binder itself, but only if it's not a top-level
         -- binding. We need non-top let-bindings to refer to the
         -- top-level binding, which this binding would incorrectly shadow.
-        ; node <- if top_lvl then return $ idToReg dflags (pprTraceIt "RAE13" $ NonVoid bndr)
+        ; node <- if top_lvl then return $ idToReg dflags (NonVoid bndr)
                   else bindToReg (NonVoid bndr) lf_info
         ; let node_points = nodeMustPointToIt dflags lf_info
         ; arg_regs <- bindArgsToRegs args

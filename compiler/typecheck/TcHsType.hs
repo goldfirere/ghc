@@ -65,7 +65,6 @@ import VarSet
 import TyCon
 import ConLike
 import DataCon
-import TysPrim ( tYPE )
 import Class
 import Name
 import NameEnv
@@ -737,9 +736,7 @@ finish_tuple tup_sort tau_tys tau_kinds exp_kind
     arity = length tau_tys
     tau_reps = map (getRuntimeRepFromKind "finish_tuple") tau_kinds
     res_kind = case tup_sort of
-                 UnboxedTuple
-                   | arity == 0  -> tYPE voidRepDataConTy
-                   | otherwise   -> unboxedTupleKind tau_reps
+                 UnboxedTuple    -> unboxedTupleKind tau_reps
                  BoxedTuple      -> liftedTypeKind
                  ConstraintTuple -> constraintKind
 

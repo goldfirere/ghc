@@ -472,7 +472,9 @@ coreToStgExpr (Let bind body) = do
 coreToStgExpr e = pprPanic "coreToStgExpr" (ppr e)
 
 mkStgAltType :: Id -> [CoreAlt] -> AltType
-mkStgAltType bndr alts = case typePrimRep bndr_ty of
+mkStgAltType bndr alts = WARN( isUnboxedTupleType bndr_ty, text "RAE1" <+> ppr bndr <+> dcolon <+> ppr bndr_ty $$ ppr alts)
+                         pprTraceIt "RAE2" $
+                         case typePrimRep bndr_ty of
   [LiftedRep] -> case tyConAppTyCon_maybe (unwrapType bndr_ty) of
     Just tc
       | isAbstractTyCon tc -> look_for_better_tycon

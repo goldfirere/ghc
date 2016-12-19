@@ -41,7 +41,7 @@ import Data.List (foldl', sort)
 import qualified Data.IntSet as IS
 
 -- | See "Type#type_classification" for what an unlifted type is
-isUnliftedType :: Type -> Bool
+isUnliftedType :: HasDebugCallStack => Type -> Bool
         -- isUnliftedType returns True for forall'd unlifted types:
         --      x :: forall a. Int#
         -- I found bindings like these were getting floated to the top level.
@@ -54,7 +54,7 @@ isUnliftedType ty
 -- | Computes whether an argument (or let right hand side) should
 -- be computed strictly or lazily, based only on its type.
 -- Currently, it's just 'isUnliftedType'.
-isStrictType :: Type -> Bool
+isStrictType :: HasDebugCallStack => Type -> Bool
 isStrictType = isUnliftedType
 
 {- **********************************************************************

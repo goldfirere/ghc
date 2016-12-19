@@ -62,7 +62,7 @@ module TysWiredIn (
         nilDataCon, nilDataConName, nilDataConKey,
         consDataCon_RDR, consDataCon, consDataConName,
         promotedNilDataCon, promotedConsDataCon,
-        mkListTy,
+        mkListTy, mkPromotedListTy,
 
         -- * Maybe
         maybeTyCon, maybeTyConName,
@@ -111,7 +111,7 @@ module TysWiredIn (
 
         vecRepDataConTyCon, tupleRepDataConTyCon, sumRepDataConTyCon,
 
-        liftedRepDataConTy, unliftedRepDataConTy, voidRepDataConTy, intRepDataConTy,
+        liftedRepDataConTy, unliftedRepDataConTy, intRepDataConTy,
         wordRepDataConTy, int64RepDataConTy, word64RepDataConTy, addrRepDataConTy,
         floatRepDataConTy, doubleRepDataConTy,
 
@@ -414,7 +414,7 @@ runtimeRepSimpleDataConNames :: [Name]
 runtimeRepSimpleDataConNames
   = zipWith3Lazy mk_special_dc_name
       [ fsLit "LiftedRep", fsLit "UnliftedRep"
-      , fsLit "VoidRep", fsLit "IntRep"
+      , fsLit "IntRep"
       , fsLit "WordRep", fsLit "Int64Rep", fsLit "Word64Rep"
       , fsLit "AddrRep", fsLit "FloatRep", fsLit "DoubleRep" ]
       runtimeRepSimpleDataConKeys
@@ -862,8 +862,7 @@ mk_tuple Unboxed arity = (tycon, tuple_con)
     tc_binders = mkTemplateTyConBinders (nOfThem arity runtimeRepTy)
                                         (\ks -> map tYPE ks)
 
-    tc_res_kind | arity == 0 = tYPE voidRepDataConTy  -- Nullary unboxed tuple
-                | otherwise  = unboxedTupleKind rr_tys
+    tc_res_kind = unboxedTupleKind rr_tys
 
     tc_arity    = arity * 2
     flavour     = UnboxedAlgTyCon
@@ -1098,7 +1097,8 @@ unicodeStarKindTyCon  = buildSynTyCon unicodeStarKindTyConName
 
 runtimeRepTyCon :: TyCon
 runtimeRepTyCon = pcNonEnumTyCon runtimeRepTyConName Nothing []
-                          (vecRepDataCon : runtimeRepSimpleDataCons)
+                          (vecRepDataCon : tupleRepDataCon :
+                           sumRepDataCon : runtimeRepSimpleDataCons)
 
 vecRepDataCon :: DataCon
 vecRepDataCon = pcSpecialDataCon vecRepDataConName [ mkTyConTy vecCountTyCon
@@ -1152,7 +1152,7 @@ runtimeRepSimpleDataCons :: [DataCon]
 liftedRepDataCon :: DataCon
 runtimeRepSimpleDataCons@(liftedRepDataCon : _)
   = zipWithLazy mk_runtime_rep_dc
-    [ LiftedRep, UnliftedRep, VoidRep, IntRep, WordRep, Int64Rep
+    [ LiftedRep, UnliftedRep, IntRep, WordRep, Int64Rep
     , Word64Rep, AddrRep, FloatRep, DoubleRep ]
     runtimeRepSimpleDataConNames
   where
@@ -1161,10 +1161,10 @@ runtimeRepSimpleDataCons@(liftedRepDataCon : _)
 
 -- See Note [Wiring in RuntimeRep]
 liftedRepDataConTy, unliftedRepDataConTy,
-  voidRepDataConTy, intRepDataConTy, wordRepDataConTy, int64RepDataConTy,
+  intRepDataConTy, wordRepDataConTy, int64RepDataConTy,
   word64RepDataConTy, addrRepDataConTy, floatRepDataConTy, doubleRepDataConTy :: Type
 [liftedRepDataConTy, unliftedRepDataConTy,
-   voidRepDataConTy, intRepDataConTy, wordRepDataConTy, int64RepDataConTy,
+   intRepDataConTy, wordRepDataConTy, int64RepDataConTy,
    word64RepDataConTy, addrRepDataConTy, floatRepDataConTy, doubleRepDataConTy]
   = map (mkTyConTy . promoteDataCon) runtimeRepSimpleDataCons
 

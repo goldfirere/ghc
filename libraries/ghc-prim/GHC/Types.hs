@@ -378,7 +378,6 @@ data RuntimeRep = VecRep VecCount VecElem   -- ^ a SIMD vector type
                 | SumRep [RuntimeRep]       -- ^ An unboxed sum of the given reps
                 | LiftedRep       -- ^ lifted; represented by a pointer
                 | UnliftedRep     -- ^ unlifted; represented by a pointer
-                | VoidRep         -- ^ erased entirely
                 | IntRep          -- ^ signed, word-sized value
                 | WordRep         -- ^ unsigned, word-sized value
                 | Int64Rep        -- ^ signed, 64-bit value (on 32-bit only)

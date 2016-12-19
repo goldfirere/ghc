@@ -1896,17 +1896,17 @@ runtimeRepSimpleDataConKeys :: [Unique]
 liftedRepDataConKey :: Unique
 runtimeRepSimpleDataConKeys@(
   liftedRepDataConKey : _)
-  = map mkPreludeDataConUnique [74..83]
+  = map mkPreludeDataConUnique [74..82]
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
 -- VecCount
 vecCountDataConKeys :: [Unique]
-vecCountDataConKeys = map mkPreludeDataConUnique [84..89]
+vecCountDataConKeys = map mkPreludeDataConUnique [83..88]
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
 -- VecElem
 vecElemDataConKeys :: [Unique]
-vecElemDataConKeys = map mkPreludeDataConUnique [90..99]
+vecElemDataConKeys = map mkPreludeDataConUnique [89..98]
 
 ---------------- Template Haskell -------------------
 --      THNames.hs: USES DataUniques 100-150

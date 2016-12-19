@@ -18,9 +18,9 @@ constraintKind :: Kind
 runtimeRepTyCon, vecCountTyCon, vecElemTyCon :: TyCon
 runtimeRepTy :: Type
 
-liftedRepDataConTyCon, vecRepDataConTyCon :: TyCon
+liftedRepDataConTyCon, vecRepDataConTyCon, tupleRepDataConTyCon :: TyCon
 
-liftedRepDataConTy, unliftedRepDataConTy, voidRepDataConTy, intRepDataConTy,
+liftedRepDataConTy, unliftedRepDataConTy, intRepDataConTy,
   wordRepDataConTy, int64RepDataConTy, word64RepDataConTy, addrRepDataConTy,
   floatRepDataConTy, doubleRepDataConTy :: Type
 
@@ -33,3 +33,5 @@ int8ElemRepDataConTy, int16ElemRepDataConTy, int32ElemRepDataConTy,
   doubleElemRepDataConTy :: Type
 
 anyTypeOfKind :: Kind -> Type
+unboxedTupleKind :: [Type] -> Type
+mkPromotedListTy :: Type -> [Type] -> Type

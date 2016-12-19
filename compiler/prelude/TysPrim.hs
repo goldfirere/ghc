@@ -81,9 +81,9 @@ module TysPrim(
 #include "HsVersions.h"
 
 import {-# SOURCE #-} TysWiredIn
-  ( runtimeRepTy, liftedTypeKind
-  , vecRepDataConTyCon
-  , liftedRepDataConTy, unliftedRepDataConTy, voidRepDataConTy, intRepDataConTy
+  ( runtimeRepTy, unboxedTupleKind, liftedTypeKind
+  , vecRepDataConTyCon, tupleRepDataConTyCon
+  , liftedRepDataConTy, unliftedRepDataConTy, intRepDataConTy
   , wordRepDataConTy, int64RepDataConTy, word64RepDataConTy, addrRepDataConTy
   , floatRepDataConTy, doubleRepDataConTy
   , vec2DataConTy, vec4DataConTy, vec8DataConTy, vec16DataConTy, vec32DataConTy
@@ -91,7 +91,8 @@ import {-# SOURCE #-} TysWiredIn
   , int8ElemRepDataConTy, int16ElemRepDataConTy, int32ElemRepDataConTy
   , int64ElemRepDataConTy, word8ElemRepDataConTy, word16ElemRepDataConTy
   , word32ElemRepDataConTy, word64ElemRepDataConTy, floatElemRepDataConTy
-  , doubleElemRepDataConTy )
+  , doubleElemRepDataConTy
+  , mkPromotedListTy )
 
 import Var              ( TyVar, mkTyVar )
 import Name
@@ -480,7 +481,7 @@ pcPrimTyCon name roles rep
 -- Defined here to avoid (more) module loops
 primRepToRuntimeRep :: PrimRep -> Type
 primRepToRuntimeRep rep = case rep of
-  VoidRep       -> voidRepDataConTy
+  VoidRep       -> TyConApp tupleRepDataConTyCon [mkPromotedListTy runtimeRepTy []]
   LiftedRep     -> liftedRepDataConTy
   UnliftedRep   -> unliftedRepDataConTy
   IntRep        -> intRepDataConTy
@@ -782,7 +783,7 @@ proxyPrimTyCon = mkPrimTyCon proxyPrimTyConName binders res_kind [Nominal,Nomina
   where
      -- Kind: forall k. k -> Void#
      binders = mkTemplateTyConBinders [liftedTypeKind] (\ks-> ks)
-     res_kind = tYPE voidRepDataConTy
+     res_kind = unboxedTupleKind []
 
 
 {- *********************************************************************
@@ -798,7 +799,7 @@ eqPrimTyCon  = mkPrimTyCon eqPrimTyConName binders res_kind roles
   where
     -- Kind :: forall k1 k2. k1 -> k2 -> Void#
     binders  = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] (\ks -> ks)
-    res_kind = tYPE voidRepDataConTy
+    res_kind = unboxedTupleKind []
     roles    = [Nominal, Nominal, Nominal, Nominal]
 
 -- like eqPrimTyCon, but the type for *Representational* coercions
@@ -809,7 +810,7 @@ eqReprPrimTyCon = mkPrimTyCon eqReprPrimTyConName binders res_kind roles
   where
     -- Kind :: forall k1 k2. k1 -> k2 -> Void#
     binders  = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] (\ks -> ks)
-    res_kind = tYPE voidRepDataConTy
+    res_kind = unboxedTupleKind []
     roles    = [Nominal, Nominal, Representational, Representational]
 
 -- like eqPrimTyCon, but the type for *Phantom* coercions.
@@ -820,7 +821,7 @@ eqPhantPrimTyCon = mkPrimTyCon eqPhantPrimTyConName binders res_kind roles
   where
     -- Kind :: forall k1 k2. k1 -> k2 -> Void#
     binders  = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] (\ks -> ks)
-    res_kind = tYPE voidRepDataConTy
+    res_kind = unboxedTupleKind []
     roles    = [Nominal, Nominal, Phantom, Phantom]
 
 {- *********************************************************************

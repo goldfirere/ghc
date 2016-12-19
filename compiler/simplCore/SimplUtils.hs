@@ -53,7 +53,7 @@ import SimplMonad
 import RepType
 import Type     hiding( substTy )
 import Coercion hiding( substCo )
-import DataCon          ( dataConWorkId )
+import DataCon          ( dataConWorkId, isUnboxedTupleCon, isUnboxedSumCon )
 import VarEnv
 import VarSet
 import BasicTypes
@@ -451,15 +451,27 @@ mkArgInfo fun rules n_val_args call_cont
     -- add_type_str is done repeatedly (for each call); might be better
     -- once-for-all in the function
     -- But beware primops/datacons with no strictness
-    add_type_str _ [] = []
-    add_type_str fun_ty strs            -- Look through foralls
-        | Just (_, fun_ty') <- splitForAllTy_maybe fun_ty       -- Includes coercions
-        = add_type_str fun_ty' strs
-    add_type_str fun_ty (str:strs)      -- Add strict-type info
-        | Just (arg_ty, fun_ty') <- splitFunTy_maybe fun_ty
-        = (str || isStrictType arg_ty) : add_type_str fun_ty' strs
-    add_type_str _ strs
-        = strs
+
+    add_type_str
+      | Just dc <- isDataConId_maybe fun
+      , isUnboxedTupleCon dc || isUnboxedSumCon dc
+      = const id
+         -- unboxed tuple/sum data constructors are the *only* functions that
+         -- can take levity-polymorphic arguments. We thus cannot tell if the
+         -- arguments are strict, so we better not try.
+
+      | otherwise
+      = go
+      where
+        go _ [] = []
+        go fun_ty strs            -- Look through foralls
+            | Just (_, fun_ty') <- splitForAllTy_maybe fun_ty       -- Includes coercions
+            = go fun_ty' strs
+        go fun_ty (str:strs)      -- Add strict-type info
+            | Just (arg_ty, fun_ty') <- splitFunTy_maybe fun_ty
+            = (str || isStrictType arg_ty) : go fun_ty' strs
+        go _ strs
+            = strs
 
 {- Note [Unsaturated functions]
   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

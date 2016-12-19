@@ -265,9 +265,7 @@ extendRho rho x (UnaryVal val)
 --------------------------------------------------------------------------------
 
 unarise :: UniqSupply -> [StgBinding] -> [StgBinding]
-unarise us binds = pprTrace "RAEb1" (ppr binds) $
-                   pprTraceIt "RAEb2" $
-                   initUs_ us (mapM (unariseBinding emptyVarEnv) binds)
+unarise us binds = initUs_ us (mapM (unariseBinding emptyVarEnv) binds)
 
 unariseBinding :: UnariseEnv -> StgBinding -> UniqSM StgBinding
 unariseBinding rho (StgNonRec x rhs)
