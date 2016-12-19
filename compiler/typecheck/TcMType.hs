@@ -103,7 +103,6 @@ import Var
 import TcRnMonad        -- TcType, amongst others
 import TcEvidence
 import Id
-import TyCon ( isUnboxedTupleTyCon, isUnboxedSumTyCon )
 import Name
 import VarSet
 import TysWiredIn

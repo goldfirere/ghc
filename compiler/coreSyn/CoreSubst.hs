@@ -56,6 +56,7 @@ import Type     hiding ( substTy, extendTvSubst, extendCvSubst, extendTvSubstLis
 import Coercion hiding ( substCo, substCoVarBndr )
 
 import TyCon       ( tyConArity )
+import RepType     ( isUnliftedType )
 import DataCon
 import PrelNames
 import OptCoercion ( optCoercion )

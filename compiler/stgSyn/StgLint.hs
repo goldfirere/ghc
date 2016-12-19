@@ -197,7 +197,7 @@ lintStgExpr (StgCase scrut bndr alts_type alts) = runMaybeT $ do
     in_scope <- MaybeT $ liftM Just $
      case alts_type of
         AlgAlt tc     -> check_bndr (tyConPrimRep tc) >> return True
-        PrimAlt reps  -> check_bndr reps              >> return True
+        PrimAlt rep   -> check_bndr [rep]             >> return True
         MultiValAlt _ -> return False -- Binder is always dead in this case
         PolyAlt       -> return True
 
@@ -208,7 +208,7 @@ lintStgExpr (StgCase scrut bndr alts_type alts) = runMaybeT $ do
     scrut_reps      = typePrimRep scrut_ty
     check_bndr reps = checkL (scrut_reps == reps) bad_bndr
                   where
-                     bad_bndr = mkDefltMsg bndr tc
+                     bad_bndr = mkDefltMsg bndr reps
 
 lintStgAlts :: [StgAlt]
             -> Type               -- Type of scrutinee
@@ -420,8 +420,7 @@ stgEqType orig_ty1 orig_ty2
   where
     gos :: [PrimRep] -> [PrimRep] -> Bool
     gos [_]   [_]   = go orig_ty1 orig_ty2
-    gos reps1 reps1 = slots1 == slots2
-    gos _     _     = False
+    gos reps1 reps2 = reps1 == reps2
 
     go :: UnaryType -> UnaryType -> Bool
     go ty1 ty2

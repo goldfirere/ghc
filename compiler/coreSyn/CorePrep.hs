@@ -28,6 +28,7 @@ import CoreSyn
 import CoreSubst
 import MkCore hiding( FloatBind(..) )   -- We use our own FloatBind here
 import Type
+import RepType
 import Literal
 import Coercion
 import TcEnv

@@ -256,6 +256,7 @@ bindConArgs :: AltCon -> LocalReg -> [NonVoid Id] -> FCode [LocalReg]
 -- found a con
 bindConArgs (DataAlt con) base args
   = ASSERT(not (isUnboxedTupleCon con))
+    pprTrace "RAEa1" (ppr args) $
     do dflags <- getDynFlags
        let (_, _, args_w_offsets) = mkVirtConstrOffsets dflags (addIdReps args)
            tag = tagForCon dflags con
@@ -270,7 +271,8 @@ bindConArgs (DataAlt con) base args
                  -- to handle here)
                  return Nothing
              | otherwise      = do
-                 emit $ mkTaggedObjectLoad dflags (idToReg dflags arg) base offset tag
+                 emit $ mkTaggedObjectLoad dflags (pprTrace "RAE3" (ppr arg) $
+                                                   idToReg dflags arg) base offset tag
                  Just <$> bindArgToReg arg
 
        mapMaybeM bind_arg args_w_offsets

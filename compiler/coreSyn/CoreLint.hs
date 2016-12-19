@@ -1404,7 +1404,7 @@ lintCoercion co@(UnivCo prov r ty1 ty2)
      checkTypes t1 t2
        = do { checkWarnL (reps1 `equalLength` reps2)
                          (report "values with different # of reps")
-            ; zipWithM validateCoercion reps1 reps2 }
+            ; zipWithM_ validateCoercion reps1 reps2 }
        where
          reps1 = typePrimRep t1
          reps2 = typePrimRep t2

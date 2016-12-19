@@ -2,39 +2,60 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 module RepType
-  ( -- * Code generator views onto Types
+  ( isUnliftedType, isStrictType,
+
+    -- * Code generator views onto Types
     UnaryType, NvUnaryType, isNvUnaryType,
     unwrapType,
 
     -- * Predicates on types
-    isVoidTy, typePrimRep, typePrimRep1,
-    runtimeRepPrimRep, typePrimRepArgs,
+    isVoidTy,
 
     -- * Type representation for the code generator
-    countConRepArgs, idFunRepArity, tyConPrimRep, tyConPrimRep1,
+    typePrimRep, typePrimRep1,
+    runtimeRepPrimRep, typePrimRepArgs,
+    PrimRep(..), primRepToType,
+    countFunRepArgs, countConRepArgs, tyConPrimRep, tyConPrimRep1,
 
     -- * Unboxed sum representation type
-    ubxSumRepType, layout, typeSlotTy, SlotTy (..),
-    slotPrimRep
+    ubxSumRepType, layoutUbxSum, typeSlotTy, SlotTy (..),
+    slotPrimRep, primRepSlot
   ) where
 
 #include "HsVersions.h"
 
 import BasicTypes (Arity, RepArity)
 import DataCon
-import Id
 import Outputable
 import PrelNames
+import NameEnv
+import Coercion
 import TyCon
 import TyCoRep
 import Type
-import TysPrim
-import TysWiredIn
 import Util
+import TysPrim
+import {-# SOURCE #-} TysWiredIn ( anyTypeOfKind )
 
 import Data.List (foldl', sort)
-import Data.Maybe (maybeToList)
 import qualified Data.IntSet as IS
+
+-- | See "Type#type_classification" for what an unlifted type is
+isUnliftedType :: Type -> Bool
+        -- isUnliftedType returns True for forall'd unlifted types:
+        --      x :: forall a. Int#
+        -- I found bindings like these were getting floated to the top level.
+        -- They are pretty bogus types, mind you.  It would be better never to
+        -- construct them
+isUnliftedType ty
+  | [LiftedRep] <- typePrimRep ty = False
+  | otherwise                     = True
+
+-- | Computes whether an argument (or let right hand side) should
+-- be computed strictly or lazily, based only on its type.
+-- Currently, it's just 'isUnliftedType'.
+isStrictType :: Type -> Bool
+isStrictType = isUnliftedType
 
 {- **********************************************************************
 *                                                                       *
@@ -78,8 +99,9 @@ typePrimRepArgs ty
 -- But not type/data families, because we don't have the envs to hand.
 unwrapType :: Type -> Type
 unwrapType ty
-  | Just unwrapped <- ASSERT( all (not . isFamilyTyCon) $ nameEnvElts $ tyConsOfType ty )
-                      topNormaliseTypeX stepper mappend inner_ty
+  | Just (_, unwrapped)
+      <- ASSERT( all (not . isFamilyTyCon) $ nameEnvElts $ tyConsOfType ty )
+         topNormaliseTypeX stepper mappend inner_ty
   = unwrapped
   | otherwise
   = inner_ty
@@ -99,9 +121,6 @@ unwrapType ty
           Nothing       -> NS_Abort   -- infinite newtypes
       | otherwise
       = NS_Done
-
-idFunRepArity :: Id -> RepArity
-idFunRepArity x = countFunRepArgs (idArity x) (idType x)
 
 countFunRepArgs :: Arity -> Type -> RepArity
 countFunRepArgs 0 _
@@ -337,11 +356,11 @@ kindPrimRep :: HasDebugCallStack => SDoc -> Kind -> [PrimRep]
 kindPrimRep doc ki
   | Just ki' <- coreViewOneStarKind ki
   = kindPrimRep doc ki'
-kindPrimRep _ (TyConApp typ [runtime_rep])
+kindPrimRep doc (TyConApp typ [runtime_rep])
   = ASSERT( typ `hasKey` tYPETyConKey )
     runtimeRepPrimRep doc runtime_rep
 kindPrimRep doc ki
-  = pprPanic "kindPrimRep" (ppr ki $$ ppr doc)
+  = pprPanic "kindPrimRep" (ppr ki $$ doc)
 
   -- TODO (RAE): Remove:
   -- WARN( True, text "kindPrimRep defaulting to LiftedRep on" <+> ppr ki $$ doc )
@@ -358,3 +377,8 @@ runtimeRepPrimRep doc rr_ty
   = fun args
   | otherwise
   = pprPanic "runtimeRepPrimRep" (doc $$ ppr rr_ty)
+
+-- | Convert a PrimRep back to a Type. Used only in the unariser to give types
+-- to fresh Ids. Really, only the type's representation matters.
+primRepToType :: PrimRep -> Type
+primRepToType = anyTypeOfKind . tYPE . primRepToRuntimeRep

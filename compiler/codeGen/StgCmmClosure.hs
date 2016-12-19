@@ -293,7 +293,7 @@ might_be_a_function :: Type -> Bool
 -- Look through newtypes etc as much as poss
 might_be_a_function ty
   | [LiftedRep] <- typePrimRep ty
-  , Just tc <- tyConAppTyCon_maybe (unwrapType rep)
+  , Just tc <- tyConAppTyCon_maybe (unwrapType ty)
   , isDataTyCon tc
   = False
   | otherwise

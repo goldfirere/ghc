@@ -85,7 +85,7 @@ module Id (
 
         -- ** Reading 'IdInfo' fields
         idArity,
-        idCallArity,
+        idCallArity, idFunRepArity,
         idUnfolding, realIdUnfolding,
         idSpecialisation, idCoreRules, idHasRules,
         idCafInfo,
@@ -126,6 +126,7 @@ import Var( Id, CoVar, DictId,
 import qualified Var
 
 import Type
+import RepType
 import TysPrim
 import DataCon
 import Demand
@@ -563,6 +564,9 @@ idCallArity id = callArityInfo (idInfo id)
 
 setIdCallArity :: Id -> Arity -> Id
 setIdCallArity id arity = modifyIdInfo (`setCallArityInfo` arity) id
+
+idFunRepArity :: Id -> RepArity
+idFunRepArity x = countFunRepArgs (idArity x) (idType x)
 
 -- | Returns true if an application to n args would diverge
 isBottomingId :: Id -> Bool

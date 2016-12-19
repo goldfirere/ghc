@@ -102,9 +102,9 @@ module Type (
         isPiTy, isTauTy, isFamFreeTy,
 
         -- (Lifting and boxity)
-        isUnliftedType, isUnboxedTupleType, isUnboxedSumType,
+        isUnboxedTupleType, isUnboxedSumType,
         isAlgType, isClosedAlgType,
-        isPrimitiveType, isStrictType,
+        isPrimitiveType,
         isRuntimeRepTy, isRuntimeRepVar, isRuntimeRepKindedTy,
         dropRuntimeRepArgs,
         getRuntimeRep, getRuntimeRepFromKind,
@@ -1843,17 +1843,6 @@ isFamFreeTy (CoercionTy _)    = False  -- Not sure about this
 ************************************************************************
 -}
 
--- | See "Type#type_classification" for what an unlifted type is
-isUnliftedType :: Type -> Bool
-        -- isUnliftedType returns True for forall'd unlifted types:
-        --      x :: forall a. Int#
-        -- I found bindings like these were getting floated to the top level.
-        -- They are pretty bogus types, mind you.  It would be better never to
-        -- construct them
-isUnliftedType ty
-  | [LiftedRep] <- typePrimRep ty = True
-  | otherwise                     = False
-
 -- | Extract the RuntimeRep classifier of a type. Panics if this is not possible.
 getRuntimeRep :: String   -- ^ Printed in case of an error
               -> Type -> Type
@@ -1905,13 +1894,6 @@ isClosedAlgType ty
       Just (tc, ty_args) | isAlgTyCon tc && not (isFamilyTyCon tc)
              -> ASSERT2( ty_args `lengthIs` tyConArity tc, ppr ty ) True
       _other -> False
-
--- | Computes whether an argument (or let right hand side) should
--- be computed strictly or lazily, based only on its type.
--- Currently, it's just 'isUnliftedType'.
-
-isStrictType :: Type -> Bool
-isStrictType = isUnliftedType
 
 isPrimitiveType :: Type -> Bool
 -- ^ Returns true of types that are opaque to Haskell.

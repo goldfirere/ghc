@@ -550,7 +550,8 @@ mkSlowEntryCode :: Id -> ClosureInfo -> [LocalReg] -> FCode ()
 mkSlowEntryCode bndr cl_info arg_regs -- function closure is already in `Node'
   | Just (_, ArgGen _) <- closureFunInfo cl_info
   = do dflags <- getDynFlags
-       let node = idToReg dflags (NonVoid bndr)
+       let node = pprTrace "RAE2" (ppr bndr) $
+                  idToReg dflags (NonVoid bndr)
            slow_lbl = closureSlowEntryLabel  cl_info
            fast_lbl = closureLocalEntryLabel dflags cl_info
            -- mkDirectJump does not clobber `Node' containing function closure

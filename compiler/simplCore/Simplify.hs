@@ -13,6 +13,7 @@ module Simplify ( simplTopBinds, simplExpr, simplRules ) where
 import DynFlags
 import SimplMonad
 import Type hiding      ( substTy, substTyVar, extendTvSubst, extendCvSubst )
+import RepType          ( isUnliftedType )
 import SimplEnv
 import SimplUtils
 import FamInstEnv       ( FamInstEnv )

@@ -16,7 +16,7 @@ import HscTypes
 import Name             ( Name, getName )
 import NameEnv
 import DataCon          ( DataCon, dataConRepArgTys, dataConIdentity )
-import TyCon            ( TyCon, tyConFamilySize, isDataTyCon, tyConDataCons, isVoidRep )
+import TyCon            ( TyCon, tyConFamilySize, isDataTyCon, tyConDataCons )
 import RepType
 import StgCmmLayout     ( mkVirtConstrSizes )
 import StgCmmClosure    ( tagForCon, NonVoid (..) )

@@ -1050,9 +1050,6 @@ ppr_iface_tc_app pp ctxt_prec tc tys
   || tc `ifaceTyConHasKey` unicodeStarKindTyConKey
   = kindStar   -- Handle unicode; do not wrap * in parens
 
-  | tc `ifaceTyConHasKey` unliftedTypeKindTyConKey
-  = ppr tc  -- Do not wrap # in parens
-
   | not (isSymOcc (nameOccName (ifaceTyConName tc)))
   = pprIfacePrefixApp ctxt_prec (ppr tc) (map (pp TyConPrec) tys)
 

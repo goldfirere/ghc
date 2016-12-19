@@ -209,7 +209,7 @@ import Outputable
 import RepType
 import StgSyn
 import Type
-import TysPrim (intPrimTyCon, intPrimTy)
+import TysPrim (intPrimTy)
 import TysWiredIn
 import UniqSupply
 import Util
@@ -265,7 +265,9 @@ extendRho rho x (UnaryVal val)
 --------------------------------------------------------------------------------
 
 unarise :: UniqSupply -> [StgBinding] -> [StgBinding]
-unarise us binds = initUs_ us (mapM (unariseBinding emptyVarEnv) binds)
+unarise us binds = pprTrace "RAEb1" (ppr binds) $
+                   pprTraceIt "RAEb2" $
+                   initUs_ us (mapM (unariseBinding emptyVarEnv) binds)
 
 unariseBinding :: UnariseEnv -> StgBinding -> UniqSM StgBinding
 unariseBinding rho (StgNonRec x rhs)
@@ -555,7 +557,7 @@ mkUbxSum dc ty_args args0
 
       tag = dataConTag dc
 
-      layout'  = layout sum_slots (mapMaybe (typeSlotTy . stgArgType) args0)
+      layout'  = layoutUbxSum sum_slots (mapMaybe (typeSlotTy . stgArgType) args0)
       tag_arg  = StgLitArg (MachInt (fromIntegral tag))
       arg_idxs = IM.fromList (zipEqual "mkUbxSum" layout' args0)
 
@@ -736,7 +738,7 @@ mkTuple :: [StgArg] -> StgExpr
 mkTuple args = StgConApp (tupleDataCon Unboxed (length args)) args (map stgArgType args)
 
 tagAltTy :: AltType
-tagAltTy = PrimAlt [IntRep]
+tagAltTy = PrimAlt IntRep
 
 tagTy :: Type
 tagTy = intPrimTy

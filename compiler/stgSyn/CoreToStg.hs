@@ -483,6 +483,8 @@ mkStgAltType bndr alts = case typePrimRep bndr_ty of
   [unlifted] -> PrimAlt unlifted
   not_unary  -> MultiValAlt (length not_unary)
   where
+   bndr_ty = idType bndr
+
    _is_poly_alt_tycon tc
         =  isFunTyCon tc
         || isPrimTyCon tc   -- "Any" is lifted but primitive
@@ -651,7 +653,7 @@ coreToStgArgs (arg : args) = do         -- Non-type argument
         arg_ty = exprType arg
         stg_arg_ty = stgArgType stg_arg
         bad_args = (isUnliftedType arg_ty && not (isUnliftedType stg_arg_ty))
-                || (map typePrimRep arg_ty /= map typePrimRep stg_arg_ty)
+                || (typePrimRep arg_ty /= typePrimRep stg_arg_ty)
         -- In GHCi we coerce an argument of type BCO# (unlifted) to HValue (lifted),
         -- and pass it to a function expecting an HValue (arg_ty).  This is ok because
         -- we can treat an unlifted value as lifted.  But the other way round

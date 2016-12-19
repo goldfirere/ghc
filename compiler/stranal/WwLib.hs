@@ -26,7 +26,7 @@ import TysWiredIn       ( tupleDataCon )
 import VarEnv           ( mkInScopeSet )
 import VarSet           ( VarSet )
 import Type
-import RepType          ( isVoidTy )
+import RepType          ( isVoidTy, isUnliftedType )
 import Coercion
 import FamInstEnv
 import BasicTypes       ( Boxity(..) )

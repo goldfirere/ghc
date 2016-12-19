@@ -50,6 +50,7 @@ import Id
 import Var
 import Demand
 import SimplMonad
+import RepType
 import Type     hiding( substTy )
 import Coercion hiding( substCo )
 import DataCon          ( dataConWorkId )

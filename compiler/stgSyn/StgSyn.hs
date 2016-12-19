@@ -62,7 +62,7 @@ import PprCore     ( {- instances -} )
 import PrimOp      ( PrimOp, PrimCall )
 import TyCon       ( PrimRep(..), TyCon )
 import Type        ( Type )
-import RepType     ( typePrimRep )
+import RepType     ( typePrimRep1 )
 import Unique      ( Unique )
 import Util
 
@@ -537,7 +537,7 @@ data AltType
   = PolyAlt             -- Polymorphic (a lifted type variable)
   | MultiValAlt Int     -- Multi value of this arity (unboxed tuple or sum)
   | AlgAlt      TyCon   -- Algebraic data type; the AltCons will be DataAlts
-  | PrimAlt     TyCon   -- Primitive data type; the AltCons (if any) will be LitAlts
+  | PrimAlt     PrimRep -- Primitive data type; the AltCons (if any) will be LitAlts
 
 {-
 ************************************************************************

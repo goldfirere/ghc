@@ -200,7 +200,7 @@ import ForeignCall
 import VarSet
 import Coercion
 import Type
-import RepType (tyConPrimRep)
+import RepType
 import TyCon
 
 -- others:

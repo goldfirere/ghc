@@ -27,7 +27,7 @@ module TysPrim(
         tYPETyConName,
 
         -- Kinds
-        tYPE,
+        tYPE, primRepToRuntimeRep,
 
         funTyCon, funTyConName,
         primTyCons,
@@ -82,8 +82,8 @@ module TysPrim(
 
 import {-# SOURCE #-} TysWiredIn
   ( runtimeRepTy, liftedTypeKind
-  , vecRepDataConTyCon,
-  , voidRepDataConTy, intRepDataConTy
+  , vecRepDataConTyCon
+  , liftedRepDataConTy, unliftedRepDataConTy, voidRepDataConTy, intRepDataConTy
   , wordRepDataConTy, int64RepDataConTy, word64RepDataConTy, addrRepDataConTy
   , floatRepDataConTy, doubleRepDataConTy
   , vec2DataConTy, vec4DataConTy, vec8DataConTy, vec16DataConTy, vec32DataConTy
@@ -474,7 +474,7 @@ pcPrimTyCon name roles rep
   = mkPrimTyCon name binders result_kind roles
   where
     binders     = mkTemplateAnonTyConBinders (map (const liftedTypeKind) roles)
-    result_kind = tYPE (primRepToRuntimRep rep)
+    result_kind = tYPE (primRepToRuntimeRep rep)
 
 -- | Convert a 'PrimRep' to a 'Type' of kind RuntimeRep
 -- Defined here to avoid (more) module loops

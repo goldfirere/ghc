@@ -76,7 +76,7 @@ module TysWiredIn (
         unitTyCon, unitDataCon, unitDataConId, unitTy, unitTyConKey,
         pairTyCon,
         unboxedUnitTyCon, unboxedUnitDataCon,
-        unboxedTupleKind,
+        unboxedTupleKind, unboxedSumKind,
 
         -- ** Constraint tuples
         cTupleTyConName, cTupleTyConNames, isCTupleTyConName,
@@ -111,10 +111,9 @@ module TysWiredIn (
 
         vecRepDataConTyCon, tupleRepDataConTyCon, sumRepDataConTyCon,
 
-        voidRepDataConTy, intRepDataConTy,
+        liftedRepDataConTy, unliftedRepDataConTy, voidRepDataConTy, intRepDataConTy,
         wordRepDataConTy, int64RepDataConTy, word64RepDataConTy, addrRepDataConTy,
-        floatRepDataConTy, doubleRepDataConTy, tupleRepDataConTy,
-        sumRepDataConTy,
+        floatRepDataConTy, doubleRepDataConTy,
 
         vec2DataConTy, vec4DataConTy, vec8DataConTy, vec16DataConTy, vec32DataConTy,
         vec64DataConTy,
@@ -142,6 +141,7 @@ import Id
 import Constants        ( mAX_TUPLE_SIZE, mAX_CTUPLE_SIZE, mAX_SUM_SIZE )
 import Module           ( Module )
 import Type
+import RepType
 import DataCon
 import {-# SOURCE #-} ConLike
 import TyCon
@@ -1157,7 +1157,7 @@ runtimeRepSimpleDataCons@(liftedRepDataCon : _)
     runtimeRepSimpleDataConNames
   where
     mk_runtime_rep_dc primrep name
-      = pcSpecialDataCon name [] runtimeRepTyCon (RuntimeRep (\_ -> primrep))
+      = pcSpecialDataCon name [] runtimeRepTyCon (RuntimeRep (\_ -> [primrep]))
 
 -- See Note [Wiring in RuntimeRep]
 liftedRepDataConTy, unliftedRepDataConTy,

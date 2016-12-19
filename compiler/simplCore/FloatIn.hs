@@ -25,7 +25,7 @@ import CoreUtils        ( exprIsDupable, exprIsExpandable,
 import CoreFVs
 import Id               ( isOneShotBndr, idType )
 import Var
-import Type             ( isUnliftedType )
+import RepType          ( isUnliftedType )
 import VarSet
 import Util
 import DynFlags

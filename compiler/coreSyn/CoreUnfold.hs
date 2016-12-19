@@ -55,6 +55,7 @@ import PrimOp
 import IdInfo
 import BasicTypes       ( Arity )
 import Type
+import RepType
 import PrelNames
 import TysPrim          ( realWorldStatePrimTy )
 import Bag

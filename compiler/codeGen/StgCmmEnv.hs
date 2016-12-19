@@ -62,7 +62,7 @@ litIdInfo dflags id lf lit
 lneIdInfo :: DynFlags -> Id -> [NonVoid Id] -> CgIdInfo
 lneIdInfo dflags id regs
   = CgIdInfo { cg_id = id, cg_lf = lf
-             , cg_loc = LneLoc blk_id (map (idToReg dflags) regs) }
+             , cg_loc = LneLoc blk_id (map (idToReg dflags) (pprTraceIt "RAE4" regs)) }
   where
     lf     = mkLFLetNoEscape
     blk_id = mkBlockId (idUnique id)
@@ -166,7 +166,7 @@ bindToReg :: NonVoid Id -> LambdaFormInfo -> FCode LocalReg
 -- Bind an Id to a fresh LocalReg
 bindToReg nvid@(NonVoid id) lf_info
   = do dflags <- getDynFlags
-       let reg = idToReg dflags nvid
+       let reg = idToReg dflags (pprTraceIt "RAE6" nvid)
        addBindC (mkCgIdInfo id lf_info (CmmReg (CmmLocal reg)))
        return reg
 
@@ -193,4 +193,5 @@ idToReg :: DynFlags -> NonVoid Id -> LocalReg
 -- about accidental collision
 idToReg dflags (NonVoid id)
              = LocalReg (idUnique id)
-                        (primRepCmmType dflags (idPrimRep id))
+                        (pprTrace "RAE1" (ppr id $$ ppr (idType id) $$ ppr (idPrimRep id)) $
+                         primRepCmmType dflags (idPrimRep id))

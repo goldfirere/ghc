@@ -1205,8 +1205,8 @@ maybe_getCCallReturnRep fn_ty
          []            -> panic "empty typePrimRepArgs"
          [VoidRep]     -> Nothing
          [rep]
-           | isGcPtrRep -> blargh
-           | otherwise  -> Just rep
+           | isGcPtrRep rep -> blargh
+           | otherwise      -> Just rep
 
                  -- if it was, it would be impossible to create a
                  -- valid return value placeholder on the stack
