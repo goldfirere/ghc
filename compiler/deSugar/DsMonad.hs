@@ -317,6 +317,48 @@ And all this mysterious stuff is so we can occasionally reach out and
 grab one or more names.  @newLocalDs@ isn't exported---exported
 functions are defined with it.  The difference in name-strings makes
 it easier to read debugging output.
+
+Note [Levity polymorphism checking]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+According to the Levity Polymorphism paper, levity polymorphism is forbidden
+in precisely two places: in the type of a bound term-level argument and in
+the type of an argument to a function. The paper explains it more fully,
+but briefly: expressions in these contexts need to be stored in registers,
+and it's hard (read, impossible) to store something that's levity polymorphic.
+
+We cannot check for bad levity polymorphism conveniently in the type checker,
+because we can't tell, a priori, which levity metavariables will be solved.
+At one point, I (Richard) thought we could check in the zonker, but it's hard
+to know where precisely are the abstracted variables and the arguments. So
+we check in the desugarer, the only place where we can see the Core code and
+still report respectable syntax to the user. This covers the vast majority
+of cases; see calls to DsMonad.dsNoLevPoly and friends. Note that it is
+important here to use hsExprType to get the types of expressions: the use
+of fixM when checking arrow notation means that we cannot look at the desugared
+expression and use exprType.
+
+Also because of the use of fixM in DsArrows, we must be very careful when
+checking that all Ids have non-levity-polymorphic types. So the desugarer
+uses two variants of newSysLocalDs (its way of generating fresh Ids), one
+that checks for levity polymorphism and one that does not. The former works
+only with types that to not depend on the desugared code; these types might
+come from the HsSyn AST or from hsExprType and friends. The latter works
+on types that we can guarantee are *not* levity polymorphic, such as tuples,
+lists, and the types of other Ids. We must thus be careful that every use
+of newSysLocalDs meets one of these two requirements.
+
+However, the desugarer is the wrong place for certain checks. In particular,
+the desugarer can't report a sensible error message if an HsWrapper is malformed.
+After all, GHC itself produced the HsWrapper. So we store some message text
+in the appropriate HsWrappers (e.g. WpFun) that we can print out in the
+desugarer.
+
+There are a few more checks in places where Core is generated outside the
+desugarer. For example, in datatype and class declarations, where levity
+polymorphism is checked for during validity checking. It would be nice to
+have one central place for all this, but that doesn't seem possible while
+still reporting nice error messages.
+
 -}
 
 -- Make a new Id with the same print name, but different type, and new unique
@@ -337,7 +379,7 @@ newSysLocalDs  = mk_local (fsLit "ds")
 
 -- this variant should be used when the caller can be sure that the variable type
 -- is not levity-polymorphic. It is necessary when the type is knot-tied because
--- of the fixM used in DsArrows
+-- of the fixM used in DsArrows. See Note [Levity polymorphism checking]
 newSysLocalDsNoCheck = mkSysLocalOrCoVarM (fsLit "ds")
 newFailLocalDsNoCheck = mkSysLocalOrCoVarM (fsLit "fail")
   -- the fail variable is used only in a situation where we can tell that
@@ -553,6 +595,6 @@ discardWarningsDs thing_inside
 
         ; return result }
 
--- See Note [Levity polymorphism checking] in TysPrim
+-- See Note [Levity polymorphism checking]
 dsNoLevPoly :: Type -> SDoc -> DsM ()
 dsNoLevPoly ty doc = checkForLevPolyX errDs doc ty

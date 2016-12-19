@@ -1663,7 +1663,7 @@ ensureNotLevPoly ty doc
                    -- forall a. a. See, for example, test ghci/scripts/T9140
     checkForLevPoly doc ty
 
-  -- See Note [Levity polymorphism checking] in TysPrim
+  -- See Note [Levity polymorphism checking] in DsMonad
 checkForLevPoly :: SDoc -> Type -> TcM ()
 checkForLevPoly = checkForLevPolyX addErr
 

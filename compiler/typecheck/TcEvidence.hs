@@ -172,7 +172,7 @@ data HsWrapper
        -- The TcType is the "from" type of the first wrapper
        -- The SDoc explains the circumstances under which we have created this
        -- WpFun, in case we run afoul of levity polymorphism restrictions in
-       -- the desugarer. See Note [Levity polymorphism checking] in TysPrim
+       -- the desugarer. See Note [Levity polymorphism checking] in DsMonad
 
   | WpCast TcCoercionR        -- A cast:  [] `cast` co
                               -- Guaranteed not the identity coercion
