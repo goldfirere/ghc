@@ -429,7 +429,7 @@ tcPatSynMatcher (L loc name) lpat
                      HsLam $
                      MG{ mg_alts = noLoc [mkSimpleMatch LambdaExpr
                                                         args body]
-                       , mg_arg_tys = [pat_ty, cont_ty, res_ty]
+                       , mg_arg_tys = [pat_ty, cont_ty, fail_ty]
                        , mg_res_ty = res_ty
                        , mg_origin = Generated
                        }
