@@ -306,6 +306,14 @@ hsExprTypeForLPCheck = go
     go_wrap (WpCompose w1 w2) e = go_wrap w1 (HsWrap w2 e)
     go_wrap WpFun{} _           = Nothing
     go_wrap WpEvLam{} _         = Nothing
+
+      -- next two cases are valid because type abstraction and application
+      -- are erased and therefore cannot cause a levity-polymorphism change
+      -- In the case that we need to compute e's type, laziness stops us
+      -- from doing so here.
+    go_wrap WpTyLam{} e | Nothing <- go e = Nothing
+    go_wrap WpTyApp{} e | Nothing <- go e = Nothing
+
     go_wrap w e                 = Just (hsWrapperType w (hsExprType e))
 
 -- Overloaded literals. Here mainly because it uses isIntTy etc
