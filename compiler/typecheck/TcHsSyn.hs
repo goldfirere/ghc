@@ -334,15 +334,15 @@ hsExprTypeForLPCheck = go
     go_wrap WpTyLam{} e | Nothing <- go e = Nothing
     go_wrap WpTyApp{} e | Nothing <- go e = Nothing
 
-    go_wrap w e                 = pprTrace "RAE1" (ppr w $$ ppr e) $
-                                  Just (hsWrapperType w (hsExprType e))
+    go_wrap w e = Just (hsWrapperType w (hsExprType e))
 
       -- if the function is a variable (common case), check its
       -- levityInfo. This might mean we don't need to look up and compute
       -- on the type. Spec of these functions: return True if there is
       -- no possibility, ever, of this expression becoming levity polymorphic,
       -- no matter what it's applied to; return False otherwise.
-      -- returning False is always safe.
+      -- returning False is always safe. See also Note [Levity info] in
+      -- IdInfo
     go_lapp (L _ e) = go_app e
 
     go_app (HsVar (L _ id))
