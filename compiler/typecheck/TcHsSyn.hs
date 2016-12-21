@@ -43,6 +43,7 @@ module TcHsSyn (
 
 import HsSyn
 import Id
+import IdInfo
 import TcRnMonad
 import PrelNames
 import TcType
@@ -55,11 +56,13 @@ import Type
 import Coercion
 import ConLike
 import DataCon
+import PatSyn
 import HscTypes
 import Name
 import NameEnv
 import Var
 import VarEnv
+import VarSet
 import DynFlags
 import Literal
 import BasicTypes
@@ -281,31 +284,48 @@ hsLitType (HsDoublePrim _)   = doublePrimTy
 hsExprTypeForLPCheck :: HsExpr Id -> Maybe Type
 hsExprTypeForLPCheck = go
   where
-    go HsVar{}                    = Nothing  -- no levity-polymorphic binders
-    go HsLit{}                    = Nothing
-    go HsLam{}                    = Nothing
-    go HsLamCase{}                = Nothing
-    go (HsAppTypeOut (L _ e) _)   = go e
-    go (HsPar (L _ e))            = go e
-     -- SectionL might be LP if PostfixOperators is on.
-    go SectionR{}                 = Nothing
-    go ExplicitTuple{}            = Nothing
-    go ExplicitSum{}              = Nothing
-    go (ExplicitList _ Nothing _) = Nothing
-    go ExplicitPArr{}             = Nothing
-    go RecordCon{}                = Nothing
-    go RecordUpd{}                = Nothing
-    go (ArithSeq _ Nothing _)     = Nothing
-    go PArrSeq{}                  = Nothing
-    go HsTcBracketOut{}           = Nothing
-    go HsStatic{}                 = Nothing
-    go (HsWrap w e)               = go_wrap w e
-    go e                          = Just (hsExprType e)
+    gol (L _ e) = go e
 
-    go_wrap WpHole e            = go e
-    go_wrap (WpCompose w1 w2) e = go_wrap w1 (HsWrap w2 e)
-    go_wrap WpFun{} _           = Nothing
-    go_wrap WpEvLam{} _         = Nothing
+    go HsVar{}                       = Nothing  -- no levity-polymorphic binders
+    go HsLit{}                       = Nothing
+    go HsLam{}                       = Nothing
+    go HsLamCase{}                   = Nothing
+    go (HsApp f _)      | go_lapp f  = Nothing
+    go (HsAppTypeOut e _)            = gol e
+    go (OpApp _ op _ _) | go_lapp op = Nothing
+    go (NegApp _ neg)   | go_syn neg = Nothing
+    go (HsPar e)                     = gol e
+     -- SectionL might be LP if PostfixOperators is on.
+    go (SectionL _ op)  | go_lapp op = Nothing
+    go SectionR{}                    = Nothing
+    go ExplicitTuple{}               = Nothing
+    go ExplicitSum{}                 = Nothing
+    go (HsLet _ (L _ e))             = go e
+    go (ExplicitList _ Nothing _)    = Nothing
+    go (ExplicitList _ (Just s) _)
+                          | go_syn s = Nothing
+    go ExplicitPArr{}                = Nothing
+    go (RecordCon { rcon_con_like = RealDataCon _ }) = Nothing
+    go (RecordUpd { rupd_cons = RealDataCon _ : _ }) = Nothing
+    go (ExprWithTySigOut e _)        = gol e
+    go (ArithSeq _ Nothing _)        = Nothing
+    go (ArithSeq _ (Just s) _) | go_syn s = Nothing
+    go PArrSeq{}                     = Nothing
+    go (HsSCC _ _ e)                 = gol e
+    go (HsCoreAnn _ _ e)             = gol e
+    go HsTcBracketOut{}              = Nothing
+    go HsStatic{}                    = Nothing
+    go (HsTick _ e)                  = gol e
+    go (HsBinTick _ _ e)             = gol e
+    go (HsTickPragma _ _ _ e)        = gol e
+    go (HsWrap w e)                  = go_wrap w e
+    go e                             = Just (hsExprType e)
+
+    go_wrap WpHole e               = go e
+    go_wrap (WpCompose w1 w2) e    = go_wrap w1 (HsWrap w2 e)
+    go_wrap WpFun{} _              = Nothing
+    go_wrap WpEvLam{} _            = Nothing
+    go_wrap WpEvApp{} e | go_app e = Nothing
 
       -- next two cases are valid because type abstraction and application
       -- are erased and therefore cannot cause a levity-polymorphism change
@@ -314,7 +334,72 @@ hsExprTypeForLPCheck = go
     go_wrap WpTyLam{} e | Nothing <- go e = Nothing
     go_wrap WpTyApp{} e | Nothing <- go e = Nothing
 
-    go_wrap w e                 = Just (hsWrapperType w (hsExprType e))
+    go_wrap w e                 = pprTrace "RAE1" (ppr w $$ ppr e) $
+                                  Just (hsWrapperType w (hsExprType e))
+
+      -- if the function is a variable (common case), check its
+      -- levityInfo. This might mean we don't need to look up and compute
+      -- on the type. Spec of these functions: return True if there is
+      -- no possibility, ever, of this expression becoming levity polymorphic,
+      -- no matter what it's applied to; return False otherwise.
+      -- returning False is always safe.
+    go_lapp (L _ e) = go_app e
+
+    go_app (HsVar (L _ id))
+      | NeverLevityPolymorphic <- levityInfo (idInfo id)
+      = True
+    go_app HsLit{}            = True
+    go_app (HsApp e _)        = go_lapp e
+    go_app (HsAppTypeOut e _) = go_lapp e
+    go_app (OpApp _ e _ _)    = go_lapp e
+    go_app (NegApp _ neg)     = go_syn neg
+    go_app (HsPar e)          = go_lapp e
+    go_app (SectionL _ e)     = go_lapp e
+    go_app (SectionR e _)     = go_lapp e
+    go_app ExplicitTuple{}    = True
+    go_app ExplicitSum{}      = True
+    go_app (HsLet _ e)        = go_lapp e
+    go_app (ExplicitList _ Nothing _)  = True
+    go_app (ExplicitList _ (Just s) _) = go_syn s
+    go_app ExplicitPArr{}              = True
+    go_app (RecordCon { rcon_con_like = RealDataCon _ }) = True
+    go_app (RecordCon { rcon_con_like = PatSynCon patsyn })
+      | Just (id, _) <- patSynBuilder patsyn
+      , NeverLevityPolymorphic <- levityInfo (idInfo id)
+      = True
+    go_app (RecordUpd { rupd_cons = RealDataCon _ : _}) = True
+    go_app (RecordUpd { rupd_cons = PatSynCon patsyn : _ })
+      | Just (id, _) <- patSynBuilder patsyn
+      , NeverLevityPolymorphic <- levityInfo (idInfo id)
+      = True
+    go_app (ExprWithTySigOut e _)    = go_lapp e
+    go_app (ArithSeq _ Nothing _)    = True
+    go_app (ArithSeq _ (Just syn) _) = go_syn syn
+    go_app PArrSeq{}                 = True
+    go_app (HsSCC _ _ e)             = go_lapp e
+    go_app (HsCoreAnn _ _ e)         = go_lapp e
+    go_app HsTcBracketOut{}          = True
+    go_app HsStatic{}                = True
+    go_app (HsTick _ e)              = go_lapp e
+    go_app (HsBinTick _ _ e)         = go_lapp e
+    go_app (HsTickPragma _ _ _ e)    = go_lapp e
+    go_app (HsWrap w e)              = go_wrap_app w e
+    go_app _                         = False
+
+    go_wrap_app WpHole                 e = go_app e
+    go_wrap_app (WpCompose w1 w2)      e = go_wrap_app w1 (HsWrap w2 e)
+    go_wrap_app (WpFun _ wrap_res _ _) e = go_wrap_app wrap_res e
+    go_wrap_app (WpCast co)            _
+      | Pair _ right_ty <- tcCoercionKind co
+      , (_, res_ty) <- tcSplitPiTys right_ty
+      = isEmptyVarSet (tyCoVarsOfType (typeKind res_ty))
+    go_wrap_app (WpEvLam _)            e = go_app e
+    go_wrap_app (WpEvApp _)            e = go_app e
+    go_wrap_app (WpTyLam _)            e = go_app e
+    go_wrap_app (WpTyApp _)            e = go_app e
+    go_wrap_app (WpLet _)              e = go_app e
+
+    go_syn (SyntaxExpr { syn_expr = e, syn_res_wrap = w }) = go_wrap_app w e
 
 -- Overloaded literals. Here mainly because it uses isIntTy etc
 
@@ -487,11 +572,12 @@ zonkIdOccs env ids = map (zonkIdOcc env) ids
 -- zonkIdBndr is used *after* typechecking to get the Id's type
 -- to its final form.  The TyVarEnv give
 zonkIdBndr :: ZonkEnv -> TcId -> TcM Id
-zonkIdBndr env id
-  = do ty' <- zonkTcTypeToType env (idType id)
+zonkIdBndr env v
+  = do ty' <- zonkTcTypeToType env (idType v)
        ensureNotLevPoly ty'
-         (text "In the type of binder" <+> quotes (ppr id))
-       return (setIdType id ty')
+         (text "In the type of binder" <+> quotes (ppr v))
+
+       return (modifyIdInfo (updateLevityInfo ty') (setIdType v ty'))
 
 zonkIdBndrs :: ZonkEnv -> [TcId] -> TcM [Id]
 zonkIdBndrs env ids = mapM (zonkIdBndr env) ids

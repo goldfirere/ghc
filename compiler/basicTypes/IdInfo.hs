@@ -66,6 +66,10 @@ module IdInfo (
 
         -- ** Tick-box Info
         TickBoxOp(..), TickBoxId,
+
+        -- ** Levity info
+        LevityInfo(..), neverLevityPolymorphic, updateLevityInfo,
+        levityInfo
     ) where
 
 import CoreSyn
@@ -77,6 +81,7 @@ import VarSet
 import BasicTypes
 import DataCon
 import TyCon
+import Type
 import PatSyn
 import ForeignCall
 import Outputable
@@ -221,8 +226,10 @@ data IdInfo
         strictnessInfo  :: StrictSig,      --  ^ A strictness signature
 
         demandInfo      :: Demand,       -- ^ ID demand information
-        callArityInfo :: !ArityInfo    -- ^ How this is called.
+        callArityInfo   :: !ArityInfo,   -- ^ How this is called.
                                          -- n <=> all calls have at least n arguments
+
+        levityInfo      :: LevityInfo    -- ^ when applied, will this Id ever have a levity-polymorphic type?
     }
 
 -- Setters
@@ -272,7 +279,8 @@ vanillaIdInfo
             occInfo             = NoOccInfo,
             demandInfo          = topDmd,
             strictnessInfo      = nopSig,
-            callArityInfo     = unknownArity
+            callArityInfo     = unknownArity,
+            levityInfo          = NoLevityInfo
            }
 
 -- | More informative 'IdInfo' we can use when we know the 'Id' has no CAF references
@@ -520,3 +528,37 @@ data TickBoxOp
 
 instance Outputable TickBoxOp where
     ppr (TickBox mod n)         = text "tick" <+> ppr (mod,n)
+
+{-
+************************************************************************
+*                                                                      *
+   Levity
+*                                                                      *
+************************************************************************
+
+Ids store whether or not they can be levity-polymorphic at any amount
+of saturation. This is helpful in optimizing the levity-polymorphism check
+done in the desugarer, where we can usually learn that something is not
+levity-polymorphic without actually figuring out its type.
+
+-}
+
+data LevityInfo = NoLevityInfo
+                | NeverLevityPolymorphic
+  deriving Eq
+
+instance Outputable LevityInfo where
+  ppr NoLevityInfo           = text "NoLevityInfo"
+  ppr NeverLevityPolymorphic = text "NeverLevityPolymorphic"
+
+neverLevityPolymorphic :: IdInfo -> IdInfo
+neverLevityPolymorphic info = info { levityInfo = NeverLevityPolymorphic }
+
+-- update the levity info if possible
+updateLevityInfo :: Type -> IdInfo -> IdInfo
+updateLevityInfo ty
+  | (_, res_ty) <- splitPiTys ty
+  , isEmptyVarSet (tyCoVarsOfType (typeKind res_ty))
+  = neverLevityPolymorphic
+  | otherwise
+  = id
