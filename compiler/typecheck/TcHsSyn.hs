@@ -166,7 +166,13 @@ hsExprType EWildPat{}                  = panic "hsExprType EWildPat"
 hsExprType EAsPat{}                    = panic "hsExprType EAsPat"
 hsExprType EViewPat{}                  = panic "hsExprType EViewPat"
 hsExprType ELazyPat{}                  = panic "hsExprType ELazyPat"
-hsExprType (HsWrap wrap expr)          = hsWrapperType wrap (hsExprType expr)
+hsExprType (HsWrap w e)                = go [w] e
+  where
+      -- accumulate all the wrappers; necessary for performance to
+      -- avoid single-variable substitution when dealing with
+      -- nested WpTyApps
+    go wraps (HsWrap wrap expr) = go (wrap:wraps) expr
+    go wraps e                  = hsWrappersType wraps (hsExprType e)
 
 hsMatchGroupType :: MatchGroup Id a -> Type
 hsMatchGroupType (MG { mg_arg_tys = arg_tys
@@ -195,17 +201,38 @@ arithSeqInfoArity FromThenTo{} = 3
 hsWrapperType :: HsWrapper
               -> Type  -- type of the thing wrapped
               -> Type
-hsWrapperType WpHole                  ty = ty
-hsWrapperType (WpCompose wrap1 wrap2) ty = hsWrapperType wrap1 $
-                                           hsWrapperType wrap2 ty
-hsWrapperType (WpFun _ wrap_res arg_ty _) ty
-  = mkFunTy arg_ty $ hsWrapperType wrap_res $ tcFunResultTyN 1 ty
-hsWrapperType (WpCast co)             _  = pSnd $ tcCoercionKind co
-hsWrapperType (WpEvLam ev_var)        ty = mkFunTy (idType ev_var) ty
-hsWrapperType (WpEvApp _)             ty = funResultTy ty
-hsWrapperType (WpTyLam tv)            ty = mkInvForAllTy tv ty
-hsWrapperType (WpTyApp arg)           ty = piResultTy ty arg
-hsWrapperType (WpLet _)               ty = ty
+hsWrapperType w ty = hsWrappersType [w] ty
+
+hsWrappersType :: [HsWrapper]  -- wrappers, in order of application
+                               -- this is *backwards* from the way
+                               -- wrappers are normally ordered
+               -> Type         -- of thing inside
+               -> Type
+hsWrappersType []                     ty = ty
+hsWrappersType (WpHole : ws)          ty = hsWrappersType ws ty
+hsWrappersType (WpCompose w1 w2 : ws) ty = hsWrappersType (w2:w1:ws) ty
+hsWrappersType (WpFun _ wrap_res arg_ty _ : ws) ty
+  = hsWrappersType ws $
+    mkFunTy arg_ty $
+    hsWrappersType [wrap_res] $
+    tcFunResultTyN 1 ty
+hsWrappersType (WpCast co : ws)       _
+  = hsWrappersType ws (pSnd $ tcCoercionKind co)
+hsWrappersType (WpEvLam ev_var : ws)  ty
+  = hsWrappersType ws (mkFunTy (idType ev_var) ty)
+hsWrappersType (WpEvApp _ : ws)       ty
+  = hsWrappersType ws (funResultTy ty)
+hsWrappersType (WpTyLam tv : ws)      ty
+  = hsWrappersType ws (mkInvForAllTy tv ty)
+hsWrappersType (WpTyApp arg : ws)     ty
+  = go [arg] ws
+  where
+      -- This is the commoning up we need. Without it, T5631 blows up.
+    go ty_args (WpTyApp ty_arg : ws') = go (ty_arg : ty_args) ws'
+    go ty_args ws'                    = hsWrappersType ws' $
+                                        piResultTys ty (reverse ty_args)
+hsWrappersType (WpLet _ : ws)         ty
+  = hsWrappersType ws ty
 
 hsLPatType :: OutPat Id -> Type
 hsLPatType (L _ pat) = hsPatType pat
