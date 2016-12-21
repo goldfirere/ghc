@@ -209,7 +209,10 @@ dsLExpr (L loc e)
        ; return core_expr }
 
 -- | Variant of 'dsLExpr' that ensures that the result is not levity
--- polymorphic
+-- polymorphic. This should be used when the resulting expression will
+-- be an argument to some other function.
+-- See Note [Levity polymorphism checking] in DsMonad
+-- See Note [Levity polymorphism invariants] in CoreSyn
 dsLExprNoLP :: LHsExpr Id -> DsM CoreExpr
 dsLExprNoLP (L loc e)
   = putSrcSpanDs loc $

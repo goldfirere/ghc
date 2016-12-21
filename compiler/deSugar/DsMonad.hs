@@ -320,11 +320,13 @@ it easier to read debugging output.
 
 Note [Levity polymorphism checking]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-According to the Levity Polymorphism paper, levity polymorphism is forbidden
-in precisely two places: in the type of a bound term-level argument and in
-the type of an argument to a function. The paper explains it more fully,
-but briefly: expressions in these contexts need to be stored in registers,
-and it's hard (read, impossible) to store something that's levity polymorphic.
+According to the Levity Polymorphism paper
+<http://cs.brynmawr.edu/~rae/papers/2017/levity/levity.pdf>, levity
+polymorphism is forbidden in precisely two places: in the type of a bound
+term-level argument and in the type of an argument to a function. The paper
+explains it more fully, but briefly: expressions in these contexts need to be
+stored in registers, and it's hard (read, impossible) to store something
+that's levity polymorphic.
 
 We cannot check for bad levity polymorphism conveniently in the type checker,
 because we can't tell, a priori, which levity metavariables will be solved.
