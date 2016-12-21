@@ -498,7 +498,7 @@ tcPolyBinds top_lvl sig_fn prag_fn rec_group rec_tc closed bind_list
         -- Check whether strict bindings are ok
         -- These must be non-recursive etc, and are not generalised
         -- They desugar to a case expression in the end
-    ; checkStrictBinds top_lvl rec_group bind_list tc_binds poly_ids
+    ; checkStrictBinds top_lvl rec_group plan bind_list tc_binds poly_ids
     ; traceTc "} End of bindings for" (vcat [ ppr binder_names, ppr rec_group
                                             , vcat [ppr id <+> ppr (idType id) | id <- poly_ids]
                                           ])
@@ -1594,8 +1594,53 @@ isClosedBndrGroup binds = do
         -- These won't be in the local type env.
         -- Ditto class method etc from the current module
 
--------------------
-checkStrictBinds :: TopLevelFlag -> RecFlag
+{- Note [Unlifted id check in checkStrictBinds]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Suppose there is a binding with the type (Num a => (# a, a #)). Is this a
+strict binding that should be disallowed at the top level? At first glance,
+no, because it's a function. But consider how this is desugared via
+AbsBinds:
+
+  -- x :: Num a => (# a, a #)
+  x = (# 3, 4 #)
+
+becomes
+
+  x = \ $dictNum ->
+      let x_mono = (# fromInteger $dictNum 3, fromInteger $dictNum 4 #) in
+      x_mono
+
+Note that the inner let is strict. And thus if we have a bunch of mutually
+recursive bindings of this form, we could end up in trouble. This was shown
+up in #9140.
+
+But if there is a type signature on x, everything changes because of the
+desugaring used by AbsBindsSig:
+
+  x :: Num a => (# a, a #)
+  x = (# 3, 4 #)
+
+becomes
+
+  x = \ $dictNum -> (# fromInteger $dictNum 3, fromInteger $dictNum 4 #)
+
+No strictness anymore! The bottom line here is that, for inferred types, we
+care about the strictness of the type after the =>. For checked types, we
+care about the overall strictness.
+
+This matters. If we don't separate out the Check case, then GHC runs into
+a problem when compiling
+
+  undefined :: forall (r :: RuntimeRep) (a :: TYPE r). HasCallStack => a
+
+Looking only after the =>, we cannot tell if this is strict or not. (GHC panics
+if you try.) Looking at the whole type, on the other hand, tells you that this
+is a lifted function type, with no trouble at all.
+
+-}
+
+-----------------------------
+checkStrictBinds :: TopLevelFlag -> RecFlag -> GeneralisationPlan
                  -> [LHsBind Name]
                  -> LHsBinds TcId -> [Id]
                  -> TcM ()
@@ -1604,7 +1649,7 @@ checkStrictBinds :: TopLevelFlag -> RecFlag
 --      b) not top level,
 --      c) not a multiple-binding group (more or less implied by (a))
 
-checkStrictBinds top_lvl rec_group orig_binds tc_binds poly_ids
+checkStrictBinds top_lvl rec_group plan orig_binds tc_binds poly_ids
   | any_unlifted_bndr || any_strict_pat   -- This binding group must be matched strictly
   = do  { check (isNotTopLevel top_lvl)
                 (strictBindErr "Top-level" any_unlifted_bndr orig_binds)
@@ -1638,8 +1683,13 @@ checkStrictBinds top_lvl rec_group orig_binds tc_binds poly_ids
     any_strict_pat     = any (isUnliftedHsBind . unLoc) orig_binds
     any_pat_looks_lazy = any (looksLazyPatBind . unLoc) orig_binds
 
-    is_unlifted id = case tcSplitSigmaTy (idType id) of
-                       (_, _, rho) -> isUnliftedType rho
+      -- See Note [Unlifted id check in checkStrictBinds]
+    is_unlifted
+      | CheckGen{} <- plan
+      = isUnliftedType . idType
+      | otherwise
+      = \ id -> case tcSplitSigmaTy (idType id) of
+          (_, _, tau) -> isUnliftedType tau
           -- For the is_unlifted check, we need to look inside polymorphism
           -- and overloading.  E.g.  x = (# 1, True #)
           -- would get type forall a. Num a => (# a, Bool #)
@@ -1707,4 +1757,3 @@ patMonoBindsCtxt :: (OutputableBndrId id, Outputable body)
                  => LPat id -> GRHSs Name body -> SDoc
 patMonoBindsCtxt pat grhss
   = hang (text "In a pattern binding:") 2 (pprPatBind pat grhss)
-

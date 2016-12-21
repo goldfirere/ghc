@@ -536,6 +536,7 @@ type GenStgAlt bndr occ
 data AltType
   = PolyAlt             -- Polymorphic (a lifted type variable)
   | MultiValAlt Int     -- Multi value of this arity (unboxed tuple or sum)
+                        -- the arity could indeed be 1 for unary unboxed tuple
   | AlgAlt      TyCon   -- Algebraic data type; the AltCons will be DataAlts
   | PrimAlt     PrimRep -- Primitive data type; the AltCons (if any) will be LitAlts
 

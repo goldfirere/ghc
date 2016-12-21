@@ -28,7 +28,6 @@ import BasicTypes (Arity, RepArity)
 import DataCon
 import Outputable
 import PrelNames
-import NameEnv
 import Coercion
 import TyCon
 import TyCoRep
@@ -100,8 +99,7 @@ typePrimRepArgs ty
 unwrapType :: Type -> Type
 unwrapType ty
   | Just (_, unwrapped)
-      <- ASSERT( all (not . isFamilyTyCon) $ nameEnvElts $ tyConsOfType ty )
-         topNormaliseTypeX stepper mappend inner_ty
+      <- topNormaliseTypeX stepper mappend inner_ty
   = unwrapped
   | otherwise
   = inner_ty
@@ -322,7 +320,8 @@ fitsIn ty1 ty2
 -- a list of 'PrimRep': it's a list because of the possibility of
 -- no runtime representation (void) or multiple (unboxed tuple/sum)
 typePrimRep :: HasDebugCallStack => Type -> [PrimRep]
-typePrimRep ty = kindPrimRep (text "kindRep ty" <+> ppr ty $$ ppr (typeKind ty))
+typePrimRep ty = kindPrimRep (text "typePrimRep" <+>
+                              parens (ppr ty <+> dcolon <+> ppr (typeKind ty)))
                              (typeKind ty)
 
 -- | Like 'typePrimRep', but assumes that there is precisely one 'PrimRep' output;

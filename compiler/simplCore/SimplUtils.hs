@@ -460,6 +460,10 @@ mkArgInfo fun rules n_val_args call_cont
          -- can take levity-polymorphic arguments. We thus cannot tell if the
          -- arguments are strict, so we better not try.
 
+      | isPrimOpId fun
+      = const id
+         -- primops can have levity-polymorphic arguments
+
       | otherwise
       = go
       where

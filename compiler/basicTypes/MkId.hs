@@ -1274,7 +1274,7 @@ unboxed values (unsafeCoerce 3#).
 
 In contrast unsafeCoerce# is even more dangerous because you *can* use
 it on unboxed things, (unsafeCoerce# 3#) :: Int. Its type is
-   forall (a:OpenKind) (b:OpenKind). a -> b
+   forall (r1 :: RuntimeRep) (r2 :: RuntimeRep) (a: TYPE r1) (b: TYPE r2). a -> b
 
 Note [seqId magic]
 ~~~~~~~~~~~~~~~~~~

@@ -472,20 +472,24 @@ coreToStgExpr (Let bind body) = do
 coreToStgExpr e = pprPanic "coreToStgExpr" (ppr e)
 
 mkStgAltType :: Id -> [CoreAlt] -> AltType
-mkStgAltType bndr alts = WARN( isUnboxedTupleType bndr_ty, text "RAE1" <+> ppr bndr <+> dcolon <+> ppr bndr_ty $$ ppr alts)
-                         pprTraceIt "RAE2" $
-                         case typePrimRep bndr_ty of
-  [LiftedRep] -> case tyConAppTyCon_maybe (unwrapType bndr_ty) of
-    Just tc
-      | isAbstractTyCon tc -> look_for_better_tycon
-      | isAlgTyCon tc      -> AlgAlt tc
-      | otherwise          -> ASSERT2( _is_poly_alt_tycon tc, ppr tc )
-                              PolyAlt
-    Nothing                -> PolyAlt
-  [unlifted] -> PrimAlt unlifted
-  not_unary  -> MultiValAlt (length not_unary)
+mkStgAltType bndr alts
+  | isUnboxedTupleType bndr_ty
+  = MultiValAlt (length prim_reps)  -- always use MultiValAlt for unboxed tuples
+
+  | otherwise
+  = case prim_reps of
+      [LiftedRep] -> case tyConAppTyCon_maybe (unwrapType bndr_ty) of
+        Just tc
+          | isAbstractTyCon tc -> look_for_better_tycon
+          | isAlgTyCon tc      -> AlgAlt tc
+          | otherwise          -> ASSERT2( _is_poly_alt_tycon tc, ppr tc )
+                                  PolyAlt
+        Nothing                -> PolyAlt
+      [unlifted] -> PrimAlt unlifted
+      not_unary  -> MultiValAlt (length not_unary)
   where
-   bndr_ty = idType bndr
+   bndr_ty   = idType bndr
+   prim_reps = typePrimRep bndr_ty
 
    _is_poly_alt_tycon tc
         =  isFunTyCon tc
@@ -806,7 +810,8 @@ mkStgRhs' con_updateable rhs_fvs bndr binder_info rhs
   | StgConApp con args _ <- unticked_rhs
   , not (con_updateable con args)
   = -- CorePrep does this right, but just to make sure
-    ASSERT(not (isUnboxedTupleCon con || isUnboxedSumCon con))
+    ASSERT2( not (isUnboxedTupleCon con || isUnboxedSumCon con)
+           , ppr bndr $$ ppr con $$ ppr args)
     StgRhsCon noCCS con args
   | otherwise
   = StgRhsClosure noCCS binder_info

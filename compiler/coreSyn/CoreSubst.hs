@@ -55,6 +55,7 @@ import Type     hiding ( substTy, extendTvSubst, extendCvSubst, extendTvSubstLis
                        , isInScope, substTyVarBndr, cloneTyVarBndr )
 import Coercion hiding ( substCo, substCoVarBndr )
 
+import Kind
 import TyCon       ( tyConArity )
 import RepType     ( isUnliftedType )
 import DataCon
@@ -1059,7 +1060,13 @@ maybe_substitute subst b r
   , isAlwaysActive (idInlineActivation b)       -- Note [Inline prag in simplOpt]
   , not (isStableUnfolding (idUnfolding b))
   , not (isExportedId b)
-  , not (isUnliftedType (idType b)) || exprOkForSpeculation r
+  , let id_ty = idType b
+     -- A levity-polymorphic id? Impossible you say?
+     -- See Note [Levity polymorphism invariants] in CoreSyn
+     -- Ah, but it *is* possible in the compulsory unfolding of unsafeCoerce#
+     -- This check prevents the isUnliftedType check from panicking.
+  , isLevityPolymorphic (typeKind id_ty)
+      || not (isUnliftedType (idType b)) || exprOkForSpeculation r
   = Just (extendIdSubst subst b r)
 
   | otherwise
