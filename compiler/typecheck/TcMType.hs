@@ -1683,7 +1683,7 @@ checkForLevPolyX add_err extra ty
                   , text "of an unboxed" <+> tuple_or_sum <> text ". This is not allowed." ] $$
              extra)
 
-  | not (isEmptyVarSet (tyCoVarsOfType runtime_rep))
+  | not (noFreeVarsOfType runtime_rep)
   = add_err $
     hang (text "A representation-polymorphic type is not allowed here:")
        2 (vcat [ text "Type:" <+> ppr tidy_ty

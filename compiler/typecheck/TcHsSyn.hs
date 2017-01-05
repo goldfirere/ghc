@@ -62,7 +62,6 @@ import Name
 import NameEnv
 import Var
 import VarEnv
-import VarSet
 import DynFlags
 import Literal
 import BasicTypes
@@ -346,7 +345,7 @@ hsExprTypeForLPCheck = go
     go_lapp (L _ e) = go_app e
 
     go_app (HsVar (L _ id))
-      | NeverLevityPolymorphic <- levityInfo (idInfo id)
+      | isNeverLevPolyId id
       = True
     go_app HsLit{}            = True
     go_app (HsApp e _)        = go_lapp e
@@ -365,12 +364,12 @@ hsExprTypeForLPCheck = go
     go_app (RecordCon { rcon_con_like = RealDataCon _ }) = True
     go_app (RecordCon { rcon_con_like = PatSynCon patsyn })
       | Just (id, _) <- patSynBuilder patsyn
-      , NeverLevityPolymorphic <- levityInfo (idInfo id)
+      , isNeverLevPolyId id
       = True
     go_app (RecordUpd { rupd_cons = RealDataCon _ : _}) = True
     go_app (RecordUpd { rupd_cons = PatSynCon patsyn : _ })
       | Just (id, _) <- patSynBuilder patsyn
-      , NeverLevityPolymorphic <- levityInfo (idInfo id)
+      , isNeverLevPolyId id
       = True
     go_app (ExprWithTySigOut e _)    = go_lapp e
     go_app (ArithSeq _ Nothing _)    = True
@@ -392,7 +391,7 @@ hsExprTypeForLPCheck = go
     go_wrap_app (WpCast co)            _
       | Pair _ right_ty <- tcCoercionKind co
       , (_, res_ty) <- tcSplitPiTys right_ty
-      = isEmptyVarSet (tyCoVarsOfType (typeKind res_ty))
+      = noFreeVarsOfType (typeKind res_ty)
     go_wrap_app (WpEvLam _)            e = go_app e
     go_wrap_app (WpEvApp _)            e = go_app e
     go_wrap_app (WpTyLam _)            e = go_app e
@@ -577,7 +576,7 @@ zonkIdBndr env v
        ensureNotLevPoly ty'
          (text "In the type of binder" <+> quotes (ppr v))
 
-       return (modifyIdInfo (updateLevityInfo ty') (setIdType v ty'))
+       return (modifyIdInfo (`setLevityInfoWithType` ty') (setIdType v ty'))
 
 zonkIdBndrs :: ZonkEnv -> [TcId] -> TcM [Id]
 zonkIdBndrs env ids = mapM (zonkIdBndr env) ids

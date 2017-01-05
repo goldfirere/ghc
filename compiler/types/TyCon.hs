@@ -67,7 +67,7 @@ module TyCon(
         isTyConAssoc, tyConAssoc_maybe,
         isImplicitTyCon,
         isTyConWithSrcDataCons,
-        isTcTyCon,
+        isTcTyCon, isTcLevPoly,
 
         -- ** Extracting information out of TyCons
         tyConName,
@@ -1510,9 +1510,9 @@ mkTcTyCon name binders res_kind unsat scoped_tvs
             , tyConArity   = length binders
             , tcTyConScopedTyVars = scoped_tvs }
 
--- | Create an unlifted primitive 'TyCon', such as @Int#@
+-- | Create an unlifted primitive 'TyCon', such as @Int#@.
 mkPrimTyCon :: Name -> [TyConBinder]
-            -> Kind   -- ^ /result/ kind
+            -> Kind   -- ^ /result/ kind, never levity-polymorphic
             -> [Role] -> TyCon
 mkPrimTyCon name binders res_kind roles
   = mkPrimTyCon' name binders res_kind roles True (Just $ mkPrelTyConRepName name)
@@ -1535,7 +1535,9 @@ mkLiftedPrimTyCon name binders res_kind roles
   where rep_nm = mkPrelTyConRepName name
 
 mkPrimTyCon' :: Name -> [TyConBinder]
-             -> Kind    -- ^ /result/ kind
+             -> Kind    -- ^ /result/ kind, never levity-polymorphic
+                        -- (If you need a levity-polymorphic PrimTyCon, change
+                        --  isTcLevPoly.)
              -> [Role]
              -> Bool -> Maybe TyConRepName -> TyCon
 mkPrimTyCon' name binders res_kind roles is_unlifted rep_nm
@@ -2034,6 +2036,19 @@ tyConCType_maybe _ = Nothing
 isTcTyCon :: TyCon -> Bool
 isTcTyCon (TcTyCon {}) = True
 isTcTyCon _            = False
+
+-- | Could this TyCon ever be levity-polymorphic when fully applied?
+-- True is safe. False means we're sure. Does only a quick check
+-- based on the TyCon's category.
+-- Precondition: The fully-applied TyCon has kind (TYPE blah)
+isTcLevPoly :: TyCon -> Bool
+isTcLevPoly FunTyCon{}           = False
+isTcLevPoly AlgTyCon{}           = False
+isTcLevPoly SynonymTyCon{}       = True
+isTcLevPoly FamilyTyCon{}        = True
+isTcLevPoly PrimTyCon{}          = False
+isTcLevPoly tc@PromotedDataCon{} = pprPanic "isTcLevPoly datacon" (ppr tc)
+isTcLevPoly tc@TcTyCon{}         = pprPanic "isTcLevPoly TcTyCon" (ppr tc)
 
 {-
 -----------------------------------------------

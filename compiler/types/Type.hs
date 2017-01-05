@@ -113,7 +113,7 @@ module Type (
         Kind,
 
         -- ** Finding the kind of a type
-        typeKind,
+        typeKind, isTypeLevPoly, resultIsLevPoly,
 
         -- ** Common Kind
         liftedTypeKind,
@@ -124,6 +124,7 @@ module Type (
         tyCoVarsOfTypeDSet,
         coVarsOfType,
         coVarsOfTypes, closeOverKinds, closeOverKindsList,
+        noFreeVarsOfType,
         splitVisVarsOfType, splitVisVarsOfTypes,
         expandTypeSynonyms,
         typeSize,
@@ -2159,6 +2160,30 @@ typeLiteralKind l =
   case l of
     NumTyLit _ -> typeNatKind
     StrTyLit _ -> typeSymbolKind
+
+-- | Returns True if a type is levity polymorphic. Should be the same
+-- as (isKindLevPoly . typeKind) but much faster.
+-- Precondition: The type has kind (TYPE blah)
+isTypeLevPoly :: Type -> Bool
+isTypeLevPoly = go
+  where
+    go ty@(TyVarTy {})                           = check_kind ty
+    go ty@(AppTy {})                             = check_kind ty
+    go ty@(TyConApp tc _) | not (isTcLevPoly tc) = False
+                          | otherwise            = check_kind ty
+    go (ForAllTy _ ty)                           = go ty
+    go (FunTy {})                                = False
+    go (LitTy {})                                = False
+    go ty@(CastTy {})                            = check_kind ty
+    go ty@(CoercionTy {})                        = pprPanic "isTypeLevPoly co" (ppr ty)
+
+    check_kind = isKindLevPoly . typeKind
+
+-- | Looking past all pi-types, is the end result potentially levity polymorphic?
+-- Example: True for (forall r (a :: TYPE r). String -> a)
+-- Example: False for (forall r1 r2 (a :: TYPE r1) (b :: TYPE r2). a -> b -> Type)
+resultIsLevPoly :: Type -> Bool
+resultIsLevPoly = isTypeLevPoly . snd . splitPiTys
 
 {-
 %************************************************************************

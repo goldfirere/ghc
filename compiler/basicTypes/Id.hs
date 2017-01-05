@@ -91,6 +91,7 @@ module Id (
         idCafInfo,
         idOneShotInfo, idStateHackOneShotInfo,
         idOccInfo,
+        isNeverLevPolyId,
 
         -- ** Writing 'IdInfo' fields
         setIdUnfolding,
@@ -863,3 +864,6 @@ transferPolyIdInfo old_id abstract_wrt new_id
                                  `setInlinePragInfo` old_inline_prag
                                  `setOccInfo` old_occ_info
                                  `setStrictnessInfo` new_strictness
+
+isNeverLevPolyId :: Id -> Bool
+isNeverLevPolyId = isNeverLevPolyIdInfo . idInfo

@@ -66,7 +66,6 @@ import Name             hiding ( varName )
 import NameSet
 import Avail
 import RdrName
-import VarSet
 import VarEnv
 import ByteCodeTypes
 import Linker
@@ -590,7 +589,7 @@ rttiEnvironment hsc_env@HscEnv{hsc_IC=ic} = do
    hsc_env' <- foldM improveTypes hsc_env (map idName incompletelyTypedIds)
    return hsc_env'
     where
-     noSkolems = isEmptyVarSet . tyCoVarsOfType . idType
+     noSkolems = noFreeVarsOfType . idType
      improveTypes hsc_env@HscEnv{hsc_IC=ic} name = do
       let tmp_ids = [id | AnId id <- ic_tythings ic]
           Just id = find (\i -> idName i == name) tmp_ids

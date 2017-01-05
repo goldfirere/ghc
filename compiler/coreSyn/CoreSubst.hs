@@ -502,7 +502,7 @@ substIdBndr _doc rec_subst subst@(Subst in_scope env tvs cvs) old_id
 
     old_ty = idType old_id
     no_type_change = (isEmptyVarEnv tvs && isEmptyVarEnv cvs) ||
-                     isEmptyVarSet (tyCoVarsOfType old_ty)
+                     noFreeVarsOfType old_ty
 
         -- new_id has the right IdInfo
         -- The lazy-set is because we're in a loop here, with
@@ -622,7 +622,7 @@ substCo subst co = Coercion.substCo (getTCvSubst subst) co
 
 substIdType :: Subst -> Id -> Id
 substIdType subst@(Subst _ _ tv_env cv_env) id
-  | (isEmptyVarEnv tv_env && isEmptyVarEnv cv_env) || isEmptyVarSet (tyCoVarsOfType old_ty) = id
+  | (isEmptyVarEnv tv_env && isEmptyVarEnv cv_env) || noFreeVarsOfType old_ty = id
   | otherwise   = setIdType id (substTy subst old_ty)
                 -- The tyCoVarsOfType is cheaper than it looks
                 -- because we cache the free tyvars of the type

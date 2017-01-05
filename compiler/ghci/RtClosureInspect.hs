@@ -1235,7 +1235,7 @@ dictsView ty = ty
 isMonomorphic :: RttiType -> Bool
 isMonomorphic ty = noExistentials && noUniversals
  where (tvs, _, ty')  = tcSplitSigmaTy ty
-       noExistentials = isEmptyVarSet (tyCoVarsOfType ty')
+       noExistentials = noFreeVarsOfType ty'
        noUniversals   = null tvs
 
 -- Use only for RTTI types

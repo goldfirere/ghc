@@ -411,8 +411,8 @@ tcExtendTyVarEnv2 binds thing_inside
 isTypeClosedLetBndr :: Id -> Bool
 -- See Note [Bindings with closed types] in TcRnTypes
 isTypeClosedLetBndr id
-  | isEmptyVarSet (tyCoVarsOfType (idType id)) = True
-  | otherwise                                  = False
+  | noFreeVarsOfType (idType id) = True
+  | otherwise                    = False
 
 tcExtendLetEnv :: TopLevelFlag -> IsGroupClosed -> [TcId] -> TcM a -> TcM a
 -- Used for both top-level value bindings and and nested let/where-bindings

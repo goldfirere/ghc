@@ -22,7 +22,7 @@ module CoreUtils (
         filterAlts, combineIdenticalAlts, refineDefaultAlt,
 
         -- * Properties of expressions
-        exprType, coreAltType, coreAltsType,
+        exprType, coreAltType, coreAltsType, isExprLevPoly,
         exprIsDupable, exprIsTrivial, getIdFromTrivialExpr, exprIsBottom,
         getIdFromTrivialExpr_maybe,
         exprIsCheap, exprIsExpandable, exprIsCheap', CheapAppFun,
@@ -128,6 +128,45 @@ coreAltsType :: [CoreAlt] -> Type
 -- ^ Returns the type of the first alternative, which should be the same as for all alternatives
 coreAltsType (alt:_) = coreAltType alt
 coreAltsType []      = panic "corAltsType"
+
+-- | Is this expression levity polymorphic? This should be the
+-- same as saying (isKindLevPoly . typeKind . exprType) but
+-- much faster.
+isExprLevPoly :: CoreExpr -> Bool
+isExprLevPoly = go
+  where
+   go (Var _)                      = False  -- no levity-polymorphic binders
+   go (Lit _)                      = False  -- no levity-polymorphic literals
+   go e@(App f _) | not (go_app f) = False
+                  | otherwise      = check_type e
+   go (Lam _ _)                    = False
+   go (Let _ e)                    = go e
+   go e@(Case {})                  = check_type e -- checking type is fast
+   go e@(Cast {})                  = check_type e
+   go (Tick _ e)                   = go e
+   go e@(Type {})                  = pprPanic "isExprLevPoly ty" (ppr e)
+   go e@(Coercion {})              = pprPanic "isExprLevPoly co" (ppr e)
+
+   check_type = isTypeLevPoly . exprType  -- slow approach
+
+      -- if the function is a variable (common case), check its
+      -- levityInfo. This might mean we don't need to look up and compute
+      -- on the type. Spec of these functions: return False if there is
+      -- no possibility, ever, of this expression becoming levity polymorphic,
+      -- no matter what it's applied to; return True otherwise.
+      -- returning True is always safe. See also Note [Levity info] in
+      -- IdInfo
+   go_app (Var id)        = not (isNeverLevPolyId id)
+   go_app (Lit _)         = False
+   go_app (App f _)       = go_app f
+   go_app (Lam _ e)       = go_app e
+   go_app (Let _ e)       = go_app e
+   go_app (Case _ _ ty _) = resultIsLevPoly ty
+   go_app (Cast _ co)     = resultIsLevPoly (pSnd $ coercionKind co)
+   go_app (Tick _ e)      = go_app e
+   go_app e@(Type {})     = pprPanic "isExprLevPoly app ty" (ppr e)
+   go_app e@(Coercion {}) = pprPanic "isExprLevPoly app co" (ppr e)
+
 
 {-
 Note [Type bindings]

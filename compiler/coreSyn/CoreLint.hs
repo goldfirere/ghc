@@ -796,7 +796,7 @@ lintCoreArg fun_ty arg
        ; checkL (not (isUnliftedType arg_ty) || exprOkForSpeculation arg)
                 (mkLetAppMsg arg)
            -- See Note [Levity polymorphism invariants] in CoreSyn
-       ; lintL (not (isLevityPolymorphic (typeKind arg_ty)))
+       ; lintL (not (isTypeLevPoly arg_ty))
            (text "Levity-polymorphic argument:" <+>
              (ppr arg <+> dcolon <+> parens (ppr arg_ty <+> dcolon <+> ppr (typeKind arg_ty))))
        ; lintValApp arg fun_ty arg_ty }
@@ -1031,7 +1031,7 @@ lintIdBndr top_lvl id linterF
 
        ; (ty, k) <- lintInTy (idType id)
           -- See Note [Levity polymorphism invariants] in CoreSyn
-       ; lintL (not (isLevityPolymorphic k))
+       ; lintL (not (isKindLevPoly k))
            (text "Levity-polymorphic binder:" <+>
                  (ppr id <+> dcolon <+> parens (ppr ty <+> dcolon <+> ppr k)))
 

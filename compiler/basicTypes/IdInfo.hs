@@ -8,6 +8,8 @@
 Haskell. [WDP 94/11])
 -}
 
+{-# LANGUAGE CPP #-}
+
 module IdInfo (
         -- * The IdDetails type
         IdDetails(..), pprIdDetails, coVarDetails, isCoVarDetails,
@@ -68,9 +70,11 @@ module IdInfo (
         TickBoxOp(..), TickBoxId,
 
         -- ** Levity info
-        LevityInfo(..), neverLevityPolymorphic, updateLevityInfo,
-        levityInfo
+        LevityInfo, levityInfo, setNeverLevPoly, setLevityInfoWithType,
+        isNeverLevPolyIdInfo
     ) where
+
+#include "HsVersions.h"
 
 import CoreSyn
 
@@ -87,6 +91,7 @@ import ForeignCall
 import Outputable
 import Module
 import Demand
+import Util
 
 -- infixl so you can say (id `set` a `set` b)
 infixl  1 `setRuleInfo`,
@@ -97,7 +102,9 @@ infixl  1 `setRuleInfo`,
           `setOccInfo`,
           `setCafInfo`,
           `setStrictnessInfo`,
-          `setDemandInfo`
+          `setDemandInfo`,
+          `setNeverLevPoly`,
+          `setLevityInfoWithType`
 
 {-
 ************************************************************************
@@ -549,7 +556,7 @@ this is required to prevent perf/compiler/T5631 from blowing up.
 -}
 
 -- See Note [Levity info]
-data LevityInfo = NoLevityInfo
+data LevityInfo = NoLevityInfo  -- always safe
                 | NeverLevityPolymorphic
   deriving Eq
 
@@ -557,14 +564,22 @@ instance Outputable LevityInfo where
   ppr NoLevityInfo           = text "NoLevityInfo"
   ppr NeverLevityPolymorphic = text "NeverLevityPolymorphic"
 
-neverLevityPolymorphic :: IdInfo -> IdInfo
-neverLevityPolymorphic info = info { levityInfo = NeverLevityPolymorphic }
+-- | Marks an IdInfo describing an Id that is never levity polymorphic (even when
+-- applied). The Type is only there for checking that it's really never levity
+-- polymorphic
+setNeverLevPoly :: IdInfo -> Type -> IdInfo
+setNeverLevPoly info ty
+  = ASSERT( not (resultIsLevPoly ty) )
+    info { levityInfo = NeverLevityPolymorphic }
 
--- update the levity info if possible
-updateLevityInfo :: Type -> IdInfo -> IdInfo
-updateLevityInfo ty
-  | (_, res_ty) <- splitPiTys ty
-  , isEmptyVarSet (tyCoVarsOfType (typeKind res_ty))
-  = neverLevityPolymorphic
+setLevityInfoWithType :: IdInfo -> Type -> IdInfo
+setLevityInfoWithType info ty
+  | not (resultIsLevPoly ty)
+  = info { levityInfo = NeverLevityPolymorphic }
   | otherwise
-  = id
+  = info
+
+isNeverLevPolyIdInfo :: IdInfo -> Bool
+isNeverLevPolyIdInfo info
+  | NeverLevityPolymorphic <- levityInfo info = True
+  | otherwise                                 = False

@@ -14,7 +14,7 @@ module Kind (
 
         classifiesTypeWithValues,
         isStarKind, isStarKindSynonymTyCon,
-        isLevityPolymorphic
+        isKindLevPoly
        ) where
 
 #include "HsVersions.h"
@@ -23,8 +23,10 @@ import {-# SOURCE #-} Type       ( typeKind, coreViewOneStarKind )
 
 import TyCoRep
 import TyCon
-import VarSet ( isEmptyVarSet )
 import PrelNames
+
+import Outputable
+import Util
 
 {-
 ************************************************************************
@@ -79,9 +81,13 @@ returnsConstraintKind = returnsTyCon constraintKindTyConKey
 
 -- | Tests whether the given kind (which should look like "TYPE ...")
 -- has any free variables
-isLevityPolymorphic :: Kind -> Bool
-isLevityPolymorphic k
-  = not $ isEmptyVarSet $ tyCoVarsOfType k
+isKindLevPoly :: Kind -> Bool
+isKindLevPoly k = ASSERT2( isStarKind k ||  -- necessary b/c of Constraint
+                           case k of
+                             TyConApp typ [_] | typ `hasKey` tYPETyConKey -> True
+                             _                                            -> False
+                         , ppr k )
+                  not $ noFreeVarsOfType k
 
 --------------------------------------------
 --            Kinding for arrow (->)

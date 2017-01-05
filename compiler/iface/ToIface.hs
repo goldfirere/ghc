@@ -379,8 +379,8 @@ toIfaceIdInfo id_info
                   | otherwise = Just (HsInline inline_prag)
 
     ------------  Levity polymorphism  ----------
-    levity_hsinfo | NeverLevityPolymorphic <- levityInfo id_info = Just HsLevity
-                  | otherwise                                    = Nothing
+    levity_hsinfo | isNeverLevPolyIdInfo id_info = Just HsLevity
+                  | otherwise                    = Nothing
 
 --------------------------
 toIfUnfolding :: Bool -> Unfolding -> Maybe IfaceInfoItem

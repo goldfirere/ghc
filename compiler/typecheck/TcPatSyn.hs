@@ -34,7 +34,7 @@ import FastString
 import Var
 import VarEnv( emptyTidyEnv, mkInScopeSet )
 import Id
-import IdInfo( RecSelParent(..), updateLevityInfo )
+import IdInfo( RecSelParent(..), setLevityInfoWithType )
 import TcBinds
 import BasicTypes
 import TcSimplify
@@ -500,7 +500,7 @@ mkPatSynBuilderId dir (L _ name)
              builder_id     = mkExportedVanillaId builder_name builder_sigma
               -- See Note [Exported LocalIds] in Id
 
-             builder_id'    = modifyIdInfo (updateLevityInfo pat_ty) builder_id
+             builder_id'    = modifyIdInfo (`setLevityInfoWithType` pat_ty) builder_id
 
        ; return (Just (builder_id', need_dummy_arg)) }
   where

@@ -55,7 +55,6 @@ import TyCon
 import CoAxiom
 import Class
 import NameSet
-import VarSet
 import Name
 import PrimOp
 import ForeignCall
@@ -286,10 +285,10 @@ mkDictSelId name clas
              mkFunTy (mkClassPred clas (mkTyVarTys (binderVars tyvars))) $
              getNth arg_tys val_index
 
-    base_info = neverLevityPolymorphic $
-                noCafIdInfo
+    base_info = noCafIdInfo
                 `setArityInfo`         1
                 `setStrictnessInfo`    strict_sig
+                `setNeverLevPoly`      sel_ty
 
     info | new_tycon
          = base_info `setInlinePragInfo` alwaysInlinePragma
@@ -379,12 +378,12 @@ mkDataConWorkId wkr_name data_con
         ----------- Workers for data types --------------
     alg_wkr_ty = dataConRepType data_con
     wkr_arity = dataConRepArity data_con
-    wkr_info  = neverLevityPolymorphic $
-                noCafIdInfo
+    wkr_info  = noCafIdInfo
                 `setArityInfo`       wkr_arity
                 `setStrictnessInfo`  wkr_sig
                 `setUnfoldingInfo`   evaldUnfolding  -- Record that it's evaluated,
                                                      -- even if arity = 0
+                `setNeverLevPoly`    alg_wkr_ty
 
     wkr_sig = mkClosedStrictSig (replicate wkr_arity topDmd) (dataConCPR data_con)
         --      Note [Data-con worker strictness]
@@ -408,11 +407,11 @@ mkDataConWorkId wkr_name data_con
     (nt_tvs, _, nt_arg_tys, _) = dataConSig data_con
     res_ty_args  = mkTyVarTys nt_tvs
     nt_wrap_ty   = dataConUserType data_con
-    nt_work_info = updateLevityInfo nt_wrap_ty $
-                   noCafIdInfo          -- The NoCaf-ness is set by noCafIdInfo
+    nt_work_info = noCafIdInfo          -- The NoCaf-ness is set by noCafIdInfo
                   `setArityInfo` 1      -- Arity 1
-                  `setInlinePragInfo`    alwaysInlinePragma
-                  `setUnfoldingInfo`     newtype_unf
+                  `setInlinePragInfo`     alwaysInlinePragma
+                  `setUnfoldingInfo`      newtype_unf
+                  `setLevityInfoWithType` nt_wrap_ty
     id_arg1      = mkTemplateLocal 1 (head nt_arg_tys)
     newtype_unf  = ASSERT2( isVanillaDataCon data_con &&
                             isSingleton nt_arg_tys, ppr data_con  )
@@ -486,8 +485,7 @@ mkDataConRep dflags fam_envs wrap_name mb_bangs data_con
                                  initial_wrap_app
 
        ; let wrap_id = mkGlobalId (DataConWrapId data_con) wrap_name wrap_ty wrap_info
-             wrap_info = neverLevityPolymorphic $
-                         noCafIdInfo
+             wrap_info = noCafIdInfo
                          `setArityInfo`         wrap_arity
                              -- It's important to specify the arity, so that partial
                              -- applications are treated as values
@@ -497,6 +495,7 @@ mkDataConRep dflags fam_envs wrap_name mb_bangs data_con
                              -- We need to get the CAF info right here because TidyPgm
                              -- does not tidy the IdInfo of implicit bindings (like the wrapper)
                              -- so it not make sure that the CAF info is sane
+                         `setNeverLevPoly`      wrap_ty
 
              wrap_sig = mkClosedStrictSig wrap_arg_dmds (dataConCPR data_con)
              wrap_arg_dmds = map mk_dmd arg_ibangs
@@ -941,12 +940,12 @@ mkPrimOpId prim_op
                          (AnId id) UserSyntax
     id   = mkGlobalId (PrimOpId prim_op) name ty info
 
-    info = updateLevityInfo res_ty $
-           noCafIdInfo
-           `setRuleInfo`          mkRuleInfo (maybeToList $ primOpRules name prim_op)
-           `setArityInfo`         arity
-           `setStrictnessInfo`    strict_sig
-           `setInlinePragInfo`    neverInlinePragma
+    info = noCafIdInfo
+           `setRuleInfo`           mkRuleInfo (maybeToList $ primOpRules name prim_op)
+           `setArityInfo`          arity
+           `setStrictnessInfo`     strict_sig
+           `setInlinePragInfo`     neverInlinePragma
+           `setLevityInfoWithType` res_ty
                -- We give PrimOps a NOINLINE pragma so that we don't
                -- get silly warnings from Desugar.dsRule (the inline_shadows_rule
                -- test) about a RULE conflicting with a possible inlining
@@ -963,7 +962,7 @@ mkPrimOpId prim_op
 
 mkFCallId :: DynFlags -> Unique -> ForeignCall -> Type -> Id
 mkFCallId dflags uniq fcall ty
-  = ASSERT( isEmptyVarSet (tyCoVarsOfType ty) )
+  = ASSERT( noFreeVarsOfType ty )
     -- A CCallOpId should have no free type variables;
     -- when doing substitutions won't substitute over it
     mkGlobalId (FCallId fcall) name ty info
@@ -974,10 +973,10 @@ mkFCallId dflags uniq fcall ty
 
     name = mkFCallName uniq occ_str
 
-    info = updateLevityInfo ty $
-           noCafIdInfo
-           `setArityInfo`         arity
-           `setStrictnessInfo`    strict_sig
+    info = noCafIdInfo
+           `setArityInfo`          arity
+           `setStrictnessInfo`     strict_sig
+           `setLevityInfoWithType` ty
 
     (bndrs, _) = tcSplitPiTys ty
     arity      = count isAnonTyBinder bndrs
@@ -1080,8 +1079,8 @@ dollarId = pcMiscPrelId dollarName ty
 proxyHashId :: Id
 proxyHashId
   = pcMiscPrelId proxyName ty
-       (neverLevityPolymorphic $
-        noCafIdInfo `setUnfoldingInfo` evaldUnfolding) -- Note [evaldUnfoldings]
+       (noCafIdInfo `setUnfoldingInfo` evaldUnfolding -- Note [evaldUnfoldings]
+                    `setNeverLevPoly`  ty )
   where
     -- proxy# :: forall k (a:k). Proxy# k a
     bndrs   = mkTemplateKiTyVars [liftedTypeKind] (\ks -> ks)
@@ -1117,18 +1116,18 @@ nullAddrId :: Id
 -- a way to write this literal in Haskell.
 nullAddrId = pcMiscPrelId nullAddrName addrPrimTy info
   where
-    info = neverLevityPolymorphic $
-           noCafIdInfo `setInlinePragInfo` alwaysInlinePragma
+    info = noCafIdInfo `setInlinePragInfo` alwaysInlinePragma
                        `setUnfoldingInfo`  mkCompulsoryUnfolding (Lit nullAddrLit)
+                       `setNeverLevPoly`   addrPrimTy
 
 ------------------------------------------------
 seqId :: Id     -- See Note [seqId magic]
 seqId = pcMiscPrelId seqName ty info
   where
-    info = neverLevityPolymorphic $
-           noCafIdInfo `setInlinePragInfo` inline_prag
+    info = noCafIdInfo `setInlinePragInfo` inline_prag
                        `setUnfoldingInfo`  mkCompulsoryUnfolding rhs
                        `setRuleInfo`       mkRuleInfo [seq_cast_rule]
+                       `setNeverLevPoly`   ty
 
     inline_prag
          = alwaysInlinePragma `setInlinePragmaActivation` ActiveAfter
@@ -1170,13 +1169,13 @@ match_seq_of_cast _ _ _ _ = Nothing
 lazyId :: Id    -- See Note [lazyId magic]
 lazyId = pcMiscPrelId lazyIdName ty info
   where
-    info = neverLevityPolymorphic noCafIdInfo
+    info = noCafIdInfo `setNeverLevPoly` ty
     ty  = mkSpecForAllTys [alphaTyVar] (mkFunTy alphaTy alphaTy)
 
 noinlineId :: Id -- See Note [noinlineId magic]
 noinlineId = pcMiscPrelId noinlineIdName ty info
   where
-    info = neverLevityPolymorphic noCafIdInfo
+    info = noCafIdInfo `setNeverLevPoly` ty
     ty  = mkSpecForAllTys [alphaTyVar] (mkFunTy alphaTy alphaTy)
 
 oneShotId :: Id -- See Note [The oneShot function]
@@ -1221,8 +1220,8 @@ runRWId = pcMiscPrelId runRWName ty info
 magicDictId :: Id  -- See Note [magicDictId magic]
 magicDictId = pcMiscPrelId magicDictName ty info
   where
-  info = neverLevityPolymorphic $
-         noCafIdInfo `setInlinePragInfo` neverInlinePragma
+  info = noCafIdInfo `setInlinePragInfo` neverInlinePragma
+                     `setNeverLevPoly`   ty
   ty   = mkSpecForAllTys [alphaTyVar] alphaTy
 
 --------------------------------------------------------------------------------
@@ -1230,9 +1229,9 @@ magicDictId = pcMiscPrelId magicDictName ty info
 coerceId :: Id
 coerceId = pcMiscPrelId coerceName ty info
   where
-    info = neverLevityPolymorphic $
-           noCafIdInfo `setInlinePragInfo` alwaysInlinePragma
+    info = noCafIdInfo `setInlinePragInfo` alwaysInlinePragma
                        `setUnfoldingInfo`  mkCompulsoryUnfolding rhs
+                       `setNeverLevPoly`   ty
     eqRTy     = mkTyConApp coercibleTyCon [ liftedTypeKind
                                           , alphaTy, betaTy ]
     eqRPrimTy = mkTyConApp eqReprPrimTyCon [ liftedTypeKind
@@ -1535,14 +1534,14 @@ inlined.
 
 realWorldPrimId :: Id   -- :: State# RealWorld
 realWorldPrimId = pcMiscPrelId realWorldName realWorldStatePrimTy
-                     (neverLevityPolymorphic $
-                      noCafIdInfo `setUnfoldingInfo` evaldUnfolding    -- Note [evaldUnfoldings]
-                                  `setOneShotInfo` stateHackOneShot)
+                     (noCafIdInfo `setUnfoldingInfo` evaldUnfolding    -- Note [evaldUnfoldings]
+                                  `setOneShotInfo` stateHackOneShot
+                                  `setNeverLevPoly` realWorldStatePrimTy)
 
 voidPrimId :: Id     -- Global constant :: Void#
 voidPrimId  = pcMiscPrelId voidPrimIdName voidPrimTy
-                (neverLevityPolymorphic $
-                 noCafIdInfo `setUnfoldingInfo` evaldUnfolding)    -- Note [evaldUnfoldings]
+                (noCafIdInfo `setUnfoldingInfo` evaldUnfolding     -- Note [evaldUnfoldings]
+                             `setNeverLevPoly`  voidPrimTy)
 
 voidArgId :: Id       -- Local lambda-bound :: Void#
 voidArgId = mkSysLocal (fsLit "void") voidArgIdKey voidPrimTy

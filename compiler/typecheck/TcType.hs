@@ -143,7 +143,7 @@ module TcType (
   mkClassPred,
   isDictLikeTy,
   tcSplitDFunTy, tcSplitDFunHead, tcSplitMethodTy,
-  isRuntimeRepVar, isLevityPolymorphic,
+  isRuntimeRepVar, isKindLevPoly,
   isVisibleBinder, isInvisibleBinder,
 
   -- Type substitutions
@@ -173,6 +173,7 @@ module TcType (
   tyCoFVsOfType, tyCoFVsOfTypes,
   tyCoVarsOfTypeDSet, tyCoVarsOfTypesDSet, closeOverKindsDSet,
   tyCoVarsOfTypeList, tyCoVarsOfTypesList,
+  noFreeVarsOfType,
 
   --------------------------------
   -- Transforming Types to TcTypes

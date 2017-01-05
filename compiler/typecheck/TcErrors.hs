@@ -1465,7 +1465,7 @@ mkTyVarEqErr dflags ctxt report ct oriented tv1 ty2
              extra2 = important $ mkEqInfoMsg ct ty1 ty2
 
              interesting_tyvars
-               = filter (not . isEmptyVarSet . tyCoVarsOfType . tyVarKind) $
+               = filter (not . noFreeVarsOfType . tyVarKind) $
                  filter isTyVar $
                  fvVarList $
                  tyCoFVsOfType ty1 `unionFV` tyCoFVsOfType ty2

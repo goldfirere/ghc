@@ -79,6 +79,8 @@ module TyCoRep (
         tyCoVarsOfCoList, tyCoVarsOfProv,
         closeOverKinds,
 
+        noFreeVarsOfType, noFreeVarsOfCo,
+
         -- * Substitutions
         TCvSubst(..), TvSubstEnv, CvSubstEnv,
         emptyTvSubstEnv, emptyCvSubstEnv, composeTCvSubstEnv, composeTCvSubst,
@@ -701,7 +703,7 @@ isUnliftedTypeKind (TyConApp tc [TyConApp ptr_rep []])
   , ptr_rep  `hasKey` ptrRepLiftedDataConKey
   = False
 isUnliftedTypeKind (TyConApp tc [arg])
-  = tc `hasKey` tYPETyConKey && isEmptyVarSet (tyCoVarsOfType arg)
+  = tc `hasKey` tYPETyConKey && noFreeVarsOfType arg
       -- all other possibilities are unlifted
 isUnliftedTypeKind _ = False
 
@@ -1539,6 +1541,49 @@ closeOverKindsList tvs = fvVarList $ closeOverKindsFV tvs
 closeOverKindsDSet :: DTyVarSet -> DTyVarSet
 closeOverKindsDSet = fvDVarSet . closeOverKindsFV . dVarSetElems
 
+-- | Returns True if this type has no free variables. Should be the same as
+-- isEmptyVarSet . tyCoVarsOfType, but faster in the non-forall case.
+noFreeVarsOfType :: Type -> Bool
+noFreeVarsOfType (TyVarTy _)      = False
+noFreeVarsOfType (AppTy t1 t2)    = noFreeVarsOfType t1 && noFreeVarsOfType t2
+noFreeVarsOfType (TyConApp _ tys) = all noFreeVarsOfType tys
+noFreeVarsOfType ty@(ForAllTy {}) = isEmptyVarSet (tyCoVarsOfType ty)
+noFreeVarsOfType (FunTy t1 t2)    = noFreeVarsOfType t1 && noFreeVarsOfType t2
+noFreeVarsOfType (LitTy _)        = True
+noFreeVarsOfType (CastTy ty co)   = noFreeVarsOfType ty && noFreeVarsOfCo co
+noFreeVarsOfType (CoercionTy co)  = noFreeVarsOfCo co
+
+-- | Returns True if this coercion has no free variables. Should be the same as
+-- isEmptyVarSet . tyCoVarsOfCo, but faster in the non-forall case.
+noFreeVarsOfCo :: Coercion -> Bool
+noFreeVarsOfCo (Refl _ ty)            = noFreeVarsOfType ty
+noFreeVarsOfCo (TyConAppCo _ _ args)  = all noFreeVarsOfCo args
+noFreeVarsOfCo (AppCo c1 c2)          = noFreeVarsOfCo c1 && noFreeVarsOfCo c2
+noFreeVarsOfCo co@(ForAllCo {})       = isEmptyVarSet (tyCoVarsOfCo co)
+noFreeVarsOfCo (CoVarCo _)            = False
+noFreeVarsOfCo (AxiomInstCo _ _ args) = all noFreeVarsOfCo args
+noFreeVarsOfCo (UnivCo p _ t1 t2)     = noFreeVarsOfProv p &&
+                                        noFreeVarsOfType t1 &&
+                                        noFreeVarsOfType t2
+noFreeVarsOfCo (SymCo co)             = noFreeVarsOfCo co
+noFreeVarsOfCo (TransCo co1 co2)      = noFreeVarsOfCo co1 && noFreeVarsOfCo co2
+noFreeVarsOfCo (NthCo _ co)           = noFreeVarsOfCo co
+noFreeVarsOfCo (LRCo _ co)            = noFreeVarsOfCo co
+noFreeVarsOfCo (InstCo co1 co2)       = noFreeVarsOfCo co1 && noFreeVarsOfCo co2
+noFreeVarsOfCo (CoherenceCo co1 co2)  = noFreeVarsOfCo co1 && noFreeVarsOfCo co2
+noFreeVarsOfCo (KindCo co)            = noFreeVarsOfCo co
+noFreeVarsOfCo (SubCo co)             = noFreeVarsOfCo co
+noFreeVarsOfCo (AxiomRuleCo _ cs)     = all noFreeVarsOfCo cs
+
+-- | Returns True if this UnivCoProv has no free variables. Should be the same as
+-- isEmptyVarSet . tyCoVarsOfProv, but faster in the non-forall case.
+noFreeVarsOfProv :: UnivCoProvenance -> Bool
+noFreeVarsOfProv UnsafeCoerceProv    = True
+noFreeVarsOfProv (PhantomProv co)    = noFreeVarsOfCo co
+noFreeVarsOfProv (ProofIrrelProv co) = noFreeVarsOfCo co
+noFreeVarsOfProv (PluginProv {})     = True
+noFreeVarsOfProv (HoleProv {})       = True -- matches with coVarsOfProv, but I'm unsure
+
 {-
 %************************************************************************
 %*                                                                      *
@@ -2236,7 +2281,7 @@ substForAllCoBndrCallback sym sco (TCvSubst in_scope tenv cenv)
                             TyVarTy new_var `CastTy` new_kind_co
             | otherwise = extendVarEnv tenv old_var (TyVarTy new_var)
 
-    no_kind_change = isEmptyVarSet (tyCoVarsOfCo old_kind_co)
+    no_kind_change = noFreeVarsOfCo old_kind_co
     no_change = no_kind_change && (new_var == old_var)
 
     new_kind_co | no_kind_change = old_kind_co
@@ -2285,7 +2330,7 @@ substTyVarBndrCallback subst_fn subst@(TCvSubst in_scope tenv cenv) old_var
     -- Assertion check that we are not capturing something in the substitution
 
     old_ki = tyVarKind old_var
-    no_kind_change = isEmptyVarSet (tyCoVarsOfType old_ki) -- verify that kind is closed
+    no_kind_change = noFreeVarsOfType old_ki -- verify that kind is closed
     no_change = no_kind_change && (new_var == old_var)
         -- no_change means that the new_var is identical in
         -- all respects to the old_var (same unique, same kind)
@@ -2316,7 +2361,7 @@ substCoVarBndrCallback sym subst_fun subst@(TCvSubst in_scope tenv cenv) old_var
     -- In that case, mkCoVarCo will return a ReflCoercion, and
     -- we want to substitute that (not new_var) for old_var
     new_co    = (if sym then mkSymCo else id) $ mkCoVarCo new_var
-    no_kind_change = isEmptyVarSet (tyCoVarsOfTypes [t1, t2])
+    no_kind_change = all noFreeVarsOfType [t1, t2]
     no_change = new_var == old_var && not (isReflCo new_co) && no_kind_change
 
     new_cenv | no_change = delVarEnv cenv old_var
@@ -2339,7 +2384,7 @@ cloneTyVarBndr subst@(TCvSubst in_scope tv_env cv_env) tv uniq
               (extendVarEnv tv_env tv (mkTyVarTy tv')) cv_env, tv')
   where
     old_ki = tyVarKind tv
-    no_kind_change = isEmptyVarSet (tyCoVarsOfType old_ki) -- verify that kind is closed
+    no_kind_change = noFreeVarsOfType old_ki -- verify that kind is closed
 
     tv1 | no_kind_change = tv
         | otherwise      = setTyVarKind tv (substTy subst old_ki)

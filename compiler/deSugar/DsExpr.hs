@@ -216,9 +216,12 @@ dsLExpr (L loc e)
 dsLExprNoLP :: LHsExpr Id -> DsM CoreExpr
 dsLExprNoLP (L loc e)
   = putSrcSpanDs loc $
-    do { whenIsJust (hsExprTypeForLPCheck e) $ \ ty ->
-           dsNoLevPoly ty (text "In the type of expression:" <+> ppr e)
-       ; dsExpr e }
+    do { -- whenIsJust (hsExprTypeForLPCheck e) $ \ ty ->
+--           dsNoLevPoly ty (text "In the type of expression:" <+> ppr e)
+       ; e' <- dsExpr e
+       ; let ty = exprType e'
+       ; dsNoLevPoly ty (text "In the type of expression:" <+> ppr e)
+       ; return e' }
 
 dsExpr :: HsExpr Id -> DsM CoreExpr
 dsExpr (HsPar e)              = dsLExpr e
