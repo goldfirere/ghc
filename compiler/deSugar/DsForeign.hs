@@ -200,7 +200,7 @@ dsFCall fn_id co fcall mDeclHeader = do
         (tv_bndrs, rho)      = tcSplitForAllTyVarBndrs ty
         (arg_tys, io_res_ty) = tcSplitFunTys rho
 
-    args <- newSysLocalsDs arg_tys
+    args <- newSysLocalsDs arg_tys  -- no FFI levity-polymorphism
     (val_args, arg_wrappers) <- mapAndUnzipM unboxArg (map Var args)
 
     let
@@ -299,7 +299,7 @@ dsPrimCall fn_id co fcall = do
         (tvs, fun_ty)        = tcSplitForAllTys ty
         (arg_tys, io_res_ty) = tcSplitFunTys fun_ty
 
-    args <- newSysLocalsDs arg_tys
+    args <- newSysLocalsDs arg_tys  -- no FFI levity-polymorphism
 
     ccall_uniq <- newUnique
     dflags <- getDynFlags
@@ -426,7 +426,7 @@ dsFExportDynamic id co0 cconv = do
         stable_ptr_ty = mkTyConApp stable_ptr_tycon [arg_ty]
         export_ty     = mkFunTy stable_ptr_ty arg_ty
     bindIOId <- dsLookupGlobalId bindIOName
-    stbl_value <- newSysLocalDsNoCheck stable_ptr_ty
+    stbl_value <- newSysLocalDs stable_ptr_ty
     (h_code, c_code, typestring, args_size) <- dsFExport id (mkRepReflCo export_ty) fe_nm cconv True
     let
          {-

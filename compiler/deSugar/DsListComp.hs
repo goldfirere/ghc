@@ -271,7 +271,6 @@ deBindComp :: OutPat Id
            -> DsM (Expr Id)
 deBindComp pat core_list1 quals core_list2 = do
     let u3_ty@u1_ty = exprType core_list1       -- two names, same thing
-      -- TODO: Are we sure that core_list1 is not knot-tied by the fixM in DsArrows?
 
         -- u1_ty is a [alpha] type, and u2_ty = alpha
     let u2_ty = hsLPatType pat
@@ -279,6 +278,8 @@ deBindComp pat core_list1 quals core_list2 = do
     let res_ty = exprType core_list2
         h_ty   = u1_ty `mkFunTy` res_ty
 
+       -- no levity polymorphism here, as list comprehensions don't work
+       -- with RebindableSyntax. NB: These are *not* monad comps.
     [h, u1, u2, u3] <- newSysLocalsDs [h_ty, u1_ty, u2_ty, u3_ty]
 
     -- the "fail" value ...
@@ -368,8 +369,8 @@ dfBindComp c_id n_id (pat, core_list1) quals = do
     let b_ty   = idType n_id
 
     -- create some new local id's
-    b <- newSysLocalDsNoCheck b_ty
-    x <- newSysLocalDs        x_ty
+    b <- newSysLocalDs b_ty
+    x <- newSysLocalDs x_ty
 
     -- build rest of the comprehesion
     core_rest <- dfListComp c_id b quals
@@ -399,11 +400,11 @@ mkZipBind :: [Type] -> DsM (Id, CoreExpr)
 --                              (a2:as'2) -> (a1, a2) : zip as'1 as'2)]
 
 mkZipBind elt_tys = do
-    ass  <- mapM newSysLocalDsNoCheck  elt_list_tys
-    as'  <- mapM newSysLocalDsNoCheck  elt_tys
-    as's <- mapM newSysLocalDsNoCheck  elt_list_tys
+    ass  <- mapM newSysLocalDs  elt_list_tys
+    as'  <- mapM newSysLocalDs  elt_tys
+    as's <- mapM newSysLocalDs  elt_list_tys
 
-    zip_fn <- newSysLocalDsNoCheck zip_fn_ty
+    zip_fn <- newSysLocalDs zip_fn_ty
 
     let inner_rhs = mkConsExpr elt_tuple_ty
                         (mkBigCoreVarTup as')
@@ -438,13 +439,13 @@ mkUnzipBind :: TransForm -> [Type] -> DsM (Maybe (Id, CoreExpr))
 mkUnzipBind ThenForm _
  = return Nothing    -- No unzipping for ThenForm
 mkUnzipBind _ elt_tys
-  = do { ax  <- newSysLocalDsNoCheck elt_tuple_ty
-       ; axs <- newSysLocalDsNoCheck elt_list_tuple_ty
-       ; ys  <- newSysLocalDsNoCheck elt_tuple_list_ty
-       ; xs  <- mapM newSysLocalDsNoCheck elt_tys
-       ; xss <- mapM newSysLocalDsNoCheck elt_list_tys
+  = do { ax  <- newSysLocalDs elt_tuple_ty
+       ; axs <- newSysLocalDs elt_list_tuple_ty
+       ; ys  <- newSysLocalDs elt_tuple_list_ty
+       ; xs  <- mapM newSysLocalDs elt_tys
+       ; xss <- mapM newSysLocalDs elt_list_tys
 
-       ; unzip_fn <- newSysLocalDsNoCheck unzip_fn_ty
+       ; unzip_fn <- newSysLocalDs unzip_fn_ty
 
        ; [us1, us2] <- sequence [newUniqueSupply, newUniqueSupply]
 
@@ -501,7 +502,7 @@ dsPArrComp (BindStmt p e _ _ _ : qs) = do
     let ety'ce  = parrElemType ce
         false   = Var falseDataConId
         true    = Var trueDataConId
-    v <- newSysLocalDsNoCheck ety'ce
+    v <- newSysLocalDs ety'ce
     pred <- matchSimply (Var v) (StmtCtxt PArrComp) p true false
     let gen | isIrrefutableHsPat p = ce
             | otherwise            = mkApps (Var filterP) [Type ety'ce, mkLams [v] pred, ce]
@@ -562,7 +563,7 @@ dePArrComp (BindStmt p e _ _ _ : qs) pa cea = do
         ety'ce  = parrElemType ce
         false   = Var falseDataConId
         true    = Var trueDataConId
-    v <- newSysLocalDsNoCheck ety'ce
+    v <- newSysLocalDs ety'ce
     pred <- matchSimply (Var v) (StmtCtxt PArrComp) p true false
     let cef | isIrrefutableHsPat p = ce
             | otherwise            = mkApps (Var filterP) [Type ety'ce, mkLams [v] pred, ce]
@@ -583,9 +584,9 @@ dePArrComp (LetStmt (L _ ds) : qs) pa cea = do
     mapP <- dsDPHBuiltin mapPVar
     let xs = collectLocalBinders ds
         ty'cea = parrElemType cea
-    v <- newSysLocalDsNoCheck ty'cea
+    v <- newSysLocalDs ty'cea
     clet <- dsLocalBinds ds (mkCoreTup (map Var xs))
-    let'v <- newSysLocalDsNoCheck (exprType clet)
+    let'v <- newSysLocalDs (exprType clet)
     let projBody = mkCoreLet (NonRec let'v clet) $
                    mkCoreTup [Var v, Var let'v]
         errTy    = exprType projBody
@@ -654,7 +655,7 @@ mkLambda :: Type                        -- type of the argument (not levity-poly
          -> CoreExpr                    -- desugared body
          -> DsM (CoreExpr, Type)
 mkLambda ty p ce = do
-    v <- newSysLocalDsNoCheck ty
+    v <- newSysLocalDs ty
     let errMsg = text "DsListComp.deLambda: internal error!"
         ce'ty  = exprType ce
     cerr <- mkErrorAppDs pAT_ERROR_ID ce'ty errMsg
@@ -751,8 +752,8 @@ dsMcStmt (TransStmt { trS_stmts = stmts, trS_bndrs = bndrs
        ; let tup_n_ty' = mkBigCoreVarTupTy to_bndrs
 
        ; body        <- dsMcStmts stmts_rest
-       ; n_tup_var'  <- newSysLocalDs n_tup_ty'
-       ; tup_n_var'  <- newSysLocalDsNoCheck tup_n_ty'
+       ; n_tup_var'  <- newSysLocalDsNoLP n_tup_ty'
+       ; tup_n_var'  <- newSysLocalDs tup_n_ty'
        ; tup_n_expr' <- mkMcUnzipM form fmap_op n_tup_var' from_bndr_tys
        ; us          <- newUniqueSupply
        ; let rhs'  = mkApps usingExpr' usingArgs'
@@ -800,7 +801,7 @@ matchTuple :: [Id] -> CoreExpr -> DsM CoreExpr
 --  \x. case x of (a,b,c) -> body
 matchTuple ids body
   = do { us <- newUniqueSupply
-       ; tup_id <- newSysLocalDsNoCheck (mkBigCoreVarTupTy ids)
+       ; tup_id <- newSysLocalDs (mkBigCoreVarTupTy ids)
        ; return (Lam tup_id $ mkTupleCase us ids body tup_id (Var tup_id)) }
 
 -- general `rhs' >>= \pat -> stmts` desugaring where `rhs'` is already a
@@ -871,9 +872,9 @@ mkMcUnzipM ThenForm _ ys _
 
 mkMcUnzipM _ fmap_op ys elt_tys
   = do { fmap_op' <- dsExpr fmap_op
-       ; xs       <- mapM newSysLocalDsNoCheck elt_tys
+       ; xs       <- mapM newSysLocalDs elt_tys
        ; let tup_ty = mkBigCoreTupTy elt_tys
-       ; tup_xs   <- newSysLocalDsNoCheck tup_ty
+       ; tup_xs   <- newSysLocalDs tup_ty
 
        ; let mk_elt i = mkApps fmap_op'  -- fmap :: forall a b. (a -> b) -> n a -> n b
                            [ Type tup_ty, Type (getNth elt_tys i)

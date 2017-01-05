@@ -705,7 +705,7 @@ matchWrapper ctxt mb_scr (MG { mg_alts = L _ matches
         ; locn   <- getSrcSpanDs
 
         ; new_vars    <- case matches of
-                           []    -> mapM newSysLocalDs arg_tys
+                           []    -> mapM newSysLocalDsNoLP arg_tys
                            (m:_) -> selectMatchVars (map unLoc (hsLMatchPats m))
 
         ; eqns_info   <- mapM (mk_eqn_info new_vars) matches

@@ -312,8 +312,8 @@ dsExpr e@(SectionR op expr) = do
     let (x_ty:y_ty:_, _) = splitFunTys (exprType core_op)
         -- See comment with SectionL
     y_core <- dsLExpr expr
-    x_id <- newSysLocalDs x_ty
-    y_id <- newSysLocalDs y_ty
+    x_id <- newSysLocalDsNoLP x_ty
+    y_id <- newSysLocalDsNoLP y_ty
     return (bindNonRec y_id y_core $
             Lam x_id (mkCoreAppsDs (text "sectionr" <+> ppr e) core_op [Var x_id, Var y_id]))
 
@@ -321,7 +321,7 @@ dsExpr (ExplicitTuple tup_args boxity)
   = do { let go (lam_vars, args) (L _ (Missing ty))
                     -- For every missing expression, we need
                     -- another lambda in the desugaring.
-               = do { lam_var <- newSysLocalDs ty
+               = do { lam_var <- newSysLocalDsNoLP ty
                     ; return (lam_var : lam_vars, Var lam_var : args) }
              go (lam_vars, args) (L _ (Present expr))
                     -- Expressions that are present don't generate
@@ -633,7 +633,7 @@ dsExpr expr@(RecordUpd { rupd_expr = record_expr, rupd_flds = fields
       -- Hence 'lcl_id'.  Cf Trac #2735
     ds_field (L _ rec_field) = do { rhs <- dsLExpr (hsRecFieldArg rec_field)
                                   ; let fld_id = unLoc (hsRecUpdFieldId rec_field)
-                                  ; lcl_id <- newSysLocalDsNoCheck (idType fld_id)
+                                  ; lcl_id <- newSysLocalDs (idType fld_id)
                                   ; return (idName fld_id, lcl_id, rhs) }
 
     add_field_binds [] expr = expr
@@ -657,7 +657,7 @@ dsExpr expr@(RecordUpd { rupd_expr = record_expr, rupd_flds = fields
                 -- I'm not bothering to clone the ex_tvs
            ; eqs_vars   <- mapM newPredVarDs (substTheta subst (eqSpecPreds eq_spec))
            ; theta_vars <- mapM newPredVarDs (substTheta subst prov_theta)
-           ; arg_ids    <- newSysLocalsDsNoCheck (substTysUnchecked subst arg_tys)
+           ; arg_ids    <- newSysLocalsDs (substTysUnchecked subst arg_tys)
            ; let field_labels = conLikeFieldLabels con
                  val_args = zipWithEqual "dsExpr:RecordUpd" mk_val_arg
                                          field_labels arg_ids

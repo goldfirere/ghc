@@ -121,7 +121,7 @@ selectMatchVar (ParPat pat)  = selectMatchVar (unLoc pat)
 selectMatchVar (VarPat var)  = return (localiseId (unLoc var))
                                   -- Note [Localise pattern binders]
 selectMatchVar (AsPat var _) = return (unLoc var)
-selectMatchVar other_pat     = newSysLocalDs (hsPatType other_pat)
+selectMatchVar other_pat     = newSysLocalDsNoLP (hsPatType other_pat)
                                   -- OK, better make up one...
 
 {-
@@ -427,7 +427,7 @@ mkPArrCase dflags var ty sorted_alts fail = do
     len lengthP = mkApps (Var lengthP) [Type elemTy, Var var]
     --
     unboxAlt = do
-        l      <- newSysLocalDsNoCheck intPrimTy
+        l      <- newSysLocalDs intPrimTy
         indexP <- dsDPHBuiltin indexPVar
         alts   <- mapM (mkAlt indexP) sorted_alts
         return (DataAlt intDataCon, [l], mkWildCase (Var l) intPrimTy ty (dft : alts))
@@ -736,7 +736,7 @@ mkSelectorBinds ticks pat val_expr
 
   | is_flat_prod_lpat pat'           -- Special case (B)
   = do { let pat_ty = hsLPatType pat'
-       ; val_var <- newSysLocalDs pat_ty
+       ; val_var <- newSysLocalDsNoLP pat_ty
 
        ; let mk_bind tick bndr_var
                -- (mk_bind sv bv)  generates  bv = case sv of { pat -> bv }
@@ -754,7 +754,7 @@ mkSelectorBinds ticks pat val_expr
        ; return ( val_var, (val_var, val_expr) : binds) }
 
   | otherwise                          -- General case (C)
-  = do { tuple_var  <- newSysLocalDsNoCheck tuple_ty
+  = do { tuple_var  <- newSysLocalDs tuple_ty
        ; error_expr <- mkErrorAppDs iRREFUT_PAT_ERROR_ID tuple_ty (ppr pat')
        ; tuple_expr <- matchSimply val_expr PatBindRhs pat
                                    local_tuple error_expr
@@ -901,8 +901,8 @@ mkFailurePair :: CoreExpr       -- Result type of the whole case expression
                       CoreExpr) -- Fail variable applied to realWorld#
 -- See Note [Failure thunks and CPR]
 mkFailurePair expr
-  = do { fail_fun_var <- newFailLocalDsNoCheck (voidPrimTy `mkFunTy` ty)
-       ; fail_fun_arg <- newSysLocalDsNoCheck voidPrimTy
+  = do { fail_fun_var <- newFailLocalDs (voidPrimTy `mkFunTy` ty)
+       ; fail_fun_arg <- newSysLocalDs voidPrimTy
        ; let real_arg = setOneShotLambda fail_fun_arg
        ; return (NonRec fail_fun_var (Lam real_arg expr),
                  App (Var fail_fun_var) (Var voidPrimId)) }

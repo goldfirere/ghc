@@ -228,7 +228,7 @@ dsHsBind dflags
                              Let core_bind $
                              tup_expr
 
-        ; poly_tup_id <- newSysLocalDsNoCheck (exprType poly_tup_rhs)
+        ; poly_tup_id <- newSysLocalDs (exprType poly_tup_rhs)
 
         -- Find corresponding global or make up a new one: sometimes
         -- we need to make new export to desugar strict binds, see
@@ -239,7 +239,7 @@ dsHsBind dflags
                            , abe_poly = global
                            , abe_mono = local, abe_prags = spec_prags })
                          -- See Note [AbsBinds wrappers] in HsBinds
-                = do { tup_id  <- newSysLocalDsNoCheck tup_ty
+                = do { tup_id  <- newSysLocalDs tup_ty
                      ; core_wrap <- dsHsWrapper wrap
                      ; rhs <- core_wrap $ mkLams tyvars $ mkLams dicts $
                               mkTupleSelector all_locals local tup_id $
@@ -297,7 +297,7 @@ dsHsBind dflags
             ([],[]) lcls
 
     mk_export local =
-      do global <- newSysLocalDsNoCheck
+      do global <- newSysLocalDs
                      (exprType (mkLams tyvars (mkLams dicts (Var local))))
          return (ABE {abe_poly = global
                      ,abe_mono = local
@@ -1060,7 +1060,7 @@ dsHsWrapper (WpCompose c1 c2) = do { w1 <- dsHsWrapper c1
                                    ; w2 <- dsHsWrapper c2
                                    ; return (w1 <=< w2) }
 dsHsWrapper (WpFun c1 c2 t1 doc)
-                              = do { x  <- newSysLocalDs t1
+                              = do { x  <- newSysLocalDsNoLP t1
                                    ; w1 <- dsHsWrapper c1
                                    ; w2 <- dsHsWrapper c2
                                    ; let app f a = mkCoreAppDs (text "dsHsWrapper") f a
@@ -1153,7 +1153,7 @@ dsEvTypeable ty ev
 
        -- Build Core for (let r::TypeRep = rep in \proxy. rep)
        -- See Note [Memoising typeOf]
-       ; repName <- newSysLocalDsNoCheck (exprType rep_expr)
+       ; repName <- newSysLocalDs (exprType rep_expr)
        ; let proxyT = mkProxyPrimTy kind ty
              method = bindNonRec repName rep_expr
                       $ mkLams [mkWildValBinder proxyT] (Var repName)

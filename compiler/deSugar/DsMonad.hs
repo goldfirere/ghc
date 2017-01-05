@@ -15,9 +15,9 @@ module DsMonad (
         foldlM, foldrM, whenGOptM, unsetGOptM, unsetWOptM,
         Applicative(..),(<$>),
 
-        duplicateLocalDs, newSysLocalDs, newSysLocalDsNoCheck,
-        newSysLocalsDs, newSysLocalsDsNoCheck, newUniqueId,
-        newFailLocalDsNoCheck, newPredVarDs,
+        duplicateLocalDs, newSysLocalDsNoLP, newSysLocalDs,
+        newSysLocalsDsNoLP, newSysLocalsDs, newUniqueId,
+        newFailLocalDs, newPredVarDs,
         getSrcSpanDs, putSrcSpanDs,
         mkPrintUnqualifiedDs,
         newUnique,
@@ -334,20 +334,16 @@ At one point, I (Richard) thought we could check in the zonker, but it's hard
 to know where precisely are the abstracted variables and the arguments. So
 we check in the desugarer, the only place where we can see the Core code and
 still report respectable syntax to the user. This covers the vast majority
-of cases; see calls to DsMonad.dsNoLevPoly and friends. Note that it is
-important here to use hsExprType to get the types of expressions: the use
-of fixM when checking arrow notation means that we cannot look at the desugared
-expression and use exprType.
+of cases; see calls to DsMonad.dsNoLevPoly and friends.
 
-Also because of the use of fixM in DsArrows, we must be very careful when
-checking that all Ids have non-levity-polymorphic types. So the desugarer
-uses two variants of newSysLocalDs (its way of generating fresh Ids), one
-that checks for levity polymorphism and one that does not. The former works
-only with types that to not depend on the desugared code; these types might
-come from the HsSyn AST or from hsExprType and friends. The latter works
-on types that we can guarantee are *not* levity polymorphic, such as tuples,
-lists, and the types of other Ids. We must thus be careful that every use
-of newSysLocalDs meets one of these two requirements.
+Levity polymorphism is also prohibited in the types of binders, and the
+desugarer checks for this in GHC-generated Ids. (The zonker handles
+the user-writted ids in zonkIdBndr.) This is done in newSysLocalDsNoLP.
+The newSysLocalDs variant is used in the vast majority of cases where
+the binder is obviously not levity polymorphic, omitting the check.
+It would be nice to ASSERT that there is no levity polymorphism here,
+but we can't, because of the fixM in DsArrows. It's all OK, though:
+Core Lint will catch an error here.
 
 However, the desugarer is the wrong place for certain checks. In particular,
 the desugarer can't report a sensible error message if an HsWrapper is malformed.
@@ -376,20 +372,20 @@ newPredVarDs :: PredType -> DsM Var
 newPredVarDs pred
  = newSysLocalDs pred
 
-newSysLocalDs, newSysLocalDsNoCheck, newFailLocalDsNoCheck :: Type -> DsM Id
-newSysLocalDs  = mk_local (fsLit "ds")
+newSysLocalDsNoLP, newSysLocalDs, newFailLocalDs :: Type -> DsM Id
+newSysLocalDsNoLP  = mk_local (fsLit "ds")
 
 -- this variant should be used when the caller can be sure that the variable type
 -- is not levity-polymorphic. It is necessary when the type is knot-tied because
 -- of the fixM used in DsArrows. See Note [Levity polymorphism checking]
-newSysLocalDsNoCheck = mkSysLocalOrCoVarM (fsLit "ds")
-newFailLocalDsNoCheck = mkSysLocalOrCoVarM (fsLit "fail")
+newSysLocalDs = mkSysLocalOrCoVarM (fsLit "ds")
+newFailLocalDs = mkSysLocalOrCoVarM (fsLit "fail")
   -- the fail variable is used only in a situation where we can tell that
   -- levity-polymorphism is impossible.
 
-newSysLocalsDs, newSysLocalsDsNoCheck :: [Type] -> DsM [Id]
+newSysLocalsDsNoLP, newSysLocalsDs :: [Type] -> DsM [Id]
+newSysLocalsDsNoLP = mapM newSysLocalDsNoLP
 newSysLocalsDs = mapM newSysLocalDs
-newSysLocalsDsNoCheck = mapM newSysLocalDsNoCheck
 
 mk_local :: FastString -> Type -> DsM Id
 mk_local fs ty = do { dsNoLevPoly ty (text "When trying to create a variable of type:" <+>
