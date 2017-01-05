@@ -16,7 +16,7 @@ import GHC.Stack.CCS
 #else
 import GHC.Stack as GHC.Stack.CCS
 #endif
-import RepType
+import Type
 import HsSyn
 import Module
 import Outputable

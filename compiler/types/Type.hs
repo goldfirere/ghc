@@ -102,9 +102,9 @@ module Type (
         isPiTy, isTauTy, isFamFreeTy,
 
         -- (Lifting and boxity)
-        isUnboxedTupleType, isUnboxedSumType,
+        isUnliftedType, isUnboxedTupleType, isUnboxedSumType,
         isAlgType, isClosedAlgType,
-        isPrimitiveType,
+        isPrimitiveType, isStrictType,
         isRuntimeRepTy, isRuntimeRepVar, isRuntimeRepKindedTy,
         dropRuntimeRepArgs,
         getRuntimeRep, getRuntimeRepFromKind,
@@ -1843,15 +1843,42 @@ isFamFreeTy (CoercionTy _)    = False  -- Not sure about this
 ************************************************************************
 -}
 
+-- | Returns Just True if this type is surely lifted, Just False
+-- if it is surely unlifted, Nothing if we can't be sure (i.e., it is
+-- levity polymorphic), and panics if the kind does not have the shape
+-- TYPE r.
+isLiftedType_maybe :: HasDebugCallStack => Type -> Maybe Bool
+isLiftedType_maybe ty = go (getRuntimeRep "isLiftedType_maybe" ty)
+  where
+    go rr | Just rr' <- coreView rr = go rr'
+    go (TyConApp lifted_rep [])
+      | lifted_rep `hasKey` liftedRepDataConKey = Just True
+    go (TyConApp {}) = Just False -- everything else is unlifted
+    go _             = Nothing    -- levity polymorphic
+
+-- | See "Type#type_classification" for what an unlifted type is.
+-- Panics on levity polymorphic types.
+isUnliftedType :: HasDebugCallStack => Type -> Bool
+        -- isUnliftedType returns True for forall'd unlifted types:
+        --      x :: forall a. Int#
+        -- I found bindings like these were getting floated to the top level.
+        -- They are pretty bogus types, mind you.  It would be better never to
+        -- construct them
+isUnliftedType ty
+  = not (isLiftedType_maybe ty `orElse`
+         pprPanic "isUnliftedType" (ppr ty <+> dcolon <+> ppr (typeKind ty)))
+
 -- | Extract the RuntimeRep classifier of a type. Panics if this is not possible.
-getRuntimeRep :: String   -- ^ Printed in case of an error
+getRuntimeRep :: HasDebugCallStack
+              => String   -- ^ Printed in case of an error
               -> Type -> Type
 getRuntimeRep err ty = getRuntimeRepFromKind err (typeKind ty)
 
 -- | Extract the RuntimeRep classifier of a type from its kind.
 -- For example, getRuntimeRepFromKind * = LiftedRep;
 -- Panics if this is not possible.
-getRuntimeRepFromKind :: String  -- ^ Printed in case of an error
+getRuntimeRepFromKind :: HasDebugCallStack
+                      => String  -- ^ Printed in case of an error
                       -> Type -> Type
 getRuntimeRepFromKind err = go
   where
@@ -1894,6 +1921,12 @@ isClosedAlgType ty
       Just (tc, ty_args) | isAlgTyCon tc && not (isFamilyTyCon tc)
              -> ASSERT2( ty_args `lengthIs` tyConArity tc, ppr ty ) True
       _other -> False
+
+-- | Computes whether an argument (or let right hand side) should
+-- be computed strictly or lazily, based only on its type.
+-- Currently, it's just 'isUnliftedType'.
+isStrictType :: HasDebugCallStack => Type -> Bool
+isStrictType = isUnliftedType
 
 isPrimitiveType :: Type -> Bool
 -- ^ Returns true of types that are opaque to Haskell.

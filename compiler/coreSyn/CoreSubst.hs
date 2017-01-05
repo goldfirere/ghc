@@ -57,7 +57,6 @@ import Coercion hiding ( substCo, substCoVarBndr )
 
 import Kind
 import TyCon       ( tyConArity )
-import RepType     ( isUnliftedType )
 import DataCon
 import PrelNames
 import OptCoercion ( optCoercion )

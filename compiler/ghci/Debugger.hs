@@ -78,7 +78,7 @@ pprintClosureCommand bindThings force str = do
        term_    <- GHC.obtainTermFromId maxBound force id'
        term     <- tidyTermTyVars term_
        term'    <- if bindThings &&
-                      False == isUnliftedTypeKind (termType term)
+                      (not (isUnliftedType (termType term)))
                      then bindSuspensions term
                      else return term
      -- Before leaving, we compare the type obtained to see if it's more specific

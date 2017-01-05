@@ -2,8 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 module RepType
-  ( isUnliftedType, isStrictType,
-
+  (
     -- * Code generator views onto Types
     UnaryType, NvUnaryType, isNvUnaryType,
     unwrapType,
@@ -38,23 +37,6 @@ import {-# SOURCE #-} TysWiredIn ( anyTypeOfKind )
 
 import Data.List (foldl', sort)
 import qualified Data.IntSet as IS
-
--- | See "Type#type_classification" for what an unlifted type is
-isUnliftedType :: HasDebugCallStack => Type -> Bool
-        -- isUnliftedType returns True for forall'd unlifted types:
-        --      x :: forall a. Int#
-        -- I found bindings like these were getting floated to the top level.
-        -- They are pretty bogus types, mind you.  It would be better never to
-        -- construct them
-isUnliftedType ty
-  | [LiftedRep] <- typePrimRep ty = False
-  | otherwise                     = True
-
--- | Computes whether an argument (or let right hand side) should
--- be computed strictly or lazily, based only on its type.
--- Currently, it's just 'isUnliftedType'.
-isStrictType :: HasDebugCallStack => Type -> Bool
-isStrictType = isUnliftedType
 
 {- **********************************************************************
 *                                                                       *

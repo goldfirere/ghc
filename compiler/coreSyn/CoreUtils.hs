@@ -68,7 +68,6 @@ import PrimOp
 import Id
 import IdInfo
 import Type
-import RepType
 import Coercion
 import TyCon
 import Unique

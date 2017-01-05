@@ -72,8 +72,7 @@ import BasicTypes
 import Binary
 import Maybes           ( orElse )
 
-import Type            ( Type )
-import RepType         ( isUnliftedType )
+import Type            ( Type, isUnliftedType )
 import TyCon           ( isNewTyCon, isClassTyCon )
 import DataCon         ( splitDataProductType_maybe )
 

@@ -688,24 +688,34 @@ mkTyConTy tycon = TyConApp tycon []
 Some basic functions, put here to break loops eg with the pretty printer
 -}
 
--- | This version considers Constraint to be distinct from *.
-isLiftedTypeKind :: Kind -> Bool
-isLiftedTypeKind ki | Just ki' <- coreView ki = isLiftedTypeKind ki'
-isLiftedTypeKind (TyConApp tc [TyConApp ptr_rep []])
-  =  tc      `hasKey` tYPETyConKey
-  && ptr_rep `hasKey` liftedRepDataConKey
-isLiftedTypeKind _                = False
+is_TYPE :: (   Type    -- the single argument to TYPE; not a synonym
+            -> Bool )  -- what to return
+        -> Kind -> Bool
+is_TYPE f ki | Just ki' <- coreView ki = is_TYPE f ki'
+is_TYPE f (TyConApp tc [arg])
+  | tc `hasKey` tYPETyConKey
+  = go arg
+    where
+      go ty | Just ty' <- coreView ty = go ty'
+      go ty = f ty
+is_TYPE _ _ = False
 
+-- | This version considers Constraint to be distinct from *. Returns True
+-- if the argument is equivalent to Type and False otherwise.
+isLiftedTypeKind :: Kind -> Bool
+isLiftedTypeKind = is_TYPE is_lifted
+  where
+    is_lifted (TyConApp lifted_rep []) = lifted_rep `hasKey` liftedRepDataConKey
+    is_lifted _                        = False
+
+-- | Returns True if the kind classifies unlifted types and False otherwise.
+-- Note that this returns False for levity-polymorphic kinds, which may
+-- be specialized to a kind that classifies unlifted types.
 isUnliftedTypeKind :: Kind -> Bool
-isUnliftedTypeKind ki | Just ki' <- coreView ki = isUnliftedTypeKind ki'
-isUnliftedTypeKind (TyConApp tc [TyConApp ptr_rep []])
-  | tc       `hasKey` tYPETyConKey
-  , ptr_rep  `hasKey` liftedRepDataConKey
-  = False
-isUnliftedTypeKind (TyConApp tc [arg])
-  = tc `hasKey` tYPETyConKey && noFreeVarsOfType arg
-      -- all other possibilities are unlifted
-isUnliftedTypeKind _ = False
+isUnliftedTypeKind = is_TYPE is_unlifted
+  where
+    is_unlifted (TyConApp rr _args) = not (rr `hasKey` liftedRepDataConKey)
+    is_unlifted _                   = False
 
 -- | Is this the type 'RuntimeRep'?
 isRuntimeRepTy :: Type -> Bool

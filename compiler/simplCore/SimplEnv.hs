@@ -46,7 +46,6 @@ import OrdList
 import Id
 import MkCore                   ( mkWildValBinder )
 import TysWiredIn
-import RepType                  ( isUnliftedType )
 import qualified Type
 import Type hiding              ( substTy, substTyVar, substTyVarBndr )
 import qualified Coercion

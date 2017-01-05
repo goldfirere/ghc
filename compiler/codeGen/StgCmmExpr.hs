@@ -39,7 +39,8 @@ import ForeignCall
 import Id
 import PrimOp
 import TyCon
-import RepType          ( isVoidTy, countConRepArgs, isUnliftedType )
+import Type             ( isUnliftedType )
+import RepType          ( isVoidTy, countConRepArgs )
 import CostCentre       ( CostCentreStack, currentCCS )
 import Maybes
 import Util
