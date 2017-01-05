@@ -101,7 +101,7 @@ mkCmdEnv tc_meths
   where
     mk_bind (std_name, expr)
       = do { rhs <- dsExpr expr
-           ; id <- newSysLocalDs (hsExprType expr)
+           ; id <- newSysLocalDs (exprType rhs)
            ; return (NonRec id rhs, (std_name, id)) }
 
     unmaybe Nothing name = pprPanic "mkCmdEnv" (text "Not found:" <+> ppr name)
@@ -416,7 +416,7 @@ dsCmd ids local_vars stack_ty res_ty
 dsCmd ids local_vars stack_ty res_ty (HsCmdApp cmd arg) env_ids = do
     core_arg <- dsLExpr arg
     let
-        arg_ty = hsLExprType arg
+        arg_ty = exprType core_arg
         stack_ty' = mkCorePairTy arg_ty stack_ty
     (core_cmd, free_vars, env_ids')
              <- dsfixCmd ids local_vars stack_ty' res_ty cmd

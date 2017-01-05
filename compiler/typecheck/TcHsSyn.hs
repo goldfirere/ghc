@@ -13,9 +13,7 @@ checker.
 
 module TcHsSyn (
         -- * Extracting types from HsSyn
-        hsLExprType, hsExprType, hsExprTypeForLPCheck,
         hsLitType, hsLPatType, hsPatType,
-        hsWrapperType, hsSyntaxExprType,
 
         -- * Other HsSyn functions
         mkHsDictLet, mkHsApp,
@@ -56,7 +54,6 @@ import Type
 import Coercion
 import ConLike
 import DataCon
-import PatSyn
 import HscTypes
 import Name
 import NameEnv
@@ -71,7 +68,6 @@ import Bag
 import Outputable
 import Util
 import UniqFM
-import Pair
 
 import Control.Monad
 import Data.List  ( partition )
@@ -85,156 +81,6 @@ import Control.Arrow ( second )
 ************************************************************************
 
 -}
-
--- | Get the type of an expression. This should be done only after zonking.
-hsLExprType :: LHsExpr Id -> Type
-hsLExprType (L _ expr) = hsExprType expr
-
--- | Get the type of an expression. This should be done only after zonking.
-hsExprType :: HsExpr Id -> Type
--- Editing this function? You may wish to test your update by uncommenting
--- the check in DsExpr.dsLExpr, which compares this result against the
--- type of a desugared expression.
-hsExprType (HsVar (L _ id))            = idType id
-hsExprType HsUnboundVar{}              = panic "hsExprType HsUnboundVar"
-hsExprType HsRecFld{}                  = panic "hsExprType HsRecFld"
-hsExprType HsOverLabel{}               = panic "hsExprType HsOverLabel"
-hsExprType HsIPVar{}                   = panic "hsExprType HsIPVar"
-hsExprType (HsOverLit lit)             = overLitType lit
-hsExprType (HsLit lit)                 = hsLitType lit
-hsExprType (HsLam matches)             = hsMatchGroupType matches
-hsExprType (HsLamCase matches)         = hsMatchGroupType matches
-hsExprType (HsApp fun _)               = funResultTy (hsLExprType fun)
-  -- in previous case, don't use tcFunResultTyN, as (deriving Ord) produces
-  -- a dictionary constructor application to the Eq dictionary in HsSyn
-hsExprType HsAppType{}                 = panic "hsExprType HsAppType"
-hsExprType (HsAppTypeOut expr _)       = hsLExprType expr
-hsExprType (OpApp _ op _ _)            = tcFunResultTyN 2 (hsLExprType op)
-hsExprType (NegApp _ neg)              = tcFunResultTyN 1 (hsSyntaxExprType neg)
-hsExprType (HsPar expr)                = hsLExprType expr
-hsExprType (SectionL _ op)             = tcFunResultTyN 1 (hsLExprType op)
-hsExprType (SectionR op _)
-  | Right (arg1_ty : _, res_ty) <- tcSplitFunTysN 2 (hsLExprType op)
-  = mkFunTy arg1_ty res_ty
-  | otherwise
-  = pprPanic "hsExprType SectionR" (ppr op <+> dcolon <+> ppr (hsLExprType op))
-hsExprType (ExplicitTuple args boxity)
-  = mkFunTys [ ty | L _ (Missing ty) <- args ]
-             (mkTupleTy boxity (map hsLTupArgType args))
-hsExprType (ExplicitSum _ _ _ tys)     = mkSumTy tys
-hsExprType (HsCase _ matches)          = tcFunResultTyN 1 (hsMatchGroupType matches)
-hsExprType (HsIf Nothing _ expr _)     = hsLExprType expr
-hsExprType (HsIf (Just if_expr) _ _ _) = tcFunResultTyN 3 (hsSyntaxExprType if_expr)
-hsExprType (HsMultiIf ty _)            = ty
-hsExprType (HsLet _ expr)              = hsLExprType expr
-hsExprType (HsDo _ _ ty)               = ty
-hsExprType (ExplicitList ty Nothing _) = mkListTy ty
-hsExprType (ExplicitList _ (Just from_list) _)
-  = tcFunResultTyN 2 (hsSyntaxExprType from_list)
-hsExprType (ExplicitPArr ty _)         = mkPArrTy ty
-hsExprType (RecordCon { rcon_con_expr = expr })
-  = snd (tcSplitFunTys (hsExprType expr))
-hsExprType (RecordUpd { rupd_cons    = RealDataCon con : _
-                      , rupd_out_tys = arg_tys })
-     -- RecordUpd types use a data *family*, not *instance*
-  = mkFamilyTyConApp (dataConTyCon con) arg_tys
-hsExprType (RecordUpd { rupd_cons    = ~(unreal_con : _)
-                         -- there are always cons; lazy match means I
-                         -- don't have to have a catch-all panic
-                      , rupd_out_tys = arg_tys })
-  = conLikeResTy unreal_con arg_tys
-hsExprType ExprWithTySig{}             = panic "hsExprType ExprWithTySig"
-hsExprType (ExprWithTySigOut expr _)   = hsLExprType expr
-hsExprType (ArithSeq expr Nothing info)
-  = tcFunResultTyN (arithSeqInfoArity info) (hsExprType expr)
-hsExprType (ArithSeq _ (Just from_list) _)
-  = tcFunResultTyN 1 (hsSyntaxExprType from_list)
-hsExprType (PArrSeq expr info)
-  = tcFunResultTyN (arithSeqInfoArity info) (hsExprType expr)
-hsExprType (HsSCC _ _ expr)            = hsLExprType expr
-hsExprType (HsCoreAnn _ _ expr)        = hsLExprType expr
-hsExprType HsBracket{}                 = panic "hsExprType HsBracket"
-hsExprType HsRnBracketOut{}            = panic "hsExprType HsRnBracketOut"
-hsExprType (HsTcBracketOut _ _ ty)     = ty
-hsExprType HsSpliceE{}                 = panic "hsExprType HsSpliceE"
-hsExprType (HsProc _ _ ty)             = ty
-hsExprType (HsStatic _ _ ty)           = ty
-hsExprType HsArrApp{}                  = panic "hsExprType HsArrApp"
-hsExprType HsArrForm{}                 = panic "hsExprType HsArrForm"
-hsExprType (HsTick _ expr)             = hsLExprType expr
-hsExprType (HsBinTick _ _ expr)        = hsLExprType expr
-hsExprType (HsTickPragma _ _ _ expr)   = hsLExprType expr
-hsExprType EWildPat{}                  = panic "hsExprType EWildPat"
-hsExprType EAsPat{}                    = panic "hsExprType EAsPat"
-hsExprType EViewPat{}                  = panic "hsExprType EViewPat"
-hsExprType ELazyPat{}                  = panic "hsExprType ELazyPat"
-hsExprType (HsWrap w e)                = go [w] e
-  where
-      -- accumulate all the wrappers; necessary for performance to
-      -- avoid single-variable substitution when dealing with
-      -- nested WpTyApps
-    go wraps (HsWrap wrap expr) = go (wrap:wraps) expr
-    go wraps e                  = hsWrappersType wraps (hsExprType e)
-
-hsMatchGroupType :: MatchGroup Id a -> Type
-hsMatchGroupType (MG { mg_arg_tys = arg_tys
-                     , mg_res_ty  = res_ty })
-  = mkFunTys arg_tys res_ty
-
-hsSyntaxExprType :: SyntaxExpr Id -> Type
-hsSyntaxExprType e@(SyntaxExpr { syn_expr      = expr
-                               , syn_arg_wraps = arg_wraps
-                               , syn_res_wrap  = res_wrap })
-  | Right (arg_tys, res_ty) <- tcSplitFunTysN (length arg_wraps) (hsExprType expr)
-  = mkFunTys (zipWith hsWrapperType arg_wraps arg_tys) (hsWrapperType res_wrap res_ty)
-  | otherwise
-  = pprPanic "hsSyntaxExprType" (ppr e)
-
-hsLTupArgType :: LHsTupArg Id -> Type
-hsLTupArgType (L _ (Present expr)) = hsLExprType expr
-hsLTupArgType (L _ (Missing ty))   = ty
-
-arithSeqInfoArity :: ArithSeqInfo id -> Arity
-arithSeqInfoArity From{}       = 1
-arithSeqInfoArity FromThen{}   = 2
-arithSeqInfoArity FromTo{}     = 2
-arithSeqInfoArity FromThenTo{} = 3
-
-hsWrapperType :: HsWrapper
-              -> Type  -- type of the thing wrapped
-              -> Type
-hsWrapperType w ty = hsWrappersType [w] ty
-
-hsWrappersType :: [HsWrapper]  -- wrappers, in order of application
-                               -- this is *backwards* from the way
-                               -- wrappers are normally ordered
-               -> Type         -- of thing inside
-               -> Type
-hsWrappersType []                     ty = ty
-hsWrappersType (WpHole : ws)          ty = hsWrappersType ws ty
-hsWrappersType (WpCompose w1 w2 : ws) ty = hsWrappersType (w2:w1:ws) ty
-hsWrappersType (WpFun _ wrap_res arg_ty _ : ws) ty
-  = hsWrappersType ws $
-    mkFunTy arg_ty $
-    hsWrappersType [wrap_res] $
-    tcFunResultTyN 1 ty
-hsWrappersType (WpCast co : ws)       _
-  = hsWrappersType ws (pSnd $ tcCoercionKind co)
-hsWrappersType (WpEvLam ev_var : ws)  ty
-  = hsWrappersType ws (mkFunTy (idType ev_var) ty)
-hsWrappersType (WpEvApp _ : ws)       ty
-  = hsWrappersType ws (funResultTy ty)
-hsWrappersType (WpTyLam tv : ws)      ty
-  = hsWrappersType ws (mkInvForAllTy tv ty)
-hsWrappersType (WpTyApp arg : ws)     ty
-  = go [arg] ws
-  where
-      -- This is the commoning up we need. Without it, T5631 blows up.
-    go ty_args (WpTyApp ty_arg : ws') = go (ty_arg : ty_args) ws'
-    go ty_args ws'                    = hsWrappersType ws' $
-                                        piResultTys ty (reverse ty_args)
-hsWrappersType (WpLet _ : ws)         ty
-  = hsWrappersType ws ty
 
 hsLPatType :: OutPat Id -> Type
 hsLPatType (L _ pat) = hsPatType pat
@@ -275,130 +121,6 @@ hsLitType (HsInteger _ _ ty) = ty
 hsLitType (HsRat _ ty)       = ty
 hsLitType (HsFloatPrim _)    = floatPrimTy
 hsLitType (HsDoublePrim _)   = doublePrimTy
-
--- | Variant of 'hsExprType' that is optimized for levity-polymorphism
--- checking. (This is necessary not to make perf/compiler/T5631 blow up.)
--- Returns Nothing if the expression's type is surely not levity polymorphic.
--- Otherwise, returns the type
-hsExprTypeForLPCheck :: HsExpr Id -> Maybe Type
-hsExprTypeForLPCheck = go
-  where
-    gol (L _ e) = go e
-
-    go HsVar{}                       = Nothing  -- no levity-polymorphic binders
-    go HsLit{}                       = Nothing
-    go HsLam{}                       = Nothing
-    go HsLamCase{}                   = Nothing
-    go (HsApp f _)      | go_lapp f  = Nothing
-    go (HsAppTypeOut e _)            = gol e
-    go (OpApp _ op _ _) | go_lapp op = Nothing
-    go (NegApp _ neg)   | go_syn neg = Nothing
-    go (HsPar e)                     = gol e
-     -- SectionL might be LP if PostfixOperators is on.
-    go (SectionL _ op)  | go_lapp op = Nothing
-    go SectionR{}                    = Nothing
-    go ExplicitTuple{}               = Nothing
-    go ExplicitSum{}                 = Nothing
-    go (HsLet _ (L _ e))             = go e
-    go (ExplicitList _ Nothing _)    = Nothing
-    go (ExplicitList _ (Just s) _)
-                          | go_syn s = Nothing
-    go ExplicitPArr{}                = Nothing
-    go (RecordCon { rcon_con_like = RealDataCon _ }) = Nothing
-    go (RecordUpd { rupd_cons = RealDataCon _ : _ }) = Nothing
-    go (ExprWithTySigOut e _)        = gol e
-    go (ArithSeq _ Nothing _)        = Nothing
-    go (ArithSeq _ (Just s) _) | go_syn s = Nothing
-    go PArrSeq{}                     = Nothing
-    go (HsSCC _ _ e)                 = gol e
-    go (HsCoreAnn _ _ e)             = gol e
-    go HsTcBracketOut{}              = Nothing
-    go HsStatic{}                    = Nothing
-    go (HsTick _ e)                  = gol e
-    go (HsBinTick _ _ e)             = gol e
-    go (HsTickPragma _ _ _ e)        = gol e
-    go (HsWrap w e)                  = go_wrap w e
-    go e                             = Just (hsExprType e)
-
-    go_wrap WpHole e               = go e
-    go_wrap (WpCompose w1 w2) e    = go_wrap w1 (HsWrap w2 e)
-    go_wrap WpFun{} _              = Nothing
-    go_wrap WpEvLam{} _            = Nothing
-    go_wrap WpEvApp{} e | go_app e = Nothing
-
-      -- next two cases are valid because type abstraction and application
-      -- are erased and therefore cannot cause a levity-polymorphism change
-      -- In the case that we need to compute e's type, laziness stops us
-      -- from doing so here.
-    go_wrap WpTyLam{} e | Nothing <- go e = Nothing
-    go_wrap WpTyApp{} e | Nothing <- go e = Nothing
-
-    go_wrap w e = Just (hsWrapperType w (hsExprType e))
-
-      -- if the function is a variable (common case), check its
-      -- levityInfo. This might mean we don't need to look up and compute
-      -- on the type. Spec of these functions: return True if there is
-      -- no possibility, ever, of this expression becoming levity polymorphic,
-      -- no matter what it's applied to; return False otherwise.
-      -- returning False is always safe. See also Note [Levity info] in
-      -- IdInfo
-    go_lapp (L _ e) = go_app e
-
-    go_app (HsVar (L _ id))
-      | isNeverLevPolyId id
-      = True
-    go_app HsLit{}            = True
-    go_app (HsApp e _)        = go_lapp e
-    go_app (HsAppTypeOut e _) = go_lapp e
-    go_app (OpApp _ e _ _)    = go_lapp e
-    go_app (NegApp _ neg)     = go_syn neg
-    go_app (HsPar e)          = go_lapp e
-    go_app (SectionL _ e)     = go_lapp e
-    go_app (SectionR e _)     = go_lapp e
-    go_app ExplicitTuple{}    = True
-    go_app ExplicitSum{}      = True
-    go_app (HsLet _ e)        = go_lapp e
-    go_app (ExplicitList _ Nothing _)  = True
-    go_app (ExplicitList _ (Just s) _) = go_syn s
-    go_app ExplicitPArr{}              = True
-    go_app (RecordCon { rcon_con_like = RealDataCon _ }) = True
-    go_app (RecordCon { rcon_con_like = PatSynCon patsyn })
-      | Just (id, _) <- patSynBuilder patsyn
-      , isNeverLevPolyId id
-      = True
-    go_app (RecordUpd { rupd_cons = RealDataCon _ : _}) = True
-    go_app (RecordUpd { rupd_cons = PatSynCon patsyn : _ })
-      | Just (id, _) <- patSynBuilder patsyn
-      , isNeverLevPolyId id
-      = True
-    go_app (ExprWithTySigOut e _)    = go_lapp e
-    go_app (ArithSeq _ Nothing _)    = True
-    go_app (ArithSeq _ (Just syn) _) = go_syn syn
-    go_app PArrSeq{}                 = True
-    go_app (HsSCC _ _ e)             = go_lapp e
-    go_app (HsCoreAnn _ _ e)         = go_lapp e
-    go_app HsTcBracketOut{}          = True
-    go_app HsStatic{}                = True
-    go_app (HsTick _ e)              = go_lapp e
-    go_app (HsBinTick _ _ e)         = go_lapp e
-    go_app (HsTickPragma _ _ _ e)    = go_lapp e
-    go_app (HsWrap w e)              = go_wrap_app w e
-    go_app _                         = False
-
-    go_wrap_app WpHole                 e = go_app e
-    go_wrap_app (WpCompose w1 w2)      e = go_wrap_app w1 (HsWrap w2 e)
-    go_wrap_app (WpFun _ wrap_res _ _) e = go_wrap_app wrap_res e
-    go_wrap_app (WpCast co)            _
-      | Pair _ right_ty <- tcCoercionKind co
-      , (_, res_ty) <- tcSplitPiTys right_ty
-      = noFreeVarsOfType (typeKind res_ty)
-    go_wrap_app (WpEvLam _)            e = go_app e
-    go_wrap_app (WpEvApp _)            e = go_app e
-    go_wrap_app (WpTyLam _)            e = go_app e
-    go_wrap_app (WpTyApp _)            e = go_app e
-    go_wrap_app (WpLet _)              e = go_app e
-
-    go_syn (SyntaxExpr { syn_expr = e, syn_res_wrap = w }) = go_wrap_app w e
 
 -- Overloaded literals. Here mainly because it uses isIntTy etc
 

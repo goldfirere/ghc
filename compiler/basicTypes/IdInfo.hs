@@ -550,7 +550,7 @@ Ids store whether or not they can be levity-polymorphic at any amount
 of saturation. This is helpful in optimizing the levity-polymorphism check
 done in the desugarer, where we can usually learn that something is not
 levity-polymorphic without actually figuring out its type. See
-hsExprTypeForLPCheck in TcHsSyn for where this info is used. Storing
+isExprLevPoly in CoreUtils for where this info is used. Storing
 this is required to prevent perf/compiler/T5631 from blowing up.
 
 -}

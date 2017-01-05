@@ -42,7 +42,6 @@ import TysPrim ( mkProxyPrimTy )
 import TyCon
 import TcEvidence
 import TcType
-import TcHsSyn ( hsWrapperType )
 import Type
 import Coercion
 import TysWiredIn ( typeNatKind, typeSymbolKind )

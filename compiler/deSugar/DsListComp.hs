@@ -27,7 +27,6 @@ import CoreUtils
 import Id
 import Type
 import TysWiredIn
-import TcHsSyn ( hsSyntaxExprType )
 import Match
 import PrelNames
 import SrcLoc
@@ -139,7 +138,7 @@ dsTransStmt (TransStmt { trS_form = form, trS_stmts = stmts, trS_bndrs = binderM
                 , Var unzip_fn'
                 , inner_list_expr' ]
 
-    dsNoLevPoly (tcFunResultTyN (length usingArgs') (hsLExprType using))
+    dsNoLevPoly (tcFunResultTyN (length usingArgs') (exprType usingExpr'))
       (text "In the result of a" <+> quotes (text "using") <+> text "function:" <+> ppr using)
 
     -- Build a pattern that ensures the consumer binds into the NEW binders,
@@ -848,10 +847,7 @@ dsInnerMonadComp :: [ExprLStmt Id]
                  -> SyntaxExpr Id   -- The monomorphic "return" operator
                  -> DsM CoreExpr
 dsInnerMonadComp stmts bndrs ret_op
-  = do { dsNoLevPoly (tcFunResultTyN 1 (hsSyntaxExprType ret_op))
-           (text "In the monad comprehension block:" <+> ppr stmts)
-       ; expr <- dsMcStmts (stmts ++ [noLoc (LastStmt (mkBigLHsVarTupId bndrs) False ret_op)])
-       ; return expr }
+  = dsMcStmts (stmts ++ [noLoc (LastStmt (mkBigLHsVarTupId bndrs) False ret_op)])
 
 
 -- The `unzip` function for `GroupStmt` in a monad comprehensions

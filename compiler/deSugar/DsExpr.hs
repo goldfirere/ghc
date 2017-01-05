@@ -216,10 +216,8 @@ dsLExpr (L loc e)
 dsLExprNoLP :: LHsExpr Id -> DsM CoreExpr
 dsLExprNoLP (L loc e)
   = putSrcSpanDs loc $
-    do { -- whenIsJust (hsExprTypeForLPCheck e) $ \ ty ->
---           dsNoLevPoly ty (text "In the type of expression:" <+> ppr e)
-       ; e' <- dsExpr e
-       ; let ty = exprType e'
+    do { e' <- dsExpr e
+       ; let ty = exprType e'  -- TODO (RAE): Update me
        ; dsNoLevPoly ty (text "In the type of expression:" <+> ppr e)
        ; return e' }
 
@@ -311,7 +309,7 @@ dsExpr (SectionL expr op)       -- Desugar (e !) to ((!) e)
 dsExpr e@(SectionR op expr) = do
     core_op <- dsLExpr op
     -- for the type of x, we need the type of op's 2nd argument
-    let (x_ty:y_ty:_, _) = splitFunTys (hsLExprType op)
+    let (x_ty:y_ty:_, _) = splitFunTys (exprType core_op)
         -- See comment with SectionL
     y_core <- dsLExpr expr
     x_id <- newSysLocalDs x_ty
@@ -775,7 +773,7 @@ dsSyntaxExpr (SyntaxExpr { syn_expr      = expr
        ; core_arg_wraps <- mapM dsHsWrapper arg_wraps
        ; core_res_wrap  <- dsHsWrapper res_wrap
        ; wrapped_args   <- zipWithM ($) core_arg_wraps arg_exprs
-       ; zipWithM_ no_lev_poly [1..] wrapped_args
+       ; zipWithM_ dsNoLevPoly (map exprType wrapped_args) [ mk_doc n | n <- [1..] ]
        ; core_res_wrap (mkApps fun wrapped_args) }
   where
     mk_doc n = text "In the" <+> speakNth n <+> text "argument of" <+> quotes (ppr expr)
