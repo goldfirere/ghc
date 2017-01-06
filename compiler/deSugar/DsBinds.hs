@@ -58,7 +58,7 @@ import SrcLoc
 import Maybes
 import OrdList
 import Bag
-import BasicTypes hiding ( TopLevel )
+import BasicTypes
 import DynFlags
 import FastString
 import Util
@@ -75,14 +75,18 @@ import Control.Monad
 -- | Desugar top level binds, strict binds are treated like normal
 -- binds since there is no good time to force before first usage.
 dsTopLHsBinds :: LHsBinds Id -> DsM (OrdList (Id,CoreExpr))
-dsTopLHsBinds binds = fmap (toOL . snd) (ds_lhs_binds binds)
+dsTopLHsBinds binds = do
+  checkStrictBinds TopLevel Recursive binds
+  fmap (toOL . snd) (ds_lhs_binds binds)
 
 -- | Desugar all other kind of bindings, Ids of strict binds are returned to
 -- later be forced in the binding gorup body, see Note [Desugar Strict binds]
-dsLHsBinds :: LHsBinds Id
+dsLHsBinds :: RecFlag -> LHsBinds Id
            -> DsM ([Id], [(Id,CoreExpr)])
-dsLHsBinds binds = do { (force_vars, binds') <- ds_lhs_binds binds
-                      ; return (force_vars, binds') }
+dsLHsBinds is_rec binds
+  = do { checkStrictBinds NotTopLevel is_rec binds
+       ; (force_vars, binds') <- ds_lhs_binds binds
+       ; return (force_vars, binds') }
 
 ------------------------
 
@@ -592,6 +596,155 @@ detailed explanation of the desugaring of strict bindings.
 
 -}
 
+{- Note [Unlifted id check in checkStrictBinds]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Suppose there is a binding with the type (Num a => (# a, a #)). Is this a
+strict binding that should be disallowed at the top level? At first glance,
+no, because it's a function. But consider how this is desugared via
+AbsBinds:
+
+  -- x :: Num a => (# a, a #)
+  x = (# 3, 4 #)
+
+becomes
+
+  x = \ $dictNum ->
+      let x_mono = (# fromInteger $dictNum 3, fromInteger $dictNum 4 #) in
+      x_mono
+
+Note that the inner let is strict. And thus if we have a bunch of mutually
+recursive bindings of this form, we could end up in trouble. This was shown
+up in #9140.
+
+But if there is a type signature on x, everything changes because of the
+desugaring used by AbsBindsSig:
+
+  x :: Num a => (# a, a #)
+  x = (# 3, 4 #)
+
+becomes
+
+  x = \ $dictNum -> (# fromInteger $dictNum 3, fromInteger $dictNum 4 #)
+
+No strictness anymore! The bottom line here is that, for inferred types, we
+care about the strictness of the type after the =>. For checked types
+(AbsBindsSig), we care about the overall strictness.
+
+This matters. If we don't separate out the AbsBindsSig case, then GHC runs into
+a problem when compiling
+
+  undefined :: forall (r :: RuntimeRep) (a :: TYPE r). HasCallStack => a
+
+Looking only after the =>, we cannot tell if this is strict or not. (GHC panics
+if you try.) Looking at the whole type, on the other hand, tells you that this
+is a lifted function type, with no trouble at all.
+
+-}
+
+-----------------------------
+-- NB: This must be in the desugarer, because we can tell strictness only
+-- after zonking
+checkStrictBinds :: TopLevelFlag -> RecFlag -> LHsBinds Id -> DsM ()
+-- Check that non-overloaded unlifted bindings are
+--      a) non-recursive,
+--      b) not top level,
+--      c) not a multiple-binding group (more or less implied by (a))
+checkStrictBinds top_lvl rec_group binds
+  | any_unlifted_bndr || any_strict_pat   -- This binding group must be matched strictly
+  = do  { check (isNotTopLevel top_lvl)
+                (strictBindErr "Top-level" any_unlifted_bndr binds)
+        ; check (isNonRec rec_group)
+                (strictBindErr "Recursive" any_unlifted_bndr binds)
+
+        ; check (allBag is_monomorphic binds)
+                  (polyBindErr binds)
+            -- data Ptr a = Ptr Addr#
+            -- f x = let p@(Ptr y) = ... in ...
+            -- Here the binding for 'p' is polymorphic, but does
+            -- not mix with an unlifted binding for 'y'.  You should
+            -- use a bang pattern.  Trac #6078.
+
+        ; check (isSingletonBag binds)
+                (strictBindErr "Multiple" any_unlifted_bndr binds)
+
+        -- Complain about a binding that looks lazy
+        --    e.g.    let I# y = x in ...
+        -- Remember, in checkStrictBinds we are going to do strict
+        -- matching, so (for software engineering reasons) we insist
+        -- that the strictness is manifest on each binding
+        -- However, lone (unboxed) variables are ok
+        ; check (not any_pat_looks_lazy)
+                  (unliftedMustBeBang binds) }
+  | otherwise
+  = return ()
+  where
+    any_unlifted_bndr  = anyBag (is_unlifted . unLoc) binds
+    any_strict_pat     = anyBag (isUnliftedHsBind . unLoc) binds
+    any_pat_looks_lazy = anyBag (looksLazyPatBind . unLoc) binds
+
+      -- See Note [Unlifted id check in checkStrictBinds]
+    is_unlifted (AbsBindsSig { abs_sig_export = id })
+      = isUnliftedType (idType id)
+    is_unlifted bind
+      = any is_unlifted_id (collectHsBindBinders bind)
+
+    is_unlifted_id id
+      = case tcSplitSigmaTy (idType id) of
+          (_, _, tau) -> isUnliftedType tau
+          -- For the is_unlifted check, we need to look inside polymorphism
+          -- and overloading.  E.g.  x = (# 1, True #)
+          -- would get type forall a. Num a => (# a, Bool #)
+          -- and we want to reject that.  See Trac #9140
+
+    is_monomorphic (L _ (AbsBinds { abs_tvs = tvs, abs_ev_vars = evs }))
+                     = null tvs && null evs
+    is_monomorphic (L _ (AbsBindsSig { abs_tvs = tvs, abs_ev_vars = evs }))
+                     = null tvs && null evs
+    is_monomorphic _ = True
+
+    check :: Bool -> SDoc -> DsM ()
+    --      see Note [Compiling GHC.Prim]
+    check True  _   = return ()
+    check False err = do { mod <- getModule
+                         ; unless (mod == gHC_PRIM) $
+                           failWithDs err }
+
+unliftedMustBeBang :: LHsBinds Id -> SDoc
+unliftedMustBeBang binds
+  = hang (text "Pattern bindings containing unlifted types should use an outermost bang pattern:")
+       2 (vcat (map ppr (bagToList binds)))
+
+polyBindErr :: LHsBinds Id -> SDoc
+polyBindErr binds
+  = hang (text "You can't mix polymorphic and unlifted bindings")
+       2 (vcat [vcat (map ppr (bagToList binds)),
+                text "Probable fix: add a type signature"])
+
+strictBindErr :: String -> Bool -> LHsBinds Id -> SDoc
+strictBindErr flavour any_unlifted_bndr binds
+  = hang (text flavour <+> msg <+> text "aren't allowed:")
+       2 (vcat (map ppr (bagToList binds)))
+  where
+    msg | any_unlifted_bndr = text "bindings for unlifted types"
+        | otherwise         = text "bang-pattern or unboxed-tuple bindings"
+
+
+{- Note [Compiling GHC.Prim]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Module GHC.Prim has no source code: it is the host module for
+primitive, built-in functions and types.  However, for Haddock-ing
+purposes we generate (via utils/genprimopcode) a fake source file
+GHC/Prim.hs, and give it to Haddock, so that it can generate
+documentation.  It contains definitions like
+    nullAddr# :: NullAddr#
+which would normally be rejected as a top-level unlifted binding. But
+we don't want to complain, because we are only "compiling" this fake
+mdule for documentation purposes.  Hence this hacky test for gHC_PRIM
+in checkStrictBinds.
+
+(We only make the test if things look wrong, so there is no cost in
+the common case.) -}
+
 ------------------------
 dsSpecs :: CoreExpr     -- Its rhs
         -> TcSpecPrags
@@ -1065,7 +1218,7 @@ dsHsWrapper (WpFun c1 c2 t1 doc)
                                    ; w2 <- dsHsWrapper c2
                                    ; let app f a = mkCoreAppDs (text "dsHsWrapper") f a
                                    ; return (\e -> do { arg <- w1 (Var x)
-                                                      ; dsNoLevPoly (exprType arg) doc
+                                                      ; dsNoLevPolyExpr arg doc
                                                       ; body <- w2 (app e arg)
                                                       ; return (Lam x body) }) }
 dsHsWrapper (WpCast co)       = ASSERT(coercionRole co == Representational)

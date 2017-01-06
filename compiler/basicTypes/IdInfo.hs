@@ -568,9 +568,9 @@ instance Outputable LevityInfo where
 -- | Marks an IdInfo describing an Id that is never levity polymorphic (even when
 -- applied). The Type is only there for checking that it's really never levity
 -- polymorphic
-setNeverLevPoly :: IdInfo -> Type -> IdInfo
+setNeverLevPoly :: HasDebugCallStack => IdInfo -> Type -> IdInfo
 setNeverLevPoly info ty
-  = ASSERT( not (resultIsLevPoly ty) )
+  = ASSERT2( not (resultIsLevPoly ty), ppr ty )
     info { levityInfo = NeverLevityPolymorphic }
 
 setLevityInfoWithType :: IdInfo -> Type -> IdInfo

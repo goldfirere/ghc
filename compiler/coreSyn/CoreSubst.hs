@@ -55,7 +55,6 @@ import Type     hiding ( substTy, extendTvSubst, extendCvSubst, extendTvSubstLis
                        , isInScope, substTyVarBndr, cloneTyVarBndr )
 import Coercion hiding ( substCo, substCoVarBndr )
 
-import Kind
 import TyCon       ( tyConArity )
 import DataCon
 import PrelNames
@@ -1064,8 +1063,7 @@ maybe_substitute subst b r
      -- See Note [Levity polymorphism invariants] in CoreSyn
      -- Ah, but it *is* possible in the compulsory unfolding of unsafeCoerce#
      -- This check prevents the isUnliftedType check from panicking.
-  , isLevityPolymorphic (typeKind id_ty)
-      || not (isUnliftedType (idType b)) || exprOkForSpeculation r
+  , isTypeLevPoly id_ty || not (isUnliftedType (idType b)) || exprOkForSpeculation r
   = Just (extendIdSubst subst b r)
 
   | otherwise

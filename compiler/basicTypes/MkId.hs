@@ -379,11 +379,13 @@ mkDataConWorkId wkr_name data_con
     alg_wkr_ty = dataConRepType data_con
     wkr_arity = dataConRepArity data_con
     wkr_info  = noCafIdInfo
-                `setArityInfo`       wkr_arity
-                `setStrictnessInfo`  wkr_sig
-                `setUnfoldingInfo`   evaldUnfolding  -- Record that it's evaluated,
-                                                     -- even if arity = 0
-                `setNeverLevPoly`    alg_wkr_ty
+                `setArityInfo`          wkr_arity
+                `setStrictnessInfo`     wkr_sig
+                `setUnfoldingInfo`      evaldUnfolding  -- Record that it's evaluated,
+                                                        -- even if arity = 0
+                `setLevityInfoWithType` alg_wkr_ty
+                  -- NB: unboxed tuples have workers, so we can't use
+                  -- setNeverLevPoly
 
     wkr_sig = mkClosedStrictSig (replicate wkr_arity topDmd) (dataConCPR data_con)
         --      Note [Data-con worker strictness]

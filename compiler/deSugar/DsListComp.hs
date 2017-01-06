@@ -79,15 +79,12 @@ dsListComp lquals res_ty = do
 -- of that comprehension that we need in the outer comprehension into such an expression
 -- and the type of the elements that it outputs (tuples of binders)
 dsInnerListComp :: (ParStmtBlock Id Id) -> DsM (CoreExpr, Type)
-dsInnerListComp block@(ParStmtBlock stmts bndrs _)
+dsInnerListComp (ParStmtBlock stmts bndrs _)
   = do { let bndrs_tuple_type = mkBigCoreVarTupTy bndrs
              list_ty          = mkListTy bndrs_tuple_type
 
              -- really use original bndrs below!
        ; expr <- dsListComp (stmts ++ [noLoc $ mkLastStmt (mkBigLHsVarTupId bndrs)]) list_ty
-
-          -- inner list comprehensions are always used as arguments
-       ; dsNoLevPoly list_ty (text "The list comprehension block:" <+> ppr block)
 
        ; return (expr, bndrs_tuple_type) }
 

@@ -85,7 +85,7 @@ module TcMType (
 
   ------------------------------
   -- Levity polymorphism
-  ensureNotLevPoly, checkForLevPoly, checkForLevPolyX
+  ensureNotLevPoly, checkForLevPoly, checkForLevPolyX, formatLevPolyErr
   ) where
 
 #include "HsVersions.h"
@@ -1607,23 +1607,21 @@ ensureNotLevPoly ty doc
 checkForLevPoly :: SDoc -> Type -> TcM ()
 checkForLevPoly = checkForLevPolyX addErr
 
-   -- See Note [Unboxed tuples in representation polymorphism check]
 checkForLevPolyX :: Monad m
                  => (SDoc -> m ())  -- how to report an error
                  -> SDoc -> Type -> m ()
 checkForLevPolyX add_err extra ty
-  | not (noFreeVarsOfType runtime_rep)
-  = add_err $
-    hang (text "A levity-polymorphic type is not allowed here:")
-       2 (vcat [ text "Type:" <+> ppr tidy_ty
-               , text "Kind:" <+> ppr tidy_ki ]) $$
-    extra
-
+  | isTypeLevPoly ty
+  = add_err (formatLevPolyErr ty $$ extra)
   | otherwise
   = return ()
-  where
-    ki          = typeKind ty
-    runtime_rep = getRuntimeRepFromKind "checkForLevPolyX" ki
 
+formatLevPolyErr :: Type  -- levity-polymorphic type
+                 -> SDoc
+formatLevPolyErr ty
+  = hang (text "A levity-polymorphic type is not allowed here:")
+       2 (vcat [ text "Type:" <+> ppr tidy_ty
+               , text "Kind:" <+> ppr tidy_ki ])
+  where
     (tidy_env, tidy_ty) = tidyOpenType emptyTidyEnv ty
     tidy_ki             = tidyType tidy_env (typeKind ty)

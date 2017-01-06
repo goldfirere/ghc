@@ -109,10 +109,10 @@ ds_val_bind (NonRecursive, hsbinds) body
   = putSrcSpanDs loc (dsUnliftedBind bind body)
 
 -- Ordinary case for bindings; none should be unlifted
-ds_val_bind (_is_rec, binds) body
-  = do  { (force_vars,prs) <- dsLHsBinds binds
+ds_val_bind (is_rec, binds) body
+  = do  { (force_vars,prs) <- dsLHsBinds is_rec binds
         ; let body' = foldr seqVar body force_vars
-        ; ASSERT2( not (any (isUnliftedType . idType . fst) prs), ppr _is_rec $$ ppr binds )
+        ; ASSERT2( not (any (isUnliftedType . idType . fst) prs), ppr is_rec $$ ppr binds )
           case prs of
             [] -> return body
             _  -> return (Let (Rec prs) body') }
@@ -217,8 +217,7 @@ dsLExprNoLP :: LHsExpr Id -> DsM CoreExpr
 dsLExprNoLP (L loc e)
   = putSrcSpanDs loc $
     do { e' <- dsExpr e
-       ; let ty = exprType e'  -- TODO (RAE): Update me
-       ; dsNoLevPoly ty (text "In the type of expression:" <+> ppr e)
+       ; dsNoLevPolyExpr e' (text "In the type of expression:" <+> ppr e)
        ; return e' }
 
 dsExpr :: HsExpr Id -> DsM CoreExpr
@@ -773,7 +772,7 @@ dsSyntaxExpr (SyntaxExpr { syn_expr      = expr
        ; core_arg_wraps <- mapM dsHsWrapper arg_wraps
        ; core_res_wrap  <- dsHsWrapper res_wrap
        ; wrapped_args   <- zipWithM ($) core_arg_wraps arg_exprs
-       ; zipWithM_ dsNoLevPoly (map exprType wrapped_args) [ mk_doc n | n <- [1..] ]
+       ; zipWithM_ dsNoLevPolyExpr wrapped_args [ mk_doc n | n <- [1..] ]
        ; core_res_wrap (mkApps fun wrapped_args) }
   where
     mk_doc n = text "In the" <+> speakNth n <+> text "argument of" <+> quotes (ppr expr)

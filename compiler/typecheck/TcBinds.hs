@@ -9,7 +9,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 module TcBinds ( tcLocalBinds, tcTopBinds, tcRecSelBinds,
-                 tcValBinds, tcHsBootSigs, tcPolyCheck,
+                 tcHsBootSigs, tcPolyCheck,
                  tcVectDecls, addTypecheckedBinds,
                  chooseInferredQuantifiers,
                  badBootDeclErr ) where
@@ -57,7 +57,7 @@ import Maybes
 import Util
 import BasicTypes
 import Outputable
-import PrelNames( gHC_PRIM, ipClassName )
+import PrelNames( ipClassName )
 import TcValidity (checkValidType)
 import Unique (getUnique)
 import UniqFM
@@ -399,7 +399,7 @@ tc_group top_lvl sig_fn prag_fn (Recursive, binds) closed thing_inside
     tc_scc (CyclicSCC binds) = tc_sub_group Recursive    binds
 
     tc_sub_group rec_tc binds =
-      tcPolyBinds top_lvl sig_fn prag_fn Recursive rec_tc closed binds
+      tcPolyBinds sig_fn prag_fn Recursive rec_tc closed binds
 
 recursivePatSynErr :: OutputableBndr name => LHsBinds name -> TcM a
 recursivePatSynErr binds
@@ -430,7 +430,7 @@ tc_single _top_lvl sig_fn _prag_fn
         Just                 _  -> panic "tc_single"
 
 tc_single top_lvl sig_fn prag_fn lbind closed thing_inside
-  = do { (binds1, ids) <- tcPolyBinds top_lvl sig_fn prag_fn
+  = do { (binds1, ids) <- tcPolyBinds sig_fn prag_fn
                                       NonRecursive NonRecursive
                                       closed
                                       [lbind]
@@ -461,7 +461,7 @@ mkEdges sig_fn binds
                                      , bndr <- collectHsBindBinders bind ]
 
 ------------------------
-tcPolyBinds :: TopLevelFlag -> TcSigFun -> TcPragEnv
+tcPolyBinds :: TcSigFun -> TcPragEnv
             -> RecFlag         -- Whether the group is really recursive
             -> RecFlag         -- Whether it's recursive after breaking
                                -- dependencies based on type signatures
@@ -480,7 +480,7 @@ tcPolyBinds :: TopLevelFlag -> TcSigFun -> TcPragEnv
 -- Knows nothing about the scope of the bindings
 -- None of the bindings are pattern synonyms
 
-tcPolyBinds top_lvl sig_fn prag_fn rec_group rec_tc closed bind_list
+tcPolyBinds sig_fn prag_fn rec_group rec_tc closed bind_list
   = setSrcSpan loc                              $
     recoverM (recoveryCode binder_names sig_fn) $ do
         -- Set up main recover; take advantage of any type sigs
@@ -490,15 +490,11 @@ tcPolyBinds top_lvl sig_fn prag_fn rec_group rec_tc closed bind_list
     ; dflags   <- getDynFlags
     ; let plan = decideGeneralisationPlan dflags bind_list closed sig_fn
     ; traceTc "Generalisation plan" (ppr plan)
-    ; result@(tc_binds, poly_ids) <- case plan of
+    ; result@(_, poly_ids) <- case plan of
          NoGen              -> tcPolyNoGen rec_tc prag_fn sig_fn bind_list
          InferGen mn        -> tcPolyInfer rec_tc prag_fn sig_fn mn bind_list
          CheckGen lbind sig -> tcPolyCheck prag_fn sig lbind
 
-        -- Check whether strict bindings are ok
-        -- These must be non-recursive etc, and are not generalised
-        -- They desugar to a case expression in the end
-    ; checkStrictBinds top_lvl rec_group plan bind_list tc_binds poly_ids
     ; traceTc "} End of bindings for" (vcat [ ppr binder_names, ppr rec_group
                                             , vcat [ppr id <+> ppr (idType id) | id <- poly_ids]
                                           ])
@@ -552,11 +548,8 @@ tcPolyNoGen rec_tc prag_fn tc_sig_fn bind_list
        ; return (binds', mono_ids') }
   where
     tc_mono_info (MBI { mbi_poly_name = name, mbi_mono_id = mono_id })
-      = do { mono_ty' <- zonkTcType (idType mono_id)
-             -- Zonk, mainly to expose unboxed types to checkStrictBinds
-           ; let mono_id' = setIdType mono_id mono_ty'
-           ; _specs <- tcSpecPrags mono_id' (lookupPragEnv prag_fn name)
-           ; return mono_id' }
+      = do { _specs <- tcSpecPrags mono_id (lookupPragEnv prag_fn name)
+           ; return mono_id }
            -- NB: tcPrags generates error messages for
            --     specialisation pragmas for non-overloaded sigs
            -- Indeed that is why we call it here!
@@ -1593,157 +1586,6 @@ isClosedBndrGroup binds = do
         -- imported things too, so that we can report unused imports
         -- These won't be in the local type env.
         -- Ditto class method etc from the current module
-
-{- Note [Unlifted id check in checkStrictBinds]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Suppose there is a binding with the type (Num a => (# a, a #)). Is this a
-strict binding that should be disallowed at the top level? At first glance,
-no, because it's a function. But consider how this is desugared via
-AbsBinds:
-
-  -- x :: Num a => (# a, a #)
-  x = (# 3, 4 #)
-
-becomes
-
-  x = \ $dictNum ->
-      let x_mono = (# fromInteger $dictNum 3, fromInteger $dictNum 4 #) in
-      x_mono
-
-Note that the inner let is strict. And thus if we have a bunch of mutually
-recursive bindings of this form, we could end up in trouble. This was shown
-up in #9140.
-
-But if there is a type signature on x, everything changes because of the
-desugaring used by AbsBindsSig:
-
-  x :: Num a => (# a, a #)
-  x = (# 3, 4 #)
-
-becomes
-
-  x = \ $dictNum -> (# fromInteger $dictNum 3, fromInteger $dictNum 4 #)
-
-No strictness anymore! The bottom line here is that, for inferred types, we
-care about the strictness of the type after the =>. For checked types, we
-care about the overall strictness.
-
-This matters. If we don't separate out the Check case, then GHC runs into
-a problem when compiling
-
-  undefined :: forall (r :: RuntimeRep) (a :: TYPE r). HasCallStack => a
-
-Looking only after the =>, we cannot tell if this is strict or not. (GHC panics
-if you try.) Looking at the whole type, on the other hand, tells you that this
-is a lifted function type, with no trouble at all.
-
--}
-
------------------------------
-checkStrictBinds :: TopLevelFlag -> RecFlag -> GeneralisationPlan
-                 -> [LHsBind Name]
-                 -> LHsBinds TcId -> [Id]
-                 -> TcM ()
--- Check that non-overloaded unlifted bindings are
---      a) non-recursive,
---      b) not top level,
---      c) not a multiple-binding group (more or less implied by (a))
-
-checkStrictBinds top_lvl rec_group plan orig_binds tc_binds poly_ids
-  | any_unlifted_bndr || any_strict_pat   -- This binding group must be matched strictly
-  = do  { check (isNotTopLevel top_lvl)
-                (strictBindErr "Top-level" any_unlifted_bndr orig_binds)
-        ; check (isNonRec rec_group)
-                (strictBindErr "Recursive" any_unlifted_bndr orig_binds)
-
-        ; check (all is_monomorphic (bagToList tc_binds))
-                  (polyBindErr orig_binds)
-            -- data Ptr a = Ptr Addr#
-            -- f x = let p@(Ptr y) = ... in ...
-            -- Here the binding for 'p' is polymorphic, but does
-            -- not mix with an unlifted binding for 'y'.  You should
-            -- use a bang pattern.  Trac #6078.
-
-        ; check (isSingleton orig_binds)
-                (strictBindErr "Multiple" any_unlifted_bndr orig_binds)
-
-        -- Complain about a binding that looks lazy
-        --    e.g.    let I# y = x in ...
-        -- Remember, in checkStrictBinds we are going to do strict
-        -- matching, so (for software engineering reasons) we insist
-        -- that the strictness is manifest on each binding
-        -- However, lone (unboxed) variables are ok
-        ; check (not any_pat_looks_lazy)
-                  (unliftedMustBeBang orig_binds) }
-  | otherwise
-  = traceTc "csb2" (ppr [(id, idType id) | id <- poly_ids]) >>
-    return ()
-  where
-    any_unlifted_bndr  = any is_unlifted poly_ids
-    any_strict_pat     = any (isUnliftedHsBind . unLoc) orig_binds
-    any_pat_looks_lazy = any (looksLazyPatBind . unLoc) orig_binds
-
-      -- See Note [Unlifted id check in checkStrictBinds]
-    is_unlifted
-      | CheckGen{} <- plan
-      = isUnliftedType . idType
-      | otherwise
-      = \ id -> case tcSplitSigmaTy (idType id) of
-          (_, _, tau) -> isUnliftedType tau
-          -- For the is_unlifted check, we need to look inside polymorphism
-          -- and overloading.  E.g.  x = (# 1, True #)
-          -- would get type forall a. Num a => (# a, Bool #)
-          -- and we want to reject that.  See Trac #9140
-
-    is_monomorphic (L _ (AbsBinds { abs_tvs = tvs, abs_ev_vars = evs }))
-                     = null tvs && null evs
-    is_monomorphic (L _ (AbsBindsSig { abs_tvs = tvs, abs_ev_vars = evs }))
-                     = null tvs && null evs
-    is_monomorphic _ = True
-
-    check :: Bool -> MsgDoc -> TcM ()
-    -- Just like checkTc, but with a special case for module GHC.Prim:
-    --      see Note [Compiling GHC.Prim]
-    check True  _   = return ()
-    check False err = do { mod <- getModule
-                         ; checkTc (mod == gHC_PRIM) err }
-
-unliftedMustBeBang :: [LHsBind Name] -> SDoc
-unliftedMustBeBang binds
-  = hang (text "Pattern bindings containing unlifted types should use an outermost bang pattern:")
-       2 (vcat (map ppr binds))
-
-polyBindErr :: [LHsBind Name] -> SDoc
-polyBindErr binds
-  = hang (text "You can't mix polymorphic and unlifted bindings")
-       2 (vcat [vcat (map ppr binds),
-                text "Probable fix: add a type signature"])
-
-strictBindErr :: String -> Bool -> [LHsBind Name] -> SDoc
-strictBindErr flavour any_unlifted_bndr binds
-  = hang (text flavour <+> msg <+> text "aren't allowed:")
-       2 (vcat (map ppr binds))
-  where
-    msg | any_unlifted_bndr = text "bindings for unlifted types"
-        | otherwise         = text "bang-pattern or unboxed-tuple bindings"
-
-
-{- Note [Compiling GHC.Prim]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Module GHC.Prim has no source code: it is the host module for
-primitive, built-in functions and types.  However, for Haddock-ing
-purposes we generate (via utils/genprimopcode) a fake source file
-GHC/Prim.hs, and give it to Haddock, so that it can generate
-documentation.  It contains definitions like
-    nullAddr# :: NullAddr#
-which would normally be rejected as a top-level unlifted binding. But
-we don't want to complain, because we are only "compiling" this fake
-mdule for documentation purposes.  Hence this hacky test for gHC_PRIM
-in checkStrictBinds.
-
-(We only make the test if things look wrong, so there is no cost in
-the common case.) -}
-
 
 {- *********************************************************************
 *                                                                      *

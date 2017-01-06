@@ -145,7 +145,7 @@ isExprLevPoly = go
    go e@(Cast {})                  = check_type e
    go (Tick _ e)                   = go e
    go e@(Type {})                  = pprPanic "isExprLevPoly ty" (ppr e)
-   go e@(Coercion {})              = pprPanic "isExprLevPoly co" (ppr e)
+   go (Coercion {})                = False  -- this case can happen in SetLevels
 
    check_type = isTypeLevPoly . exprType  -- slow approach
 

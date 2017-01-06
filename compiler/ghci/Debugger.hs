@@ -28,7 +28,6 @@ import Var hiding ( varName )
 import VarSet
 import UniqFM
 import Type
-import Kind
 import GHC
 import Outputable
 import PprTyThing
