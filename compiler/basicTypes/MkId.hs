@@ -286,9 +286,9 @@ mkDictSelId name clas
              getNth arg_tys val_index
 
     base_info = noCafIdInfo
-                `setArityInfo`         1
-                `setStrictnessInfo`    strict_sig
-                `setNeverLevPoly`      sel_ty
+                `setArityInfo`          1
+                `setStrictnessInfo`     strict_sig
+                `setLevityInfoWithType` sel_ty
 
     info | new_tycon
          = base_info `setInlinePragInfo` alwaysInlinePragma

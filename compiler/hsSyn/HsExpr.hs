@@ -826,20 +826,26 @@ ppr_expr e@(HsAppType {})    = ppr_apps e []
 ppr_expr e@(HsAppTypeOut {}) = ppr_apps e []
 
 ppr_expr (OpApp e1 op _ e2)
-  = case unLoc op of
-      HsVar (L _ v) -> pp_infixly v
-      HsRecFld f    -> pp_infixly f
-      HsUnboundVar h@TrueExprHole{} -> pp_infixly (unboundVarOcc h)
-      _             -> pp_prefixly
+  | Just pp_op <- should_print_infix (unLoc op)
+  = pp_infixly pp_op
+  | otherwise
+  = pp_prefixly
+
   where
+    should_print_infix (HsVar (L _ v)) = Just (pprInfixOcc v)
+    should_print_infix (HsRecFld f)    = Just (pprInfixOcc f)
+    should_print_infix (HsUnboundVar h@TrueExprHole{}) = Just (pprInfixOcc h)
+    should_print_infix (HsWrap _ e)    = should_print_infix e
+    should_print_infix _               = Nothing
+
     pp_e1 = pprDebugParendExpr e1   -- In debug mode, add parens
     pp_e2 = pprDebugParendExpr e2   -- to make precedence clear
 
     pp_prefixly
       = hang (ppr op) 2 (sep [pp_e1, pp_e2])
 
-    pp_infixly v
-      = hang pp_e1 2 (sep [pprInfixOcc v, nest 2 pp_e2])
+    pp_infixly pp_op
+      = hang pp_e1 2 (sep [pp_op, nest 2 pp_e2])
 
 ppr_expr (NegApp e _) = char '-' <+> pprDebugParendExpr e
 
@@ -1084,6 +1090,7 @@ hsExprNeedsParens (HsRecFld{})        = False
 hsExprNeedsParens (RecordCon{})       = False
 hsExprNeedsParens (HsSpliceE{})       = False
 hsExprNeedsParens (RecordUpd{})       = False
+hsExprNeedsParens (HsWrap _ e)        = hsExprNeedsParens e
 hsExprNeedsParens _ = True
 
 

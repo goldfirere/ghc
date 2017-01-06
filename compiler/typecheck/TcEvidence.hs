@@ -825,7 +825,7 @@ evVarsOfTypeable ev =
 instance Outputable HsWrapper where
   ppr co_fn = pprHsWrapper co_fn (no_parens (text "<>"))
 
-pprHsWrapper ::HsWrapper ->  (Bool -> SDoc) -> SDoc
+pprHsWrapper :: HsWrapper -> (Bool -> SDoc) -> SDoc
 -- With -fprint-typechecker-elaboration, print the wrapper
 --   otherwise just print what's inside
 -- The pp_thing_inside function takes Bool to say whether
