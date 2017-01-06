@@ -409,7 +409,7 @@ data HsExpr id
   --       'ApiAnnotation.AnnClose' @'}'@,'ApiAnnotation.AnnIn'
 
   -- For details on above see note [Api annotations] in ApiAnnotation
-  | HsLet       (Located (HsLocalBinds id))
+  | HsLet       (LHsLocalBinds id)
                 (LHsExpr  id)
 
   -- | - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnDo',
@@ -1177,7 +1177,7 @@ data HsCmd id
 
     -- For details on above see note [Api annotations] in ApiAnnotation
 
-  | HsCmdLet    (Located (HsLocalBinds id))      -- let(rec)
+  | HsCmdLet    (LHsLocalBinds id)      -- let(rec)
                 (LHsCmd  id)
     -- ^ - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnLet',
     --       'ApiAnnotation.AnnOpen' @'{'@,
@@ -1451,8 +1451,8 @@ hsLMatchPats (L _ (Match _ pats _ _)) = pats
 -- For details on above see note [Api annotations] in ApiAnnotation
 data GRHSs id body
   = GRHSs {
-      grhssGRHSs :: [LGRHS id body],       -- ^ Guarded RHSs
-      grhssLocalBinds :: Located (HsLocalBinds id) -- ^ The where clause
+      grhssGRHSs :: [LGRHS id body],      -- ^ Guarded RHSs
+      grhssLocalBinds :: LHsLocalBinds id -- ^ The where clause
     }
 deriving instance (Data body,DataId id) => Data (GRHSs id body)
 
@@ -1639,7 +1639,7 @@ data StmtLR idL idR body -- body should always be (LHs**** idR)
   --          'ApiAnnotation.AnnOpen' @'{'@,'ApiAnnotation.AnnClose' @'}'@,
 
   -- For details on above see note [Api annotations] in ApiAnnotation
-  | LetStmt  (Located (HsLocalBindsLR idL idR))
+  | LetStmt  (LHsLocalBindsLR idL idR)
 
   -- ParStmts only occur in a list/monad comprehension
   | ParStmt  [ParStmtBlock idL idR]

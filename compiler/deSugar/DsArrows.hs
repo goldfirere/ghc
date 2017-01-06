@@ -610,7 +610,7 @@ dsCmd ids local_vars stack_ty res_ty
 --
 --              ---> premap (\ ((xs),stk) -> let binds in ((ys),stk)) c
 
-dsCmd ids local_vars stack_ty res_ty (HsCmdLet (L _ binds) body) env_ids = do
+dsCmd ids local_vars stack_ty res_ty (HsCmdLet lbinds@(L _ binds) body) env_ids = do
     let
         defined_vars = mkVarSet (collectLocalBinders binds)
         local_vars' = defined_vars `unionVarSet` local_vars
@@ -618,7 +618,7 @@ dsCmd ids local_vars stack_ty res_ty (HsCmdLet (L _ binds) body) env_ids = do
     (core_body, _free_vars, env_ids') <- dsfixCmd ids local_vars' stack_ty res_ty body
     stack_id <- newSysLocalDs stack_ty
     -- build a new environment, plus the stack, using the let bindings
-    core_binds <- dsLocalBinds binds (buildEnvStack env_ids' stack_id)
+    core_binds <- dsLocalBinds lbinds (buildEnvStack env_ids' stack_id)
     -- match the old environment and stack against the input
     core_map <- matchEnvStack env_ids stack_id core_binds
     return (do_premap ids
@@ -888,7 +888,7 @@ dsCmdStmt ids local_vars out_ids (BindStmt pat cmd _ _ _) env_ids = do
 --
 --              ---> arr (\ (xs) -> let binds in (xs')) >>> ss
 
-dsCmdStmt ids local_vars out_ids (LetStmt (L _ binds)) env_ids = do
+dsCmdStmt ids local_vars out_ids (LetStmt binds) env_ids = do
     -- build a new environment using the let bindings
     core_binds <- dsLocalBinds binds (mkBigCoreVarTup out_ids)
     -- match the old environment against the input

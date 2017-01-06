@@ -70,12 +70,14 @@ import GHC.Fingerprint
 ************************************************************************
 -}
 
-dsLocalBinds :: HsLocalBinds Id -> CoreExpr -> DsM CoreExpr
-dsLocalBinds EmptyLocalBinds    body = return body
-dsLocalBinds (HsValBinds binds) body = dsValBinds binds body
-dsLocalBinds (HsIPBinds binds)  body = dsIPBinds  binds body
+dsLocalBinds :: LHsLocalBinds Id -> CoreExpr -> DsM CoreExpr
+dsLocalBinds (L _   EmptyLocalBinds)    body = return body
+dsLocalBinds (L loc (HsValBinds binds)) body = putSrcSpanDs loc $
+                                               dsValBinds binds body
+dsLocalBinds (L _ (HsIPBinds binds))    body = dsIPBinds  binds body
 
 -------------------------
+-- caller sets location
 dsValBinds :: HsValBinds Id -> CoreExpr -> DsM CoreExpr
 dsValBinds (ValBindsOut binds _) body = foldrM ds_val_bind body binds
 dsValBinds (ValBindsIn {})       _    = panic "dsValBinds ValBindsIn"
@@ -106,7 +108,11 @@ ds_val_bind (NonRecursive, hsbinds) body
         --       could be dict binds in the 'binds'.  (See the notes
         --       below.  Then pattern-match would fail.  Urk.)
     unliftedMatchOnly bind
-  = putSrcSpanDs loc (dsUnliftedBind bind body)
+  = do  { success <- checkStrictBinds NotTopLevel NonRecursive hsbinds
+        ; if success
+          then putSrcSpanDs loc (dsUnliftedBind bind body)
+          else return $ mkCoreTup [] }
+               -- we just want to carry on so we can issue more errors
 
 -- Ordinary case for bindings; none should be unlifted
 ds_val_bind (is_rec, binds) body
@@ -362,7 +368,7 @@ dsExpr (HsCase discrim matches)
 
 -- Pepe: The binds are in scope in the body but NOT in the binding group
 --       This is to avoid silliness in breakpoints
-dsExpr (HsLet (L _ binds) body) = do
+dsExpr (HsLet binds body) = do
     body' <- dsLExpr body
     dsLocalBinds binds body'
 
@@ -910,7 +916,7 @@ dsDo stmts
            ; rest <- goL stmts
            ; dsSyntaxExpr then_expr [rhs2, rest] }
 
-    go _ (LetStmt (L _ binds)) stmts
+    go _ (LetStmt binds) stmts
       = do { rest <- goL stmts
            ; dsLocalBinds binds rest }
 

@@ -12,7 +12,7 @@ lower levels it is preserved with @let@/@letrec@s).
 
 {-# LANGUAGE CPP #-}
 
-module DsBinds ( dsTopLHsBinds, dsLHsBinds, decomposeRuleLhs, dsSpec,
+module DsBinds ( dsTopLHsBinds, dsLHsBinds, checkStrictBinds, decomposeRuleLhs, dsSpec,
                  dsHsWrapper, dsTcEvBinds, dsTcEvBinds_s, dsEvBinds, dsMkUserRule
   ) where
 
@@ -75,18 +75,21 @@ import Control.Monad
 -- | Desugar top level binds, strict binds are treated like normal
 -- binds since there is no good time to force before first usage.
 dsTopLHsBinds :: LHsBinds Id -> DsM (OrdList (Id,CoreExpr))
-dsTopLHsBinds binds = do
-  checkStrictBinds TopLevel Recursive binds
-  fmap (toOL . snd) (ds_lhs_binds binds)
+dsTopLHsBinds binds
+  = do { success <- checkStrictBinds TopLevel Recursive binds
+       ; if success
+         then fmap (toOL . snd) (ds_lhs_binds binds)
+         else return nilOL }
 
 -- | Desugar all other kind of bindings, Ids of strict binds are returned to
 -- later be forced in the binding gorup body, see Note [Desugar Strict binds]
 dsLHsBinds :: RecFlag -> LHsBinds Id
            -> DsM ([Id], [(Id,CoreExpr)])
 dsLHsBinds is_rec binds
-  = do { checkStrictBinds NotTopLevel is_rec binds
-       ; (force_vars, binds') <- ds_lhs_binds binds
-       ; return (force_vars, binds') }
+  = do { success <- checkStrictBinds NotTopLevel is_rec binds
+       ; if success
+         then ds_lhs_binds binds
+         else return ([], []) }
 
 ------------------------
 
@@ -644,28 +647,35 @@ is a lifted function type, with no trouble at all.
 -----------------------------
 -- NB: This must be in the desugarer, because we can tell strictness only
 -- after zonking
-checkStrictBinds :: TopLevelFlag -> RecFlag -> LHsBinds Id -> DsM ()
+-- Top-level binds have no location set; otherwise, the location of the binding
+-- group is in the monad
+-- Returns True if the check shows up no problems
+checkStrictBinds :: TopLevelFlag -> RecFlag -> LHsBinds Id -> DsM Bool
 -- Check that non-overloaded unlifted bindings are
 --      a) non-recursive,
 --      b) not top level,
 --      c) not a multiple-binding group (more or less implied by (a))
-checkStrictBinds top_lvl rec_group binds
+checkStrictBinds top_lvl rec_group lbinds
   | any_unlifted_bndr || any_strict_pat   -- This binding group must be matched strictly
-  = do  { check (isNotTopLevel top_lvl)
-                (strictBindErr "Top-level" any_unlifted_bndr binds)
-        ; check (isNonRec rec_group)
-                (strictBindErr "Recursive" any_unlifted_bndr binds)
+  = fmap snd $ askNoErrsDs $
+    do  { if (isTopLevel top_lvl)
+          then do { let unlifted_binds   = filterBag (is_unlifted       . unLoc) lbinds
+                        strict_pat_binds = filterBag (isStrictHsPatBind . unLoc) lbinds
+                  ; mapBagM_ (topLevelErr "bindings for unlifted types") unlifted_binds
+                  ; mapBagM_ (topLevelErr "strict pattern bindings")     strict_pat_binds }
+          else check (isNonRec rec_group)
+                  (strictBindErr "Recursive" any_unlifted_bndr lbinds)
 
         ; check (allBag is_monomorphic binds)
-                  (polyBindErr binds)
+                  (polyBindErr lbinds)
             -- data Ptr a = Ptr Addr#
             -- f x = let p@(Ptr y) = ... in ...
             -- Here the binding for 'p' is polymorphic, but does
             -- not mix with an unlifted binding for 'y'.  You should
             -- use a bang pattern.  Trac #6078.
 
-        ; check (isSingletonBag binds)
-                (strictBindErr "Multiple" any_unlifted_bndr binds)
+        ; check (isSingletonBag lbinds)
+                (strictBindErr "Multiple" any_unlifted_bndr lbinds)
 
         -- Complain about a binding that looks lazy
         --    e.g.    let I# y = x in ...
@@ -674,13 +684,15 @@ checkStrictBinds top_lvl rec_group binds
         -- that the strictness is manifest on each binding
         -- However, lone (unboxed) variables are ok
         ; check (not any_pat_looks_lazy)
-                  (unliftedMustBeBang binds) }
+                  (unliftedMustBeBang lbinds) }
   | otherwise
-  = return ()
+  = return True
   where
-    any_unlifted_bndr  = anyBag (is_unlifted . unLoc) binds
-    any_strict_pat     = anyBag (isUnliftedHsBind . unLoc) binds
-    any_pat_looks_lazy = anyBag (looksLazyPatBind . unLoc) binds
+    binds = mapBag unLoc lbinds
+
+    any_unlifted_bndr  = anyBag is_unlifted       binds
+    any_strict_pat     = anyBag isStrictHsPatBind binds
+    any_pat_looks_lazy = anyBag looksLazyPatBind  binds
 
       -- See Note [Unlifted id check in checkStrictBinds]
     is_unlifted (AbsBindsSig { abs_sig_export = id })
@@ -696,9 +708,9 @@ checkStrictBinds top_lvl rec_group binds
           -- would get type forall a. Num a => (# a, Bool #)
           -- and we want to reject that.  See Trac #9140
 
-    is_monomorphic (L _ (AbsBinds { abs_tvs = tvs, abs_ev_vars = evs }))
+    is_monomorphic (AbsBinds { abs_tvs = tvs, abs_ev_vars = evs })
                      = null tvs && null evs
-    is_monomorphic (L _ (AbsBindsSig { abs_tvs = tvs, abs_ev_vars = evs }))
+    is_monomorphic (AbsBindsSig { abs_tvs = tvs, abs_ev_vars = evs })
                      = null tvs && null evs
     is_monomorphic _ = True
 
@@ -707,11 +719,12 @@ checkStrictBinds top_lvl rec_group binds
     check True  _   = return ()
     check False err = do { mod <- getModule
                          ; unless (mod == gHC_PRIM) $
-                           failWithDs err }
+                           errDs err }
 
 unliftedMustBeBang :: LHsBinds Id -> SDoc
 unliftedMustBeBang binds
-  = hang (text "Pattern bindings containing unlifted types should use an outermost bang pattern:")
+  = hang (text "Pattern bindings containing unlifted types should use" $$
+          text "an outermost bang pattern:")
        2 (vcat (map ppr (bagToList binds)))
 
 polyBindErr :: LHsBinds Id -> SDoc
@@ -719,6 +732,12 @@ polyBindErr binds
   = hang (text "You can't mix polymorphic and unlifted bindings")
        2 (vcat [vcat (map ppr (bagToList binds)),
                 text "Probable fix: add a type signature"])
+
+topLevelErr :: String -> LHsBind Id -> DsM ()
+topLevelErr desc (L loc bind)
+  = putSrcSpanDs loc $
+    errDs (hang (text "Top-level" <+> text desc <+> text "aren't allowed:")
+              2 (ppr bind))
 
 strictBindErr :: String -> Bool -> LHsBinds Id -> SDoc
 strictBindErr flavour any_unlifted_bndr binds

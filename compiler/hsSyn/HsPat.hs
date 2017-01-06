@@ -30,6 +30,7 @@ module HsPat (
 
         isUnliftedHsBind, looksLazyPatBind,
         isUnliftedLPat, isBangedLPat, isBangedPatBind,
+        isStrictHsPatBind,
         hsPatNeedsParens,
         isIrrefutableHsPat,
 
@@ -568,6 +569,18 @@ isUnliftedHsBind :: HsBind id -> Bool
 isUnliftedHsBind (PatBind { pat_lhs = p }) = isUnliftedLPat p
 isUnliftedHsBind _                         = False
 
+-- A pattern binding is strict if it is unlifted or banged.
+-- Looks through AbsBinds, as this is used after typechecking
+isStrictHsPatBind :: HsBind id -> Bool
+isStrictHsPatBind (PatBind {pat_lhs = pat})
+  = isBangedLPat pat || isUnliftedLPat pat
+isStrictHsPatBind (AbsBinds { abs_binds = binds })
+  = anyBag (isStrictHsPatBind . unLoc) binds
+isStrictHsPatBind (AbsBindsSig { abs_sig_bind = L _ bind })
+  = isStrictHsPatBind bind
+isStrictHsPatBind _
+  = False
+
 isBangedPatBind :: HsBind id -> Bool
 isBangedPatBind (PatBind {pat_lhs = pat}) = isBangedLPat pat
 isBangedPatBind _ = False
@@ -577,13 +590,20 @@ isBangedLPat (L _ (ParPat p))   = isBangedLPat p
 isBangedLPat (L _ (BangPat {})) = True
 isBangedLPat _                  = False
 
-looksLazyPatBind :: HsBind id -> Bool
+looksLazyPatBind :: (OutputableBndr id, OutputableBndr (NameOrRdrName id)) => HsBind id -> Bool
 -- Returns True of anything *except*
 --     a StrictHsBind (as above) or
 --     a VarPat
 -- In particular, returns True of a pattern binding with a compound pattern, like (I# x)
-looksLazyPatBind (PatBind { pat_lhs = p }) = looksLazyLPat p
-looksLazyPatBind _                         = False
+-- Looks through AbsBinds
+looksLazyPatBind (PatBind { pat_lhs = p })
+  = looksLazyLPat p
+looksLazyPatBind (AbsBinds { abs_binds = binds })
+  = anyBag (looksLazyPatBind . unLoc) binds
+looksLazyPatBind (AbsBindsSig { abs_sig_bind = L _ bind })
+  = looksLazyPatBind bind
+looksLazyPatBind _
+  = False
 
 looksLazyLPat :: LPat id -> Bool
 looksLazyLPat (L _ (ParPat p))             = looksLazyLPat p

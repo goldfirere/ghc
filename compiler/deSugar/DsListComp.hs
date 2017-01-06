@@ -228,7 +228,7 @@ deListComp (BodyStmt guard _ _ _ : quals) list = do  -- rule B above
     return (mkIfThenElse core_guard core_rest list)
 
 -- [e | let B, qs] = let B in [e | qs]
-deListComp (LetStmt (L _ binds) : quals) list = do
+deListComp (LetStmt binds : quals) list = do
     core_rest <- deListComp quals list
     dsLocalBinds binds core_rest
 
@@ -334,7 +334,7 @@ dfListComp c_id n_id (BodyStmt guard _ _ _  : quals) = do
     core_rest <- dfListComp c_id n_id quals
     return (mkIfThenElse core_guard core_rest (Var n_id))
 
-dfListComp c_id n_id (LetStmt (L _ binds) : quals) = do
+dfListComp c_id n_id (LetStmt binds : quals) = do
     -- new in 1.3, local bindings
     core_rest <- dfListComp c_id n_id quals
     dsLocalBinds binds core_rest
@@ -577,12 +577,12 @@ dePArrComp (BindStmt p e _ _ _ : qs) pa cea = do
 --  where
 --    {x_1, ..., x_n} = DV (ds)         -- Defined Variables
 --
-dePArrComp (LetStmt (L _ ds) : qs) pa cea = do
+dePArrComp (LetStmt lds@(L _ ds) : qs) pa cea = do
     mapP <- dsDPHBuiltin mapPVar
     let xs = collectLocalBinders ds
         ty'cea = parrElemType cea
     v <- newSysLocalDs ty'cea
-    clet <- dsLocalBinds ds (mkCoreTup (map Var xs))
+    clet <- dsLocalBinds lds (mkCoreTup (map Var xs))
     let'v <- newSysLocalDs (exprType clet)
     let projBody = mkCoreLet (NonRec let'v clet) $
                    mkCoreTup [Var v, Var let'v]
@@ -688,7 +688,7 @@ dsMcStmt (LastStmt body _ ret_op) stmts
        ; dsSyntaxExpr ret_op [body'] }
 
 --   [ .. | let binds, stmts ]
-dsMcStmt (LetStmt (L _ binds)) stmts
+dsMcStmt (LetStmt binds) stmts
   = do { rest <- dsMcStmts stmts
        ; dsLocalBinds binds rest }
 

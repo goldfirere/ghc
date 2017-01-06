@@ -435,3 +435,4 @@ test('T12042', extra_clean(['T12042a.hi', 'T12042a.o', 'T12042.hi-boot', 'T12042
 test('T12966', normal, compile_fail, [''])
 test('T12837', normal, compile_fail, [''])
 test('T12973', normal, compile_fail, [''])
+test('StrictBinds', normal, compile_fail, [''])
