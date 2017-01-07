@@ -17,7 +17,7 @@ module PprCore (
 import CoreSyn
 import CoreStats (exprStats)
 import Literal( pprLiteral )
-import Name( pprInfixName, pprPrefixName )
+import Name( Name, pprInfixName, pprPrefixName )
 import Var
 import Id
 import IdInfo
@@ -312,8 +312,21 @@ binders are printed as "_".
 
 instance OutputableBndr Var where
   pprBndr = pprCoreBinder
-  pprInfixOcc  = pprInfixName  . varName
-  pprPrefixOcc = pprPrefixName . varName
+
+    -- We sometimes print type-checked HsSyn, which contains DataCon
+    -- wrappers. These wrappers are not generally in scope. So, when
+    -- printing for the user, extract a datacon name when possible.
+  pprInfixOcc  var = getPprStyle $ \ sty -> pprInfixName (varOrDataConName sty var)
+  pprPrefixOcc var = getPprStyle $ \ sty -> pprPrefixName (varOrDataConName sty var)
+
+varOrDataConName :: PprStyle -> Var -> Name
+varOrDataConName sty var
+  | userStyle sty
+  , isId var
+  , Just dc <- isDataConId_maybe var
+  = dataConName dc
+  | otherwise
+  = varName var
 
 pprCoreBinder :: BindingSite -> Var -> SDoc
 pprCoreBinder LetBind binder
