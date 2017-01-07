@@ -82,12 +82,15 @@ returnsConstraintKind = returnsTyCon constraintKindTyConKey
 -- | Tests whether the given kind (which should look like "TYPE ...")
 -- has any free variables
 isKindLevPoly :: Kind -> Bool
-isKindLevPoly k = ASSERT2( isStarKind k ||  -- necessary b/c of Constraint
-                           case k of
-                             TyConApp typ [_] | typ `hasKey` tYPETyConKey -> True
-                             _                                            -> False
-                         , ppr k )
+isKindLevPoly k = ASSERT2( isStarKind k || _is_type, ppr k )
+                      -- the isStarKind check is necessary b/c of Constraint
                   not $ noFreeVarsOfType k
+  where
+    _is_type
+      | TyConApp typ [_] <- k
+      = typ `hasKey` tYPETyConKey
+      | otherwise
+      = False
 
 --------------------------------------------
 --            Kinding for arrow (->)
