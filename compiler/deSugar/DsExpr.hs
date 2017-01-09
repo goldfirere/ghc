@@ -6,7 +6,7 @@
 Desugaring exporessions.
 -}
 
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, MultiWayIf #-}
 
 module DsExpr ( dsExpr, dsLExpr, dsLExprNoLP, dsLocalBinds
               , dsValBinds, dsLit, dsSyntaxExpr ) where
@@ -96,27 +96,67 @@ dsIPBinds (IPBinds ip_binds ev_binds) body
            return (Let (NonRec n e') body)
 
 -------------------------
+-- caller sets location
 ds_val_bind :: (RecFlag, LHsBinds Id) -> CoreExpr -> DsM CoreExpr
 -- Special case for bindings which bind unlifted variables
 -- We need to do a case right away, rather than building
 -- a tuple and doing selections.
 -- Silently ignore INLINE and SPECIALISE pragmas...
 ds_val_bind (NonRecursive, hsbinds) body
-  | [L loc bind] <- bagToList hsbinds,
+  | [L loc bind] <- bagToList hsbinds
         -- Non-recursive, non-overloaded bindings only come in ones
         -- ToDo: in some bizarre case it's conceivable that there
         --       could be dict binds in the 'binds'.  (See the notes
         --       below.  Then pattern-match would fail.  Urk.)
-    unliftedMatchOnly bind
-  = do  { success <- checkStrictBinds NotTopLevel NonRecursive hsbinds
-        ; if success
-          then putSrcSpanDs loc (dsUnliftedBind bind body)
-          else return $ mkCoreTup [] }
-               -- we just want to carry on so we can issue more errors
+  , isUnliftedHsBind bind
+  = putSrcSpanDs loc $
+     -- see Note [Strict binds checks] in DsBinds
+    if | looksLazyPatBind bind -> errDsCoreExpr (unlifted_must_be_bang bind)
+        -- Complain about a binding that looks lazy
+        --    e.g.    let I# y = x in ...
+        -- Remember, in checkStrictBinds we are going to do strict
+        -- matching, so (for software engineering reasons) we insist
+        -- that the strictness is manifest on each binding
+        -- However, lone (unboxed) variables are ok
+
+       | is_polymorphic bind   -> errDsCoreExpr (poly_bind_err bind)
+            -- data Ptr a = Ptr Addr#
+            -- f x = let p@(Ptr y) = ... in ...
+            -- Here the binding for 'p' is polymorphic, but does
+            -- not mix with an unlifted binding for 'y'.  You should
+            -- use a bang pattern.  Trac #6078.
+
+       | otherwise             -> dsUnliftedBind bind body
+  where
+    is_polymorphic (AbsBinds { abs_tvs = tvs, abs_ev_vars = evs })
+                     = not (null tvs && null evs)
+    is_polymorphic (AbsBindsSig { abs_tvs = tvs, abs_ev_vars = evs })
+                     = not (null tvs && null evs)
+    is_polymorphic _ = False
+
+    unlifted_must_be_bang bind
+      = hang (text "Pattern bindings containing unlifted types should use" $$
+              text "an outermost bang pattern:")
+           2 (ppr bind)
+
+    poly_bind_err bind
+      = hang (text "You can't mix polymorphic and unlifted bindings:")
+           2 (ppr bind) $$
+        text "Probable fix: add a type signature"
+
+ds_val_bind (is_rec, binds) _body
+  | anyBag (isUnliftedHsBind . unLoc) binds  -- see Note [Strict binds checks] in DsBinds
+  = ASSERT( isRec is_rec )
+    errDsCoreExpr $
+    hang (text "Recursive bindings for unlifted types aren't allowed:")
+       2 (vcat (map ppr (bagToList binds)))
 
 -- Ordinary case for bindings; none should be unlifted
 ds_val_bind (is_rec, binds) body
-  = do  { (force_vars,prs) <- dsLHsBinds is_rec binds
+  = do  { MASSERT( isRec is_rec || isSingletonBag binds )
+               -- we should never produce a non-recursive list of multiple binds
+
+        ; (force_vars,prs) <- dsLHsBinds binds
         ; let body' = foldr seqVar body force_vars
         ; ASSERT2( not (any (isUnliftedType . idType . fst) prs), ppr is_rec $$ ppr binds )
           case prs of
@@ -180,20 +220,6 @@ dsUnliftedBind (PatBind {pat_lhs = pat, pat_rhs = grhss, pat_rhs_ty = ty }) body
        ; return (bindNonRec var rhs result) }
 
 dsUnliftedBind bind body = pprPanic "dsLet: unlifted" (ppr bind $$ ppr body)
-
-----------------------
-unliftedMatchOnly :: HsBind Id -> Bool
-unliftedMatchOnly (AbsBinds { abs_binds = lbinds })
-  = anyBag (unliftedMatchOnly . unLoc) lbinds
-unliftedMatchOnly (AbsBindsSig { abs_sig_bind = L _ bind })
-  = unliftedMatchOnly bind
-unliftedMatchOnly (PatBind { pat_lhs = lpat, pat_rhs_ty = rhs_ty })
-  =  isUnliftedType rhs_ty
-  || isUnliftedLPat lpat
-  || any (isUnliftedType . idType) (collectPatBinders lpat)
-unliftedMatchOnly (FunBind { fun_id = L _ id })
-  = isUnliftedType (idType id)
-unliftedMatchOnly _ = False -- I hope!  Checked immediately by caller in fact
 
 {-
 ************************************************************************

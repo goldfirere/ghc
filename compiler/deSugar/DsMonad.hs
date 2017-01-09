@@ -38,7 +38,8 @@ module DsMonad (
         incrCheckPmIterDs, resetPmIterDs,
 
         -- Warnings and errors
-        DsWarning, warnDs, errDs, failWithDs, failDs, discardWarningsDs,
+        DsWarning, warnDs, errDs, errDsCoreExpr,
+        failWithDs, failDs, discardWarningsDs,
         askNoErrsDs,
 
         -- Data types
@@ -53,6 +54,7 @@ module DsMonad (
 import TcRnMonad
 import FamInstEnv
 import CoreSyn
+import MkCore    ( mkCoreTup )
 import CoreUtils ( exprType, isExprLevPoly )
 import HsSyn
 import TcIface
@@ -464,6 +466,13 @@ errDs err
         ; dflags <- getDynFlags
         ; let msg = mkErrMsg dflags loc (ds_unqual env) err
         ; updMutVar (ds_msgs env) (\ (w,e) -> (w, e `snocBag` msg)) }
+
+-- | Issue an error, but return the expression for (), so that we can continue
+-- reporting errors.
+errDsCoreExpr :: SDoc -> DsM CoreExpr
+errDsCoreExpr err
+  = do { errDs err
+       ; return $ mkCoreTup [] }
 
 failWithDs :: SDoc -> DsM a
 failWithDs err

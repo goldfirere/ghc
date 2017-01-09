@@ -1492,7 +1492,6 @@ decideGeneralisationPlan
    :: DynFlags -> [LHsBind Name] -> IsGroupClosed -> TcSigFun
    -> GeneralisationPlan
 decideGeneralisationPlan dflags lbinds closed sig_fn
-  | unlifted_pat_binds                       = NoGen
   | has_partial_sigs                         = InferGen (and partial_sig_mrs)
   | Just (bind, sig) <- one_funbind_with_sig = CheckGen bind sig
   | mono_local_binds closed                  = NoGen
@@ -1512,10 +1511,6 @@ decideGeneralisationPlan dflags lbinds closed sig_fn
         , let (_, L _ theta, _) = splitLHsSigmaTy (hsSigWcType hs_ty) ]
 
     has_partial_sigs   = not (null partial_sig_mrs)
-    unlifted_pat_binds = any isUnliftedHsBind binds
-       -- Unlifted patterns (unboxed tuple) must not
-       -- be polymorphic, because we are going to force them
-       -- See Trac #4498, #8762
 
     mono_restriction  = xopt LangExt.MonomorphismRestriction dflags
                      && any restricted binds

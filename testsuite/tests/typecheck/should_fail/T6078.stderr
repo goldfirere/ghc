@@ -1,10 +1,10 @@
 
 T6078.hs:8:10: error:
-    You can't mix polymorphic and unlifted bindings
-      ip1p@(Ptr ip1) = Ptr ip0 `plusPtr` len
-      Probable fix: add a type signature
-
-T6078.hs:8:10: error:
     Pattern bindings containing unlifted types should use
     an outermost bang pattern:
       ip1p@(Ptr ip1) = Ptr ip0 `plusPtr` len
+
+T6078.hs:14:10: error:
+    You can't mix polymorphic and unlifted bindings:
+      !ip1p@(Ptr ip1) = Ptr ip0 `plusPtr` len
+    Probable fix: add a type signature

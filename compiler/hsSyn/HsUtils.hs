@@ -71,6 +71,8 @@ module HsUtils(
   noRebindableInfo,
 
   -- Collecting binders
+  isUnliftedHsBind,
+
   collectLocalBinders, collectHsValBinders, collectHsBindListBinders,
   collectHsIdBinders,
   collectHsBindsBinders, collectHsBindBinders, collectMethodBinders,
@@ -105,6 +107,7 @@ import Type   ( filterOutInvisibleTypes )
 import TysWiredIn ( unitTy )
 import TcType
 import DataCon
+import Id
 import Name
 import NameSet
 import NameEnv
@@ -772,9 +775,72 @@ These functions should only be used on HsSyn *after* the renamer,
 to return a [Name] or [Id].  Before renaming the record punning
 and wild-card mechanism makes it hard to know what is bound.
 So these functions should not be applied to (HsSyn RdrName)
+
+Note [Unlifted id check in isHsUnliftedBind]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Suppose there is a binding with the type (Num a => (# a, a #)). Is this a
+strict binding that should be disallowed at the top level? At first glance,
+no, because it's a function. But consider how this is desugared via
+AbsBinds:
+
+  -- x :: Num a => (# a, a #)
+  x = (# 3, 4 #)
+
+becomes
+
+  x = \ $dictNum ->
+      let x_mono = (# fromInteger $dictNum 3, fromInteger $dictNum 4 #) in
+      x_mono
+
+Note that the inner let is strict. And thus if we have a bunch of mutually
+recursive bindings of this form, we could end up in trouble. This was shown
+up in #9140.
+
+But if there is a type signature on x, everything changes because of the
+desugaring used by AbsBindsSig:
+
+  x :: Num a => (# a, a #)
+  x = (# 3, 4 #)
+
+becomes
+
+  x = \ $dictNum -> (# fromInteger $dictNum 3, fromInteger $dictNum 4 #)
+
+No strictness anymore! The bottom line here is that, for inferred types, we
+care about the strictness of the type after the =>. For checked types
+(AbsBindsSig), we care about the overall strictness.
+
+This matters. If we don't separate out the AbsBindsSig case, then GHC runs into
+a problem when compiling
+
+  undefined :: forall (r :: RuntimeRep) (a :: TYPE r). HasCallStack => a
+
+Looking only after the =>, we cannot tell if this is strict or not. (GHC panics
+if you try.) Looking at the whole type, on the other hand, tells you that this
+is a lifted function type, with no trouble at all.
+
 -}
 
 ----------------- Bindings --------------------------
+
+-- | Should we treat this as an unlifted bind? This will be true for any
+-- bind that binds an unlifted variable, but we must be careful around
+-- AbsBinds. See Note [Unlifted id check in isUnliftedHsBind]. For usage
+-- information, see Note [Strict binds check] is DsBinds.
+isUnliftedHsBind :: HsBind Id -> Bool  -- works only over typechecked binds
+isUnliftedHsBind (AbsBindsSig { abs_sig_export = id })
+  = isUnliftedType (idType id)
+isUnliftedHsBind bind
+  = any is_unlifted_id (collectHsBindBinders bind)
+  where
+    is_unlifted_id id
+      = case tcSplitSigmaTy (idType id) of
+          (_, _, tau) -> isUnliftedType tau
+          -- For the is_unlifted check, we need to look inside polymorphism
+          -- and overloading.  E.g.  x = (# 1, True #)
+          -- would get type forall a. Num a => (# a, Bool #)
+          -- and we want to reject that.  See Trac #9140
+
 collectLocalBinders :: HsLocalBindsLR idL idR -> [idL]
 collectLocalBinders (HsValBinds binds) = collectHsIdBinders binds
                                          -- No pattern synonyms here

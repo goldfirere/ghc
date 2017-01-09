@@ -28,9 +28,8 @@ module HsPat (
 
         mkPrefixConPat, mkCharLitPat, mkNilPat,
 
-        isUnliftedHsBind, looksLazyPatBind,
-        isUnliftedLPat, isBangedLPat, isBangedPatBind,
-        isStrictHsPatBind,
+        looksLazyPatBind,
+        isBangedLPat, isBangedPatBind,
         hsPatNeedsParens,
         isIrrefutableHsPat,
 
@@ -556,31 +555,6 @@ patterns are treated specially, of course.
 The 1.3 report defines what ``irrefutable'' and ``failure-free'' patterns are.
 -}
 
-isUnliftedLPat :: LPat id -> Bool
-isUnliftedLPat (L _ (ParPat p))             = isUnliftedLPat p
-isUnliftedLPat (L _ (TuplePat _ Unboxed _)) = True
-isUnliftedLPat (L _ (SumPat _ _ _ _))       = True
-isUnliftedLPat _                            = False
-
-isUnliftedHsBind :: HsBind id -> Bool
--- A pattern binding with an outermost bang or unboxed tuple or sum must be
--- matched strictly.
--- Defined in this module because HsPat is above HsBinds in the import graph
-isUnliftedHsBind (PatBind { pat_lhs = p }) = isUnliftedLPat p
-isUnliftedHsBind _                         = False
-
--- A pattern binding is strict if it is unlifted or banged.
--- Looks through AbsBinds, as this is used after typechecking
-isStrictHsPatBind :: HsBind id -> Bool
-isStrictHsPatBind (PatBind {pat_lhs = pat})
-  = isBangedLPat pat || isUnliftedLPat pat
-isStrictHsPatBind (AbsBinds { abs_binds = binds })
-  = anyBag (isStrictHsPatBind . unLoc) binds
-isStrictHsPatBind (AbsBindsSig { abs_sig_bind = L _ bind })
-  = isStrictHsPatBind bind
-isStrictHsPatBind _
-  = False
-
 isBangedPatBind :: HsBind id -> Bool
 isBangedPatBind (PatBind {pat_lhs = pat}) = isBangedLPat pat
 isBangedPatBind _ = False
@@ -590,7 +564,7 @@ isBangedLPat (L _ (ParPat p))   = isBangedLPat p
 isBangedLPat (L _ (BangPat {})) = True
 isBangedLPat _                  = False
 
-looksLazyPatBind :: (OutputableBndr id, OutputableBndr (NameOrRdrName id)) => HsBind id -> Bool
+looksLazyPatBind :: HsBind id -> Bool
 -- Returns True of anything *except*
 --     a StrictHsBind (as above) or
 --     a VarPat
@@ -609,8 +583,6 @@ looksLazyLPat :: LPat id -> Bool
 looksLazyLPat (L _ (ParPat p))             = looksLazyLPat p
 looksLazyLPat (L _ (AsPat _ p))            = looksLazyLPat p
 looksLazyLPat (L _ (BangPat {}))           = False
-looksLazyLPat (L _ (TuplePat _ Unboxed _)) = False
-looksLazyLPat (L _ (SumPat _ _ _ _))       = False
 looksLazyLPat (L _ (VarPat {}))            = False
 looksLazyLPat (L _ (WildPat {}))           = False
 looksLazyLPat _                            = True

@@ -7,7 +7,17 @@ tcfail203.hs:28:11: error:
 tcfail203.hs:31:11: error:
     Pattern bindings containing unlifted types should use
     an outermost bang pattern:
-      (b, I# x) = (GHC.Types.True, 5)
+      (b, I# x) = (True, 5)
+
+tcfail203.hs:34:11: error:
+    Pattern bindings containing unlifted types should use
+    an outermost bang pattern:
+      (# b, I# x #) = (# True, 5 #)
+
+tcfail203.hs:37:11: error:
+    Pattern bindings containing unlifted types should use
+    an outermost bang pattern:
+      (# b, x #) = (# True, 5# #)
 
 tcfail203.hs:40:11: error:
     Pattern bindings containing unlifted types should use
@@ -17,4 +27,14 @@ tcfail203.hs:40:11: error:
 tcfail203.hs:43:11: error:
     Pattern bindings containing unlifted types should use
     an outermost bang pattern:
-      (b, !(I# x)) = (GHC.Types.True, 5)
+      (b, !(I# x)) = (True, 5)
+
+tcfail203.hs:46:11: error:
+    Pattern bindings containing unlifted types should use
+    an outermost bang pattern:
+      (# b, !(I# x) #) = (# True, 5 #)
+
+tcfail203.hs:49:11: error:
+    Pattern bindings containing unlifted types should use
+    an outermost bang pattern:
+      (# b, !x #) = (# True, 5# #)

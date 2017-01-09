@@ -12,7 +12,7 @@ lower levels it is preserved with @let@/@letrec@s).
 
 {-# LANGUAGE CPP #-}
 
-module DsBinds ( dsTopLHsBinds, dsLHsBinds, checkStrictBinds, decomposeRuleLhs, dsSpec,
+module DsBinds ( dsTopLHsBinds, dsLHsBinds, decomposeRuleLhs, dsSpec,
                  dsHsWrapper, dsTcEvBinds, dsTcEvBinds_s, dsEvBinds, dsMkUserRule
   ) where
 
@@ -76,30 +76,37 @@ import Control.Monad
 -- binds since there is no good time to force before first usage.
 dsTopLHsBinds :: LHsBinds Id -> DsM (OrdList (Id,CoreExpr))
 dsTopLHsBinds binds
-  = do { success <- checkStrictBinds TopLevel Recursive binds
-       ; if success
-         then fmap (toOL . snd) (ds_lhs_binds binds)
-         else return nilOL }
+     -- see Note [Strict binds checks]
+  | not (isEmptyBag unlifted_binds) || not (isEmptyBag bang_binds)
+  = do { mapBagM_ (top_level_err "bindings for unlifted types") unlifted_binds
+       ; mapBagM_ (top_level_err "strict pattern bindings")    bang_binds
+       ; return nilOL }
+
+  | otherwise
+  = do { (force_vars, prs) <- dsLHsBinds binds
+       ; MASSERT2( null force_vars, ppr binds )
+       ; return (toOL prs) }
+
+  where
+    unlifted_binds = filterBag (isUnliftedHsBind . unLoc) binds
+    bang_binds     = filterBag (isBangedPatBind  . unLoc) binds
+
+    top_level_err desc (L loc bind)
+      = putSrcSpanDs loc $
+        errDs (hang (text "Top-level" <+> text desc <+> text "aren't allowed:")
+                  2 (ppr bind))
+
 
 -- | Desugar all other kind of bindings, Ids of strict binds are returned to
 -- later be forced in the binding gorup body, see Note [Desugar Strict binds]
-dsLHsBinds :: RecFlag -> LHsBinds Id
-           -> DsM ([Id], [(Id,CoreExpr)])
-dsLHsBinds is_rec binds
-  = do { success <- checkStrictBinds NotTopLevel is_rec binds
-       ; if success
-         then ds_lhs_binds binds
-         else return ([], []) }
-
-------------------------
-
-ds_lhs_binds :: LHsBinds Id -> DsM ([Id], [(Id,CoreExpr)])
-
-ds_lhs_binds binds
-  = do { ds_bs <- mapBagM dsLHsBind binds
+dsLHsBinds :: LHsBinds Id -> DsM ([Id], [(Id,CoreExpr)])
+dsLHsBinds binds
+  = do { MASSERT( allBag (not . isUnliftedHsBind . unLoc) binds )
+       ; ds_bs <- mapBagM dsLHsBind binds
        ; return (foldBag (\(a, a') (b, b') -> (a ++ b, a' ++ b'))
                          id ([], []) ds_bs) }
 
+------------------------
 dsLHsBind :: LHsBind Id
           -> DsM ([Id], [(Id,CoreExpr)])
 dsLHsBind (L loc bind) = do dflags <- getDynFlags
@@ -175,7 +182,7 @@ dsHsBind dflags
   = -- See Note [AbsBinds wrappers] in HsBinds
     addDictsDs (toTcTypeBag (listToBag dicts)) $
          -- addDictsDs: push type constraints deeper for pattern match check
-    do { (_, bind_prs) <- ds_lhs_binds binds
+    do { (_, bind_prs) <- dsLHsBinds binds
        ; let core_bind = Rec bind_prs
        ; ds_binds <- dsTcEvBinds_s ev_binds
        ; core_wrap <- dsHsWrapper wrap -- Usually the identity
@@ -198,7 +205,7 @@ dsHsBind dflags
          (AbsBinds { abs_tvs = [], abs_ev_vars = []
                    , abs_exports = exports
                    , abs_ev_binds = ev_binds, abs_binds = binds })
-  = do { (force_vars, bind_prs) <- ds_lhs_binds binds
+  = do { (force_vars, bind_prs) <- dsLHsBinds binds
        ; let mk_bind (ABE { abe_wrap = wrap
                           , abe_poly = global
                           , abe_mono = local
@@ -220,7 +227,7 @@ dsHsBind dflags
          -- See Note [Desugaring AbsBinds]
   = addDictsDs (toTcTypeBag (listToBag dicts)) $
          -- addDictsDs: push type constraints deeper for pattern match check
-     do { (local_force_vars, bind_prs) <- ds_lhs_binds binds
+     do { (local_force_vars, bind_prs) <- dsLHsBinds binds
         ; let core_bind = Rec [ makeCorePair dflags (add_inline lcl_id) False 0 rhs
                               | (lcl_id, rhs) <- bind_prs ]
                 -- Monomorphic recursion possible, hence Rec
@@ -597,172 +604,38 @@ tuple `t`, thus:
 See https://ghc.haskell.org/trac/ghc/wiki/StrictPragma for a more
 detailed explanation of the desugaring of strict bindings.
 
--}
+Note [Strict binds checks]
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+There are several checks around properly formed strict bindings. They
+all link to this Note. These checks must be here in the desugarer because
+we cannot know whether or not a type is unlifted until after zonking, due
+to levity polymorphism. These checks all used to be handled in the typechecker
+in checkStrictBinds (before Jan '17).
 
-{- Note [Unlifted id check in checkStrictBinds]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Suppose there is a binding with the type (Num a => (# a, a #)). Is this a
-strict binding that should be disallowed at the top level? At first glance,
-no, because it's a function. But consider how this is desugared via
-AbsBinds:
+We define an "unlifted bind" to be any bind that binds an unlifted id. Note that
 
-  -- x :: Num a => (# a, a #)
-  x = (# 3, 4 #)
+  x :: Char
+  (# True, x #) = blah
 
-becomes
+is *not* an unlifted bind. Unlifted binds are detected by HsUtils.isUnliftedHsBind.
 
-  x = \ $dictNum ->
-      let x_mono = (# fromInteger $dictNum 3, fromInteger $dictNum 4 #) in
-      x_mono
+Define a "banged bind" to have a top-level bang. Detected by HsPat.isBangedPatBind.
+Define a "strict bind" to be either an unlifted bind or a strict bind.
 
-Note that the inner let is strict. And thus if we have a bunch of mutually
-recursive bindings of this form, we could end up in trouble. This was shown
-up in #9140.
+The restrictions are:
+  1. Strict binds may not be top-level. Checked in dsTopLHsBinds.
 
-But if there is a type signature on x, everything changes because of the
-desugaring used by AbsBindsSig:
+  2. Unlifted binds must also be banged. (There is no trouble to compile an unbanged
+     unlifted bind, but an unbanged bind looks lazy, and we don't want users to be
+     surprised by the strictness of an unlifted bind.) Checked in first clause
+     of DsExpr.ds_val_bind.
 
-  x :: Num a => (# a, a #)
-  x = (# 3, 4 #)
+  3. Unlifted binds may not have polymorphism (#6078). Checked in first clause
+     of DsExpr.ds_val_bind.
 
-becomes
-
-  x = \ $dictNum -> (# fromInteger $dictNum 3, fromInteger $dictNum 4 #)
-
-No strictness anymore! The bottom line here is that, for inferred types, we
-care about the strictness of the type after the =>. For checked types
-(AbsBindsSig), we care about the overall strictness.
-
-This matters. If we don't separate out the AbsBindsSig case, then GHC runs into
-a problem when compiling
-
-  undefined :: forall (r :: RuntimeRep) (a :: TYPE r). HasCallStack => a
-
-Looking only after the =>, we cannot tell if this is strict or not. (GHC panics
-if you try.) Looking at the whole type, on the other hand, tells you that this
-is a lifted function type, with no trouble at all.
+  4. Unlifted binds may not be recursive. Checked in second clause of ds_val_bind.
 
 -}
-
------------------------------
--- NB: This must be in the desugarer, because we can tell strictness only
--- after zonking
--- Top-level binds have no location set; otherwise, the location of the binding
--- group is in the monad
--- Returns True if the check shows up no problems
-checkStrictBinds :: TopLevelFlag -> RecFlag -> LHsBinds Id -> DsM Bool
--- Check that non-overloaded unlifted bindings are
---      a) non-recursive,
---      b) not top level,
---      c) not a multiple-binding group (more or less implied by (a))
-checkStrictBinds top_lvl rec_group lbinds
-  | any_unlifted_bndr || any_strict_pat   -- This binding group must be matched strictly
-  = fmap snd $ askNoErrsDs $
-    do  { if (isTopLevel top_lvl)
-          then do { let unlifted_binds   = filterBag (is_unlifted       . unLoc) lbinds
-                        strict_pat_binds = filterBag (isStrictHsPatBind . unLoc) lbinds
-                  ; mapBagM_ (topLevelErr "bindings for unlifted types") unlifted_binds
-                  ; mapBagM_ (topLevelErr "strict pattern bindings")     strict_pat_binds }
-          else check (isNonRec rec_group)
-                  (strictBindErr "Recursive" any_unlifted_bndr lbinds)
-
-        ; check (allBag is_monomorphic binds)
-                  (polyBindErr lbinds)
-            -- data Ptr a = Ptr Addr#
-            -- f x = let p@(Ptr y) = ... in ...
-            -- Here the binding for 'p' is polymorphic, but does
-            -- not mix with an unlifted binding for 'y'.  You should
-            -- use a bang pattern.  Trac #6078.
-
-        ; check (isSingletonBag lbinds)
-                (strictBindErr "Multiple" any_unlifted_bndr lbinds)
-
-        -- Complain about a binding that looks lazy
-        --    e.g.    let I# y = x in ...
-        -- Remember, in checkStrictBinds we are going to do strict
-        -- matching, so (for software engineering reasons) we insist
-        -- that the strictness is manifest on each binding
-        -- However, lone (unboxed) variables are ok
-        ; check (not any_pat_looks_lazy)
-                  (unliftedMustBeBang lbinds) }
-  | otherwise
-  = return True
-  where
-    binds = mapBag unLoc lbinds
-
-    any_unlifted_bndr  = anyBag is_unlifted       binds
-    any_strict_pat     = anyBag isStrictHsPatBind binds
-    any_pat_looks_lazy = anyBag looksLazyPatBind  binds
-
-      -- See Note [Unlifted id check in checkStrictBinds]
-    is_unlifted (AbsBindsSig { abs_sig_export = id })
-      = isUnliftedType (idType id)
-    is_unlifted bind
-      = any is_unlifted_id (collectHsBindBinders bind)
-
-    is_unlifted_id id
-      = case tcSplitSigmaTy (idType id) of
-          (_, _, tau) -> isUnliftedType tau
-          -- For the is_unlifted check, we need to look inside polymorphism
-          -- and overloading.  E.g.  x = (# 1, True #)
-          -- would get type forall a. Num a => (# a, Bool #)
-          -- and we want to reject that.  See Trac #9140
-
-    is_monomorphic (AbsBinds { abs_tvs = tvs, abs_ev_vars = evs })
-                     = null tvs && null evs
-    is_monomorphic (AbsBindsSig { abs_tvs = tvs, abs_ev_vars = evs })
-                     = null tvs && null evs
-    is_monomorphic _ = True
-
-    check :: Bool -> SDoc -> DsM ()
-    --      see Note [Compiling GHC.Prim]
-    check True  _   = return ()
-    check False err = do { mod <- getModule
-                         ; unless (mod == gHC_PRIM) $
-                           errDs err }
-
-unliftedMustBeBang :: LHsBinds Id -> SDoc
-unliftedMustBeBang binds
-  = hang (text "Pattern bindings containing unlifted types should use" $$
-          text "an outermost bang pattern:")
-       2 (vcat (map ppr (bagToList binds)))
-
-polyBindErr :: LHsBinds Id -> SDoc
-polyBindErr binds
-  = hang (text "You can't mix polymorphic and unlifted bindings")
-       2 (vcat [vcat (map ppr (bagToList binds)),
-                text "Probable fix: add a type signature"])
-
-topLevelErr :: String -> LHsBind Id -> DsM ()
-topLevelErr desc (L loc bind)
-  = putSrcSpanDs loc $
-    errDs (hang (text "Top-level" <+> text desc <+> text "aren't allowed:")
-              2 (ppr bind))
-
-strictBindErr :: String -> Bool -> LHsBinds Id -> SDoc
-strictBindErr flavour any_unlifted_bndr binds
-  = hang (text flavour <+> msg <+> text "aren't allowed:")
-       2 (vcat (map ppr (bagToList binds)))
-  where
-    msg | any_unlifted_bndr = text "bindings for unlifted types"
-        | otherwise         = text "bang-pattern or unboxed-tuple bindings"
-
-
-{- Note [Compiling GHC.Prim]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Module GHC.Prim has no source code: it is the host module for
-primitive, built-in functions and types.  However, for Haddock-ing
-purposes we generate (via utils/genprimopcode) a fake source file
-GHC/Prim.hs, and give it to Haddock, so that it can generate
-documentation.  It contains definitions like
-    nullAddr# :: NullAddr#
-which would normally be rejected as a top-level unlifted binding. But
-we don't want to complain, because we are only "compiling" this fake
-mdule for documentation purposes.  Hence this hacky test for gHC_PRIM
-in checkStrictBinds.
-
-(We only make the test if things look wrong, so there is no cost in
-the common case.) -}
 
 ------------------------
 dsSpecs :: CoreExpr     -- Its rhs
