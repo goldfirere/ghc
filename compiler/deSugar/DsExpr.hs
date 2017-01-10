@@ -120,8 +120,7 @@ ds_val_bind (NonRecursive, hsbinds) body
             -- use a bang pattern.  Trac #6078.
 
     else do { when (looksLazyPatBind bind) $
-              warnDs (Reason Opt_WarnUnbangedStrictPatterns)
-                     (unlifted_must_be_bang bind)
+              warnIfSetDs Opt_WarnUnbangedStrictPatterns (unlifted_must_be_bang bind)
         -- Complain about a binding that looks lazy
         --    e.g.    let I# y = x in ...
         -- Remember, in checkStrictBinds we are going to do strict

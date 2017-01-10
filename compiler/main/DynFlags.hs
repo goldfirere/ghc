@@ -568,6 +568,10 @@ data GeneralFlag
 -- displayed. If a warning isn't controlled by a flag, this is made
 -- explicit at the point of use.
 data WarnReason = NoReason | Reason !WarningFlag
+  deriving Show
+
+instance Outputable WarnReason where
+  ppr = text . show
 
 data WarningFlag =
 -- See Note [Updating flag description in the User's Guide]
@@ -3367,7 +3371,7 @@ wWarningFlagsDeps = [
   depFlagSpec "auto-orphans"             Opt_WarnAutoOrphans
     "it has no effect",
   flagSpec "cpp-undef"                   Opt_WarnCPPUndef,
-  flagSpec "ubanged-strict-patterns"     Opt_WarnUnbangedStrictPatterns,
+  flagSpec "unbanged-strict-patterns"    Opt_WarnUnbangedStrictPatterns,
   flagSpec "deferred-type-errors"        Opt_WarnDeferredTypeErrors,
   flagSpec "deferred-out-of-scope-variables"
                                          Opt_WarnDeferredOutOfScopeVariables,

@@ -38,7 +38,7 @@ module DsMonad (
         incrCheckPmIterDs, resetPmIterDs,
 
         -- Warnings and errors
-        DsWarning, warnDs, errDs, errDsCoreExpr,
+        DsWarning, warnDs, warnIfSetDs, errDs, errDsCoreExpr,
         failWithDs, failDs, discardWarningsDs,
         askNoErrsDs,
 
@@ -450,6 +450,7 @@ putSrcSpanDs (RealSrcSpan real_span) thing_inside
   = updLclEnv (\ env -> env {dsl_loc = real_span}) thing_inside
 
 -- | Emit a warning for the current source location
+-- NB: Warns whether or not -Wxyz is set
 warnDs :: WarnReason -> SDoc -> DsM ()
 warnDs reason warn
   = do { env <- getGblEnv
@@ -458,6 +459,12 @@ warnDs reason warn
        ; let msg = makeIntoWarning reason $
                    mkWarnMsg dflags loc (ds_unqual env) warn
        ; updMutVar (ds_msgs env) (\ (w,e) -> (w `snocBag` msg, e)) }
+
+-- | Emit a warning only if the correct WarnReason is set in the DynFlags
+warnIfSetDs :: WarningFlag -> SDoc -> DsM ()
+warnIfSetDs flag warn
+  = whenWOptM flag $
+    warnDs (Reason flag) warn
 
 errDs :: SDoc -> DsM ()
 errDs err

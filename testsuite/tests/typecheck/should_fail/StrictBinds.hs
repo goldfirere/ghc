@@ -7,5 +7,3 @@ import GHC.Exts
 foo = let x = 3# +# y
           y = x in
       True
-
-bar = let I# x = 5 in False
