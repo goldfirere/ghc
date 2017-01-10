@@ -635,6 +635,7 @@ data WarningFlag =
    | Opt_WarnUnrecognisedWarningFlags     -- since 8.0
    | Opt_WarnSimplifiableClassConstraints -- Since 8.2
    | Opt_WarnCPPUndef                     -- Since 8.2
+   | Opt_WarnUnbangedStrictPatterns       -- Since 8.2
    deriving (Eq, Show, Enum)
 
 data Language = Haskell98 | Haskell2010
@@ -3366,6 +3367,7 @@ wWarningFlagsDeps = [
   depFlagSpec "auto-orphans"             Opt_WarnAutoOrphans
     "it has no effect",
   flagSpec "cpp-undef"                   Opt_WarnCPPUndef,
+  flagSpec "ubanged-strict-patterns"     Opt_WarnUnbangedStrictPatterns,
   flagSpec "deferred-type-errors"        Opt_WarnDeferredTypeErrors,
   flagSpec "deferred-out-of-scope-variables"
                                          Opt_WarnDeferredOutOfScopeVariables,
@@ -4065,7 +4067,8 @@ minusWOpts
         Opt_WarnUnusedImports,
         Opt_WarnIncompletePatterns,
         Opt_WarnDodgyExports,
-        Opt_WarnDodgyImports
+        Opt_WarnDodgyImports,
+        Opt_WarnUnbangedStrictPatterns
       ]
 
 -- | Things you get with -Wall

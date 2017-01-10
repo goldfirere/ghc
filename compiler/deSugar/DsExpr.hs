@@ -111,7 +111,17 @@ ds_val_bind (NonRecursive, hsbinds) body
   , isUnliftedHsBind bind
   = putSrcSpanDs loc $
      -- see Note [Strict binds checks] in DsBinds
-    if | looksLazyPatBind bind -> errDsCoreExpr (unlifted_must_be_bang bind)
+    if is_polymorphic bind
+    then errDsCoreExpr (poly_bind_err bind)
+            -- data Ptr a = Ptr Addr#
+            -- f x = let p@(Ptr y) = ... in ...
+            -- Here the binding for 'p' is polymorphic, but does
+            -- not mix with an unlifted binding for 'y'.  You should
+            -- use a bang pattern.  Trac #6078.
+
+    else do { when (looksLazyPatBind bind) $
+              warnDs (Reason Opt_WarnUnbangedStrictPatterns)
+                     (unlifted_must_be_bang bind)
         -- Complain about a binding that looks lazy
         --    e.g.    let I# y = x in ...
         -- Remember, in checkStrictBinds we are going to do strict
@@ -119,14 +129,8 @@ ds_val_bind (NonRecursive, hsbinds) body
         -- that the strictness is manifest on each binding
         -- However, lone (unboxed) variables are ok
 
-       | is_polymorphic bind   -> errDsCoreExpr (poly_bind_err bind)
-            -- data Ptr a = Ptr Addr#
-            -- f x = let p@(Ptr y) = ... in ...
-            -- Here the binding for 'p' is polymorphic, but does
-            -- not mix with an unlifted binding for 'y'.  You should
-            -- use a bang pattern.  Trac #6078.
 
-       | otherwise             -> dsUnliftedBind bind body
+            ; dsUnliftedBind bind body }
   where
     is_polymorphic (AbsBinds { abs_tvs = tvs, abs_ev_vars = evs })
                      = not (null tvs && null evs)
