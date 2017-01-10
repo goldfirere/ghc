@@ -270,7 +270,7 @@ dsExpr (HsWrap co_fn e)
   = do { e' <- dsExpr e
        ; wrap' <- dsHsWrapper co_fn
        ; dflags <- getDynFlags
-       ; wrapped_e <- wrap' e'
+       ; let wrapped_e = wrap' e'
        ; warnAboutIdentities dflags e' (exprType wrapped_e)
        ; return wrapped_e }
 
@@ -806,9 +806,9 @@ dsSyntaxExpr (SyntaxExpr { syn_expr      = expr
   = do { fun            <- dsExpr expr
        ; core_arg_wraps <- mapM dsHsWrapper arg_wraps
        ; core_res_wrap  <- dsHsWrapper res_wrap
-       ; wrapped_args   <- zipWithM ($) core_arg_wraps arg_exprs
+       ; let wrapped_args = zipWith ($) core_arg_wraps arg_exprs
        ; zipWithM_ dsNoLevPolyExpr wrapped_args [ mk_doc n | n <- [1..] ]
-       ; core_res_wrap (mkApps fun wrapped_args) }
+       ; return (core_res_wrap (mkApps fun wrapped_args)) }
   where
     mk_doc n = text "In the" <+> speakNth n <+> text "argument of" <+> quotes (ppr expr)
 

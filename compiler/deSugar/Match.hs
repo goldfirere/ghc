@@ -266,7 +266,7 @@ matchCoercion (var:vars) ty (eqns@(eqn1:_))
         ; match_result <- match (var':vars) ty $
                           map (decomposeFirstPat getCoPat) eqns
         ; core_wrap <- dsHsWrapper co
-        ; bind <- NonRec var' <$> core_wrap (Var var)
+        ; let bind = NonRec var' (core_wrap (Var var))
         ; return (mkCoLetMatchResult bind match_result) }
 matchCoercion _ _ _ = panic "matchCoercion"
 
