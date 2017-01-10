@@ -620,7 +620,7 @@ We define an "unlifted bind" to be any bind that binds an unlifted id. Note that
 is *not* an unlifted bind. Unlifted binds are detected by HsUtils.isUnliftedHsBind.
 
 Define a "banged bind" to have a top-level bang. Detected by HsPat.isBangedPatBind.
-Define a "strict bind" to be either an unlifted bind or a strict bind.
+Define a "strict bind" to be either an unlifted bind or a banged bind.
 
 The restrictions are:
   1. Strict binds may not be top-level. Checked in dsTopLHsBinds.
@@ -630,7 +630,8 @@ The restrictions are:
      surprised by the strictness of an unlifted bind.) Checked in first clause
      of DsExpr.ds_val_bind.
 
-  3. Unlifted binds may not have polymorphism (#6078). Checked in first clause
+  3. Unlifted binds may not have polymorphism (#6078). (That is, no quantified type
+     variables or constraints.) Checked in first clause
      of DsExpr.ds_val_bind.
 
   4. Unlifted binds may not be recursive. Checked in second clause of ds_val_bind.
@@ -1104,6 +1105,8 @@ dsHsWrapper (WpLet ev_binds)  = do { bs <- dsTcEvBinds ev_binds
 dsHsWrapper (WpCompose c1 c2) = do { w1 <- dsHsWrapper c1
                                    ; w2 <- dsHsWrapper c2
                                    ; return (w1 <=< w2) }
+ -- See comments on WpFun in TcEvidence for an explanation of what
+ -- the specification of this clause is
 dsHsWrapper (WpFun c1 c2 t1 doc)
                               = do { x  <- newSysLocalDsNoLP t1
                                    ; w1 <- dsHsWrapper c1
