@@ -42,7 +42,6 @@ import Control.Monad
 #if __GLASGOW_HASKELL__ > 710
 import qualified Control.Monad.Fail as MonadFail
 #endif
-import Data.Functor.Identity ( runIdentity )
 
 {-
 ************************************************************************
@@ -1319,12 +1318,11 @@ specCalls mb_mod env rules_for_me calls_for_me fn rhs
                   = (inl_prag { inl_inline = EmptyInlineSpec }, noUnfolding)
 
                   | otherwise
-                  = (inl_prag, runIdentity $
-                               specUnfolding poly_tyvars spec_app
+                  = (inl_prag, specUnfolding poly_tyvars spec_app
                                              arity_decrease fn_unf)
 
                 arity_decrease = length spec_dict_args
-                spec_app e = return $ (e `mkApps` ty_args) `mkApps` spec_dict_args
+                spec_app e = (e `mkApps` ty_args) `mkApps` spec_dict_args
 
                 --------------------------------------
                 -- Adding arity information just propagates it a bit faster

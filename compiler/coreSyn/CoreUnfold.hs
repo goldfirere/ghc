@@ -147,8 +147,7 @@ mkInlinableUnfolding dflags expr
   where
     expr' = simpleOptExpr expr
 
-specUnfolding :: Monad m
-              => [Var] -> (CoreExpr -> m CoreExpr) -> Arity -> Unfolding -> m Unfolding
+specUnfolding :: [Var] -> (CoreExpr -> CoreExpr) -> Arity -> Unfolding -> Unfolding
 -- See Note [Specialising unfoldings]
 -- specUnfolding spec_bndrs spec_app arity_decrease unf
 --   = \spec_bndrs. spec_app( unf )
@@ -156,7 +155,7 @@ specUnfolding :: Monad m
 specUnfolding spec_bndrs spec_app arity_decrease
               df@(DFunUnfolding { df_bndrs = old_bndrs, df_con = con, df_args = args })
   = ASSERT2( arity_decrease == count isId old_bndrs - count isId spec_bndrs, ppr df )
-    mkDFunUnfolding spec_bndrs con <$> mapM spec_arg args
+    mkDFunUnfolding spec_bndrs con (map spec_arg args)
       -- There is a hard-to-check assumption here that the spec_app has
       -- enough applications to exactly saturate the old_bndrs
       -- For DFunUnfoldings we transform
@@ -165,7 +164,7 @@ specUnfolding spec_bndrs spec_app arity_decrease
       --       \new_bndrs. MkD (spec_app(\old_bndrs. <op1>)) ... ditto <opn>
       -- The ASSERT checks the value part of that
   where
-    spec_arg arg = simpleOptExpr <$> spec_app (mkLams old_bndrs arg)
+    spec_arg arg = simpleOptExpr (spec_app (mkLams old_bndrs arg))
                    -- The beta-redexes created by spec_app will be
                    -- simplified away by simplOptExpr
 
@@ -177,16 +176,16 @@ specUnfolding spec_bndrs spec_app arity_decrease
  , UnfWhen { ug_arity     = old_arity
            , ug_unsat_ok  = unsat_ok
            , ug_boring_ok = boring_ok } <- old_guidance
- = do { let guidance = UnfWhen { ug_arity     = old_arity - arity_decrease
-                               , ug_unsat_ok  = unsat_ok
-                               , ug_boring_ok = boring_ok }
-      ; new_tmpl <- simpleOptExpr <$> (mkLams spec_bndrs <$> (spec_app tmpl))
+ = let guidance = UnfWhen { ug_arity     = old_arity - arity_decrease
+                          , ug_unsat_ok  = unsat_ok
+                          , ug_boring_ok = boring_ok }
+       new_tmpl = simpleOptExpr (mkLams spec_bndrs (spec_app tmpl))
                    -- The beta-redexes created by spec_app will be
                    -- simplified away by simplOptExpr
 
-      ; return (mkCoreUnfolding src top_lvl new_tmpl guidance) }
+   in mkCoreUnfolding src top_lvl new_tmpl guidance
 
-specUnfolding _ _ _ _ = return noUnfolding
+specUnfolding _ _ _ _ = noUnfolding
 
 {- Note [Specialising unfoldings]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
