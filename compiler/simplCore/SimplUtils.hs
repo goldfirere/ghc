@@ -52,7 +52,7 @@ import Demand
 import SimplMonad
 import Type     hiding( substTy )
 import Coercion hiding( substCo )
-import DataCon          ( dataConWorkId, isUnboxedTupleCon, isUnboxedSumCon )
+import DataCon          ( dataConWorkId )
 import VarEnv
 import VarSet
 import BasicTypes
@@ -452,18 +452,6 @@ mkArgInfo fun rules n_val_args call_cont
     -- But beware primops/datacons with no strictness
 
     add_type_str
-      | Just dc <- isDataConId_maybe fun
-      , isUnboxedTupleCon dc || isUnboxedSumCon dc
-      = const id
-         -- unboxed tuple/sum data constructors are the *only* functions that
-         -- can take levity-polymorphic arguments. We thus cannot tell if the
-         -- arguments are strict, so we better not try.
-
-      | isPrimOpId fun
-      = const id
-         -- primops can have levity-polymorphic arguments
-
-      | otherwise
       = go
       where
         go _ [] = []
@@ -472,7 +460,10 @@ mkArgInfo fun rules n_val_args call_cont
             = go fun_ty' strs
         go fun_ty (str:strs)      -- Add strict-type info
             | Just (arg_ty, fun_ty') <- splitFunTy_maybe fun_ty
-            = (str || isStrictType arg_ty) : go fun_ty' strs
+            = (str || Just False == isLiftedType_maybe arg_ty) : go fun_ty' strs
+               -- If the type is levity-polymorphic, we can't know whether it's
+               -- strict. isLiftedType_maybe will return Just False only when
+               -- we're sure the type is unlifted.
         go _ strs
             = strs
 

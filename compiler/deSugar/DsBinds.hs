@@ -709,8 +709,7 @@ dsSpec mb_poly_rhs (L loc (SpecPrag poly_id spec_co spec_inl))
                         rule_bndrs args
                         (mkVarApps (Var spec_id) spec_bndrs)
 
-       ; rhs_body <- core_app poly_rhs
-       ; let spec_rhs = mkLams spec_bndrs rhs_body
+       ; let spec_rhs = mkLams spec_bndrs (core_app poly_rhs)
 
 -- Commented out: see Note [SPECIALISE on INLINE functions]
 --       ; when (isInlinePragma id_inl)

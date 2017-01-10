@@ -102,7 +102,7 @@ module Type (
         isPiTy, isTauTy, isFamFreeTy,
 
         -- (Lifting and boxity)
-        isUnliftedType, isUnboxedTupleType, isUnboxedSumType,
+        isLiftedType_maybe, isUnliftedType, isUnboxedTupleType, isUnboxedSumType,
         isAlgType, isClosedAlgType,
         isPrimitiveType, isStrictType,
         isRuntimeRepTy, isRuntimeRepVar, isRuntimeRepKindedTy,
@@ -1924,7 +1924,7 @@ isClosedAlgType ty
 
 -- | Computes whether an argument (or let right hand side) should
 -- be computed strictly or lazily, based only on its type.
--- Currently, it's just 'isUnliftedType'.
+-- Currently, it's just 'isUnliftedType'. Panics on levity-polymorphic types.
 isStrictType :: HasDebugCallStack => Type -> Bool
 isStrictType = isUnliftedType
 
