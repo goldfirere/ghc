@@ -834,7 +834,8 @@ ppr_expr (OpApp e1 op _ e2)
   where
     should_print_infix (HsVar (L _ v)) = Just (pprInfixOcc v)
     should_print_infix (HsRecFld f)    = Just (pprInfixOcc f)
-    should_print_infix (HsUnboundVar h@TrueExprHole{}) = Just (pprInfixOcc h)
+    should_print_infix (HsUnboundVar h@TrueExprHole{})
+                                       = Just (pprInfixOcc (unboundVarOcc h))
     should_print_infix (HsWrap _ e)    = should_print_infix e
     should_print_infix _               = Nothing
 

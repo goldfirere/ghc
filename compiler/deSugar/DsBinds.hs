@@ -695,12 +695,12 @@ dsSpec mb_poly_rhs (L loc (SpecPrag poly_id spec_co spec_inl))
 
        { dflags <- getDynFlags
        ; this_mod <- getModule
-       ; let fn_unf    = realIdUnfolding poly_id
-             spec_unf  = specUnfolding spec_bndrs core_app arity_decrease fn_unf
-             spec_id   = mkLocalId spec_name spec_ty
+       ; let fn_unf         = realIdUnfolding poly_id
+             arity_decrease = count isValArg args - count isId spec_bndrs
+       ; spec_unf <- specUnfolding spec_bndrs core_app arity_decrease fn_unf
+       ; let spec_id   = mkLocalId spec_name spec_ty
                             `setInlinePragma` inl_prag
                             `setIdUnfolding`  spec_unf
-             arity_decrease = count isValArg args - count isId spec_bndrs
 
        ; rule <- dsMkUserRule this_mod is_local_id
                         (mkFastString ("SPEC " ++ showPpr dflags poly_name))
@@ -1096,7 +1096,7 @@ dsHsWrapper :: HsWrapper -> DsM (CoreExpr -> DsM CoreExpr)
   -- NB: returns a monadic function for the levity-polymorphic check
   -- in the WpFun case
 dsHsWrapper WpHole            = return $ \e -> return e
-dsHsWrapper (WpTyApp ty)      = return $ \e -> return (App e (Type ty)
+dsHsWrapper (WpTyApp ty)      = return $ \e -> return (App e (Type ty))
 dsHsWrapper (WpEvLam ev)      = return $ return . Lam ev
 dsHsWrapper (WpTyLam tv)      = return $ return . Lam tv
 dsHsWrapper (WpLet ev_binds)  = do { bs <- dsTcEvBinds ev_binds
