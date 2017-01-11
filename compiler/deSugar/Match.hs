@@ -444,7 +444,18 @@ tidy1 v (AsPat (L _ var) pat)
 -}
 
 tidy1 v (LazyPat pat)
-  = do  { (_,sel_prs) <- mkSelectorBinds [] pat (Var v)
+    -- This is a convenient place to check for unlifted types under a lazy pattern.
+    -- Doing this check during type-checking is unsatisfactory because we may
+    -- not fully know the zonked types yet. We sure do here.
+  = do  { let unlifted_bndrs = filter (isUnliftedType . idType) (collectPatBinders pat)
+        ; unless (null unlifted_bndrs) $
+          putSrcSpanDs (getLoc pat) $
+          errDs (hang (text "A lazy (~) pattern cannot bind variables of unlifted type." $$
+                       text "Unlifted variables:")
+                    2 (vcat (map (\id -> ppr id <+> dcolon <+> ppr (idType id))
+                                 unlifted_bndrs)))
+
+        ; (_,sel_prs) <- mkSelectorBinds [] pat (Var v)
         ; let sel_binds =  [NonRec b rhs | (b,rhs) <- sel_prs]
         ; return (mkCoreLets sel_binds, WildPat (idType v)) }
 

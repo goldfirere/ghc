@@ -12,7 +12,7 @@
 module DsMonad (
         DsM, mapM, mapAndUnzipM,
         initDs, initDsTc, initTcDsForSolver, fixDs,
-        foldlM, foldrM, whenGOptM, unsetGOptM, unsetWOptM,
+        foldlM, foldrM, whenGOptM, unsetGOptM, unsetWOptM, xoptM,
         Applicative(..),(<$>),
 
         duplicateLocalDs, newSysLocalDsNoLP, newSysLocalDs,

@@ -6,6 +6,7 @@
 Printing of Core syntax
 -}
 
+{-# LANGUAGE MultiWayIf #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module PprCore (
         pprCoreExpr, pprParendExpr,
@@ -23,6 +24,7 @@ import Id
 import IdInfo
 import Demand
 import DataCon
+import PatSyn
 import TyCon
 import Type
 import Coercion
@@ -323,8 +325,10 @@ varOrDataConName :: PprStyle -> Var -> Name
 varOrDataConName sty var
   | userStyle sty
   , isId var
-  , Just dc <- isDataConId_maybe var
-  = dataConName dc
+  , Just name <- if | Just dc <- isDataConId_maybe var       -> Just (dataConName dc)
+                    | Just ps <- isPatSynBuilderId_maybe var -> Just (patSynName ps)
+                    | otherwise                              -> Nothing
+  = name
   | otherwise
   = varName var
 

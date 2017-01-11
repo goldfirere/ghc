@@ -473,7 +473,7 @@ coreToStgExpr e = pprPanic "coreToStgExpr" (ppr e)
 
 mkStgAltType :: Id -> [CoreAlt] -> AltType
 mkStgAltType bndr alts
-  | isUnboxedTupleType bndr_ty
+  | isUnboxedTupleType bndr_ty || isUnboxedSumType bndr_ty
   = MultiValAlt (length prim_reps)  -- always use MultiValAlt for unboxed tuples
 
   | otherwise

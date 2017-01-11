@@ -84,7 +84,11 @@ dsTopLHsBinds binds
 
   | otherwise
   = do { (force_vars, prs) <- dsLHsBinds binds
-       ; MASSERT2( null force_vars, ppr binds )
+       ; when debugIsOn $
+         do { xstrict <- xoptM LangExt.Strict
+            ; MASSERT2( null force_vars || xstrict, ppr binds $$ ppr force_vars ) }
+              -- with -XStrict, even top-level vars are listed as force vars.
+
        ; return (toOL prs) }
 
   where

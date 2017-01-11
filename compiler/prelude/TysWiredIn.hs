@@ -971,9 +971,7 @@ unboxedSumKind = unboxedTupleSumKind sumRepDataConTyCon
 
 -- | Create type constructor and data constructors for n-ary unboxed sum.
 mk_sum :: Arity -> (TyCon, Array ConTagZ DataCon)
-mk_sum arity = pprTrace "RAE2" (ppr arity $$ ppr tycon $$ ppr tyvars $$ ppr (map tyVarKind tyvars) $$ ppr tc_res_kind $$
-                                ppr (tyConKind tycon) $$ ppr tc_binders) $
-               (tycon, sum_cons)
+mk_sum arity = (tycon, sum_cons)
   where
     tycon   = mkSumTyCon tc_name tc_binders tc_res_kind (arity * 2) tyvars (elems sum_cons)
                          UnboxedAlgTyCon

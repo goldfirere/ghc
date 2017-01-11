@@ -130,6 +130,7 @@ data IdDetails
 
   | DataConWorkId DataCon       -- ^ The 'Id' is for a data constructor /worker/
   | DataConWrapId DataCon       -- ^ The 'Id' is for a data constructor /wrapper/
+  | PatSynBuilderId PatSyn      -- ^ A "builder" 'Id' for a pattern synonym
 
                                 -- [the only reasons we need to know is so that
                                 --  a) to support isImplicitId
@@ -182,18 +183,19 @@ pprIdDetails :: IdDetails -> SDoc
 pprIdDetails VanillaId = empty
 pprIdDetails other     = brackets (pp other)
  where
-   pp VanillaId         = panic "pprIdDetails"
-   pp (DataConWorkId _) = text "DataCon"
-   pp (DataConWrapId _) = text "DataConWrapper"
-   pp (ClassOpId {})    = text "ClassOp"
-   pp (PrimOpId _)      = text "PrimOp"
-   pp (FCallId _)       = text "ForeignCall"
-   pp (TickBoxOpId _)   = text "TickBoxOp"
-   pp (DFunId nt)       = text "DFunId" <> ppWhen nt (text "(nt)")
+   pp VanillaId               = panic "pprIdDetails"
+   pp (DataConWorkId _)       = text "DataCon"
+   pp (DataConWrapId _)       = text "DataConWrapper"
+   pp (PatSynBuilderId _)     = text "PatSynBuilderId"
+   pp (ClassOpId {})          = text "ClassOp"
+   pp (PrimOpId _)            = text "PrimOp"
+   pp (FCallId _)             = text "ForeignCall"
+   pp (TickBoxOpId _)         = text "TickBoxOp"
+   pp (DFunId nt)             = text "DFunId" <> ppWhen nt (text "(nt)")
    pp (RecSelId { sel_naughty = is_naughty })
-                         = brackets $ text "RecSel"
-                            <> ppWhen is_naughty (text "(naughty)")
-   pp CoVarId           = text "CoVarId"
+                              = brackets $ text "RecSel" <>
+                                           ppWhen is_naughty (text "(naughty)")
+   pp CoVarId                 = text "CoVarId"
 
 {-
 ************************************************************************

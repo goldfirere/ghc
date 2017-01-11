@@ -67,6 +67,7 @@ module Id (
         isPrimOpId, isPrimOpId_maybe,
         isFCallId, isFCallId_maybe,
         isDataConWorkId, isDataConWorkId_maybe, isDataConId_maybe, idDataCon,
+        isPatSynBuilderId_maybe,
         isConLikeId, isBottomingId, idIsFrom,
         hasNoBinding,
 
@@ -129,6 +130,7 @@ import Type
 import RepType
 import TysPrim
 import DataCon
+import PatSyn
 import Demand
 import Name
 import Module
@@ -469,6 +471,11 @@ isDataConId_maybe id = case Var.idDetails id of
                          DataConWorkId con -> Just con
                          DataConWrapId con -> Just con
                          _                 -> Nothing
+
+isPatSynBuilderId_maybe :: Id -> Maybe PatSyn
+isPatSynBuilderId_maybe id = case Var.idDetails id of
+  PatSynBuilderId syn -> Just syn
+  _                   -> Nothing
 
 idDataCon :: Id -> DataCon
 -- ^ Get from either the worker or the wrapper 'Id' to the 'DataCon'. Currently used only in the desugarer.

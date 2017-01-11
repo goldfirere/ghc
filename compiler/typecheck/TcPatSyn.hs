@@ -34,7 +34,7 @@ import FastString
 import Var
 import VarEnv( emptyTidyEnv, mkInScopeSet )
 import Id
-import IdInfo( RecSelParent(..), setLevityInfoWithType )
+import IdInfo( RecSelParent(..), setLevityInfoWithType, IdDetails(..) )
 import TcBinds
 import BasicTypes
 import TcSimplify
@@ -330,27 +330,29 @@ tc_patsyn_finish lname dir is_infix lpat'
                                          (args, arg_tys)
                                          pat_ty
 
-
-       -- Make the 'builder'
-       ; builder_id <- mkPatSynBuilderId dir lname
-                                         univ_tvs req_theta
-                                         ex_tvs   prov_theta
-                                         arg_tys pat_ty
-
          -- TODO: Make this have the proper information
        ; let mkFieldLabel name = FieldLabel { flLabel = occNameFS (nameOccName name)
                                             , flIsOverloaded = False
                                             , flSelector = name }
              field_labels' = map mkFieldLabel field_labels
 
+       -- Make the 'builder'
+       ; patSyn <- fixM $ \ ~rec_patSyn -> do
+           { builder_id <- mkPatSynBuilderId rec_patSyn
+                                             dir lname
+                                             univ_tvs req_theta
+                                             ex_tvs   prov_theta
+                                             arg_tys pat_ty
+
        -- Make the PatSyn itself
-       ; let patSyn = mkPatSyn (unLoc lname) is_infix
-                        (univ_tvs, req_theta)
-                        (ex_tvs, prov_theta)
-                        arg_tys
-                        pat_ty
-                        matcher_id builder_id
-                        field_labels'
+           ; return $
+             mkPatSyn (unLoc lname) is_infix
+                      (univ_tvs, req_theta)
+                      (ex_tvs, prov_theta)
+                      arg_tys
+                      pat_ty
+                      matcher_id builder_id
+                      field_labels' }
 
        -- Selectors
        ; let rn_rec_sel_binds = mkPatSynRecSelBinds patSyn (patSynFieldLabels patSyn)
@@ -477,12 +479,13 @@ isUnidirectional ExplicitBidirectional{} = False
 ************************************************************************
 -}
 
-mkPatSynBuilderId :: HsPatSynDir a -> Located Name
+mkPatSynBuilderId :: PatSyn  -- knot-tied
+                  -> HsPatSynDir a -> Located Name
                   -> [TyVarBinder] -> ThetaType
                   -> [TyVarBinder] -> ThetaType
                   -> [Type] -> Type
                   -> TcM (Maybe (Id, Bool))
-mkPatSynBuilderId dir (L _ name)
+mkPatSynBuilderId rec_patsyn dir (L _ name)
                   univ_bndrs req_theta ex_bndrs prov_theta
                   arg_tys pat_ty
   | isUnidirectional dir
@@ -497,7 +500,8 @@ mkPatSynBuilderId dir (L _ name)
                               mkFunTys theta $
                               mkFunTys arg_tys $
                               pat_ty
-             builder_id     = mkExportedVanillaId builder_name builder_sigma
+             builder_id     = mkExportedLocalId (PatSynBuilderId rec_patsyn)
+                                                builder_name builder_sigma
               -- See Note [Exported LocalIds] in Id
 
              builder_id'    = modifyIdInfo (`setLevityInfoWithType` pat_ty) builder_id
