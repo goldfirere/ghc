@@ -79,18 +79,29 @@ returnsTyCon _  _                  = False
 returnsConstraintKind :: Kind -> Bool
 returnsConstraintKind = returnsTyCon constraintKindTyConKey
 
--- | Tests whether the given kind (which should look like "TYPE ...")
--- has any free variables
+-- | Tests whether the given kind (which should look like @TYPE x@)
+-- is something other than a constructor tree (that is, constructors at every node).
 isKindLevPoly :: Kind -> Bool
 isKindLevPoly k = ASSERT2( isStarKind k || _is_type, ppr k )
                       -- the isStarKind check is necessary b/c of Constraint
-                  not $ noFreeVarsOfType k
+                  go k
   where
+    go ty | Just ty' <- coreViewOneStarKind ty = go ty'
+    go TyVarTy{}         = True
+    go AppTy{}           = True  -- it can't be a TyConApp
+    go (TyConApp tc tys) = not (isFamilyTyCon tc) || any go tys
+    go ForAllTy{}        = True
+    go (FunTy t1 t2)     = go t1 || go t2
+    go LitTy{}           = False
+    go CastTy{}          = True
+    go CoercionTy{}      = True
+
     _is_type
       | TyConApp typ [_] <- k
       = typ `hasKey` tYPETyConKey
       | otherwise
       = False
+
 
 --------------------------------------------
 --            Kinding for arrow (->)

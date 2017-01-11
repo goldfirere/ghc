@@ -30,3 +30,5 @@ test('T12711', only_ways(['ghci']), ghci_script, ['T12711.script'])
 #       extra_files([ "unboxedsums" + str(i) + ".hs" for i in range(1, 12) ])],
 #      run_command,
 #      ['$MAKE -s --no-print-directory sum_api_annots'])
+
+test('UbxSumLevPoly', normal, compile, [''])

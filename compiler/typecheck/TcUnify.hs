@@ -1231,7 +1231,7 @@ uType_defer origin t_or_k ty1 ty2
 --------------
 uType origin t_or_k orig_ty1 orig_ty2
   = do { tclvl <- getTcLevel
-       ; traceTc "u_tys " $ vcat
+       ; traceTc "u_tys" $ vcat
               [ text "tclvl" <+> ppr tclvl
               , sep [ ppr orig_ty1, text "~", ppr orig_ty2]
               , pprCtOrigin origin]

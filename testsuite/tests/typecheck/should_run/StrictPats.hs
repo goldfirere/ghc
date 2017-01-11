@@ -2,7 +2,7 @@
              UnboxedSums, NoMonomorphismRestriction #-}
 {-# OPTIONS_GHC -Wno-unused-binds -Wno-unbanged-strict-patterns #-}
 
-module StrictPats where
+module Main where
 
 import Control.Exception
 import GHC.Exts
