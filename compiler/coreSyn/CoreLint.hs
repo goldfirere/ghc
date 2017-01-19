@@ -793,12 +793,14 @@ lintCoreArg fun_ty (Type arg_ty)
 
 lintCoreArg fun_ty arg
   = do { arg_ty <- lintCoreExpr arg
-       ; checkL (not (isUnliftedType arg_ty) || exprOkForSpeculation arg)
-                (mkLetAppMsg arg)
            -- See Note [Levity polymorphism invariants] in CoreSyn
        ; lintL (not (isTypeLevPoly arg_ty))
            (text "Levity-polymorphic argument:" <+>
              (ppr arg <+> dcolon <+> parens (ppr arg_ty <+> dcolon <+> ppr (typeKind arg_ty))))
+          -- check for levity polymorphism first, because otherwise isUnliftedType panics
+
+       ; checkL (not (isUnliftedType arg_ty) || exprOkForSpeculation arg)
+                (mkLetAppMsg arg)
        ; lintValApp arg fun_ty arg_ty }
 
 -----------------
