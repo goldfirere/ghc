@@ -1,4 +1,4 @@
-{-# LANGUAGE Safe #-}
+{-# LANGUAGE Trustworthy, TypeInType, DefaultSignatures, GADTs #-}
 {-# LANGUAGE CPP #-}
 
 -----------------------------------------------------------------------------
@@ -19,6 +19,7 @@ module Data.Bifunctor
 
 import Control.Applicative  ( Const(..) )
 import GHC.Generics ( K1(..) )
+import GHC.Types ( TYPE, RuntimeRep(..) )
 
 -- | Formally, the class 'Bifunctor' represents a bifunctor
 -- from @Hask@ -> @Hask@.
@@ -53,25 +54,28 @@ import GHC.Generics ( K1(..) )
 -- @
 --
 -- @since 4.8.0.0
-class Bifunctor p where
+class Bifunctor (p :: TYPE r1 -> TYPE r2 -> TYPE r3) where
     {-# MINIMAL bimap | first, second #-}
 
     -- | Map over both arguments at the same time.
     --
     -- @'bimap' f g ≡ 'first' f '.' 'second' g@
     bimap :: (a -> b) -> (c -> d) -> p a c -> p b d
+    default bimap :: r3 ~ 'LiftedRep => (a -> b) -> (c -> d) -> p a c -> p b d
     bimap f g = first f . second g
 
     -- | Map covariantly over the first argument.
     --
     -- @'first' f ≡ 'bimap' f 'id'@
     first :: (a -> b) -> p a c -> p b c
+    default first :: r2 ~ 'LiftedRep => (a -> b) -> p a c -> p b c
     first f = bimap f id
 
     -- | Map covariantly over the second argument.
     --
     -- @'second' ≡ 'bimap' 'id'@
     second :: (b -> c) -> p a b -> p a c
+    default second :: r1 ~ 'LiftedRep => (b -> c) -> p a b -> p a c
     second = bimap id
 
 

@@ -1,5 +1,5 @@
-{-# LANGUAGE Safe #-}
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE GADTs, TypeInType, ScopedTypeVariables, DefaultSignatures #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -98,6 +98,7 @@ import Data.Word
 import Numeric
 import Numeric.Natural
 import System.IO
+import GHC.Types ( TYPE, RuntimeRep(..) )
 
 -------------------
 
@@ -269,13 +270,13 @@ hPrintf hdl fmts = hspr hdl fmts []
 -- this module. If you attempt to pass an argument of a type which
 -- is not an instance of this class to 'printf' or 'hPrintf', then
 -- the compiler will report it as a missing instance of 'PrintfArg'.
-class PrintfType t where
+class PrintfType (t :: TYPE r) where
     spr :: String -> [UPrintf] -> t
 
 -- | The 'HPrintfType' class provides the variable argument magic for
 -- 'hPrintf'.  Its implementation is intentionally not visible from
 -- this module.
-class HPrintfType t where
+class HPrintfType (t :: TYPE r) where
     hspr :: Handle -> String -> [UPrintf] -> t
 
 {- not allowed in Haskell 2010
@@ -315,13 +316,15 @@ instance (PrintfArg a, HPrintfType r) => HPrintfType (a -> r) where
 -- to a bad descriptor or produces a 'ShowS' as the result. The
 -- default 'parseFormat' expects no modifiers: this is the normal
 -- case. Minimal instance: 'formatArg'.
-class PrintfArg a where
+class PrintfArg (a :: TYPE r) where
     -- | @since 4.7.0.0
     formatArg :: a -> FieldFormatter
     -- | @since 4.7.0.0
     parseFormat :: a -> ModifierParser
-    parseFormat _ (c : cs) = FormatParse "" c cs
-    parseFormat _ "" = errorShortFormat
+    default parseFormat :: r ~ 'LiftedRep => a -> ModifierParser
+    parseFormat = ((\ _ l -> case l of
+      (c : cs) -> FormatParse "" c cs
+      "" -> errorShortFormat) :: forall b. PrintfArg b => b -> ModifierParser)
 
 -- | @since 2.01
 instance PrintfArg Char where
@@ -404,7 +407,7 @@ instance PrintfArg Double where
 -- a workaround for the fact that 'String', as a concrete
 -- type, is not allowable as a typeclass instance. 'IsChar'
 -- is exported for backward-compatibility.
-class IsChar c where
+class IsChar (c :: TYPE r) where
     -- | @since 4.7.0.0
     toChar :: c -> Char
     -- | @since 4.7.0.0

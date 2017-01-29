@@ -1,4 +1,4 @@
-{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE Trustworthy, TypeInType, GADTs, DefaultSignatures, ScopedTypeVariables #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 
@@ -28,6 +28,7 @@ import GHC.Num
 import GHC.IO.Device as IODevice
 import GHC.IO.Device as RawIO
 import GHC.IO.Buffer
+import GHC.Types ( TYPE )
 
 -- | The purpose of 'BufferedIO' is to provide a common interface for I/O
 -- devices that can read and write data through a buffer.  Devices that
@@ -35,7 +36,7 @@ import GHC.IO.Buffer
 -- and bytestrings.  The underlying device implementing a 'Handle' must
 -- provide 'BufferedIO'.
 --
-class BufferedIO dev where
+class BufferedIO (dev :: TYPE r) where
   -- | allocate a new buffer.  The size of the buffer is at the
   -- discretion of the device; e.g. for a memory-mapped file the
   -- buffer will probably cover the entire file.
@@ -60,8 +61,9 @@ class BufferedIO dev where
   -- There is no corresponding operation for read buffers, because before
   -- reading the client will always call 'fillReadBuffer'.
   emptyWriteBuffer  :: dev -> Buffer Word8 -> IO (Buffer Word8)
-  emptyWriteBuffer _dev buf
-    = return buf{ bufL=0, bufR=0, bufState = WriteBuffer }
+  default emptyWriteBuffer :: r ~ 'LiftedRep => dev -> Buffer Word8 -> IO (Buffer Word8)
+  emptyWriteBuffer = ((\ _ buf ->
+    return buf{ bufL=0, bufR=0, bufState = WriteBuffer }) :: forall d. BufferedIO d => d -> Buffer Word8 -> IO (Buffer Word8))
 
   -- | Flush all the data from the supplied write buffer out to the device.
   -- The returned buffer should be empty, and ready for writing.
@@ -123,4 +125,3 @@ writeBufNonBlocking dev bbuf = do
   res <- withBuffer bbuf $ \ptr ->
             IODevice.writeNonBlocking dev (ptr `plusPtr` bufL bbuf) bytes
   return (res, bufferAdjustL (bufL bbuf + res) bbuf)
-

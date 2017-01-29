@@ -746,7 +746,7 @@ import GHC.TypeLits ( Nat, Symbol, KnownSymbol, KnownNat, symbolVal, natVal )
 
 -- | Void: used for datatypes without constructors
 data V1 (p :: k)
-  deriving (Functor, Generic, Generic1)
+  deriving (Functor, Generic {-, Generic1 -})
 
 deriving instance Eq   (V1 p)
 deriving instance Ord  (V1 p)
@@ -755,7 +755,7 @@ deriving instance Show (V1 p)
 
 -- | Unit: used for constructors without arguments
 data U1 (p :: k) = U1
-  deriving (Generic, Generic1)
+  deriving (Generic{- , Generic1 -})
 
 -- | @since 4.9.0.0
 instance Eq (U1 p) where
@@ -796,7 +796,7 @@ instance MonadPlus U1
 
 -- | Used for marking occurrences of the parameter
 newtype Par1 p = Par1 { unPar1 :: p }
-  deriving (Eq, Ord, Read, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Read, Show, Functor, Generic{- , Generic1 -})
 
 -- | @since 4.9.0.0
 instance Applicative Par1 where
@@ -810,7 +810,7 @@ instance Monad Par1 where
 -- | Recursive calls of kind @* -> *@ (or kind @k -> *@, when @PolyKinds@
 -- is enabled)
 newtype Rec1 (f :: k -> *) (p :: k) = Rec1 { unRec1 :: f p }
-  deriving (Eq, Ord, Read, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Read, Show, Functor, Generic{- , Generic1 -})
 
 -- | @since 4.9.0.0
 instance Applicative f => Applicative (Rec1 f) where
@@ -831,7 +831,7 @@ instance MonadPlus f => MonadPlus (Rec1 f)
 
 -- | Constants, additional parameters and recursion of kind @*@
 newtype K1 (i :: *) c (p :: k) = K1 { unK1 :: c }
-  deriving (Eq, Ord, Read, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Read, Show, Functor, Generic{- , Generic1 -})
 
 -- | @since 4.9.0.0
 instance Applicative f => Applicative (M1 i c f) where
@@ -852,17 +852,17 @@ instance MonadPlus f => MonadPlus (M1 i c f)
 
 -- | Meta-information (constructor names, etc.)
 newtype M1 (i :: *) (c :: Meta) (f :: k -> *) (p :: k) = M1 { unM1 :: f p }
-  deriving (Eq, Ord, Read, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Read, Show, Functor, Generic{- , Generic1 -})
 
 -- | Sums: encode choice between constructors
 infixr 5 :+:
 data (:+:) (f :: k -> *) (g :: k -> *) (p :: k) = L1 (f p) | R1 (g p)
-  deriving (Eq, Ord, Read, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Read, Show, Functor, Generic{- , Generic1 -})
 
 -- | Products: encode multiple arguments to constructors
 infixr 6 :*:
 data (:*:) (f :: k -> *) (g :: k -> *) (p :: k) = f p :*: g p
-  deriving (Eq, Ord, Read, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Read, Show, Functor, Generic{- , Generic1 -})
 
 -- | @since 4.9.0.0
 instance (Applicative f, Applicative g) => Applicative (f :*: g) where
@@ -888,7 +888,7 @@ instance (MonadPlus f, MonadPlus g) => MonadPlus (f :*: g)
 infixr 7 :.:
 newtype (:.:) (f :: k2 -> *) (g :: k1 -> k2) (p :: k1) =
     Comp1 { unComp1 :: f (g p) }
-  deriving (Eq, Ord, Read, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Read, Show, Functor, Generic{- , Generic1 -})
 
 -- | @since 4.9.0.0
 instance (Applicative f, Applicative g) => Applicative (f :.: g) where
@@ -909,37 +909,37 @@ data family URec (a :: *) (p :: k)
 --
 -- @since 4.9.0.0
 data instance URec (Ptr ()) (p :: k) = UAddr { uAddr# :: Addr# }
-  deriving (Eq, Ord, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Functor, Generic{- , Generic1 -})
 
 -- | Used for marking occurrences of 'Char#'
 --
 -- @since 4.9.0.0
 data instance URec Char (p :: k) = UChar { uChar# :: Char# }
-  deriving (Eq, Ord, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Show, Functor, Generic{- , Generic1 -})
 
 -- | Used for marking occurrences of 'Double#'
 --
 -- @since 4.9.0.0
 data instance URec Double (p :: k) = UDouble { uDouble# :: Double# }
-  deriving (Eq, Ord, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Show, Functor, Generic{- , Generic1 -})
 
 -- | Used for marking occurrences of 'Float#'
 --
 -- @since 4.9.0.0
 data instance URec Float (p :: k) = UFloat { uFloat# :: Float# }
-  deriving (Eq, Ord, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Show, Functor, Generic{- , Generic1 -})
 
 -- | Used for marking occurrences of 'Int#'
 --
 -- @since 4.9.0.0
 data instance URec Int (p :: k) = UInt { uInt# :: Int# }
-  deriving (Eq, Ord, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Show, Functor, Generic{- , Generic1 -})
 
 -- | Used for marking occurrences of 'Word#'
 --
 -- @since 4.9.0.0
 data instance URec Word (p :: k) = UWord { uWord# :: Word# }
-  deriving (Eq, Ord, Show, Functor, Generic, Generic1)
+  deriving (Eq, Ord, Show, Functor, Generic{- , Generic1 -})
 
 -- | Type synonym for @'URec' 'Addr#'@
 --

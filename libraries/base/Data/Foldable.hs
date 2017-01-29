@@ -5,6 +5,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeInType, GADTs, DefaultSignatures #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -65,6 +66,7 @@ import GHC.Arr  ( Array(..), elems, numElements,
                   foldlElems', foldrElems',
                   foldl1Elems, foldr1Elems)
 import GHC.Base hiding ( foldr )
+import GHC.Prim ( TYPE )
 import GHC.Generics
 import GHC.Num  ( Num(..) )
 
@@ -114,7 +116,7 @@ infix  4 `elem`, `notElem`
 --
 -- > foldMap f . fmap g = foldMap (f . g)
 
-class Foldable t where
+class Foldable (t :: Type -> TYPE r) where
     {-# MINIMAL foldMap | foldr #-}
 
     -- | Combine the elements of a structure using a monoid.
@@ -146,14 +148,15 @@ class Foldable t where
     -- @foldr f z = 'List.foldr' f z . 'toList'@
     --
     foldr :: (a -> b -> b) -> b -> t a -> b
-    foldr f z t = appEndo (foldMap (Endo #. f) t) z
+    default foldr :: r ~ 'LiftedRep => (a -> b -> b) -> b -> t a -> b
+    foldr = ((\ f z t -> appEndo (foldMap (Endo #. f) t) z) :: forall s a b. Foldable s => (a -> b -> b) -> b -> s a -> b)
 
     -- | Right-associative fold of a structure, but with strict application of
     -- the operator.
     --
     foldr' :: (a -> b -> b) -> b -> t a -> b
-    foldr' f z0 xs = foldl f' id xs z0
-      where f' k x z = k $! f x z
+    default foldr' :: r ~ 'LiftedRep => (a -> b -> b) -> b -> t a -> b
+    foldr' = ((\ f z0 xs -> let f' k x z = k $! f x z in foldl f' id xs z0) :: forall s a b. Foldable s => (a -> b -> b) -> b -> s a -> b)
 
     -- | Left-associative fold of a structure.
     --
@@ -181,7 +184,8 @@ class Foldable t where
     -- @foldl f z = 'List.foldl' f z . 'toList'@
     --
     foldl :: (b -> a -> b) -> b -> t a -> b
-    foldl f z t = appEndo (getDual (foldMap (Dual . Endo . flip f) t)) z
+    default foldl :: r ~ 'LiftedRep => (b -> a -> b) -> b -> t a -> b
+    foldl = ((\ f z t -> appEndo (getDual (foldMap (Dual . Endo . flip f) t)) z) :: forall s a b. Foldable s => (b -> a -> b) -> b -> s a -> b)
     -- There's no point mucking around with coercions here,
     -- because flip forces us to build a new function anyway.
 
@@ -199,37 +203,40 @@ class Foldable t where
     -- @foldl f z = 'List.foldl'' f z . 'toList'@
     --
     foldl' :: (b -> a -> b) -> b -> t a -> b
-    foldl' f z0 xs = foldr f' id xs z0
-      where f' x k z = k $! f z x
+    default foldl' :: r ~ 'LiftedRep => (b -> a -> b) -> b -> t a -> b
+    foldl' = ((\f z0 xs -> let f' x k z = k $! f z x in foldr f' id xs z0) :: forall s a b. Foldable s => (b -> a -> b) -> b -> s a -> b)
+
 
     -- | A variant of 'foldr' that has no base case,
     -- and thus may only be applied to non-empty structures.
     --
     -- @'foldr1' f = 'List.foldr1' f . 'toList'@
     foldr1 :: (a -> a -> a) -> t a -> a
-    foldr1 f xs = fromMaybe (errorWithoutStackTrace "foldr1: empty structure")
-                    (foldr mf Nothing xs)
-      where
-        mf x m = Just (case m of
-                         Nothing -> x
-                         Just y  -> f x y)
+    default foldr1 :: r ~ 'LiftedRep => (a -> a -> a) -> t a -> a
+    foldr1 = ((\f xs -> let mf x m = Just (case m of
+                                             Nothing -> x
+                                             Just y  -> f x y) in
+                  fromMaybe (errorWithoutStackTrace "foldr1: empty structure")
+                    (foldr mf Nothing xs)) :: forall s a. Foldable s => (a -> a -> a) -> s a -> a )
+
 
     -- | A variant of 'foldl' that has no base case,
     -- and thus may only be applied to non-empty structures.
     --
     -- @'foldl1' f = 'List.foldl1' f . 'toList'@
     foldl1 :: (a -> a -> a) -> t a -> a
-    foldl1 f xs = fromMaybe (errorWithoutStackTrace "foldl1: empty structure")
-                    (foldl mf Nothing xs)
-      where
-        mf m y = Just (case m of
-                         Nothing -> y
-                         Just x  -> f x y)
+    default foldl1 :: r ~ 'LiftedRep => (a -> a -> a) -> t a -> a
+    foldl1 = ((\f xs -> let mf m y = Just (case m of
+                                             Nothing -> y
+                                             Just x  -> f x y) in
+                  fromMaybe (errorWithoutStackTrace "foldl1: empty structure")
+                    (foldl mf Nothing xs)) :: forall s a. Foldable s => (a -> a -> a) -> s a -> a)
 
     -- | List of elements of a structure, from left to right.
     toList :: t a -> [a]
+    default toList :: r ~ 'LiftedRep => t a -> [a]
     {-# INLINE toList #-}
-    toList t = build (\ c n -> foldr c n t)
+    toList = ((\ t -> build (\ c n -> foldr c n t)) :: forall s a. Foldable s => s a -> [a])
 
     -- | Test whether the structure is empty. The default implementation is
     -- optimized for structures that are similar to cons-lists, because there
@@ -245,25 +252,30 @@ class Foldable t where
 
     -- | Does the element occur in the structure?
     elem :: Eq a => a -> t a -> Bool
+    default elem :: (r ~ 'LiftedRep, Eq a) => a -> t a -> Bool
     elem = any . (==)
 
     -- | The largest element of a non-empty structure.
     maximum :: forall a . Ord a => t a -> a
+    default maximum :: forall a. (r ~ 'LiftedRep, Ord a) => t a -> a
     maximum = fromMaybe (errorWithoutStackTrace "maximum: empty structure") .
        getMax . foldMap (Max #. (Just :: a -> Maybe a))
 
     -- | The least element of a non-empty structure.
     minimum :: forall a . Ord a => t a -> a
+    default minimum :: forall a. (r ~ 'LiftedRep, Ord a) => t a -> a
     minimum = fromMaybe (errorWithoutStackTrace "minimum: empty structure") .
        getMin . foldMap (Min #. (Just :: a -> Maybe a))
 
     -- | The 'sum' function computes the sum of the numbers of a structure.
     sum :: Num a => t a -> a
+    default sum :: (r ~ 'LiftedRep, Num a) => t a -> a
     sum = getSum #. foldMap Sum
 
     -- | The 'product' function computes the product of the numbers of a
     -- structure.
     product :: Num a => t a -> a
+    default product :: (r ~ 'LiftedRep, Num a) => t a -> a
     product = getProduct #. foldMap Product
 
 -- instances for Prelude types

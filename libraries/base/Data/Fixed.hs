@@ -1,4 +1,4 @@
-{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE Trustworthy, TypeInType #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -----------------------------------------------------------------------------
@@ -39,7 +39,7 @@ import Data.Data
 import GHC.Read
 import Text.ParserCombinators.ReadPrec
 import Text.Read.Lex
-
+import GHC.Types ( Type, TYPE )
 default () -- avoid any defaulting shenanigans
 
 -- | generalisation of 'div' to any instance of Real
@@ -57,7 +57,7 @@ mod' n d = n - (fromInteger f) * d where
     f = div' n d
 
 -- | The type parameter should be an instance of 'HasResolution'.
-newtype Fixed a = MkFixed Integer -- ^ @since 4.7.0.0
+newtype Fixed (a :: Type) = MkFixed Integer -- ^ @since 4.7.0.0
         deriving (Eq,Ord)
 
 -- We do this because the automatically derived Data instance requires (Data a) context.
@@ -74,7 +74,7 @@ instance (Typeable a) => Data (Fixed a) where
     dataTypeOf _ = tyFixed
     toConstr _ = conMkFixed
 
-class HasResolution a where
+class HasResolution (a :: TYPE r) where
     resolution :: p a -> Integer
 
 withType :: (p a -> f a) -> f a

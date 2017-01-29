@@ -6,7 +6,7 @@
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE StandaloneDeriving  #-}
 {-# LANGUAGE NoImplicitPrelude   #-}
-{-# LANGUAGE PolyKinds           #-}
+{-# LANGUAGE TypeInType          #-}
 {-# LANGUAGE RankNTypes          #-}
 
 -----------------------------------------------------------------------------
@@ -39,6 +39,7 @@ import GHC.Enum
 import GHC.Show
 import GHC.Read
 import GHC.Base
+import GHC.Prim ( TYPE )
 
 -- | Representational equality. If @Coercion a b@ is inhabited by some terminating
 -- value, then the type @a@ has the same underlying representation as the type @b@.
@@ -97,7 +98,7 @@ deriving instance Coercible a b => Bounded (Coercion a b)
 -- | This class contains types where you can learn the equality of two types
 -- from information contained in /terms/. Typically, only singleton types should
 -- inhabit this class.
-class TestCoercion f where
+class TestCoercion (f :: k -> TYPE r) where
   -- | Conditionally prove the representational equality of @a@ and @b@.
   testCoercion :: f a -> f b -> Maybe (Coercion a b)
 

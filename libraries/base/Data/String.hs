@@ -3,7 +3,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE Trustworthy #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilies, TypeInType #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -34,10 +34,11 @@ import GHC.Base
 import Data.Functor.Const (Const (Const))
 import Data.Functor.Identity (Identity (Identity))
 import Data.List (lines, words, unlines, unwords)
+import GHC.Prim ( TYPE )
 
 -- | Class for string-like datastructures; used by the overloaded string
 --   extension (-XOverloadedStrings in GHC).
-class IsString a where
+class IsString (a :: TYPE r) where
     fromString :: String -> a
 
 {- Note [IsString String]

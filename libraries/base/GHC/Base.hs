@@ -82,7 +82,7 @@ Other Prelude modules are much easier with fewer complex dependencies.
            , MagicHash
            , UnboxedTuples
            , ExistentialQuantification
-           , RankNTypes
+           , RankNTypes, TypeInType, DefaultSignatures, GADTs
   #-}
 -- -Wno-orphans is needed for things like:
 -- Orphan rule: "x# -# x#" ALWAYS forall x# :: Int# -# x# x# = 0
@@ -351,13 +351,14 @@ The instances of 'Functor' for lists, 'Data.Maybe.Maybe' and 'System.IO.IO'
 satisfy these laws.
 -}
 
-class  Functor f  where
+class  Functor (f :: TYPE r1 -> TYPE r2)  where
     fmap        :: (a -> b) -> f a -> f b
 
     -- | Replace all locations in the input with the same value.
     -- The default definition is @'fmap' . 'const'@, but this may be
     -- overridden with a more efficient version.
     (<$)        :: a -> f b -> f a
+    default (<$) :: (r1 ~ 'LiftedRep) => a -> f b -> f a
     (<$)        =  fmap . const
 
 -- | A functor with application, providing operations to
@@ -404,7 +405,7 @@ class  Functor f  where
 --
 -- (which implies that 'pure' and '<*>' satisfy the applicative functor laws).
 
-class Functor f => Applicative f where
+class Functor f => Applicative (f :: Type -> TYPE r) where
     -- | Lift a value.
     pure :: a -> f a
 
@@ -413,12 +414,14 @@ class Functor f => Applicative f where
 
     -- | Sequence actions, discarding the value of the first argument.
     (*>) :: f a -> f b -> f b
-    a1 *> a2 = (id <$ a1) <*> a2
+    default (*>) :: r ~ 'LiftedRep => f a -> f b -> f b
+    (*>) = ((\a1 a2 -> (id <$ a1) <*> a2) :: forall g a b. Applicative g => g a -> g b -> g b)
     -- This is essentially the same as liftA2 (const id), but if the
     -- Functor instance has an optimized (<$), we want to use that instead.
 
     -- | Sequence actions, discarding the value of the second argument.
     (<*) :: f a -> f b -> f a
+    default (<*) :: (r ~ 'LiftedRep) => f a -> f b -> f a
     (<*) = liftA2 const
 
 -- | A variant of '<*>' with the arguments reversed.
@@ -487,7 +490,7 @@ and that 'pure' and ('<*>') satisfy the applicative functor laws.
 The instances of 'Monad' for lists, 'Data.Maybe.Maybe' and 'System.IO.IO'
 defined in the "Prelude" satisfy these laws.
 -}
-class Applicative m => Monad m where
+class Applicative m => Monad (m :: Type -> TYPE r) where
     -- | Sequentially compose two actions, passing any value produced
     -- by the first as an argument to the second.
     (>>=)       :: forall a b. m a -> (a -> m b) -> m b
@@ -496,7 +499,8 @@ class Applicative m => Monad m where
     -- by the first, like sequencing operators (such as the semicolon)
     -- in imperative languages.
     (>>)        :: forall a b. m a -> m b -> m b
-    m >> k = m >>= \_ -> k -- See Note [Recursive bindings for Applicative/Monad]
+    default (>>) :: r ~ 'LiftedRep => m a -> m b -> m b
+    (>>) = ((\m k -> m >>= \_ -> k) :: forall n a b. Monad n => n a -> n b -> n b) -- See Note [Recursive bindings for Applicative/Monad]
     {-# INLINE (>>) #-}
 
     -- | Inject a value into the monadic type.

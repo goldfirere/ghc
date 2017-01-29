@@ -1,4 +1,4 @@
-{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE Trustworthy, TypeInType, GADTs, DefaultSignatures, ScopedTypeVariables #-}
 {-# LANGUAGE NoImplicitPrelude, MagicHash, UnboxedTuples #-}
 {-# OPTIONS_HADDOCK hide #-}
 
@@ -20,6 +20,7 @@ module GHC.Num (module GHC.Num, module GHC.Integer) where
 
 import GHC.Base
 import GHC.Integer
+import GHC.Types ( TYPE )
 
 infixl 7  *
 infixl 6  +, -
@@ -28,7 +29,7 @@ default ()              -- Double isn't available yet,
                         -- and we shouldn't be using defaults anyway
 
 -- | Basic numeric class.
-class  Num a  where
+class  Num (a :: TYPE r)  where
     {-# MINIMAL (+), (*), abs, signum, fromInteger, (negate | (-)) #-}
 
     (+), (-), (*)       :: a -> a -> a
@@ -52,8 +53,11 @@ class  Num a  where
 
     {-# INLINE (-) #-}
     {-# INLINE negate #-}
-    x - y               = x + negate y
-    negate x            = 0 - x
+    default (-) :: r ~ 'LiftedRep => a -> a -> a
+    (-) = ((\x y -> x + negate y) :: forall b. Num b => b -> b -> b)
+
+    default negate :: r ~ 'LiftedRep => a -> a
+    negate = ((\x ->            0 - x) :: forall b. Num b => b -> b)
 
 -- | the same as @'flip' ('-')@.
 --

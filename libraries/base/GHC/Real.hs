@@ -1,4 +1,4 @@
-{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE Trustworthy, TypeInType, DefaultSignatures, GADTs, ScopedTypeVariables #-}
 {-# LANGUAGE CPP, NoImplicitPrelude, MagicHash, UnboxedTuples, BangPatterns #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 {-# OPTIONS_HADDOCK hide #-}
@@ -25,6 +25,7 @@ import GHC.Num
 import GHC.List
 import GHC.Enum
 import GHC.Show
+import GHC.Types ( TYPE )
 import {-# SOURCE #-} GHC.Exception( divZeroException, overflowException, ratioZeroDenomException )
 
 #ifdef OPTIMISE_INTEGER_GCD_LCM
@@ -117,7 +118,7 @@ denominator (_ :% y)    =  y
 -- Standard numeric classes
 --------------------------------------------------------------
 
-class  (Num a, Ord a) => Real a  where
+class  (Num a, Ord a) => Real (a :: TYPE r)  where
     -- | the rational equivalent of its real argument with full precision
     toRational          ::  a -> Rational
 
@@ -155,7 +156,7 @@ class  (Real a, Enum a) => Integral a  where
                            where qr@(q,r) = quotRem n d
 
 -- | Fractional numbers, supporting real division.
-class  (Num a) => Fractional a  where
+class  (Num a) => Fractional (a :: TYPE r)  where
     {-# MINIMAL fromRational, (recip | (/)) #-}
 
     -- | fractional division
@@ -170,8 +171,10 @@ class  (Num a) => Fractional a  where
 
     {-# INLINE recip #-}
     {-# INLINE (/) #-}
-    recip x             =  1 / x
-    x / y               = x * recip y
+    default recip :: r ~ 'LiftedRep => a -> a
+    recip = ((\x -> 1 / x) :: forall b. Fractional b => b -> b)
+    default (/) :: r ~ 'LiftedRep => a -> a -> a
+    (/) = ((\x y -> x * recip y) :: forall b. Fractional b => b -> b -> b)
 
 -- | Extracting components of fractions.
 class  (Real a, Fractional a) => RealFrac a  where

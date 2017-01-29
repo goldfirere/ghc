@@ -4,7 +4,7 @@
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE StandaloneDeriving     #-}
 {-# LANGUAGE NoImplicitPrelude      #-}
-{-# LANGUAGE PolyKinds              #-}
+{-# LANGUAGE TypeInType             #-}
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE DataKinds              #-}
 {-# LANGUAGE TypeFamilies           #-}
@@ -51,6 +51,7 @@ import GHC.Show
 import GHC.Read
 import GHC.Base
 import Data.Type.Bool
+import GHC.Types ( TYPE )
 
 -- | Lifted, homogeneous equality. By lifted, we mean that it can be
 -- bogus (deferred type error). By homogeneous, the two types @a@
@@ -140,7 +141,7 @@ deriving instance a ~ b => Bounded (a :~: b)
 -- | This class contains types where you can learn the equality of two types
 -- from information contained in /terms/. Typically, only singleton types should
 -- inhabit this class.
-class TestEquality f where
+class TestEquality (f :: k -> TYPE r) where
   -- | Conditionally prove the equality of @a@ and @b@.
   testEquality :: f a -> f b -> Maybe (a :~: b)
 

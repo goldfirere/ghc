@@ -1,4 +1,4 @@
-{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE Trustworthy, TypeInType, GADTs, DefaultSignatures, ScopedTypeVariables #-}
 {-# LANGUAGE NoImplicitPrelude, BangPatterns #-}
 
 -----------------------------------------------------------------------------
@@ -32,9 +32,10 @@ import GHC.Ptr
 import GHC.Num
 import GHC.IO
 import {-# SOURCE #-} GHC.IO.Exception ( unsupportedOperation )
+import GHC.Types ( TYPE )
 
 -- | A low-level I/O provider where the data is bytes in memory.
-class RawIO a where
+class RawIO (a :: TYPE r) where
   -- | Read up to the specified number of bytes, returning the number
   -- of bytes actually read.  This function should only block if there
   -- is no data available.  If there is not enough data available,
@@ -167,4 +168,3 @@ data SeekMode
   | SeekFromEnd         -- ^ the position of @hdl@ is set to offset @i@
                         -- from the end of the file.
     deriving (Eq, Ord, Ix, Enum, Read, Show)
-

@@ -1,5 +1,6 @@
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE TypeInType #-}
 
 -- |
 -- Module      :  Control.Monad.Fail
@@ -38,7 +39,8 @@
 --
 module Control.Monad.Fail ( MonadFail(fail) ) where
 
-import GHC.Base (String, Monad(), Maybe(Nothing), IO())
+import GHC.Base (String, Monad(), Maybe(Nothing), IO(), Type)
+import GHC.Prim ( TYPE )
 import {-# SOURCE #-} GHC.IO (failIO)
 
 -- | When a value is bound in @do@-notation, the pattern on the left
@@ -63,7 +65,7 @@ import {-# SOURCE #-} GHC.IO (failIO)
 -- @
 --
 -- @since 4.9.0.0
-class Monad m => MonadFail m where
+class Monad m => MonadFail (m :: Type -> TYPE r) where
     fail :: String -> m a
 
 

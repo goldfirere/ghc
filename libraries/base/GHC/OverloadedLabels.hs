@@ -2,7 +2,7 @@
            , MultiParamTypeClasses
            , MagicHash
            , KindSignatures
-           , DataKinds
+           , DataKinds, TypeInType
   #-}
 
 -----------------------------------------------------------------------------
@@ -43,6 +43,7 @@ module GHC.OverloadedLabels
 
 import GHC.Base ( Symbol )
 import GHC.Exts ( Proxy# )
+import GHC.Types ( TYPE )
 
-class IsLabel (x :: Symbol) a where
+class IsLabel (x :: Symbol) (a :: TYPE r) where
   fromLabel :: Proxy# x -> a

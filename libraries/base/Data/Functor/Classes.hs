@@ -1,4 +1,4 @@
-{-# LANGUAGE Safe #-}
+{-# LANGUAGE Trustworthy, TypeInType #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Data.Functor.Classes
@@ -77,10 +77,12 @@ import Text.Read (Read(..), parens, prec, step)
 import Text.Read.Lex (Lexeme(..))
 import Text.Show (showListWith)
 
+import GHC.Types ( TYPE )
+
 -- | Lifting of the 'Eq' class to unary type constructors.
 --
 -- @since 4.9.0.0
-class Eq1 f where
+class Eq1 (f :: TYPE r1 -> TYPE r2) where
     -- | Lift an equality test through the type constructor.
     --
     -- The function will usually be applied to an equality function,
@@ -100,7 +102,7 @@ eq1 = liftEq (==)
 -- | Lifting of the 'Ord' class to unary type constructors.
 --
 -- @since 4.9.0.0
-class (Eq1 f) => Ord1 f where
+class (Eq1 f) => Ord1 (f :: TYPE r1 -> TYPE r2) where
     -- | Lift a 'compare' function through the type constructor.
     --
     -- The function will usually be applied to a comparison function,
@@ -236,7 +238,7 @@ showsPrec1 = liftShowsPrec showsPrec showList
 -- | Lifting of the 'Eq' class to binary type constructors.
 --
 -- @since 4.9.0.0
-class Eq2 f where
+class Eq2 (f :: TYPE r1 -> TYPE r2 -> TYPE r3) where
     -- | Lift equality tests through the type constructor.
     --
     -- The function will usually be applied to equality functions,
@@ -256,7 +258,7 @@ eq2 = liftEq2 (==) (==)
 -- | Lifting of the 'Ord' class to binary type constructors.
 --
 -- @since 4.9.0.0
-class (Eq2 f) => Ord2 f where
+class (Eq2 f) => Ord2 (f :: TYPE r1 -> TYPE r2 -> TYPE r3) where
     -- | Lift 'compare' functions through the type constructor.
     --
     -- The function will usually be applied to comparison functions,

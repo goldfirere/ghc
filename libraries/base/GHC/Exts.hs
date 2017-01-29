@@ -1,6 +1,7 @@
 {-# LANGUAGE Unsafe #-}
 {-# LANGUAGE MagicHash, UnboxedTuples, TypeFamilies, DeriveDataTypeable,
-             MultiParamTypeClasses, FlexibleInstances, NoImplicitPrelude #-}
+             MultiParamTypeClasses, FlexibleInstances, NoImplicitPrelude,
+             TypeInType #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -167,7 +168,7 @@ data SpecConstrAnnotation = NoSpecConstr | ForceSpecConstr
 --   conjunction with the OverloadedLists extension.
 --
 -- @since 4.7.0.0
-class IsList l where
+class IsList (l :: GHC.Prim.TYPE r) where
   -- | The 'Item' type function returns the type of items of the structure
   --   @l@.
   type Item l

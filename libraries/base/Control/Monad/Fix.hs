@@ -1,6 +1,7 @@
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeInType #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -29,7 +30,8 @@ import Data.Function ( fix )
 import Data.Maybe
 import Data.Monoid ( Dual(..), Sum(..), Product(..)
                    , First(..), Last(..), Alt(..) )
-import GHC.Base ( Monad, errorWithoutStackTrace, (.) )
+import GHC.Base ( Monad, errorWithoutStackTrace, (.), Type )
+import GHC.Prim ( TYPE )
 import GHC.Generics
 import GHC.List ( head, tail )
 import GHC.ST
@@ -53,7 +55,7 @@ import System.IO
 --
 -- This class is used in the translation of the recursive @do@ notation
 -- supported by GHC and Hugs.
-class (Monad m) => MonadFix m where
+class (Monad m) => MonadFix (m :: Type -> TYPE r) where
         -- | The fixed point of a monadic computation.
         -- @'mfix' f@ executes the action @f@ only once, with the eventual
         -- output fed back as the input.  Hence @f@ should not be strict,

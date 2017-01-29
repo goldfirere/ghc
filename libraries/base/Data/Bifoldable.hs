@@ -1,5 +1,7 @@
-{-# LANGUAGE Safe #-}
+{-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeInType, GADTs #-}
+{-# LANGUAGE DefaultSignatures #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -54,6 +56,7 @@ import Data.Functor.Utils (Max(..), Min(..), (#.))
 import Data.Maybe (fromMaybe)
 import Data.Monoid
 import GHC.Generics (K1(..))
+import GHC.Types ( Type, TYPE, RuntimeRep(..) )
 
 -- | 'Bifoldable' identifies foldable structures with two different varieties
 -- of elements (as opposed to 'Foldable', which has one variety of element).
@@ -85,7 +88,7 @@ import GHC.Generics (K1(..))
 -- > 'bifoldMap' f g . 'bimap' h i ≡ 'bifoldMap' (f . h) (g . i)
 --
 -- @since 4.10.0.0
-class Bifoldable p where
+class Bifoldable (p :: Type -> Type -> TYPE r) where
   {-# MINIMAL bifoldr | bifoldMap #-}
 
   -- | Combines the elements of a structure using a monoid.
@@ -115,7 +118,8 @@ class Bifoldable p where
   --
   -- @since 4.10.0.0
   bifoldr :: (a -> c -> c) -> (b -> c -> c) -> c -> p a b -> c
-  bifoldr f g z t = appEndo (bifoldMap (Endo #. f) (Endo #. g) t) z
+  default bifoldr :: r ~ 'LiftedRep => (a -> c -> c) -> (b -> c -> c) -> c -> p a b -> c
+  bifoldr = ((\ f g z t -> appEndo (bifoldMap (Endo #. f) (Endo #. g) t) z) :: forall q a b c. Bifoldable q => (a -> c -> c) -> (b -> c -> c) -> c -> q a b -> c)
 
   -- | Combines the elments of a structure in a left associative manner. Given
   -- a hypothetical function @toEitherList :: p a b -> [Either a b]@ yielding a
@@ -131,8 +135,9 @@ class Bifoldable p where
   --
   -- @since 4.10.0.0
   bifoldl :: (c -> a -> c) -> (c -> b -> c) -> c -> p a b -> c
-  bifoldl f g z t = appEndo (getDual (bifoldMap (Dual . Endo . flip f)
-                                                (Dual . Endo . flip g) t)) z
+  default bifoldl :: r ~ 'LiftedRep => (c -> a -> c) -> (c -> b -> c) -> c -> p a b -> c
+  bifoldl = ((\ f g z t -> appEndo (getDual (bifoldMap (Dual . Endo . flip f)
+                                                (Dual . Endo . flip g) t)) z) :: forall q a b c. Bifoldable q => (c -> a -> c) -> (c -> b -> c) -> c -> q a b -> c)
 
 -- | @since 4.10.0.0
 instance Bifoldable (,) where
