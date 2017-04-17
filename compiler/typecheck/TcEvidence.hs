@@ -62,6 +62,9 @@ import qualified Data.Data as Data
 import Outputable
 import FastString
 import SrcLoc
+#if __GLASGOW_HASKELL__ <= 708
+import Control.Applicative
+#endif
 import Data.IORef( IORef )
 
 #if __GLASGOW_HASKELL__ < 709
