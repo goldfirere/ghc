@@ -1706,7 +1706,7 @@ mkTyVarEqErr' dflags ctxt report ct oriented tv1 ty2
   , Implic { ic_env = env, ic_given = given
            , ic_tclvl = lvl, ic_info = skol_info } <- implic
   = ASSERT2( not (isTouchableMetaTyVar lvl tv1)
-           , ppr tv1 )  -- See Note [Error messages for untouchables]
+           , ppr tv1 $$ ppr lvl )  -- See Note [Error messages for untouchables]
     do { let msg = important $ misMatchMsg ct oriented ty1 ty2
              tclvl_extra = important $
                   nest 2 $
