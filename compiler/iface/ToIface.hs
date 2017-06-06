@@ -217,7 +217,10 @@ toIfaceCoercionX fr co
   = go co
   where
     go (Refl r ty)          = IfaceReflCo r (toIfaceType ty)
-    go (CoVarCo cv)         = IfaceCoVarCo  (toIfaceCoVar cv)
+    go (CoVarCo cv)
+      -- See [TcTyVars in IfaceType] in IfaceType
+      | cv `elemVarSet` fr  = IfaceFreeCoVar cv
+      | otherwise           = IfaceCoVarCo  (toIfaceCoVar cv)
     go (AppCo co1 co2)      = IfaceAppCo  (go co1) (go co2)
     go (SymCo co)           = IfaceSymCo (go co)
     go (TransCo co1 co2)    = IfaceTransCo (go co1) (go co2)
