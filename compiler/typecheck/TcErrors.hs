@@ -1919,7 +1919,8 @@ mkExpectedActualMsg :: Type -> Type -> CtOrigin -> Maybe TypeOrKind -> Bool
 -- First return val is whether or not to print a herald above this msg
 mkExpectedActualMsg ty1 ty2 (TypeEqOrigin { uo_actual = act
                                           , uo_expected = exp
-                                          , uo_thing = maybe_thing })
+                                          , uo_thing = maybe_thing
+                                          , uo_arity = maybe_arity })
                     m_level printExpanded
   | KindLevel <- level, occurs_check_error       = (True, Nothing, empty)
   | isUnliftedTypeKind act, isLiftedTypeKind exp = (False, Nothing, msg2)
@@ -1991,12 +1992,12 @@ mkExpectedActualMsg ty1 ty2 (TypeEqOrigin { uo_actual = act
            case n_act - n_exp of
              n | n /= 0
                , Just thing <- maybe_thing
-               , case errorThingNumArgs_maybe thing of
+               , case maybe_arity of
                    Nothing           -> n > 0
                    Just num_act_args -> num_act_args >= -n
                      -- don't report to strip off args that aren't there
                -> Just $ text "Expecting" <+> speakN (abs n) <+>
-                         more_or_fewer <+> quotes (ppr thing)
+                         more_or_fewer <+> quotes thing
                where
                  more_or_fewer
                   | n < 0     = text "fewer arguments to"

@@ -531,9 +531,8 @@ skolemising the type.
 
 -- | Call this variant when you are in a higher-rank situation and
 -- you know the right-hand type is deeply skolemised.
-tcSubTypeHR :: Outputable a
-            => CtOrigin    -- ^ of the actual type
-            -> Maybe a     -- ^ If present, it has type ty_actual
+tcSubTypeHR :: CtOrigin               -- ^ of the actual type
+            -> Maybe (HsExpr GhcRn)   -- ^ If present, it has type ty_actual
             -> TcSigmaType -> ExpRhoType -> TcM HsWrapper
 tcSubTypeHR orig = tcSubTypeDS_NC_O orig GenSigCtxt
 
@@ -547,7 +546,8 @@ tcSubTypeET orig ctxt (Check ty_actual) ty_expected
   where
     eq_orig = TypeEqOrigin { uo_actual   = ty_expected
                            , uo_expected = ty_actual
-                           , uo_thing    = Nothing }
+                           , uo_thing    = Nothing
+                           , uo_arity    = Nothing }
 
 tcSubTypeET _ _ (Infer inf_res) ty_expected
   = ASSERT2( not (ir_inst inf_res), ppr inf_res $$ ppr ty_expected )
@@ -566,7 +566,7 @@ tcSubTypeO orig ctxt ty_actual ty_expected
                                        , pprUserTypeCtxt ctxt
                                        , ppr ty_actual
                                        , ppr ty_expected ])
-       ; tcSubTypeDS_NC_O orig ctxt noThing ty_actual ty_expected }
+       ; tcSubTypeDS_NC_O orig ctxt Nothing ty_actual ty_expected }
 
 addSubTypeCtxt :: TcType -> ExpType -> TcM a -> TcM a
 addSubTypeCtxt ty_actual ty_expected thing_inside
@@ -605,7 +605,8 @@ tcSubType_NC ctxt ty_actual ty_expected
   where
     origin = TypeEqOrigin { uo_actual   = ty_actual
                           , uo_expected = ty_expected
-                          , uo_thing    = Nothing }
+                          , uo_thing    = Nothing
+                          , uo_arity    = Nothing }
 
 tcSubTypeDS :: CtOrigin -> UserTypeCtxt -> TcSigmaType -> ExpRhoType -> TcM HsWrapper
 -- Just like tcSubType, but with the additional precondition that
@@ -613,12 +614,11 @@ tcSubTypeDS :: CtOrigin -> UserTypeCtxt -> TcSigmaType -> ExpRhoType -> TcM HsWr
 tcSubTypeDS orig ctxt ty_actual ty_expected
   = addSubTypeCtxt ty_actual ty_expected $
     do { traceTc "tcSubTypeDS_NC" (vcat [pprUserTypeCtxt ctxt, ppr ty_actual, ppr ty_expected])
-       ; tcSubTypeDS_NC_O orig ctxt noThing ty_actual ty_expected }
+       ; tcSubTypeDS_NC_O orig ctxt Nothing ty_actual ty_expected }
 
-tcSubTypeDS_NC_O :: Outputable a
-                 => CtOrigin   -- origin used for instantiation only
+tcSubTypeDS_NC_O :: CtOrigin   -- origin used for instantiation only
                  -> UserTypeCtxt
-                 -> Maybe a
+                 -> Maybe (HsExpr GhcRn)
                  -> TcSigmaType -> ExpRhoType -> TcM HsWrapper
 -- Just like tcSubType, but with the additional precondition that
 -- ty_expected is deeply skolemised
@@ -628,7 +628,8 @@ tcSubTypeDS_NC_O inst_orig ctxt m_thing ty_actual ty_expected
       Check ty      -> tc_sub_type_ds eq_orig inst_orig ctxt ty_actual ty
          where
            eq_orig = TypeEqOrigin { uo_actual = ty_actual, uo_expected = ty
-                                  , uo_thing = mkErrorThing <$> m_thing }
+                                  , uo_thing  = ppr <$> m_thing
+                                  , uo_arity  = Nothing }
 
 ---------------
 tc_sub_tc_type :: CtOrigin   -- used when calling uType
@@ -958,7 +959,8 @@ promoteTcType dest_lvl ty
            ; prom_ty <- newMetaTyVarTyAtLevel dest_lvl (tYPE rr)
            ; let eq_orig = TypeEqOrigin { uo_actual   = ty
                                         , uo_expected = prom_ty
-                                        , uo_thing    = Nothing }
+                                        , uo_thing    = Nothing
+                                        , uo_arity    = Nothing }
 
            ; co <- emitWantedEq eq_orig TypeLevel Nominal ty prom_ty
            ; return (co, prom_ty) }
@@ -969,7 +971,8 @@ promoteTcType dest_lvl ty
            ; let ty_kind = typeKind ty
                  kind_orig = TypeEqOrigin { uo_actual   = ty_kind
                                           , uo_expected = res_kind
-                                          , uo_thing    = Nothing }
+                                          , uo_thing    = Nothing
+                                          , uo_arity    = Nothing }
            ; ki_co <- uType kind_orig KindLevel (typeKind ty) res_kind
            ; let co = mkTcNomReflCo ty `mkTcCoherenceRightCo` ki_co
            ; return (co, ty `mkCastTy` ki_co) }
@@ -1184,7 +1187,7 @@ The exported functions are all defined as versions of some
 non-exported generic functions.
 -}
 
-unifyType :: Outputable a => Maybe a   -- ^ If present, has type 'ty1'
+unifyType :: Maybe (HsExpr GhcRn)   -- ^ If present, has type 'ty1'
           -> TcTauType -> TcTauType -> TcM TcCoercionN
 -- Actual and expected types
 -- Returns a coercion : ty1 ~ ty2
@@ -1192,7 +1195,8 @@ unifyType thing ty1 ty2 = traceTc "utype" (ppr ty1 $$ ppr ty2 $$ ppr thing) >>
                           uType origin TypeLevel ty1 ty2
   where
     origin = TypeEqOrigin { uo_actual = ty1, uo_expected = ty2
-                          , uo_thing  = mkErrorThing <$> thing }
+                          , uo_thing  = ppr <$> thing
+                          , uo_arity  = Nothing }
 
 -- | Use this instead of 'Nothing' when calling 'unifyType' without
 -- a good "thing" (where the "thing" has the "actual" type passed in)
@@ -1200,11 +1204,12 @@ unifyType thing ty1 ty2 = traceTc "utype" (ppr ty1 $$ ppr ty2 $$ ppr thing) >>
 noThing :: Maybe (HsExpr GhcRn)
 noThing = Nothing
 
-unifyKind :: Outputable a => Maybe a -> TcKind -> TcKind -> TcM CoercionN
+unifyKind :: Maybe (HsType GhcRn) -> TcKind -> TcKind -> TcM CoercionN
 unifyKind thing ty1 ty2 = traceTc "ukind" (ppr ty1 $$ ppr ty2 $$ ppr thing) >>
                           uType origin KindLevel ty1 ty2
   where origin = TypeEqOrigin { uo_actual = ty1, uo_expected = ty2
-                              , uo_thing  = mkErrorThing <$> thing }
+                              , uo_thing  = ppr <$> thing
+                              , uo_arity  = Nothing }
 
 ---------------
 unifyPred :: PredType -> PredType -> TcM TcCoercionN
@@ -1780,11 +1785,12 @@ we return a made-up TcTyVarDetails, but I think it works smoothly.
 
 -- | Breaks apart a function kind into its pieces.
 matchExpectedFunKind :: Arity           -- ^ # of args remaining, only for errors
+                     -> HsType GhcRn    -- ^ type, only for errors
                      -> TcType          -- ^ type, only for errors
                      -> TcKind          -- ^ function kind
                      -> TcM (Coercion, TcKind, TcKind)
                                   -- ^ co :: old_kind ~ arg -> res
-matchExpectedFunKind num_args_remaining ty = go
+matchExpectedFunKind num_args_remaining hs_ty ty = go
   where
     go k | Just k' <- tcView k = go k'
 
@@ -1802,10 +1808,11 @@ matchExpectedFunKind num_args_remaining ty = go
       = do { arg_kind <- newMetaKindVar
            ; res_kind <- newMetaKindVar
            ; let new_fun = mkFunTy arg_kind res_kind
-                 thing   = mkTypeErrorThingArgs ty num_args_remaining
                  origin  = TypeEqOrigin { uo_actual   = k
                                         , uo_expected = new_fun
-                                        , uo_thing    = Just thing
+                                        , uo_thing    = Just (ppr hs_ty)
+                                        , uo_arity    = Just (tcRepGetNumAppTys ty +
+                                                              num_args_remaining)
                                         }
            ; co <- uType origin KindLevel k new_fun
            ; return (co, arg_kind, res_kind) }

@@ -270,11 +270,12 @@ tcHsClsInstType user_ctxt hs_inst_ty
 -- Used for 'VECTORISE [SCALAR] instance' declarations
 tcHsVectInst :: LHsSigType GhcRn -> TcM (Class, [Type])
 tcHsVectInst ty
-  | Just (L _ cls_name, tys) <- hsTyGetAppHead_maybe (hsSigType ty)
+  | let hs_cls_ty = hsSigType ty
+  , Just (L _ cls_name, tys) <- hsTyGetAppHead_maybe hs_cls_ty
     -- Ignoring the binders looks pretty dodgy to me
   = do { (cls, cls_kind) <- tcClass cls_name
        ; (applied_class, _res_kind)
-           <- tcInferApps typeLevelMode cls_name (mkClassPred cls []) cls_kind tys
+           <- tcInferApps typeLevelMode hs_cls_ty (mkClassPred cls []) cls_kind tys
        ; case tcSplitTyConApp_maybe applied_class of
            Just (_tc, args) -> ASSERT( _tc == classTyCon cls )
                                return (cls, args)
@@ -857,9 +858,8 @@ tc_infer_args mode orig_ty binders mb_kind_info orig_args n0
 -- necessary. If you wish to apply a type to a list of HsTypes, this is
 -- your function.
 -- Used for type-checking types only.
-tcInferApps :: Outputable fun
-            => TcTyMode
-            -> fun                  -- ^ Function (for printing only)
+tcInferApps :: TcTyMode
+            -> HsType GhcRn         -- ^ Function (for printing only)
             -> TcType               -- ^ Function (could be knot-tied)
             -> TcKind               -- ^ Function kind (zonked)
             -> [LHsType GhcRn]      -- ^ Args
@@ -885,7 +885,8 @@ tcInferApps mode orig_ty ty ki args = go ty ki args 1
                 res_k args (n+1) }
 
 --------------------------
-checkExpectedKind :: TcType               -- the type whose kind we're checking
+checkExpectedKind :: HsType GhcRn         -- HsType whose kind we're checking
+                  -> TcType               -- the type whose kind we're checking
                   -> TcKind               -- the known kind of that type, k
                   -> TcKind               -- the expected kind, exp_kind
                   -> TcM TcType    -- a possibly-inst'ed, casted type :: exp_kind
@@ -893,11 +894,12 @@ checkExpectedKind :: TcType               -- the type whose kind we're checking
 --      (checkExpectedKind ty act_kind exp_kind)
 -- checks that the actual kind act_kind is compatible
 --      with the expected kind exp_kind
-checkExpectedKind ty act_kind exp_kind
+checkExpectedKind hs_ty ty act_kind exp_kind
  = do { (ty', act_kind') <- instantiate ty act_kind exp_kind
       ; let origin = TypeEqOrigin { uo_actual   = act_kind'
                                   , uo_expected = exp_kind
-                                  , uo_thing    = Just $ mkTypeErrorThing ty'
+                                  , uo_thing    = Just (ppr hs_ty)
+                                  , uo_arity    = Just (tcRepGetNumAppTys ty)
                                   }
       ; co_k <- uType origin KindLevel act_kind' exp_kind
       ; traceTc "checkExpectedKind" (vcat [ ppr act_kind
@@ -935,6 +937,7 @@ instantiateTyN n ty ki
        ; let rebuilt_ki = mkPiTys leftover_bndrs inner_ki
              ki'        = substTy subst rebuilt_ki
        ; return (mkNakedAppTys ty inst_args, ki') }
+
 
 ---------------------------
 tcHsContext :: LHsContext GhcRn -> TcM [PredType]
