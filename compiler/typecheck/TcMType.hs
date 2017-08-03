@@ -719,7 +719,7 @@ writeMetaTyVarRef tyvar ref ty
              kind_msg = hang (text "Ill-kinded update to meta tyvar")
                            2 (    ppr tyvar <+> text "::" <+> (ppr tv_kind $$ ppr zonked_tv_kind)
                               <+> text ":="
-                              <+> ppr ty <+> text "::" <+> (ppr ty_kind $$ ppr zonked_ty_kind) )
+                              <+> ppr ty <+> text "::" <+> (ppr zonked_ty_kind) )
 
        ; traceTc "writeMetaTyVar" (ppr tyvar <+> text ":=" <+> ppr ty)
 
@@ -737,7 +737,6 @@ writeMetaTyVarRef tyvar ref ty
        ; writeMutVar ref (Indirect ty) }
   where
     tv_kind = tyVarKind tyvar
-    ty_kind = typeKind ty
 
     tv_lvl = tcTyVarLevel tyvar
     ty_lvl = tcTypeLevel ty
