@@ -31,9 +31,7 @@ holes3.hs:6:7: error:
         minBound :: forall a. Bounded a => a
           (imported from ‘Prelude’ at holes3.hs:1:8-13
            (and originally defined in ‘GHC.Enum’))
-        undefined :: forall (a :: TYPE r).
-                     GHC.Stack.Types.HasCallStack =>
-                     a
+        undefined :: forall a. GHC.Stack.Types.HasCallStack => a
           (imported from ‘Prelude’ at holes3.hs:1:8-13
            (and originally defined in ‘GHC.Err’))
 
@@ -50,9 +48,7 @@ holes3.hs:8:5: error:
         mempty :: forall a. Monoid a => a
           (imported from ‘Prelude’ at holes3.hs:1:8-13
            (and originally defined in ‘GHC.Base’))
-        undefined :: forall (a :: TYPE r).
-                     GHC.Stack.Types.HasCallStack =>
-                     a
+        undefined :: forall a. GHC.Stack.Types.HasCallStack => a
           (imported from ‘Prelude’ at holes3.hs:1:8-13
            (and originally defined in ‘GHC.Err’))
 

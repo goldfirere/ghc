@@ -30,9 +30,7 @@ holes.hs:6:7: warning: [-Wtyped-holes (in -Wdefault)]
         minBound :: forall a. Bounded a => a
           (imported from ‘Prelude’ at holes.hs:1:8-12
            (and originally defined in ‘GHC.Enum’))
-        undefined :: forall (a :: TYPE r).
-                     GHC.Stack.Types.HasCallStack =>
-                     a
+        undefined :: forall a. GHC.Stack.Types.HasCallStack => a
           (imported from ‘Prelude’ at holes.hs:1:8-12
            (and originally defined in ‘GHC.Err’))
 
@@ -48,9 +46,7 @@ holes.hs:8:5: warning: [-Wtyped-holes (in -Wdefault)]
         mempty :: forall a. Monoid a => a
           (imported from ‘Prelude’ at holes.hs:1:8-12
            (and originally defined in ‘GHC.Base’))
-        undefined :: forall (a :: TYPE r).
-                     GHC.Stack.Types.HasCallStack =>
-                     a
+        undefined :: forall a. GHC.Stack.Types.HasCallStack => a
           (imported from ‘Prelude’ at holes.hs:1:8-12
            (and originally defined in ‘GHC.Err’))
 
