@@ -24,6 +24,9 @@ module TcHsType (
         kcLookupTcTyCon, kcTyClTyVars, tcTyClTyVars,
         tcDataKindSig,
 
+          -- tyvars
+        scopeTyVars, scopeTyVars2,
+
         -- Kind-checking types
         -- No kind generalisation, no checkValidType
         tcWildCardBinders,
@@ -1668,6 +1671,31 @@ newSkolemTyVar name kind = do { lvl <- getTcLevel
 
 mk_skolem_tv :: TcLevel -> Name -> Kind -> TcTyVar
 mk_skolem_tv lvl n k = mkTcTyVar n k (SkolemTv lvl False)
+
+--------------------------
+-- Bringing tyvars into scope
+--------------------------
+
+-- | Bring tyvars into scope, wrapping the thing_inside in an implication
+-- constraint. The implication constraint is necessary to provide SkolemInfo
+-- for the tyvars and to ensure that no unification variables made outside
+-- the scope of these tyvars (i.e. lower TcLevel) unify with the locally-scoped
+-- tyvars (i.e. higher TcLevel). The returned TcEvBinds can safely be ignored
+-- iff the thing_inside emits only equalities (i.e. works only on types, never
+-- on terms)
+--
+-- Use this (not tcExtendTyVarEnv) wherever you expect a Λ or ∀ in Core.
+-- Use tcExtendTyVarEnv otherwise.
+scopeTyVars :: SkolemInfo -> [TcTyVar] -> TcM a -> TcM (TcEvBinds, a)
+scopeTyVars skol_info tvs = scopeTyVars2 skol_info [(tyVarName tv, tv) | tv <- tvs]
+
+-- | Like 'scopeTyVars', but allows you to specify different scoped names
+-- than the Names stored within the tyvars.
+scopeTyVars2 :: SkolemInfo -> [(Name, TcTyVar)] -> TcM a -> TcM (TcEvBinds, a)
+scopeTyVars2 skol_info prs thing_inside
+  = checkConstraints skol_info (map snd prs) [{- no EvVars -}] $
+    tcExtendTyVarEnv2 prs $
+    thing_inside
 
 ------------------
 kindGeneralizeType :: Type -> TcM Type
