@@ -11,8 +11,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef SM_CNF_H
-#define SM_CNF_H
+#pragma once
 
 #include "BeginPrivate.h"
 
@@ -21,10 +20,6 @@ void              exitCompact  (void);
 
 StgCompactNFData *compactNew   (Capability      *cap,
                                 StgWord          size);
-StgPtr            compactAppend(Capability       *cap,
-                                StgCompactNFData *str,
-                                StgClosure       *what,
-                                StgWord           share);
 void              compactResize(Capability       *cap,
                                 StgCompactNFData *str,
                                 StgWord           new_size);
@@ -34,12 +29,18 @@ StgWord           compactContains(StgCompactNFData *str,
                                   StgPtr            what);
 StgWord           countCompactBlocks(bdescr *outer);
 
+#if defined(DEBUG)
+StgWord           countAllocdCompactBlocks(bdescr *outer);
+#endif
+
 StgCompactNFDataBlock *compactAllocateBlock(Capability            *cap,
                                             StgWord                size,
                                             StgCompactNFDataBlock *previous);
 StgPtr                 compactFixupPointers(StgCompactNFData      *str,
                                             StgClosure            *root);
 
+// Go from an arbitrary pointer into any block of a compact chain, to the
+// StgCompactNFDataBlock at the beginning of the block.
 INLINE_HEADER StgCompactNFDataBlock *objectGetCompactBlock (StgClosure *closure);
 INLINE_HEADER StgCompactNFDataBlock *objectGetCompactBlock (StgClosure *closure)
 {
@@ -47,18 +48,20 @@ INLINE_HEADER StgCompactNFDataBlock *objectGetCompactBlock (StgClosure *closure)
 
     object_block = Bdescr((StgPtr)closure);
 
-    ASSERT ((object_block->flags & BF_COMPACT) != 0);
+    ASSERT((object_block->flags & BF_COMPACT) != 0);
 
     if (object_block->blocks == 0)
         head_block = object_block->link;
     else
         head_block = object_block;
 
-    ASSERT ((head_block->flags & BF_COMPACT) != 0);
+    ASSERT((head_block->flags & BF_COMPACT) != 0);
 
     return (StgCompactNFDataBlock*)(head_block->start);
 }
 
+// Go from an arbitrary pointer into any block of a compact chain, to the
+// StgCompactNFData for the whole compact chain.
 INLINE_HEADER StgCompactNFData *objectGetCompact (StgClosure *closure);
 INLINE_HEADER StgCompactNFData *objectGetCompact (StgClosure *closure)
 {
@@ -66,6 +69,14 @@ INLINE_HEADER StgCompactNFData *objectGetCompact (StgClosure *closure)
     return block->owner;
 }
 
-#include "EndPrivate.h"
+extern void *allocateForCompact (Capability *cap,
+                                 StgCompactNFData *str,
+                                 StgWord sizeW);
 
-#endif // SM_COMPACT_H
+extern void insertCompactHash (Capability *cap,
+                               StgCompactNFData *str,
+                               StgClosure *p, StgClosure *to);
+
+extern void verifyCompact (StgCompactNFData *str);
+
+#include "EndPrivate.h"

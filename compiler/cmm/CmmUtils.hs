@@ -11,7 +11,7 @@
 module CmmUtils(
         -- CmmType
         primRepCmmType, slotCmmType, slotForeignHint,
-        typeCmmType, typeForeignHint,
+        typeCmmType, typeForeignHint, primRepForeignHint,
 
         -- CmmLit
         zeroCLit, mkIntCLit,
@@ -65,14 +65,13 @@ module CmmUtils(
 #include "HsVersions.h"
 
 import TyCon    ( PrimRep(..), PrimElemRep(..) )
-import RepType  ( UnaryType, SlotTy (..), typePrimRep )
+import RepType  ( UnaryType, SlotTy (..), typePrimRep1 )
 
 import SMRep
 import Cmm
 import BlockId
 import CLabel
 import Outputable
-import Unique
 import DynFlags
 import Util
 import CodeGen.Platform
@@ -80,7 +79,10 @@ import CodeGen.Platform
 import Data.Word
 import Data.Maybe
 import Data.Bits
-import Hoopl
+import Hoopl.Graph
+import Hoopl.Label
+import Hoopl.Block
+import Hoopl.Collections
 
 ---------------------------------------------------
 --
@@ -90,7 +92,8 @@ import Hoopl
 
 primRepCmmType :: DynFlags -> PrimRep -> CmmType
 primRepCmmType _      VoidRep          = panic "primRepCmmType:VoidRep"
-primRepCmmType dflags PtrRep           = gcWord dflags
+primRepCmmType dflags LiftedRep        = gcWord dflags
+primRepCmmType dflags UnliftedRep      = gcWord dflags
 primRepCmmType dflags IntRep           = bWord dflags
 primRepCmmType dflags WordRep          = bWord dflags
 primRepCmmType _      Int64Rep         = b64
@@ -120,11 +123,12 @@ primElemRepCmmType FloatElemRep  = f32
 primElemRepCmmType DoubleElemRep = f64
 
 typeCmmType :: DynFlags -> UnaryType -> CmmType
-typeCmmType dflags ty = primRepCmmType dflags (typePrimRep ty)
+typeCmmType dflags ty = primRepCmmType dflags (typePrimRep1 ty)
 
 primRepForeignHint :: PrimRep -> ForeignHint
 primRepForeignHint VoidRep      = panic "primRepForeignHint:VoidRep"
-primRepForeignHint PtrRep       = AddrHint
+primRepForeignHint LiftedRep    = AddrHint
+primRepForeignHint UnliftedRep  = AddrHint
 primRepForeignHint IntRep       = SignedHint
 primRepForeignHint WordRep      = NoHint
 primRepForeignHint Int64Rep     = SignedHint
@@ -142,7 +146,7 @@ slotForeignHint FloatSlot     = NoHint
 slotForeignHint DoubleSlot    = NoHint
 
 typeForeignHint :: UnaryType -> ForeignHint
-typeForeignHint = primRepForeignHint . typePrimRep
+typeForeignHint = primRepForeignHint . typePrimRep1
 
 ---------------------------------------------------
 --
@@ -167,14 +171,17 @@ zeroExpr dflags = CmmLit (zeroCLit dflags)
 mkWordCLit :: DynFlags -> Integer -> CmmLit
 mkWordCLit dflags wd = CmmInt wd (wordWidth dflags)
 
-mkByteStringCLit :: Unique -> [Word8] -> (CmmLit, GenCmmDecl CmmStatics info stmt)
+mkByteStringCLit
+  :: CLabel -> [Word8] -> (CmmLit, GenCmmDecl CmmStatics info stmt)
 -- We have to make a top-level decl for the string,
 -- and return a literal pointing to it
-mkByteStringCLit uniq bytes
-  = (CmmLabel lbl, CmmData sec $ Statics lbl [CmmString bytes])
+mkByteStringCLit lbl bytes
+  = (CmmLabel lbl, CmmData (Section sec lbl) $ Statics lbl [CmmString bytes])
   where
-    lbl = mkStringLitLabel uniq
-    sec = Section ReadOnlyData lbl
+    -- This can not happen for String literals (as there \NUL is replaced by
+    -- C0 80). However, it can happen with Addr# literals.
+    sec = if 0 `elem` bytes then ReadOnlyData else CString
+
 mkDataLits :: Section -> CLabel -> [CmmLit] -> GenCmmDecl CmmStatics info stmt
 -- Build a data-segment data block
 mkDataLits section lbl lits
@@ -473,13 +480,13 @@ mkLiveness dflags (reg:regs)
 modifyGraph :: (Graph n C C -> Graph n' C C) -> GenCmmGraph n -> GenCmmGraph n'
 modifyGraph f g = CmmGraph {g_entry=g_entry g, g_graph=f (g_graph g)}
 
-toBlockMap :: CmmGraph -> BlockEnv CmmBlock
+toBlockMap :: CmmGraph -> LabelMap CmmBlock
 toBlockMap (CmmGraph {g_graph=GMany NothingO body NothingO}) = body
 
-ofBlockMap :: BlockId -> BlockEnv CmmBlock -> CmmGraph
+ofBlockMap :: BlockId -> LabelMap CmmBlock -> CmmGraph
 ofBlockMap entry bodyMap = CmmGraph {g_entry=entry, g_graph=GMany NothingO bodyMap NothingO}
 
-insertBlock :: CmmBlock -> BlockEnv CmmBlock -> BlockEnv CmmBlock
+insertBlock :: CmmBlock -> LabelMap CmmBlock -> LabelMap CmmBlock
 insertBlock block map =
   ASSERT(isNothing $ mapLookup id map)
   mapInsert id block map
@@ -506,7 +513,7 @@ toBlockListEntryFirst g
 -- have both true and false successors. Block ordering can make a big difference
 -- in performance in the LLVM backend. Note that we rely crucially on the order
 -- of successors returned for CmmCondBranch by the NonLocal instance for CmmNode
--- defind in cmm/CmmNode.hs. -GBM
+-- defined in cmm/CmmNode.hs. -GBM
 toBlockListEntryFirstFalseFallthrough :: CmmGraph -> [CmmBlock]
 toBlockListEntryFirstFalseFallthrough g
   | mapNull m  = []

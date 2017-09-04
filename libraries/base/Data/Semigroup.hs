@@ -72,6 +72,7 @@ import           Prelude             hiding (foldr1)
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Fix
+import           Control.Monad.ST(ST)
 import           Data.Bifoldable
 import           Data.Bifunctor
 import           Data.Bitraversable
@@ -83,8 +84,9 @@ import           Data.Monoid         (All (..), Any (..), Dual (..), Endo (..),
                                       Product (..), Sum (..))
 import           Data.Monoid         (Alt (..))
 import qualified Data.Monoid         as Monoid
+import           Data.Ord            (Down(..))
 import           Data.Void
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
 import           GHC.Event           (Event, Lifetime)
 #endif
 import           GHC.Generics
@@ -238,6 +240,11 @@ instance Semigroup Any where
   (<>) = coerce (||)
   stimes = stimesIdempotentMonoid
 
+-- | @since 4.11.0.0
+instance Semigroup a => Semigroup (Down a) where
+  Down a <> Down b = Down (a <> b)
+  stimes n (Down a) = Down (stimes n a)
+
 
 -- | @since 4.9.0.0
 instance Num a => Semigroup (Sum a) where
@@ -366,7 +373,8 @@ instance Applicative Min where
   pure = Min
   a <* _ = a
   _ *> a = a
-  Min f <*> Min x = Min (f x)
+  (<*>) = coerce
+  liftA2 = coerce
 
 -- | @since 4.9.0.0
 instance Monad Min where
@@ -428,7 +436,8 @@ instance Applicative Max where
   pure = Max
   a <* _ = a
   _ *> a = a
-  Max f <*> Max x = Max (f x)
+  (<*>) = coerce
+  liftA2 = coerce
 
 -- | @since 4.9.0.0
 instance Monad Max where
@@ -533,7 +542,8 @@ instance Applicative First where
   pure x = First x
   a <* _ = a
   _ *> a = a
-  First f <*> First x = First (f x)
+  (<*>) = coerce
+  liftA2 = coerce
 
 -- | @since 4.9.0.0
 instance Monad First where
@@ -583,7 +593,8 @@ instance Applicative Last where
   pure = Last
   a <* _ = a
   _ *> a = a
-  Last f <*> Last x = Last (f x)
+  (<*>) = coerce
+  liftA2 = coerce
 
 -- | @since 4.9.0.0
 instance Monad Last where
@@ -648,6 +659,7 @@ instance Functor Option where
 instance Applicative Option where
   pure a = Option (Just a)
   Option a <*> Option b = Option (a <*> b)
+  liftA2 f (Option x) (Option y) = Option (liftA2 f x y)
 
   Option Nothing  *>  _ = Option Nothing
   _               *>  b = b
@@ -714,7 +726,11 @@ instance Semigroup (Proxy s) where
 instance Semigroup a => Semigroup (IO a) where
     (<>) = liftA2 (<>)
 
-#ifndef mingw32_HOST_OS
+-- | @since 4.11.0.0
+instance Semigroup a => Semigroup (ST s a) where
+    (<>) = liftA2 (<>)
+
+#if !defined(mingw32_HOST_OS)
 -- | @since 4.10.0.0
 instance Semigroup Event where
     (<>) = mappend

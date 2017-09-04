@@ -40,34 +40,38 @@ Flag stage3
     Default: False
     Manual: True
 
+Flag terminfo
+    Description: Build GHC with terminfo support on non-Windows platforms.
+    Default: True
+    Manual: True
+
 Library
     Default-Language: Haskell2010
     Exposed: False
 
     Build-Depends: base       >= 4   && < 5,
                    deepseq    >= 1.4 && < 1.5,
-                   directory  >= 1   && < 1.3,
-                   process    >= 1   && < 1.5,
+                   directory  >= 1   && < 1.4,
+                   process    >= 1   && < 1.7,
                    bytestring >= 0.9 && < 0.11,
                    binary     == 0.8.*,
-                   time       >= 1.4 && < 1.7,
+                   time       >= 1.4 && < 1.9,
                    containers >= 0.5 && < 0.6,
                    array      >= 0.1 && < 0.6,
                    filepath   >= 1   && < 1.5,
-                   template-haskell == 2.11.*,
+                   template-haskell == 2.12.*,
                    hpc        == 0.6.*,
                    transformers == 0.5.*,
                    ghc-boot   == @ProjectVersionMunged@,
                    ghc-boot-th == @ProjectVersionMunged@,
-                   hoopl      >= 3.10.2 && < 3.11
+                   ghci == @ProjectVersionMunged@
 
     if os(windows)
-        Build-Depends: Win32  == 2.3.*
+        Build-Depends: Win32  >= 2.3 && < 2.6
     else
+        if flag(terminfo)
+            Build-Depends: terminfo == 0.4.*
         Build-Depends: unix   == 2.7.*
-
-    if flag(ghci)
-        Build-Depends: ghci == @ProjectVersionMunged@
 
     GHC-Options: -Wall -fno-warn-name-shadowing
 
@@ -160,11 +164,13 @@ Library
         vectorise
 
     Exposed-Modules:
+        FileCleanup
         DriverBkp
         BkpSyn
         NameShape
         RnModIface
         Avail
+        AsmUtils
         BasicTypes
         ConLike
         DataCon
@@ -231,6 +237,7 @@ Library
         CmmType
         CmmUtils
         CmmLayoutStack
+        EnumSet
         MkGraph
         PprBase
         PprC
@@ -271,6 +278,7 @@ Library
         CoreLint
         CorePrep
         CoreSubst
+        CoreOpt
         CoreSyn
         TrieMap
         CoreTidy
@@ -293,6 +301,7 @@ Library
         DsGRHSs
         DsListComp
         DsMonad
+        DsUsage
         DsUtils
         Match
         MatchCon
@@ -304,16 +313,19 @@ Library
         HsImpExp
         HsLit
         PlaceHolder
+        HsExtension
         HsPat
         HsSyn
         HsTypes
         HsUtils
+        HsDumpAst
         BinIface
         BinFingerprint
         BuildTyCl
         IfaceEnv
         IfaceSyn
         IfaceType
+        ToIface
         LoadIface
         MkIface
         TcIface
@@ -346,9 +358,9 @@ Library
         Plugins
         TcPluginM
         PprTyThing
-        StaticFlags
         StaticPtrTable
         SysTools
+        SysTools.Terminal
         Elf
         TidyPgm
         Ctype
@@ -378,6 +390,9 @@ Library
         RnSource
         RnSplice
         RnTypes
+        RnFixity
+        RnUtils
+        RnUnbound
         CoreMonad
         CSE
         FloatIn
@@ -393,6 +408,7 @@ Library
         Simplify
         SimplStg
         StgStats
+        StgCse
         UnariseStg
         RepType
         Rules
@@ -481,13 +497,16 @@ Library
         GraphOps
         GraphPpr
         IOEnv
+        Json
         ListSetOps
+        ListT
         Maybes
         MonadUtils
         OrdList
         Outputable
         Pair
         Panic
+        PprColour
         Pretty
         State
         Stream
@@ -495,6 +514,7 @@ Library
         UniqDFM
         UniqDSet
         UniqFM
+        UniqMap
         UniqSet
         Util
         Vectorise.Builtins.Base
@@ -526,8 +546,12 @@ Library
         Vectorise.Env
         Vectorise.Exp
         Vectorise
+        Hoopl.Block
+        Hoopl.Collections
         Hoopl.Dataflow
-        Hoopl
+        Hoopl.Graph
+        Hoopl.Label
+        Hoopl.Unique
 --        CgInfoTbls used in ghci/DebuggerUtils
 --        CgHeapery  mkVirtHeapOffsets used in ghci
 
@@ -595,16 +619,6 @@ Library
             Dwarf
             Dwarf.Types
             Dwarf.Constants
-
-    if !flag(stage1)
-        -- ghc:Serialized moved to ghc-boot:GHC.Serialized.  So for
-        -- compatibility with GHC 7.10 and earlier, we reexport it
-        -- under the old name.
-        reexported-modules:
-            ghc-boot:GHC.Serialized as Serialized
-
-    if flag(ghci)
-        Exposed-Modules:
             Convert
             ByteCodeTypes
             ByteCodeAsm

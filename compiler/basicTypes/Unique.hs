@@ -8,6 +8,7 @@
 comparison key in the compiler.
 
 If there is any single operation that needs to be fast, it is @Unique@
+
 comparison.  Unsurprisingly, there is quite a bit of huff-and-puff
 directed to that end.
 
@@ -21,11 +22,12 @@ Haskell).
 module Unique (
         -- * Main data types
         Unique, Uniquable(..),
+        uNIQUE_BITS,
 
         -- ** Constructors, destructors and operations on 'Unique's
         hasKey,
 
-        pprUnique,
+        pprUniqueAlways,
 
         mkUniqueGrimily,                -- Used in UniqSupply only!
         getKey,                         -- Used in Var, UniqFM, Name only!
@@ -35,6 +37,7 @@ module Unique (
         newTagUnique,                   -- Used in CgCase
         initTyVarUnique,
         nonDetCmpUnique,
+        isValidKnownKeyUnique,          -- Used in PrelInfo.knownKeyNamesOkay
 
         -- ** Making built-in uniques
 
@@ -63,6 +66,7 @@ module Unique (
     ) where
 
 #include "HsVersions.h"
+#include "Unique.h"
 
 import BasicTypes
 import FastString
@@ -95,6 +99,10 @@ Fast comparison is everything on @Uniques@:
 -- These are sometimes also referred to as \"keys\" in comments in GHC.
 newtype Unique = MkUnique Int
 
+{-# INLINE uNIQUE_BITS #-}
+uNIQUE_BITS :: Int
+uNIQUE_BITS = finiteBitSize (0 :: Int) - UNIQUE_TAG_BITS
+
 {-
 Now come the functions which construct uniques from their pieces, and vice versa.
 The stuff about unique *supplies* is handled further down this module.
@@ -126,6 +134,11 @@ deriveUnique (MkUnique i) delta = mkUnique 'X' (i + delta)
 -- newTagUnique changes the "domain" of a unique to a different char
 newTagUnique u c = mkUnique c i where (_,i) = unpkUnique u
 
+-- | How many bits are devoted to the unique index (as opposed to the class
+-- character).
+uniqueMask :: Int
+uniqueMask = (1 `shiftL` uNIQUE_BITS) - 1
+
 -- pop the Char in the top 8 bits of the Unique(Supply)
 
 -- No 64-bit bugs here, as long as we have at least 32 bits. --JSM
@@ -138,17 +151,26 @@ mkUnique :: Char -> Int -> Unique       -- Builds a unique from pieces
 mkUnique c i
   = MkUnique (tag .|. bits)
   where
-    tag  = ord c `shiftL` 24
-    bits = i .&. 16777215 {-``0x00ffffff''-}
+    tag  = ord c `shiftL` uNIQUE_BITS
+    bits = i .&. uniqueMask
 
 unpkUnique (MkUnique u)
   = let
         -- as long as the Char may have its eighth bit set, we
         -- really do need the logical right-shift here!
-        tag = chr (u `shiftR` 24)
-        i   = u .&. 16777215 {-``0x00ffffff''-}
+        tag = chr (u `shiftR` uNIQUE_BITS)
+        i   = u .&. uniqueMask
     in
     (tag, i)
+
+-- | The interface file symbol-table encoding assumes that known-key uniques fit
+-- in 30-bits; verify this.
+--
+-- See Note [Symbol table representation of names] in BinIface for details.
+isValidKnownKeyUnique :: Unique -> Bool
+isValidKnownKeyUnique u =
+    case unpkUnique u of
+      (c, x) -> ord c < 0xff && x <= (1 `shiftL` 22)
 
 {-
 ************************************************************************
@@ -263,11 +285,16 @@ finish_show 't' u _pp_u | u < 26
     [chr (ord 'a' + u)]
 finish_show tag _ pp_u = tag : pp_u
 
-pprUnique :: Unique -> SDoc
-pprUnique u = text (showUnique u)
+pprUniqueAlways :: Unique -> SDoc
+-- The "always" means regardless of -dsuppress-uniques
+-- It replaces the old pprUnique to remind callers that
+-- they should consider whether they want to consult
+-- Opt_SuppressUniques
+pprUniqueAlways u
+  = text (showUnique u)
 
 instance Outputable Unique where
-    ppr = pprUnique
+    ppr = pprUniqueAlways
 
 instance Show Unique where
     show uniq = showUnique uniq

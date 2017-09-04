@@ -19,14 +19,14 @@ import System.Environment( getArgs )
 import VarSet
 import PprCore
 import Unique
-import UniqFM
+import UniqSet
 import CoreLint
 import FastString
 
 -- Build IDs. use mkTemplateLocal, more predictable than proper uniques
-go, go2, x, d, n, y, z, scrut :: Id
-[go, go2, x,d, n, y, z, scrut, f] = mkTestIds
-    (words "go go2 x d n y z scrut f")
+go, go2, x, d, n, y, z, scrutf, scruta :: Id
+[go, go2, x,d, n, y, z, scrutf, scruta, f] = mkTestIds
+    (words "go go2 x d n y z scrutf scruta f")
     [ mkFunTys [intTy, intTy] intTy
     , mkFunTys [intTy, intTy] intTy
     , intTy
@@ -34,6 +34,7 @@ go, go2, x, d, n, y, z, scrut :: Id
     , mkFunTys [intTy] intTy
     , intTy
     , intTy
+    , mkFunTys [boolTy] boolTy
     , boolTy
     , mkFunTys [intTy, intTy] intTy -- protoypical external function
     ]
@@ -42,17 +43,17 @@ exprs :: [(String, CoreExpr)]
 exprs =
   [ ("go2",) $
      mkRFun go [x]
-        (mkLet d (mkACase (Var go `mkVarApps` [x])
+        (mkLetNonRec d (mkACase (Var go `mkVarApps` [x])
                           (mkLams [y] $ Var y)
                   ) $ mkLams [z] $ Var d `mkVarApps` [x]) $
         go `mkLApps` [0, 0]
   , ("nested_go2",) $
      mkRFun go [x]
-        (mkLet n (mkACase (Var go `mkVarApps` [x])
+        (mkLetNonRec n (mkACase (Var go `mkVarApps` [x])
                           (mkLams [y] $ Var y))  $
             mkACase (Var n) $
                 mkFun go2 [y]
-                    (mkLet d
+                    (mkLetNonRec d
                         (mkACase (Var go `mkVarApps` [x])
                                  (mkLams [y] $ Var y) ) $
                         mkLams [z] $ Var d `mkVarApps` [x] )$
@@ -60,40 +61,40 @@ exprs =
         go `mkLApps` [0, 0]
   , ("d0 (go 2 would be bad)",) $
      mkRFun go [x]
-        (mkLet d (mkACase (Var go `mkVarApps` [x])
+        (mkLetNonRec d (mkACase (Var go `mkVarApps` [x])
                           (mkLams [y] $ Var y)
                   ) $
             mkLams [z] $ Var f `mkApps` [ Var d `mkVarApps` [x],  Var d `mkVarApps` [x] ]) $
         go `mkLApps` [0, 0]
   , ("go2 (in case crut)",) $
      mkRFun go [x]
-        (mkLet d (mkACase (Var go `mkVarApps` [x])
+        (mkLetNonRec d (mkACase (Var go `mkVarApps` [x])
                           (mkLams [y] $ Var y)
                   ) $ mkLams [z] $ Var d `mkVarApps` [x]) $
         Case (go `mkLApps` [0, 0]) z intTy
             [(DEFAULT, [], Var f `mkVarApps` [z,z])]
   , ("go2 (in function call)",) $
      mkRFun go [x]
-        (mkLet d (mkACase (Var go `mkVarApps` [x])
+        (mkLetNonRec d (mkACase (Var go `mkVarApps` [x])
                           (mkLams [y] $ Var y)
                   ) $ mkLams [z] $ Var d `mkVarApps` [x]) $
         f `mkLApps` [0] `mkApps` [go `mkLApps` [0, 0]]
   , ("go2 (using surrounding interesting let)",) $
-     mkLet n (f `mkLApps` [0]) $
+     mkLetNonRec n (f `mkLApps` [0]) $
          mkRFun go [x]
-            (mkLet d (mkACase (Var go `mkVarApps` [x])
+            (mkLetNonRec d (mkACase (Var go `mkVarApps` [x])
                               (mkLams [y] $ Var y)
                       ) $ mkLams [z] $ Var d `mkVarApps` [x]) $
             Var f `mkApps` [n `mkLApps` [0],  go `mkLApps` [0, 0]]
   , ("go2 (using surrounding boring let)",) $
-     mkLet z (mkLit 0) $
+     mkLetNonRec z (mkLit 0) $
          mkRFun go [x]
-            (mkLet d (mkACase (Var go `mkVarApps` [x])
+            (mkLetNonRec d (mkACase (Var go `mkVarApps` [x])
                               (mkLams [y] $ Var y)
                       ) $ mkLams [z] $ Var d `mkVarApps` [x]) $
             Var f `mkApps` [Var z,  go `mkLApps` [0, 0]]
   , ("two calls, one from let and from body (d 1 would be bad)",) $
-     mkLet  d (mkACase (mkLams [y] $ mkLit 0) (mkLams [y] $ mkLit 0)) $
+     mkLetNonRec  d (mkACase (mkLams [y] $ mkLit 0) (mkLams [y] $ mkLit 0)) $
      mkFun go [x,y] (mkVarApps (Var d) [x]) $
      mkApps (Var d) [mkLApps go [1,2]]
   , ("a thunk in a recursion (d 1 would be bad)",) $
@@ -101,19 +102,19 @@ exprs =
      mkRLet d (mkACase (mkLams [y] $ mkLit 0) (Var d)) $
          Var n `mkApps` [d `mkLApps` [0]]
   , ("two thunks, one called multiple times (both arity 1 would be bad!)",) $
-     mkLet n (mkACase (mkLams [y] $ mkLit 0) (f `mkLApps` [0])) $
-     mkLet d (mkACase (mkLams [y] $ mkLit 0) (f `mkLApps` [0])) $
+     mkLetNonRec n (mkACase (mkLams [y] $ mkLit 0) (f `mkLApps` [0])) $
+     mkLetNonRec d (mkACase (mkLams [y] $ mkLit 0) (f `mkLApps` [0])) $
          Var n `mkApps` [Var d `mkApps` [Var d `mkApps` [mkLit 0]]]
   , ("two functions, not thunks",) $
-     mkLet go  (mkLams [x] (mkACase (mkLams [y] $ mkLit 0) (Var f `mkVarApps` [x]))) $
-     mkLet go2 (mkLams [x] (mkACase (mkLams [y] $ mkLit 0) (Var f `mkVarApps` [x]))) $
+     mkLetNonRec go  (mkLams [x] (mkACase (mkLams [y] $ mkLit 0) (Var f `mkVarApps` [x]))) $
+     mkLetNonRec go2 (mkLams [x] (mkACase (mkLams [y] $ mkLit 0) (Var f `mkVarApps` [x]))) $
          Var go `mkApps` [go2 `mkLApps` [0,1], mkLit 0]
   , ("a thunk, called multiple times via a forking recursion (d 1 would be bad!)",) $
-     mkLet  d   (mkACase (mkLams [y] $ mkLit 0) (f `mkLApps` [0])) $
+     mkLetNonRec  d   (mkACase (mkLams [y] $ mkLit 0) (f `mkLApps` [0])) $
      mkRLet go2 (mkLams [x] (mkACase (Var go2 `mkApps` [Var go2 `mkApps` [mkLit 0, mkLit 0]]) (Var d))) $
          go2 `mkLApps` [0,1]
   , ("a function, one called multiple times via a forking recursion",) $
-     mkLet go   (mkLams [x] (mkACase (mkLams [y] $ mkLit 0) (Var f `mkVarApps` [x]))) $
+     mkLetNonRec go   (mkLams [x] (mkACase (mkLams [y] $ mkLit 0) (Var f `mkVarApps` [x]))) $
      mkRLet go2 (mkLams [x] (mkACase (Var go2 `mkApps` [Var go2 `mkApps` [mkLit 0, mkLit 0]]) (go `mkLApps` [0]))) $
          go2 `mkLApps` [0,1]
   , ("two functions (recursive)",) $
@@ -129,36 +130,36 @@ exprs =
               , (go2, mkLams [x] (mkACase (mkLams [y] $ mkLit 0) (Var go `mkVarApps` [x])))]) $
          Var go `mkApps` [go2 `mkLApps` [0,1], mkLit 0]
   , ("mutual recursion (functions), one boring (d 1 would be bad)",) $
-     mkLet d (f `mkLApps` [0]) $
+     mkLetNonRec d (f `mkLApps` [0]) $
          Let (Rec [ (go,  mkLams [x, y] (Var d `mkApps` [go2 `mkLApps` [1,2]]))
                   , (go2, mkLams [x] (mkACase (mkLams [y] $ mkLit 0) (Var go `mkVarApps` [x])))]) $
              Var d `mkApps` [go2 `mkLApps` [0,1]]
   , ("a thunk (non-function-type), called twice, still calls once",) $
-    mkLet d (f `mkLApps` [0]) $
-        mkLet x (d `mkLApps` [1]) $
+    mkLetNonRec d (f `mkLApps` [0]) $
+        mkLetNonRec x (d `mkLApps` [1]) $
             Var f `mkVarApps` [x, x]
   , ("a thunk (function type), called multiple times, still calls once",) $
-    mkLet d (f `mkLApps` [0]) $
-        mkLet n (Var f `mkApps` [d `mkLApps` [1]]) $
+    mkLetNonRec d (f `mkLApps` [0]) $
+        mkLetNonRec n (Var f `mkApps` [d `mkLApps` [1]]) $
             mkLams [x] $ Var n `mkVarApps` [x]
   , ("a thunk (non-function-type), in mutual recursion, still calls once (d 1 would be good)",) $
-    mkLet d (f `mkLApps` [0]) $
+    mkLetNonRec d (f `mkLApps` [0]) $
         Let (Rec [ (x, Var d `mkApps` [go `mkLApps` [1,2]])
                  , (go, mkLams [x] $ mkACase (mkLams [z] $ Var x) (Var go `mkVarApps` [x]) ) ]) $
             Var go `mkApps` [mkLit 0, go `mkLApps` [0,1]]
   , ("a thunk (non-function-type), in mutual recursion, causes many calls (d 1 would be bad)",) $
-    mkLet d (f `mkLApps` [0]) $
+    mkLetNonRec d (f `mkLApps` [0]) $
         Let (Rec [ (x, Var go `mkApps` [go `mkLApps` [1,2], go `mkLApps` [1,2]])
                  , (go, mkLams [x] $ mkACase (Var d) (Var go `mkVarApps` [x]) ) ]) $
             Var go `mkApps` [mkLit 0, go `mkLApps` [0,1]]
   , ("a thunk (function type), in mutual recursion, still calls once (d 1 would be good)",) $
-    mkLet d (f `mkLApps` [0]) $
+    mkLetNonRec d (f `mkLApps` [0]) $
         Let (Rec [ (n, Var go `mkApps` [d `mkLApps` [1]])
                  , (go, mkLams [x] $ mkACase (Var n) (Var go `mkApps` [Var n `mkVarApps` [x]]) ) ]) $
             Var go `mkApps` [mkLit 0, go `mkLApps` [0,1]]
   , ("a thunk (non-function-type) co-calls with the body (d 1 would be bad)",) $
-    mkLet d (f `mkLApps` [0]) $
-        mkLet x (d `mkLApps` [1]) $
+    mkLetNonRec d (f `mkLApps` [0]) $
+        mkLetNonRec x (d `mkLApps` [1]) $
             Var d `mkVarApps` [x]
   ]
 
@@ -168,14 +169,14 @@ main = do
         getSessionDynFlags >>= setSessionDynFlags . flip gopt_set Opt_SuppressUniques
         dflags <- getSessionDynFlags
         liftIO $ forM_ exprs $ \(n,e) -> do
-            case lintExpr dflags [f,scrut] e of
+            case lintExpr dflags [f,scrutf,scruta] e of
                 Just msg -> putMsg dflags (msg $$ text "in" <+> text n)
                 Nothing -> return ()
             putMsg dflags (text n <> char ':')
             -- liftIO $ putMsg dflags (ppr e)
             let e' = callArityRHS e
-            let bndrs = nonDetEltsUFM (allBoundIds e')
-              -- It should be OK to use nonDetEltsUFM here, if it becomes a
+            let bndrs = nonDetEltsUniqSet (allBoundIds e')
+              -- It should be OK to use nonDetEltsUniqSet here, if it becomes a
               -- problem we should use DVarSet
             -- liftIO $ putMsg dflags (ppr e')
             forM_ bndrs $ \v -> putMsg dflags $ nest 4 $ ppr v <+> ppr (idCallArity v)
@@ -184,7 +185,7 @@ main = do
 mkLApps :: Id -> [Integer] -> CoreExpr
 mkLApps v = mkApps (Var v) . map mkLit
 
-mkACase = mkIfThenElse (Var scrut)
+mkACase = mkIfThenElse (mkVarApps (Var scrutf) [scruta])
 
 mkTestId :: Int -> String -> Type -> Id
 mkTestId i s ty = mkSysLocal (mkFastString s) (mkBuiltinUnique i) ty
@@ -192,14 +193,11 @@ mkTestId i s ty = mkSysLocal (mkFastString s) (mkBuiltinUnique i) ty
 mkTestIds :: [String] -> [Type] -> [Id]
 mkTestIds ns tys = zipWith3 mkTestId [0..] ns tys
 
-mkLet :: Id -> CoreExpr -> CoreExpr -> CoreExpr
-mkLet v rhs body = Let (NonRec v rhs) body
-
 mkRLet :: Id -> CoreExpr -> CoreExpr -> CoreExpr
-mkRLet v rhs body = Let (Rec [(v, rhs)]) body
+mkRLet v rhs body = mkLetRec [(v, rhs)] body
 
 mkFun :: Id -> [Id] -> CoreExpr -> CoreExpr -> CoreExpr
-mkFun v xs rhs body = mkLet v (mkLams xs rhs) body
+mkFun v xs rhs body = mkLetNonRec v (mkLams xs rhs) body
 
 mkRFun :: Id -> [Id] -> CoreExpr -> CoreExpr -> CoreExpr
 mkRFun v xs rhs body = mkRLet v (mkLams xs rhs) body

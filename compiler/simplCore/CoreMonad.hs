@@ -9,7 +9,7 @@
 module CoreMonad (
     -- * Configuration of the core-to-core passes
     CoreToDo(..), runWhen, runMaybe,
-    SimplifierMode(..),
+    SimplMode(..),
     FloatOutSwitches(..),
     pprPassDetails,
 
@@ -49,21 +49,16 @@ module CoreMonad (
     debugTraceMsg, debugTraceMsgS,
     dumpIfSet_dyn,
 
-#ifdef GHCI
     -- * Getting 'Name's
     thNameToGhcName
-#endif
   ) where
 
-#ifdef GHCI
 import Name( Name )
 import TcRnMonad        ( initTcForLookup )
-#endif
 import CoreSyn
 import HscTypes
 import Module
 import DynFlags
-import StaticFlags
 import BasicTypes       ( CompilerPhase(..) )
 import Annotations
 
@@ -81,31 +76,21 @@ import UniqFM       ( UniqFM, mapUFM, filterUFM )
 import MonadUtils
 import NameCache
 import SrcLoc
-import ListSetOps       ( runs )
 import Data.List
 import Data.Ord
 import Data.Dynamic
 import Data.IORef
 import Data.Map (Map)
 import qualified Data.Map as Map
+import qualified Data.Map.Strict as MapStrict
 import Data.Word
 import Control.Monad
 import Control.Applicative ( Alternative(..) )
 
 import Prelude hiding   ( read )
 
-#ifdef GHCI
-import Control.Concurrent.MVar (MVar)
-import Linker ( PersistentLinkerState, saveLinkerGlobals, restoreLinkerGlobals )
 import {-# SOURCE #-} TcSplice ( lookupThName_maybe )
 import qualified Language.Haskell.TH as TH
-#else
-saveLinkerGlobals :: IO ()
-saveLinkerGlobals = return ()
-
-restoreLinkerGlobals :: () -> IO ()
-restoreLinkerGlobals () = return ()
-#endif
 
 {-
 ************************************************************************
@@ -122,7 +107,7 @@ data CoreToDo           -- These are diff core-to-core passes,
 
   = CoreDoSimplify      -- The core-to-core simplifier.
         Int                    -- Max iterations
-        SimplifierMode
+        SimplMode
   | CoreDoPluginPass String PluginPass
   | CoreDoFloatInwards
   | CoreDoFloatOutwards FloatOutSwitches
@@ -147,6 +132,7 @@ data CoreToDo           -- These are diff core-to-core passes,
 
   | CoreTidy
   | CorePrep
+  | CoreOccurAnal
 
 instance Outputable CoreToDo where
   ppr (CoreDoSimplify _ _)     = text "Simplifier"
@@ -166,6 +152,7 @@ instance Outputable CoreToDo where
   ppr CoreDesugarOpt           = text "Desugar (after optimization)"
   ppr CoreTidy                 = text "Tidy Core"
   ppr CorePrep                 = text "CorePrep"
+  ppr CoreOccurAnal            = text "Occurrence analysis"
   ppr CoreDoPrintCore          = text "Print core"
   ppr (CoreDoRuleCheck {})     = text "Rule check"
   ppr CoreDoNothing            = text "CoreDoNothing"
@@ -176,17 +163,19 @@ pprPassDetails (CoreDoSimplify n md) = vcat [ text "Max iterations =" <+> int n
                                             , ppr md ]
 pprPassDetails _ = Outputable.empty
 
-data SimplifierMode             -- See comments in SimplMonad
+data SimplMode             -- See comments in SimplMonad
   = SimplMode
         { sm_names      :: [String] -- Name(s) of the phase
         , sm_phase      :: CompilerPhase
+        , sm_dflags     :: DynFlags -- Just for convenient non-monadic
+                                    -- access; we don't override these
         , sm_rules      :: Bool     -- Whether RULES are enabled
         , sm_inline     :: Bool     -- Whether inlining is enabled
         , sm_case_case  :: Bool     -- Whether case-of-case is enabled
         , sm_eta_expand :: Bool     -- Whether eta-expansion is enabled
         }
 
-instance Outputable SimplifierMode where
+instance Outputable SimplMode where
     ppr (SimplMode { sm_phase = p, sm_names = ss
                    , sm_rules = r, sm_inline = i
                    , sm_eta_expand = eta, sm_case_case = cc })
@@ -263,8 +252,8 @@ bindsOnlyPass pass guts
 ************************************************************************
 -}
 
-verboseSimplStats :: Bool
-verboseSimplStats = opt_PprStyle_Debug          -- For now, anyway
+getVerboseSimplStats :: (Bool -> SDoc) -> SDoc
+getVerboseSimplStats = getPprDebug          -- For now, anyway
 
 zeroSimplCount     :: DynFlags -> SimplCount
 isZeroSimplCount   :: SimplCount -> Bool
@@ -324,19 +313,13 @@ doSimplTick dflags tick
 doSimplTick _ _ (VerySimplCount n) = VerySimplCount (n+1)
 
 
--- Don't use Map.unionWith because that's lazy, and we want to
--- be pretty strict here!
 addTick :: TickCounts -> Tick -> TickCounts
-addTick fm tick = case Map.lookup tick fm of
-                        Nothing -> Map.insert tick 1 fm
-                        Just n  -> n1 `seq` Map.insert tick n1 fm
-                                where
-                                   n1 = n+1
-
+addTick fm tick = MapStrict.insertWith (+) tick 1 fm
 
 plusSimplCount sc1@(SimplCount { ticks = tks1, details = dts1 })
                sc2@(SimplCount { ticks = tks2, details = dts2 })
-  = log_base { ticks = tks1 + tks2, details = Map.unionWith (+) dts1 dts2 }
+  = log_base { ticks = tks1 + tks2
+             , details = MapStrict.unionWith (+) dts1 dts2 }
   where
         -- A hackish way of getting recent log info
     log_base | null (log1 sc2) = sc1    -- Nothing at all in sc2
@@ -352,7 +335,8 @@ pprSimplCount (SimplCount { ticks = tks, details = dts, log1 = l1, log2 = l2 })
   = vcat [text "Total ticks:    " <+> int tks,
           blankLine,
           pprTickCounts dts,
-          if verboseSimplStats then
+          getVerboseSimplStats $ \dbg -> if dbg
+          then
                 vcat [blankLine,
                       text "Log (most recent first)",
                       nest 4 (vcat (map ppr l1) $$ vcat (map ppr l2))]
@@ -365,7 +349,7 @@ pprTickCounts counts
   where
     groups :: [[(Tick,Int)]]    -- Each group shares a comon tag
                                 -- toList returns common tags adjacent
-    groups = runs same_tag (Map.toList counts)
+    groups = groupBy same_tag (Map.toList counts)
     same_tag (tick1,_) (tick2,_) = tickToTag tick1 == tickToTag tick2
 
 pprTickGroup :: [(Tick, Int)] -> SDoc
@@ -509,12 +493,7 @@ data CoreReader = CoreReader {
         cr_print_unqual        :: PrintUnqualified,
         cr_loc                 :: SrcSpan,   -- Use this for log/error messages so they
                                              -- are at least tagged with the right source file
-        cr_visible_orphan_mods :: !ModuleSet,
-#ifdef GHCI
-        cr_globals :: (MVar PersistentLinkerState, Bool)
-#else
-        cr_globals :: ()
-#endif
+        cr_visible_orphan_mods :: !ModuleSet
 }
 
 -- Note: CoreWriter used to be defined with data, rather than newtype.  If it
@@ -586,15 +565,13 @@ runCoreM :: HscEnv
          -> CoreM a
          -> IO (a, SimplCount)
 runCoreM hsc_env rule_base us mod orph_imps print_unqual loc m
-  = do { glbls <- saveLinkerGlobals
-       ; liftM extract $ runIOEnv (reader glbls) $ unCoreM m state }
+  = liftM extract $ runIOEnv reader $ unCoreM m state
   where
-    reader glbls = CoreReader {
+    reader = CoreReader {
             cr_hsc_env = hsc_env,
             cr_rule_base = rule_base,
             cr_module = mod,
             cr_visible_orphan_mods = orph_imps,
-            cr_globals = glbls,
             cr_print_unqual = print_unqual,
             cr_loc = loc
         }
@@ -690,59 +667,9 @@ getPackageFamInstEnv = do
     eps <- liftIO $ hscEPS hsc_env
     return $ eps_fam_inst_env eps
 
-{-
-************************************************************************
-*                                                                      *
-             Initializing globals
-*                                                                      *
-************************************************************************
-
-This is a rather annoying function. When a plugin is loaded, it currently
-gets linked against a *newly loaded* copy of the GHC package. This would
-not be a problem, except that the new copy has its own mutable state
-that is not shared with that state that has already been initialized by
-the original GHC package.
-
-(NB This mechanism is sufficient for granting plugins read-only access to
-globals that are guaranteed to be initialized before the plugin is loaded.  If
-any further synchronization is necessary, I would suggest using the more
-sophisticated mechanism involving GHC.Conc.Sync.sharedCAF and rts/Globals.c to
-share a single instance of the global variable among the compiler and the
-plugins.  Perhaps we should migrate all global variables to use that mechanism,
-for robustness... -- NSF July 2013)
-
-This leads to loaded plugins calling GHC code which pokes the static flags,
-and then dying with a panic because the static flags *it* sees are uninitialized.
-
-There are two possible solutions:
-  1. Export the symbols from the GHC executable from the GHC library and link
-     against this existing copy rather than a new copy of the GHC library
-  2. Carefully ensure that the global state in the two copies of the GHC
-     library matches
-
-I tried 1. and it *almost* works (and speeds up plugin load times!) except
-on Windows. On Windows the GHC library tends to export more than 65536 symbols
-(see #5292) which overflows the limit of what we can export from the EXE and
-causes breakage.
-
-(Note that if the GHC executable was dynamically linked this wouldn't be a
-problem, because we could share the GHC library it links to.)
-
-We are going to try 2. instead. Unfortunately, this means that every plugin
-will have to say `reinitializeGlobals` before it does anything, but never mind.
-
-I've threaded the cr_globals through CoreM rather than giving them as an
-argument to the plugin function so that we can turn this function into
-(return ()) without breaking any plugins when we eventually get 1. working.
--}
-
+{-# DEPRECATED reinitializeGlobals "It is not necessary to call reinitializeGlobals. Since GHC 8.2, this function is a no-op and will be removed in GHC 8.4" #-}
 reinitializeGlobals :: CoreM ()
-reinitializeGlobals = do
-    linker_globals <- read cr_globals
-    hsc_env <- getHscEnv
-    let dflags = hsc_dflags hsc_env
-    liftIO $ restoreLinkerGlobals linker_globals
-    liftIO $ setUnsafeGlobalDynFlags dflags
+reinitializeGlobals = return ()
 
 {-
 ************************************************************************
@@ -809,10 +736,9 @@ msg sev doc
                      SevDump    -> dump_sty
                      _          -> user_sty
              err_sty  = mkErrStyle dflags unqual
-             user_sty = mkUserStyle unqual AllTheWay
-             dump_sty = mkDumpStyle unqual
-       ; liftIO $
-         (log_action dflags) dflags NoReason sev loc sty doc }
+             user_sty = mkUserStyle dflags unqual AllTheWay
+             dump_sty = mkDumpStyle dflags unqual
+       ; liftIO $ putLogMsg dflags NoReason sev loc sty doc }
 
 -- | Output a String message to the screen
 putMsgS :: String -> CoreM ()
@@ -877,15 +803,13 @@ instance MonadThings CoreM where
 ************************************************************************
 -}
 
-#ifdef GHCI
 -- | Attempt to convert a Template Haskell name to one that GHC can
 -- understand. Original TH names such as those you get when you use
 -- the @'foo@ syntax will be translated to their equivalent GHC name
--- exactly. Qualified or unqualifed TH names will be dynamically bound
+-- exactly. Qualified or unqualified TH names will be dynamically bound
 -- to names in the module being compiled, if possible. Exact TH names
 -- will be bound to the name they represent, exactly.
 thNameToGhcName :: TH.Name -> CoreM (Maybe Name)
 thNameToGhcName th_name = do
     hsc_env <- getHscEnv
     liftIO $ initTcForLookup hsc_env (lookupThName_maybe th_name)
-#endif

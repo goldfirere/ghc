@@ -298,7 +298,7 @@ baseRegOffset dflags CurrentNursery = oFFSET_StgRegTable_rCurrentNursery dflags
 baseRegOffset dflags HpAlloc        = oFFSET_StgRegTable_rHpAlloc dflags
 baseRegOffset dflags GCEnter1       = oFFSET_stgGCEnter1 dflags
 baseRegOffset dflags GCFun          = oFFSET_stgGCFun dflags
-baseRegOffset _      reg            = pprPanic "baseRegOffset:" (ppr reg)
+baseRegOffset _      reg            = pprPanic "StgCmmUtils.baseRegOffset:" (ppr reg)
 
 -------------------------------------------------------------------------
 --
@@ -322,7 +322,7 @@ newStringCLit str = newByteStringCLit (map (fromIntegral . ord) str)
 newByteStringCLit :: [Word8] -> FCode CmmLit
 newByteStringCLit bytes
   = do  { uniq <- newUnique
-        ; let (lit, decl) = mkByteStringCLit uniq bytes
+        ; let (lit, decl) = mkByteStringCLit (mkStringLitLabel uniq) bytes
         ; emitDecl decl
         ; return lit }
 
@@ -362,11 +362,11 @@ newUnboxedTupleRegs res_ty
         ; sequel <- getSequel
         ; regs <- choose_regs dflags sequel
         ; ASSERT( regs `equalLength` reps )
-          return (regs, map slotForeignHint reps) }
+          return (regs, map primRepForeignHint reps) }
   where
-    MultiRep reps = repType res_ty
+    reps = typePrimRep res_ty
     choose_regs _ (AssignTo regs _) = return regs
-    choose_regs dflags _            = mapM (newTemp . slotCmmType dflags) reps
+    choose_regs dflags _            = mapM (newTemp . primRepCmmType dflags) reps
 
 
 
@@ -399,8 +399,8 @@ emitMultiAssign regs rhss   = do
 unscramble :: DynFlags -> [Vrtx] -> FCode ()
 unscramble dflags vertices = mapM_ do_component components
   where
-        edges :: [ (Vrtx, Key, [Key]) ]
-        edges = [ (vertex, key1, edges_from stmt1)
+        edges :: [ Node Key Vrtx ]
+        edges = [ DigraphNode vertex key1 (edges_from stmt1)
                 | vertex@(key1, stmt1) <- vertices ]
 
         edges_from :: Stmt -> [Key]
@@ -459,7 +459,7 @@ emitSwitch _ [(_,code)] Nothing     _ _ = emit (fst code)
 
 -- Right, off we go
 emitSwitch tag_expr branches mb_deflt lo_tag hi_tag = do
-    join_lbl      <- newLabelC
+    join_lbl      <- newBlockId
     mb_deflt_lbl  <- label_default join_lbl mb_deflt
     branches_lbls <- label_branches join_lbl branches
     tag_expr'     <- assignTemp' tag_expr
@@ -517,7 +517,7 @@ emitCmmLitSwitch :: CmmExpr                    -- Tag to switch on
 emitCmmLitSwitch _scrut []       deflt = emit $ fst deflt
 emitCmmLitSwitch scrut  branches deflt = do
     scrut' <- assignTemp' scrut
-    join_lbl <- newLabelC
+    join_lbl <- newBlockId
     deflt_lbl <- label_code join_lbl deflt
     branches_lbls <- label_branches join_lbl branches
 
@@ -604,7 +604,7 @@ label_code :: BlockId -> CmmAGraphScoped -> FCode BlockId
 --  [L: code; goto J]
 -- and returns L
 label_code join_lbl (code,tsc) = do
-    lbl <- newLabelC
+    lbl <- newBlockId
     emitOutOfLine lbl (code MkGraph.<*> mkBranch join_lbl, tsc)
     return lbl
 

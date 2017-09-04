@@ -12,16 +12,16 @@ module MkCore (
         -- * Constructing boxed literals
         mkWordExpr, mkWordExprWord,
         mkIntExpr, mkIntExprInt,
-        mkIntegerExpr,
+        mkIntegerExpr, mkNaturalExpr,
         mkFloatExpr, mkDoubleExpr,
-        mkCharExpr, mkStringExpr, mkStringExprFS,
+        mkCharExpr, mkStringExpr, mkStringExprFS, mkStringExprFSWith,
 
         -- * Floats
         FloatBind(..), wrapFloat,
 
         -- * Constructing small tuples
         mkCoreVarTup, mkCoreVarTupTy, mkCoreTup, mkCoreUbxTup,
-        mkCoreTupBoxity,
+        mkCoreTupBoxity, unitExpr,
 
         -- * Constructing big tuples
         mkBigCoreVarTup, mkBigCoreVarTup1,
@@ -107,6 +107,7 @@ sortQuantVars vs = sorted_tcvs ++ ids
 mkCoreLet :: CoreBind -> CoreExpr -> CoreExpr
 mkCoreLet (NonRec bndr rhs) body        -- See Note [CoreSyn let/app invariant]
   | needsCaseBinding (idType bndr) rhs
+  , not (isJoinId bndr)
   = Case rhs bndr (exprType body) [(DEFAULT,[],body)]
 mkCoreLet bind body
   = Let bind body
@@ -172,7 +173,7 @@ mk_val_app fun arg arg_ty res_ty
         -- game, mk_val_app returns an expression that does not have
         -- have a free wild-id.  So the only thing that can go wrong
         -- is if you take apart this case expression, and pass a
-        -- fragmet of it as the fun part of a 'mk_val_app'.
+        -- fragment of it as the fun part of a 'mk_val_app'.
 
 -----------
 mkWildEvBinder :: PredType -> EvVar
@@ -249,6 +250,15 @@ mkIntegerExpr  :: MonadThings m => Integer -> m CoreExpr  -- Result :: Integer
 mkIntegerExpr i = do t <- lookupTyCon integerTyConName
                      return (Lit (mkLitInteger i (mkTyConTy t)))
 
+-- | Create a 'CoreExpr' which will evaluate to the given @Natural@
+--
+-- TODO: should we add LitNatural to Core?
+mkNaturalExpr  :: MonadThings m => Integer -> m CoreExpr  -- Result :: Natural
+mkNaturalExpr i = do iExpr <- mkIntegerExpr i
+                     fiExpr <- lookupId naturalFromIntegerName
+                     return (mkCoreApps (Var fiExpr) [iExpr])
+
+
 -- | Create a 'CoreExpr' which will evaluate to the given @Float@
 mkFloatExpr :: Float -> CoreExpr
 mkFloatExpr f = mkCoreConApps floatDataCon [mkFloatLitFloat f]
@@ -270,16 +280,19 @@ mkStringExprFS :: MonadThings m => FastString -> m CoreExpr  -- Result :: String
 
 mkStringExpr str = mkStringExprFS (mkFastString str)
 
-mkStringExprFS str
+mkStringExprFS = mkStringExprFSWith lookupId
+
+mkStringExprFSWith :: Monad m => (Name -> m Id) -> FastString -> m CoreExpr
+mkStringExprFSWith lookupM str
   | nullFS str
   = return (mkNilExpr charTy)
 
   | all safeChar chars
-  = do unpack_id <- lookupId unpackCStringName
+  = do unpack_id <- lookupM unpackCStringName
        return (App (Var unpack_id) lit)
 
   | otherwise
-  = do unpack_utf8_id <- lookupId unpackCStringUtf8Name
+  = do unpack_utf8_id <- lookupM unpackCStringUtf8Name
        return (App (Var unpack_utf8_id) lit)
 
   where
@@ -309,7 +322,7 @@ Note [Flattening one-tuples]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 This family of functions creates a tuple of variables/expressions/types.
   mkCoreTup [e1,e2,e3] = (e1,e2,e3)
-What if there is just one variable/expression/type in the agument?
+What if there is just one variable/expression/type in the argument?
 We could do one of two things:
 
 * Flatten it out, so that
@@ -349,7 +362,7 @@ mkCoreUbxTup :: [Type] -> [CoreExpr] -> CoreExpr
 mkCoreUbxTup tys exps
   = ASSERT( tys `equalLength` exps)
     mkCoreConApps (tupleDataCon Unboxed (length tys))
-             (map (Type . getRuntimeRep "mkCoreUbxTup") tys ++ map Type tys ++ exps)
+             (map (Type . getRuntimeRep) tys ++ map Type tys ++ exps)
 
 -- | Make a core tuple of the given boxity
 mkCoreTupBoxity :: Boxity -> [CoreExpr] -> CoreExpr
@@ -383,6 +396,9 @@ mkBigCoreTup = mkChunkified mkCoreTup
 mkBigCoreTupTy :: [Type] -> Type
 mkBigCoreTupTy = mkChunkified mkBoxedTupleTy
 
+-- | The unit expression
+unitExpr :: CoreExpr
+unitExpr = Var unitDataConId
 
 {-
 ************************************************************************
@@ -635,7 +651,7 @@ mkRuntimeErrorApp
         -> CoreExpr
 
 mkRuntimeErrorApp err_id res_ty err_msg
-  = mkApps (Var err_id) [ Type (getRuntimeRep "mkRuntimeErrorApp" res_ty)
+  = mkApps (Var err_id) [ Type (getRuntimeRep res_ty)
                         , Type res_ty, err_string ]
   where
     err_string = Lit (mkMachString err_msg)
@@ -750,8 +766,7 @@ mkRuntimeErrorId name
 'error' and 'undefined' have types
         error     :: forall (v :: RuntimeRep) (a :: TYPE v). String -> a
         undefined :: forall (v :: RuntimeRep) (a :: TYPE v). a
-Notice the runtime-representation polymophism. This ensures that
+Notice the runtime-representation polymorphism. This ensures that
 "error" can be instantiated at unboxed as well as boxed types.
 This is OK because it never returns, so the return type is irrelevant.
 -}
-

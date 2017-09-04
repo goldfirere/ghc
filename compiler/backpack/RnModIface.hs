@@ -9,10 +9,13 @@
 module RnModIface(
     rnModIface,
     rnModExports,
+    tcRnModIface,
+    tcRnModExports,
     ) where
 
 #include "HsVersions.h"
 
+import SrcLoc
 import Outputable
 import HscTypes
 import Module
@@ -21,6 +24,7 @@ import Avail
 import IfaceSyn
 import FieldLabel
 import Var
+import ErrUtils
 
 import Name
 import TcRnMonad
@@ -34,10 +38,40 @@ import DynFlags
 
 import qualified Data.Traversable as T
 
+import Bag
+import Data.IORef
 import NameShape
 import IfaceEnv
 
--- | What we have a generalized ModIface, which corresponds to
+tcRnMsgMaybe :: IO (Either ErrorMessages a) -> TcM a
+tcRnMsgMaybe do_this = do
+    r <- liftIO $ do_this
+    case r of
+        Left errs -> do
+            addMessages (emptyBag, errs)
+            failM
+        Right x -> return x
+
+tcRnModIface :: [(ModuleName, Module)] -> Maybe NameShape -> ModIface -> TcM ModIface
+tcRnModIface x y z = do
+    hsc_env <- getTopEnv
+    tcRnMsgMaybe $ rnModIface hsc_env x y z
+
+tcRnModExports :: [(ModuleName, Module)] -> ModIface -> TcM [AvailInfo]
+tcRnModExports x y = do
+    hsc_env <- getTopEnv
+    tcRnMsgMaybe $ rnModExports hsc_env x y
+
+failWithRn :: SDoc -> ShIfM a
+failWithRn doc = do
+    errs_var <- fmap sh_if_errs getGblEnv
+    dflags <- getDynFlags
+    errs <- readTcRef errs_var
+    -- TODO: maybe associate this with a source location?
+    writeTcRef errs_var (errs `snocBag` mkPlainErrMsg dflags noSrcSpan doc)
+    failM
+
+-- | What we have is a generalized ModIface, which corresponds to
 -- a module that looks like p[A=<A>]:B.  We need a *specific* ModIface, e.g.
 -- p[A=q():A]:B (or maybe even p[A=<B>]:B) which we load
 -- up (either to merge it, or to just use during typechecking).
@@ -58,7 +92,7 @@ import IfaceEnv
 -- should be Foo.T; then we'll also rename this (this is used
 -- when loading an interface to merge it into a requirement.)
 rnModIface :: HscEnv -> [(ModuleName, Module)] -> Maybe NameShape
-           -> ModIface -> IO ModIface
+           -> ModIface -> IO (Either ErrorMessages ModIface)
 rnModIface hsc_env insts nsubst iface = do
     initRnIface hsc_env iface insts nsubst $ do
         mod <- rnModule (mi_module iface)
@@ -69,6 +103,7 @@ rnModIface hsc_env insts nsubst iface = do
         decls <- mapM rnIfaceDecl' (mi_decls iface)
         insts <- mapM rnIfaceClsInst (mi_insts iface)
         fams <- mapM rnIfaceFamInst (mi_fam_insts iface)
+        deps <- rnDependencies (mi_deps iface)
         -- TODO:
         -- mi_rules
         -- mi_vect_info (LOW PRIORITY)
@@ -77,14 +112,35 @@ rnModIface hsc_env insts nsubst iface = do
                      , mi_insts = insts
                      , mi_fam_insts = fams
                      , mi_exports = exports
-                     , mi_decls = decls }
+                     , mi_decls = decls
+                     , mi_deps = deps }
 
 -- | Rename just the exports of a 'ModIface'.  Useful when we're doing
 -- shaping prior to signature merging.
-rnModExports :: HscEnv -> [(ModuleName, Module)] -> ModIface -> IO [AvailInfo]
+rnModExports :: HscEnv -> [(ModuleName, Module)] -> ModIface -> IO (Either ErrorMessages [AvailInfo])
 rnModExports hsc_env insts iface
     = initRnIface hsc_env iface insts Nothing
     $ mapM rnAvailInfo (mi_exports iface)
+
+rnDependencies :: Rename Dependencies
+rnDependencies deps = do
+    orphs  <- rnDepModules dep_orphs deps
+    finsts <- rnDepModules dep_finsts deps
+    return deps { dep_orphs = orphs, dep_finsts = finsts }
+
+rnDepModules :: (Dependencies -> [Module]) -> Dependencies -> ShIfM [Module]
+rnDepModules sel deps = do
+    hsc_env <- getTopEnv
+    hmap <- getHoleSubst
+    -- NB: It's not necessary to test if we're doing signature renaming,
+    -- because ModIface will never contain module reference for itself
+    -- in these dependencies.
+    fmap (nubSort . concat) . T.forM (sel deps) $ \mod -> do
+        dflags <- getDynFlags
+        let mod' = renameHoleModule dflags hmap mod
+        iface <- liftIO . initIfaceCheck (text "rnDepModule") hsc_env
+                        $ loadSysInterface (text "rnDepModule") mod'
+        return (mod' : sel (mi_deps iface))
 
 {-
 ************************************************************************
@@ -94,19 +150,28 @@ rnModExports hsc_env insts iface
 ************************************************************************
 -}
 
--- | Initialize the 'ShIfM' monad.
+-- | Run a computation in the 'ShIfM' monad.
 initRnIface :: HscEnv -> ModIface -> [(ModuleName, Module)] -> Maybe NameShape
-            -> ShIfM a -> IO a
-initRnIface hsc_env iface insts nsubst do_this =
-    let hsubst = listToUFM insts
-        rn_mod = renameHoleModule (hsc_dflags hsc_env) hsubst
+            -> ShIfM a -> IO (Either ErrorMessages a)
+initRnIface hsc_env iface insts nsubst do_this = do
+    errs_var <- newIORef emptyBag
+    let dflags = hsc_dflags hsc_env
+        hsubst = listToUFM insts
+        rn_mod = renameHoleModule dflags hsubst
         env = ShIfEnv {
             sh_if_module = rn_mod (mi_module iface),
             sh_if_semantic_module = rn_mod (mi_semantic_module iface),
             sh_if_hole_subst = listToUFM insts,
-            sh_if_shape = nsubst
+            sh_if_shape = nsubst,
+            sh_if_errs = errs_var
         }
-    in initTcRnIf 'c' hsc_env env () do_this
+    -- Modeled off of 'initTc'
+    res <- initTcRnIf 'c' hsc_env env () $ tryM do_this
+    msgs <- readIORef errs_var
+    case res of
+        Left _                          -> return (Left msgs)
+        Right r | not (isEmptyBag msgs) -> return (Left msgs)
+                | otherwise             -> return (Right r)
 
 -- | Environment for 'ShIfM' monads.
 data ShIfEnv = ShIfEnv {
@@ -123,7 +188,9 @@ data ShIfEnv = ShIfEnv {
         -- the names in the interface.  If this is 'Nothing', then
         -- we just load the target interface and look at the export
         -- list to determine the renaming.
-        sh_if_shape :: Maybe NameShape
+        sh_if_shape :: Maybe NameShape,
+        -- Mutable reference to keep track of errors (similar to 'tcl_errs')
+        sh_if_errs :: IORef ErrorMessages
     }
 
 getHoleSubst :: ShIfM ShHoleSubst
@@ -215,10 +282,21 @@ rnIfaceGlobal n = do
        , isHoleModule m'
       -- NB: this could be Nothing for computeExports, we have
       -- nothing to say.
-      -> do fmap (case mb_nsubst of
-                   Nothing -> id
-                   Just nsubst -> substNameShape nsubst)
-                $ setNameModule (Just m') n
+      -> do n' <- setNameModule (Just m') n
+            case mb_nsubst of
+                Nothing -> return n'
+                Just nsubst ->
+                    case maybeSubstNameShape nsubst n' of
+                        -- TODO: would love to have context
+                        -- TODO: This will give an unpleasant message if n'
+                        -- is a constructor; then we'll suggest adding T
+                        -- but it won't work.
+                        Nothing -> failWithRn $ vcat [
+                            text "The identifier" <+> ppr (occName n') <+>
+                                text "does not exist in the local signature.",
+                            parens (text "Try adding it to the export list of the hsig file.")
+                            ]
+                        Just n'' -> return n''
        -- Fastpath: we are renaming p[H=<H>]:A.T, in which case the
        -- export list is irrelevant.
        | not (isHoleModule m)
@@ -239,19 +317,58 @@ rnIfaceGlobal n = do
             iface <- liftIO . initIfaceCheck (text "rnIfaceGlobal") hsc_env
                             $ loadSysInterface (text "rnIfaceGlobal") m''
             let nsubst = mkNameShape (moduleName m) (mi_exports iface)
-            return (substNameShape nsubst n)
+            case maybeSubstNameShape nsubst n of
+                Nothing -> failWithRn $ vcat [
+                    text "The identifier" <+> ppr (occName n) <+>
+                        -- NB: report m' because it's more user-friendly
+                        text "does not exist in the signature for" <+> ppr m',
+                    parens (text "Try adding it to the export list in that hsig file.")
+                    ]
+                Just n' -> return n'
 
--- | Rename a DFun name. Here is where we ensure that DFuns have the correct
--- module as described in Note [Bogus DFun renamings].
-rnIfaceDFun :: Name -> ShIfM Name
-rnIfaceDFun name = do
+-- | Rename an implicit name, e.g., a DFun or coercion axiom.
+-- Here is where we ensure that DFuns have the correct module as described in
+-- Note [rnIfaceNeverExported].
+rnIfaceNeverExported :: Name -> ShIfM Name
+rnIfaceNeverExported name = do
     hmap <- getHoleSubst
     dflags <- getDynFlags
     iface_semantic_mod <- fmap sh_if_semantic_module getGblEnv
     let m = renameHoleModule dflags hmap $ nameModule name
-    -- Doublecheck that this DFun was, indeed, locally defined.
+    -- Doublecheck that this DFun/coercion axiom was, indeed, locally defined.
     MASSERT2( iface_semantic_mod == m, ppr iface_semantic_mod <+> ppr m )
     setNameModule (Just m) name
+
+-- Note [rnIfaceNeverExported]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- For the high-level overview, see
+-- Note [Handling never-exported TyThings under Backpack]
+--
+-- When we see a reference to an entity that was defined in a signature,
+-- 'rnIfaceGlobal' relies on the identifier in question being part of the
+-- exports of the implementing 'ModIface', so that we can use the exports to
+-- decide how to rename the identifier.  Unfortunately, references to 'DFun's
+-- and 'CoAxiom's will run into trouble under this strategy, because they are
+-- never exported.
+--
+-- Let us consider first what should happen in the absence of promotion.  In
+-- this setting, a reference to a 'DFun' or a 'CoAxiom' can only occur inside
+-- the signature *that is defining it* (as there are no Core terms in
+-- typechecked-only interface files, there's no way for a reference to occur
+-- besides from the defining 'ClsInst' or closed type family).  Thus,
+-- it doesn't really matter what names we give the DFun/CoAxiom, as long
+-- as it's consistent between the declaration site and the use site.
+--
+-- We have to make sure that these bogus names don't get propagated,
+-- but it is fine: see Note [Signature merging DFuns] for the fixups
+-- to the names we do before writing out the merged interface.
+-- (It's even easier for instantiation, since the DFuns all get
+-- dropped entirely; the instances are reexported implicitly.)
+--
+-- Unfortunately, this strategy is not enough in the presence of promotion
+-- (see bug #13149), where modules which import the signature may make
+-- reference to their coercions.  It's not altogether clear how to
+-- fix this case, but it is definitely a bug!
 
 -- PILES AND PILES OF BOILERPLATE
 
@@ -262,67 +379,7 @@ rnIfaceClsInst cls_inst = do
     n <- rnIfaceGlobal (ifInstCls cls_inst)
     tys <- mapM rnMaybeIfaceTyCon (ifInstTys cls_inst)
 
-    -- Note [Bogus DFun renamings]
-    -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    -- Every 'IfaceClsInst' is associated with a DFun; in fact, when
-    -- we are typechecking only, it is the ONLY place a DFun Id
-    -- can appear.  This DFun must refer to a DFun that is defined
-    -- elsewhere in the 'ModIface'.
-    --
-    -- Unfortunately, DFuns are not exported (don't appear in
-    -- mi_exports), so we can't look at the exports (as we do in
-    -- rnIfaceGlobal) to rename it.
-    --
-    -- We have to rename it to *something*.  So what we do depends
-    -- on the situation:
-    --
-    --  * If the instance wasn't defined in a signature, the DFun
-    --    have a name like p[A=<A>]:B.$fShowFoo.  This is the
-    --    easy case: just apply the module substitution to the
-    --    unit id and go our merry way.
-    --
-    --  * If the instance was defined in a signature, we are in
-    --    an interesting situation.  Suppose we are instantiating
-    --    the signature:
-    --
-    --      signature H where
-    --          instance F T           -- {H.$fxFT}
-    --      module H where
-    --          instance F T where ... -- p[]:H.$fFT
-    --
-    --    In an ideal world, we would map {H.$fxFT} to p[]:H.$fFT.
-    --    But we have no idea what the correct DFun is: the OccNames
-    --    don't match up.  Nor do we really want to wire up {H.$fxFT}
-    --    to p[]:H.$fFT: we'd rather have it point at the DFun
-    --    from the *signature's* interface, and use that type to
-    --    find the actual instance we want to compare against.
-    --
-    --    So, to handle this case, we have to do several things:
-    --
-    --      * In 'rnIfaceClsInst', we just blindly rename the
-    --        the identifier to something that looks vaguely plausible.
-    --        In the instantiating case, we just map {H.$fxFT}
-    --        to p[]:H.$fxFT.  In the merging case, we map
-    --        {H.$fxFT} to {H2.$fxFT}.
-    --
-    --      * In 'lookupIfaceTop', we arrange for the top-level DFun
-    --        to be assigned the very same identifier we picked
-    --        during renaming (p[]:H.$fxFT)
-    --
-    --      * Finally, in 'tcIfaceInstWithDFunTypeEnv', we make sure
-    --        to grab the correct 'TyThing' for the DFun directly
-    --        from the local type environment (which was constructed
-    --        using 'Name's from 'lookupIfaceTop').
-    --
-    --    It's all a bit of a giant Rube Goldberg machine, but it
-    --    seems to work!  Note that the name we pick here doesn't
-    --    really matter, since we throw it out shortly after
-    --    (for merging, we rename all of the DFuns so that they
-    --    are unique; for instantiation, the final interface never
-    --    mentions DFuns since they are implicitly exported. See
-    --    Note [Signature merging DFuns])  The important thing is that it's
-    --    consistent everywhere.
-    dfun <- rnIfaceDFun (ifDFun cls_inst)
+    dfun <- rnIfaceNeverExported (ifDFun cls_inst)
     return cls_inst { ifInstCls = n
                     , ifInstTys = tys
                     , ifDFun = dfun
@@ -345,8 +402,13 @@ rnIfaceDecl' (fp, decl) = (,) fp <$> rnIfaceDecl decl
 rnIfaceDecl :: Rename IfaceDecl
 rnIfaceDecl d@IfaceId{} = do
             name <- case ifIdDetails d of
-                      IfDFunId -> rnIfaceDFun (ifName d)
-                      _        -> rnIfaceGlobal (ifName d)
+                      IfDFunId -> rnIfaceNeverExported (ifName d)
+                      _ | isDefaultMethodOcc (occName (ifName d))
+                        -> rnIfaceNeverExported (ifName d)
+                      -- Typeable bindings. See Note [Grand plan for Typeable].
+                      _ | isTypeableBindOcc (occName (ifName d))
+                        -> rnIfaceNeverExported (ifName d)
+                        | otherwise -> rnIfaceGlobal (ifName d)
             ty <- rnIfaceType (ifType d)
             details <- rnIfaceIdDetails (ifIdDetails d)
             info <- rnIfaceIdInfo (ifIdInfo d)
@@ -389,18 +451,14 @@ rnIfaceDecl d@IfaceFamily{} = do
                      }
 rnIfaceDecl d@IfaceClass{} = do
             name <- rnIfaceGlobal (ifName d)
-            ctxt <- mapM rnIfaceType (ifCtxt d)
             binders <- mapM rnIfaceTyConBinder (ifBinders d)
-            ats <- mapM rnIfaceAT (ifATs d)
-            sigs <- mapM rnIfaceClassOp (ifSigs d)
-            return d { ifName = name
-                     , ifCtxt = ctxt
+            body <- rnIfaceClassBody (ifBody d)
+            return d { ifName    = name
                      , ifBinders = binders
-                     , ifATs = ats
-                     , ifSigs = sigs
+                     , ifBody    = body
                      }
 rnIfaceDecl d@IfaceAxiom{} = do
-            name <- rnIfaceGlobal (ifName d)
+            name <- rnIfaceNeverExported (ifName d)
             tycon <- rnIfaceTyCon (ifTyCon d)
             ax_branches <- mapM rnIfaceAxBranch (ifAxBranches d)
             return d { ifName = name
@@ -429,9 +487,17 @@ rnIfaceDecl d@IfacePatSyn{} =  do
                      , ifPatTy = pat_ty
                      }
 
+rnIfaceClassBody :: Rename IfaceClassBody
+rnIfaceClassBody IfAbstractClass = return IfAbstractClass
+rnIfaceClassBody d@IfConcreteClass{} = do
+    ctxt <- mapM rnIfaceType (ifClassCtxt d)
+    ats <- mapM rnIfaceAT (ifATs d)
+    sigs <- mapM rnIfaceClassOp (ifSigs d)
+    return d { ifClassCtxt = ctxt, ifATs = ats, ifSigs = sigs }
+
 rnIfaceFamTyConFlav :: Rename IfaceFamTyConFlav
 rnIfaceFamTyConFlav (IfaceClosedSynFamilyTyCon (Just (n, axs)))
-    = IfaceClosedSynFamilyTyCon . Just <$> ((,) <$> rnIfaceGlobal n
+    = IfaceClosedSynFamilyTyCon . Just <$> ((,) <$> rnIfaceNeverExported n
                                                 <*> mapM rnIfaceAxBranch axs)
 rnIfaceFamTyConFlav flav = pure flav
 
@@ -447,12 +513,10 @@ rnIfaceTyConParent (IfDataInstance n tc args)
 rnIfaceTyConParent IfNoParent = pure IfNoParent
 
 rnIfaceConDecls :: Rename IfaceConDecls
-rnIfaceConDecls (IfDataTyCon ds b fs)
+rnIfaceConDecls (IfDataTyCon ds)
     = IfDataTyCon <$> mapM rnIfaceConDecl ds
-                  <*> return b
-                  <*> return fs
-rnIfaceConDecls (IfNewTyCon d b fs) = IfNewTyCon <$> rnIfaceConDecl d <*> return b <*> return fs
-rnIfaceConDecls (IfAbstractTyCon b) = pure (IfAbstractTyCon b)
+rnIfaceConDecls (IfNewTyCon d) = IfNewTyCon <$> rnIfaceConDecl d
+rnIfaceConDecls IfAbstractTyCon = pure IfAbstractTyCon
 
 rnIfaceConDecl :: Rename IfaceConDecl
 rnIfaceConDecl d = do
@@ -462,10 +526,7 @@ rnIfaceConDecl d = do
     con_eq_spec <- mapM rnIfConEqSpec (ifConEqSpec d)
     con_ctxt <- mapM rnIfaceType (ifConCtxt d)
     con_arg_tys <- mapM rnIfaceType (ifConArgTys d)
-    -- TODO: It seems like we really should rename the field labels, but this
-    -- breaks due to tcIfaceDataCons projecting back to the field's OccName and
-    -- then looking up it up in the name cache. See #12699.
-    --con_fields <- mapM rnIfaceGlobal (ifConFields d)
+    con_fields <- mapM rnFieldLabel (ifConFields d)
     let rnIfaceBang (IfUnpackCo co) = IfUnpackCo <$> rnIfaceCo co
         rnIfaceBang bang = pure bang
     con_stricts <- mapM rnIfaceBang (ifConStricts d)
@@ -474,7 +535,7 @@ rnIfaceConDecl d = do
              , ifConEqSpec = con_eq_spec
              , ifConCtxt = con_ctxt
              , ifConArgTys = con_arg_tys
-             --, ifConFields = con_fields -- See TODO above
+             , ifConFields = con_fields
              , ifConStricts = con_stricts
              }
 
@@ -569,8 +630,8 @@ rnIfaceConAlt (IfaceDataAlt data_occ) = IfaceDataAlt <$> rnIfaceGlobal data_occ
 rnIfaceConAlt alt = pure alt
 
 rnIfaceLetBndr :: Rename IfaceLetBndr
-rnIfaceLetBndr (IfLetBndr fs ty info)
-    = IfLetBndr fs <$> rnIfaceType ty <*> rnIfaceIdInfo info
+rnIfaceLetBndr (IfLetBndr fs ty info jpi)
+    = IfLetBndr fs <$> rnIfaceType ty <*> rnIfaceIdInfo info <*> pure jpi
 
 rnIfaceLamBndr :: Rename IfaceLamBndr
 rnIfaceLamBndr (bndr, oneshot) = (,) <$> rnIfaceBndr bndr <*> pure oneshot
@@ -585,6 +646,7 @@ rnIfaceCo (IfaceAppCo co1 co2)
     = IfaceAppCo <$> rnIfaceCo co1 <*> rnIfaceCo co2
 rnIfaceCo (IfaceForAllCo bndr co1 co2)
     = IfaceForAllCo <$> rnIfaceTvBndr bndr <*> rnIfaceCo co1 <*> rnIfaceCo co2
+rnIfaceCo (IfaceFreeCoVar c) = pure (IfaceFreeCoVar c)
 rnIfaceCo (IfaceCoVarCo lcl) = IfaceCoVarCo <$> pure lcl
 rnIfaceCo (IfaceAxiomInstCo n i cs)
     = IfaceAxiomInstCo <$> rnIfaceGlobal n <*> pure i <*> mapM rnIfaceCo cs
@@ -617,7 +679,8 @@ rnIfaceIdDetails (IfRecSelId (Right decl) b) = IfRecSelId <$> fmap Right (rnIfac
 rnIfaceIdDetails details = pure details
 
 rnIfaceType :: Rename IfaceType
-rnIfaceType (IfaceTyVar n) = pure (IfaceTyVar n)
+rnIfaceType (IfaceFreeTyVar n) = pure (IfaceFreeTyVar n)
+rnIfaceType (IfaceTyVar   n)   = pure (IfaceTyVar n)
 rnIfaceType (IfaceAppTy t1 t2)
     = IfaceAppTy <$> rnIfaceType t1 <*> rnIfaceType t2
 rnIfaceType (IfaceLitTy l)         = return (IfaceLitTy l)

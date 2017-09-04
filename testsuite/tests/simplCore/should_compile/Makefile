@@ -2,14 +2,46 @@ TOP=../../..
 include $(TOP)/mk/boilerplate.mk
 include $(TOP)/mk/test.mk
 
+T13468:
+	$(RM) -f T13468.o T13468.hi
+	-'$(TEST_HC)' $(TEST_HC_OPTS) -O -c -ddump-simpl T13468.hs | grep 'Error'
+        # Expecting no output from the grep, hence "-"
+        # If the case branch is not eliminated, we get a patError
+
 T3990:
 	$(RM) -f T3990.o T3990.hi
 	'$(TEST_HC)' $(TEST_HC_OPTS) -O -c -ddump-simpl T3990.hs | grep 'test_case'
         # Grep output should show an unpacked constructor
 
+T8848:
+	$(RM) -f T8848.o T8848.hi
+	'$(TEST_HC)' $(TEST_HC_OPTS) -O -c -ddump-rule-firings T8848.hs | grep 'SPEC map2'
+        # Should fire twice
+
+T9509:
+	$(RM) -f T9509*.o T9509*.hi
+	'$(TEST_HC)' $(TEST_HC_OPTS) -O -c T9509a.hs
+	'$(TEST_HC)' $(TEST_HC_OPTS) -O -c T9509.hs  \
+              -ddump-rule-rewrites | grep SPEC
+        # Grep output should show a SPEC rule firing, twice
+
+T13317:
+	$(RM) -f T13317.o T13317.hi
+	'$(TEST_HC)' $(TEST_HC_OPTS) $(T8832_WORDSIZE_OPTS) -O -c -ddump-simpl-stats T13317.hs | grep 'KnownBranch'
+
+T13367:
+	$(RM) -f T13317.o T13317.hi
+	'$(TEST_HC)' $(TEST_HC_OPTS) $(T8832_WORDSIZE_OPTS) -O -c -ddump-simpl T13367.hs | grep 'foo'
+        # There should be only one copy of the string "foo"#
+
 T8832:
 	$(RM) -f T8832.o T8832.hi
 	'$(TEST_HC)' $(TEST_HC_OPTS) $(T8832_WORDSIZE_OPTS) -O -c -ddump-simpl T8832.hs | grep '^[a-zA-Z0-9]\+ ='
+
+T12603:
+	$(RM) -f T12603.o T12603.hi
+	'$(TEST_HC)' $(TEST_HC_OPTS) -O -c -ddump-simpl -dsuppress-uniques T12603.hs | grep 'GHC.Real'
+         # Horribly delicate; looking for a top-level shared call to 2^8
 
 T11155:
 	$(RM) -f T11155.o T11155.hi
@@ -35,6 +67,7 @@ T5658b:
 	$(RM) -f T5658b.o T5658b.hi
 	'$(TEST_HC)' $(TEST_HC_OPTS) -O -c T5658b.hs -ddump-simpl | grep -c indexIntArray
 # Trac 5658 meant that there were three calls to indexIntArray instead of two
+# (now four due to join-point discount causing W/W to stabilize unfolding)
 
 T5776:
 	$(RM) -f T5776.o T5776.hi
@@ -101,6 +134,15 @@ T5327:
 T5623:
 	$(RM) -f T5623.hi T5623.o
 	'$(TEST_HC)' $(TEST_HC_OPTS) -c T5623.hs -O -ddump-prep | grep -c "plusAddr#"
+T13155:
+	$(RM) -f T13155.hi T13155.o
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c T13155.hs -O -ddump-prep | grep -c "plusAddr#"
+        # There should be only one plusAddr#!
+
+T13156:
+	$(RM) -f T13156.hi T13156.o
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c T13156.hs -O -ddump-prep -dsuppress-uniques | grep "case.*Any"
+        # There should be a single 'case r @ GHC.Types.Any'
 
 .PHONY: T4138
 T4138:
@@ -109,6 +151,7 @@ T4138:
 	'$(TEST_HC)' $(TEST_HC_OPTS) -O -c T4138_A.hs
 	'$(TEST_HC)' $(TEST_HC_OPTS) -O -c T4138.hs -ddump-simpl > T4138.simpl
 	grep -c 'F#' T4138.simpl
+        # We expect to see this
 
 T7165:
 	$(RM) -f T7165.hi T7165a.hi T7165a.o T7165.o
@@ -154,3 +197,36 @@ T5615:
 	-grep 'quotInt#' T5615.dump-simpl
 	-grep 'remInt#' T5615.dump-simpl
 	grep -c '1999#' T5615.dump-simpl
+
+# When this one works there are no 'plusWord' left at all
+T12877:
+	-('$(TEST_HC)' $(TEST_HC_OPTS) -c -O T12877.hs -ddump-simpl | grep 'plusWord')
+
+T13025:
+	$(RM) -f T13025.o T13025.hi T13025a.o T13025a.hi
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O T13025a.hs
+	-'$(TEST_HC)' $(TEST_HC_OPTS) -c -O T13025.hs -ddump-simpl | grep -c HEq_sc
+	# No lines should match 'HEq_sc' so wc should output zeros
+
+.PHONY: str-rules
+str-rules:
+	$(RM) -f str-rules.hi str-rules.o
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O str-rules.hs -ddump-simpl | grep -o '"@@@[^"].*"#' | sort
+
+# We expect there to be precisely one use of +# in the simplified Core as f and
+# g should have been collapsed into one defininition by CSE.
+.PHONY: T13340
+T13340:
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O T13340.hs -ddump-simpl -dsuppress-all | grep -c '\+#'
+
+
+# We expect to see all dictionaries specialized away.
+.PHONY: T11272
+T11272:
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O T11272a.hs
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O -ddump-prep T11272.hs | { ! grep Ord ;}
+
+# We expect to see a $wfoo worker that doesn't take any dictionaries.
+.PHONY: T12600
+T12600:
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O -ddump-prep -dsuppress-all -dsuppress-uniques -dno-suppress-type-signatures -dppr-cols=200 T12600.hs | grep "wfoo" | head -n 1

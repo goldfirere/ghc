@@ -13,7 +13,7 @@ dnl
 # see what flags are available. (Better yet, read the documentation!)
 #
 
-AC_INIT([The Glorious Glasgow Haskell Compilation System], [8.1], [glasgow-haskell-bugs@haskell.org], [ghc-AC_PACKAGE_VERSION])
+AC_INIT([The Glorious Glasgow Haskell Compilation System], [8.3], [glasgow-haskell-bugs@haskell.org], [ghc-AC_PACKAGE_VERSION])
 
 # Set this to YES for a released version, otherwise NO
 : ${RELEASE=NO}
@@ -113,6 +113,17 @@ AC_ARG_ENABLE(tarballs-autodownload,
         TarballsAutodownload=NO
 )
 
+AC_ARG_ENABLE(distro-toolchain,
+[AC_HELP_STRING([--enable-distro-toolchain],
+                [Do not use bundled Windows toolchain binaries.])],
+        EnableDistroToolchain=YES,
+        EnableDistroToolchain=NO
+)
+
+if test "$EnableDistroToolchain" = "YES"; then
+  TarballsAutodownload=NO
+fi
+
 dnl CC_STAGE0 is like the "previous" variable CC (inherited by CC_STAGE[123])
 dnl but instead used by stage0 for bootstrapping stage1
 AC_ARG_VAR(CC_STAGE0, [C compiler command (bootstrap)])
@@ -120,7 +131,7 @@ AC_ARG_VAR(CC_STAGE0, [C compiler command (bootstrap)])
 if test "$WithGhc" != ""; then
   FPTOOLS_GHC_VERSION([GhcVersion], [GhcMajVersion], [GhcMinVersion], [GhcPatchLevel])dnl
 
-  if test "$GhcMajVersion" = "unknown" -o "$GhcMinVersion" = "unknown"; then
+  if test "$GhcMajVersion" = "unknown" || test "$GhcMinVersion" = "unknown"; then
      AC_MSG_ERROR([Cannot determine the version of $WithGhc.  Is it really GHC?])
   fi
 
@@ -147,8 +158,8 @@ if test "$WithGhc" = ""
 then
     AC_MSG_ERROR([GHC is required.])
 fi
-FP_COMPARE_VERSIONS([$GhcVersion],[-lt],[7.10],
-    [AC_MSG_ERROR([GHC version 7.10 or later is required to compile GHC.])])
+FP_COMPARE_VERSIONS([$GhcVersion],[-lt],[8.0],
+    [AC_MSG_ERROR([GHC version 8.0 or later is required to compile GHC.])])
 
 if test `expr $GhcMinVersion % 2` = "1"
 then
@@ -177,9 +188,13 @@ then
 
     if test "$ghc_host_os" = "mingw32"
     then
-        # Canonicalise to <drive>:/path/to/ghc
-        WithGhc=`cygpath -m "${WithGhc}"`
-
+        if test "${OSTYPE}" = "msys"
+        then
+            WithGhc=`echo "${WithGhc}" | sed "s#^/\([a-zA-Z]\)/#\1:/#"`
+        else
+            # Canonicalise to <drive>:/path/to/ghc
+            WithGhc=`cygpath -m "${WithGhc}"`
+        fi
         echo "GHC path canonicalised to: ${WithGhc}"
     fi
 fi
@@ -241,8 +256,8 @@ AC_SUBST(SOLARIS_BROKEN_SHLD)
 
 dnl ** Do an unregisterised build?
 dnl --------------------------------------------------------------
-case "$HostArch" in
-    i386|x86_64|powerpc|powerpc64|powerpc64le|arm)
+case "$TargetArch" in
+    i386|x86_64|powerpc|powerpc64|powerpc64le|arm|aarch64)
         UnregisterisedDefault=NO
         ;;
     *)
@@ -261,6 +276,18 @@ AC_ARG_ENABLE(unregisterised,
 [Unregisterised="$UnregisterisedDefault"]
 )
 AC_SUBST(Unregisterised)
+
+dnl ** Does target have runtime linker support?
+dnl --------------------------------------------------------------
+case "$target" in
+    powerpc64-*|powerpc64le-*|powerpc-ibm-aix*)
+        HaskellHaveRTSLinker=NO
+        ;;
+    *)
+        HaskellHaveRTSLinker=YES
+        ;;
+esac
+AC_SUBST(HaskellHaveRTSLinker)
 
 # Requires FPTOOLS_SET_PLATFORM_VARS to be run first.
 FP_FIND_ROOT
@@ -349,7 +376,7 @@ set_up_tarballs() {
     fi
 }
 
-if test "$HostOS" = "mingw32"
+if test "$HostOS" = "mingw32" -a "$EnableDistroToolchain" = "NO"
 then
     test -d inplace || mkdir inplace
 
@@ -362,9 +389,9 @@ then
     NM="${mingwbin}nm.exe"
     RANLIB="${mingwbin}ranlib.exe"
     OBJDUMP="${mingwbin}objdump.exe"
-    Windres="${mingwbin}windres.exe"
-    DllWrap="${mingwbin}dllwrap.exe"
     fp_prog_ar="${mingwbin}ar.exe"
+
+    AC_PATH_PROG([Genlib],[genlib])
 
     # NB. Download the perl binaries if required
     if ! test -d inplace/perl ||
@@ -381,30 +408,46 @@ then
     fi
 fi
 
+# We don't want to bundle a MinGW-w64 toolchain
+# So we have to find these individual tools.
+if test "$EnableDistroToolchain" = "YES"
+then
+    # Ideally should use AC_CHECK_TARGET_TOOL but our triples
+    # are screwed up. Configure doesn't think they're ever equal and
+    # so never tried without the prefix.
+    AC_PATH_PROG([CC],[gcc], [clang])
+    AC_PATH_PROG([NM],[nm])
+    AC_PATH_PROG([AR],[ar])
+    AC_PATH_PROG([RANLIB],[ranlib])
+    AC_PATH_PROG([OBJDUMP],[objdump])
+    AC_PATH_PROG([DllWrap],[dllwrap])
+    AC_PATH_PROG([Windres],[windres])
+    AC_PATH_PROG([Genlib],[genlib])
+fi
+
+DllWrapCmd="$DllWrap"
+WindresCmd="$Windres"
+
+HAVE_GENLIB=False
+if test "$HostOS" = "mingw32"
+then
+    if test "$Genlib" != ""; then
+        GenlibCmd="$(cygpath -m $Genlib)"
+        HAVE_GENLIB=True
+    fi
+fi
+
+AC_SUBST([DllWrapCmd])
+AC_SUBST([WindresCmd])
+AC_SUBST([GenlibCmd])
+AC_SUBST([HAVE_GENLIB])
+
 FP_ICONV
 FP_GMP
 FP_CURSES
 
 XCODE_VERSION()
 
-SplitObjsBroken=NO
-if test "$TargetOS_CPP" = "darwin"
-then
-    # Split objects is broken (#4013) with XCode < 3.2
-    if test "$XCodeVersion1" -lt 3
-    then
-        SplitObjsBroken=YES
-    else
-        if test "$XCodeVersion1" -eq 3
-        then
-            if test "$XCodeVersion2" -lt 2
-            then
-                SplitObjsBroken=YES
-            fi
-        fi
-    fi
-fi
-AC_SUBST([SplitObjsBroken])
 
 dnl ** Building a cross compiler?
 dnl --------------------------------------------------------------
@@ -431,16 +474,41 @@ with a cross-compiler.  To cross-compile GHC itself, set TARGET: stage
 GHC.
 ])
 fi
+# Despite its similarity in name to TargetPlatform, TargetPlatformFull is used
+# in calls to subproject configure scripts and thus must be set to the autoconf
+# triple, not the normalized GHC triple that TargetPlatform is set to.
+#
+# We use the non-canonicalized triple, target_alias, here since the subproject
+# configure scripts will use this triple to construct the names of the toolchain
+# executables. If we instead passed down the triple produced by
+# AC_CANONICAL_TARGET then it may look for the target toolchain under the wrong
+# name (this is a known problem in the case of the Android NDK, which has
+# slightly odd triples).
+#
+# It may be better to just do away with the GHC triples altogether. This would
+# all be taken care of for us if we configured the subprojects using
+# AC_CONFIG_DIR, but unfortunately Cabal needs to be the one to do the
+# configuration.
+#
+# We also use non-canonicalized triple when install stage1 crosscompiler
+if test -z "${target_alias}"
+then
+  # --target wasn't given; use result from AC_CANONICAL_TARGET
+  TargetPlatformFull="${target}"
+else
+  TargetPlatformFull="${target_alias}"
+fi
 if test "$CrossCompiling" = "YES"
 then
-  CrossCompilePrefix="${target}-"
+  # Use value passed by user from --target=
+  CrossCompilePrefix="${TargetPlatformFull}-"
 else
   CrossCompilePrefix=""
 fi
-TargetPlatformFull="${TargetPlatform}"
 AC_SUBST(CrossCompiling)
 AC_SUBST(CrossCompilePrefix)
 AC_SUBST(TargetPlatformFull)
+AC_SUBST(EnableDistroToolchain)
 
 dnl ** Which gcc to use?
 dnl --------------------------------------------------------------
@@ -475,14 +543,25 @@ FP_SET_CFLAGS_C99([CC_STAGE0],[CONF_CC_OPTS_STAGE0],[CONF_CPP_OPTS_STAGE0])
 FP_SET_CFLAGS_C99([CC],[CONF_CC_OPTS_STAGE1],[CONF_CPP_OPTS_STAGE1])
 FP_SET_CFLAGS_C99([CC],[CONF_CC_OPTS_STAGE2],[CONF_CPP_OPTS_STAGE2])
 
-dnl ** Which ld to use?
+dnl ** Choose a linker
 dnl --------------------------------------------------------------
-FIND_LD([LdCmd])
+FIND_LD([$target],[GccUseLdOpt])
+CONF_GCC_LINKER_OPTS_STAGE1="$CONF_GCC_LINKER_OPTS_STAGE1 $GccUseLdOpt"
+CONF_GCC_LINKER_OPTS_STAGE2="$CONF_GCC_LINKER_OPTS_STAGE2 $GccUseLdOpt"
+LdCmd="$LD"
+CFLAGS="$CFLAGS $GccUseLdOpt"
 AC_SUBST([LdCmd])
 
 dnl ** Which nm to use?
 dnl --------------------------------------------------------------
-FP_ARG_WITH_PATH_GNU_PROG([NM], [nm], [nm])
+if test "$HostOS" != "mingw32"; then
+    AC_CHECK_TARGET_TOOL([NM], [nm])
+    if test "$NM" = ":"; then
+        AC_MSG_ERROR([cannot find nm in your PATH])
+    fi
+fi
+NmCmd="$NM"
+AC_SUBST([NmCmd])
 
 if test "$TargetOS_CPP" = "darwin"
 then
@@ -499,7 +578,7 @@ then
             echo
             echo "Try re-running configure with:"
             echo
-            echo '   ./configure --with-nm=$(xcrun --find nm-classic)'
+            echo '   NM=$(xcrun --find nm-classic) ./configure'
             echo
             exit 1
             ;;
@@ -509,58 +588,64 @@ then
         esac
 fi
 
-NmCmd="$NM"
-AC_SUBST([NmCmd])
-
 dnl ** Which objdump to use?
 dnl --------------------------------------------------------------
-FP_ARG_WITH_PATH_GNU_PROG_OPTIONAL([OBJDUMP], [objdump], [objdump])
+dnl Note: we may not have objdump on OS X, and we only need it on
+dnl Windows (for DLL checks), OpenBSD, and AIX
+case $HostOS_CPP in
+  cygwin32|mingw32|openbsd|aix)
+    AC_CHECK_TARGET_TOOL([OBJDUMP], [objdump])
+    ;;
+esac
+
 ObjdumpCmd="$OBJDUMP"
 AC_SUBST([ObjdumpCmd])
 
-dnl ** Which ar to use?
-dnl --------------------------------------------------------------
-FP_ARG_WITH_PATH_GNU_PROG([AR], [ar], [ar])
-ArCmd="$AR"
-fp_prog_ar="$AR"
-AC_SUBST([ArCmd])
-
 dnl ** Which ranlib to use?
 dnl --------------------------------------------------------------
-FP_ARG_WITH_PATH_GNU_PROG([RANLIB], [ranlib], [ranlib])
+AC_PROG_RANLIB
+if test "$RANLIB" = ":"; then
+    AC_MSG_ERROR([cannot find ranlib in your PATH])
+fi
 RanlibCmd="$RANLIB"
 RANLIB="$RanlibCmd"
 
-
-# Note: we may not have objdump on OS X, and we only need it on Windows (for DLL checks)
-case $HostOS_CPP in
-cygwin32|mingw32)
-    dnl ** Which objdump to use?
-    dnl --------------------------------------------------------------
-    FP_ARG_WITH_PATH_GNU_PROG([OBJDUMP], [objdump], [objdump])
-    ObjdumpCmd="$OBJDUMP"
-    AC_SUBST([ObjdumpCmd])
-    ;;
-esac
+dnl ** which libtool to use?
+dnl --------------------------------------------------------------
+# The host normalization on Windows breaks autoconf, it no longer
+# thinks that target == host so it never checks the unqualified
+# tools for Windows. I don't know why we do this whole normalization thing
+# as it just breaks everything.. but for now, just check the unqualified one
+# if on Windows.
+if test "$HostOS" = "mingw32"
+then
+    AC_PATH_PROG([LIBTOOL],[libtool])
+    LibtoolCmd="$(cygpath -m $LIBTOOL)"
+else
+    AC_CHECK_TARGET_TOOL([LIBTOOL], [libtool])
+    LibtoolCmd="$LIBTOOL"
+    LIBTOOL="$LibtoolCmd"
+fi
+AC_SUBST([LibtoolCmd])
 
 # Here is where we re-target which specific version of the LLVM
 # tools we are looking for. In the past, GHC supported a number of
 # versions of LLVM simultaneously, but that stopped working around
 # 3.5/3.6 release of LLVM.
-LlvmVersion=3.8
+LlvmVersion=4.0
 AC_SUBST([LlvmVersion])
 sUPPORTED_LLVM_VERSION=$(echo \($LlvmVersion\) | sed 's/\./,/')
 AC_DEFINE_UNQUOTED([sUPPORTED_LLVM_VERSION], ${sUPPORTED_LLVM_VERSION}, [The supported LLVM version number])
 
 dnl ** Which LLVM llc to use?
 dnl --------------------------------------------------------------
-FIND_LLVM_PROG([LLC], [llc], [llc], [$LlvmVersion])
+FIND_LLVM_PROG([LLC], [llc], [$LlvmVersion])
 LlcCmd="$LLC"
 AC_SUBST([LlcCmd])
 
 dnl ** Which LLVM opt to use?
 dnl --------------------------------------------------------------
-FIND_LLVM_PROG([OPT], [opt], [opt], [$LlvmVersion])
+FIND_LLVM_PROG([OPT], [opt], [$LlvmVersion])
 OptCmd="$OPT"
 AC_SUBST([OptCmd])
 
@@ -584,29 +669,38 @@ AC_SUBST([GhcLibsWithUnix])
 dnl ** does #! work?
 AC_SYS_INTERPRETER()
 
+# Check for split-objs
+SplitObjsBroken=NO
 dnl ** look for `perl'
 case $HostOS_CPP in
 cygwin32|mingw32)
+  if test "$EnableDistroToolchain" = "NO"; then
     PerlCmd=$hardtop/inplace/perl/perl
-    ;;
+  else
+    AC_PATH_PROG([PerlCmd],[perl])
+  fi
+  ;;
 *)
-    AC_PATH_PROG(PerlCmd,perl)
+    AC_PATH_PROG([PerlCmd],[perl])
     if test -z "$PerlCmd"
     then
-        echo "You must install perl before you can continue"
-        echo "Perhaps it is already installed, but not in your PATH?"
-        exit 1
+        AC_MSG_WARN([No Perl on PATH, disabling split object support])
+        SplitObjsBroken=YES
     else
         FPTOOLS_CHECK_PERL_VERSION
     fi
     ;;
 esac
+AC_SUBST([SplitObjsBroken])
 
 dnl ** look for GCC and find out which version
 dnl     Figure out which C compiler to use.  Gcc is preferred.
 dnl     If gcc, make sure it's at least 3.0
 dnl
 FP_GCC_VERSION
+
+dnl ** See whether gcc supports -no-pie
+FP_GCC_SUPPORTS_NO_PIE
 
 dnl ** look to see if we have a C compiler using an llvm back end.
 dnl
@@ -617,7 +711,6 @@ FP_PROG_LD_BUILD_ID
 FP_PROG_LD_NO_COMPACT_UNWIND
 FP_PROG_LD_FILELIST
 
-
 FPTOOLS_SET_C_LD_FLAGS([target],[CFLAGS],[LDFLAGS],[IGNORE_LINKER_LD_FLAGS],[CPPFLAGS])
 FPTOOLS_SET_C_LD_FLAGS([build],[CONF_CC_OPTS_STAGE0],[CONF_GCC_LINKER_OPTS_STAGE0],[CONF_LD_LINKER_OPTS_STAGE0],[CONF_CPP_OPTS_STAGE0])
 FPTOOLS_SET_C_LD_FLAGS([target],[CONF_CC_OPTS_STAGE1],[CONF_GCC_LINKER_OPTS_STAGE1],[CONF_LD_LINKER_OPTS_STAGE1],[CONF_CPP_OPTS_STAGE1])
@@ -626,18 +719,27 @@ FPTOOLS_SET_C_LD_FLAGS([target],[CONF_CC_OPTS_STAGE2],[CONF_GCC_LINKER_OPTS_STAG
 
 FP_GCC_EXTRA_FLAGS
 
+# See rules/distdir-way-opts.mk for details.
+# Flags passed to the C compiler
 AC_SUBST(CONF_CC_OPTS_STAGE0)
 AC_SUBST(CONF_CC_OPTS_STAGE1)
 AC_SUBST(CONF_CC_OPTS_STAGE2)
+# Flags passed to the C compiler when we ask it to link
 AC_SUBST(CONF_GCC_LINKER_OPTS_STAGE0)
 AC_SUBST(CONF_GCC_LINKER_OPTS_STAGE1)
 AC_SUBST(CONF_GCC_LINKER_OPTS_STAGE2)
+# Flags passed to the linker when we ask it to link
 AC_SUBST(CONF_LD_LINKER_OPTS_STAGE0)
 AC_SUBST(CONF_LD_LINKER_OPTS_STAGE1)
 AC_SUBST(CONF_LD_LINKER_OPTS_STAGE2)
+# Flags passed to the C preprocessor
 AC_SUBST(CONF_CPP_OPTS_STAGE0)
 AC_SUBST(CONF_CPP_OPTS_STAGE1)
 AC_SUBST(CONF_CPP_OPTS_STAGE2)
+# Flags passed to the Haskell compiler
+AC_SUBST(CONF_HC_OPTS_STAGE0)
+AC_SUBST(CONF_HC_OPTS_STAGE1)
+AC_SUBST(CONF_HC_OPTS_STAGE2)
 
 dnl ** Set up the variables for the platform in the settings file.
 dnl May need to use gcc to find platform details.
@@ -673,6 +775,11 @@ dnl ** check for tar
 dnl   if GNU tar is named gtar, look for it first.
 AC_PATH_PROGS(TarCmd,gnutar gtar tar,tar)
 
+dnl ** check for compressors
+AC_PATH_PROGS(Bzip2Cmd,bzip2, bzip2)
+AC_PATH_PROGS(GzipCmd,gzip, gzip)
+AC_PATH_PROGS(XzCmd,pxz xz, xz)
+
 dnl ** check for patch
 dnl if GNU patch is named gpatch, look for it first
 AC_PATH_PROGS(PatchCmd,gpatch patch, patch)
@@ -690,6 +797,7 @@ AC_SUBST(HaveDtrace)
 AC_PATH_PROG(HSCOLOUR,HsColour)
 # HsColour is passed to Cabal, so we need a native path
 if test "$HostOS"      = "mingw32" && \
+   test "${OSTYPE}"   != "msys"    && \
    test "${HSCOLOUR}" != ""
 then
     # Canonicalise to <drive>:/path/to/gcc
@@ -781,8 +889,8 @@ FP_CHECK_SIZEOF_AND_ALIGNMENT(uint64_t)
 
 
 dnl for use in settings.in
-WordSize=$ac_cv_sizeof_void_p
-AC_SUBST(WordSize)
+TargetWordSize=$ac_cv_sizeof_void_p
+AC_SUBST(TargetWordSize)
 FP_CHECK_FUNC([WinExec],
   [@%:@include <windows.h>], [WinExec("",0)])
 
@@ -934,6 +1042,31 @@ AC_TRY_LINK_FUNC(printf\$LDBLStub,
             [Define to 1 if we have printf$LDBLStub (Apple Mac OS >= 10.4, PPC).])
     ])
 
+dnl Some platforms (e.g. Android's Bionic) have pthreads support available
+dnl without linking against libpthread. Check whether -lpthread is necessary
+dnl to use pthreads.
+dnl
+dnl Note that it is important that this happens before we AC_CHECK_LIB(thread)
+AC_MSG_CHECKING(whether -lpthread is needed for pthreads)
+AC_CHECK_FUNC(pthread_create,
+    [
+        AC_MSG_RESULT(no)
+        need_lpthread=0
+    ],
+    [
+        AC_CHECK_LIB(pthread, pthread_create,
+            [
+                AC_MSG_RESULT(yes)
+                need_lpthread=1
+            ],
+            [
+                AC_MSG_RESULT([no pthreads support found.])
+                need_lpthread=0
+            ])
+    ])
+AC_DEFINE_UNQUOTED([NEED_PTHREAD_LIB], [$need_lpthread],
+    [Define 1 if we need to link code using pthreads with -lpthread])
+
 dnl ** pthread_setname_np is a recent addition to glibc, and OS X has
 dnl    a different single-argument version.
 AC_CHECK_LIB(pthread, pthread_setname_np)
@@ -1022,10 +1155,10 @@ dnl ** Use MMAP in the runtime linker?
 dnl --------------------------------------------------------------
 
 case ${TargetOS} in
-    linux|freebsd|dragonfly|netbsd|openbsd|kfreebsdgnu|gnu|solaris2)
+    linux|linux-android|freebsd|dragonfly|netbsd|openbsd|kfreebsdgnu|gnu|solaris2)
         RtsLinkerUseMmap=1
         ;;
-    darwin)
+    darwin|ios)
         # Don't use mmap on powerpc/darwin as the mmap there doesn't support
         # reallocating. Reallocating is needed to allocate jump islands just
         # after each object image. Jumps to these jump islands use relative
@@ -1094,6 +1227,7 @@ AC_SUBST(BUILD_SPHINX_PDF)
 LIBRARY_VERSION(base)
 LIBRARY_VERSION(Cabal, Cabal/Cabal)
 LIBRARY_VERSION(ghc-prim)
+LIBRARY_VERSION(ghc-compact)
 LIBRARY_ghc_VERSION="$ProjectVersion"
 AC_SUBST(LIBRARY_ghc_VERSION)
 
@@ -1129,9 +1263,9 @@ checkMake380() {
 checkMake380 make
 checkMake380 gmake
 
-AC_CONFIG_FILES([mk/config.mk mk/install.mk mk/project.mk compiler/ghc.cabal ghc/ghc-bin.cabal utils/runghc/runghc.cabal libraries/ghc-boot/ghc-boot.cabal libraries/ghc-boot-th/ghc-boot-th.cabal libraries/ghci/ghci.cabal settings docs/users_guide/ghc_config.py docs/index.html libraries/prologue.txt distrib/configure.ac])
+AC_CONFIG_FILES([mk/config.mk mk/install.mk mk/project.mk compiler/ghc.cabal ghc/ghc-bin.cabal utils/runghc/runghc.cabal utils/gen-dll/gen-dll.cabal libraries/ghc-boot/ghc-boot.cabal libraries/ghc-boot-th/ghc-boot-th.cabal libraries/ghci/ghci.cabal settings docs/users_guide/ghc_config.py docs/index.html libraries/prologue.txt distrib/configure.ac])
 AC_OUTPUT
-
+[
 if test "$print_make_warning" = "true"; then
    echo
    echo "WARNING: It looks like \"$MakeCmd\" is GNU make 3.80."
@@ -1139,7 +1273,7 @@ if test "$print_make_warning" = "true"; then
    echo "Please use GNU make >= 3.81."
 fi
 
-echo ["
+echo "
 ----------------------------------------------------------------------
 Configure completed successfully.
 
@@ -1149,12 +1283,12 @@ Configure completed successfully.
    Build platform        : $BuildPlatform
    Host platform         : $HostPlatform
    Target platform       : $TargetPlatform
-"]
+"
 
-echo ["\
+echo "\
    Bootstrapping using   : $WithGhc
       which is version   : $GhcVersion
-"]
+"
 
 if test "x$CC_LLVM_BACKEND" = "x1"; then
     if test "x$CC_CLANG_BACKEND" = "x1"; then
@@ -1166,7 +1300,7 @@ else
     CompilerName="gcc          "
 fi
 
-echo ["\
+echo "\
    Using (for bootstrapping) : $CC_STAGE0
    Using $CompilerName       : $CC
       which is version       : $GccVersion
@@ -1174,9 +1308,15 @@ echo ["\
    Unregisterised            : $Unregisterised
    hs-cpp       : $HaskellCPPCmd
    hs-cpp-flags : $HaskellCPPArgs
+   ar           : $ArCmd
    ld           : $LdCmd
    nm           : $NmCmd
+   libtool      : $LibtoolCmd
    objdump      : $ObjdumpCmd
+   ranlib       : $RanlibCmd
+   windres      : $WindresCmd
+   dllwrap      : $DllWrapCmd
+   genlib       : $GenlibCmd
    Happy        : $HappyCmd ($HappyVersion)
    Alex         : $AlexCmd ($AlexVersion)
    Perl         : $PerlCmd
@@ -1185,24 +1325,24 @@ echo ["\
 
    Using LLVM tools
       llc   : $LlcCmd
-      opt   : $OptCmd"]
+      opt   : $OptCmd"
 
 if test "$HSCOLOUR" = ""; then
-echo ["
+echo "
    HsColour was not found; documentation will not contain source links
-"]
+"
 else
-echo ["\
+echo "\
    HsColour : $HSCOLOUR
-"]
+"
 fi
 
-echo ["\
+echo "\
    Tools to build Sphinx HTML documentation available: $BUILD_SPHINX_HTML
-   Tools to build Sphinx PDF documentation available: $BUILD_SPHINX_PDF"]
+   Tools to build Sphinx PDF documentation available: $BUILD_SPHINX_PDF"
 
-echo ["----------------------------------------------------------------------
-"]
+echo "----------------------------------------------------------------------
+"
 
 echo "\
 For a standard build of GHC (fully optimised with profiling), type (g)make.
@@ -1212,4 +1352,4 @@ mk/build.mk.sample to mk/build.mk, and edit the settings in there.
 
 For more information on how to configure your GHC build, see
    http://ghc.haskell.org/trac/ghc/wiki/Building
-"
+"]

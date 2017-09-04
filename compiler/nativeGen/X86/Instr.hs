@@ -26,6 +26,8 @@ import Reg
 import TargetReg
 
 import BlockId
+import Hoopl.Collections
+import Hoopl.Label
 import CodeGen.Platform
 import Cmm
 import FastString
@@ -38,6 +40,7 @@ import DynFlags
 import UniqSet
 import Unique
 import UniqSupply
+import Debug (UnwindTable)
 
 import Control.Monad
 import Data.Maybe       (fromMaybe)
@@ -178,9 +181,13 @@ data Instr
         -- invariants for a BasicBlock (see Cmm).
         | NEWBLOCK BlockId
 
-        -- specify current stack offset for
-        -- benefit of subsequent passes
-        | DELTA   Int
+        -- unwinding information
+        -- See Note [Unwinding information in the NCG].
+        | UNWIND CLabel UnwindTable
+
+        -- specify current stack offset for benefit of subsequent passes.
+        -- This carries a BlockId so it can be used in unwinding information.
+        | DELTA  Int
 
         -- Moves.
         | MOV         Format Operand Operand
@@ -283,7 +290,7 @@ data Instr
         | CVTSI2SS      Format Operand Reg -- I32/I64 to F32
         | CVTSI2SD      Format Operand Reg -- I32/I64 to F64
 
-        -- use ADD & SUB for arithmetic.  In both cases, operands
+        -- use ADD, SUB, and SQRT for arithmetic.  In both cases, operands
         -- are  Operand Reg.
 
         -- SSE2 floating-point division:
@@ -441,12 +448,14 @@ x86_regUsageOfInstr platform instr
     CVTSI2SS   _ src dst -> mkRU (use_R src []) [dst]
     CVTSI2SD   _ src dst -> mkRU (use_R src []) [dst]
     FDIV _     src dst  -> usageRM src dst
+    SQRT _ src dst      -> mkRU (use_R src []) [dst]
 
     FETCHGOT reg        -> mkRU [] [reg]
     FETCHPC  reg        -> mkRU [] [reg]
 
     COMMENT _           -> noUsage
     LOCATION{}          -> noUsage
+    UNWIND{}            -> noUsage
     DELTA   _           -> noUsage
 
     POPCNT _ src dst -> mkRU (use_R src []) [dst]
@@ -610,6 +619,7 @@ x86_patchRegsOfInstr instr env
     CVTSI2SS fmt src dst -> CVTSI2SS fmt (patchOp src) (env dst)
     CVTSI2SD fmt src dst -> CVTSI2SD fmt (patchOp src) (env dst)
     FDIV fmt src dst     -> FDIV fmt (patchOp src) (patchOp dst)
+    SQRT fmt src dst    -> SQRT fmt (patchOp src) (env dst)
 
     CALL (Left _)  _    -> instr
     CALL (Right reg) p  -> CALL (Right (env reg)) p
@@ -620,6 +630,7 @@ x86_patchRegsOfInstr instr env
     NOP                 -> instr
     COMMENT _           -> instr
     LOCATION {}         -> instr
+    UNWIND {}           -> instr
     DELTA _             -> instr
 
     JXX _ _             -> instr
@@ -783,6 +794,7 @@ x86_isMetaInstr instr
         LOCATION{}      -> True
         LDATA{}         -> True
         NEWBLOCK{}      -> True
+        UNWIND{}        -> True
         DELTA{}         -> True
         _               -> False
 
@@ -964,7 +976,7 @@ allocMoreStack platform slots proc@(CmmProc info lbl live (ListGraph code)) = do
       alloc   = mkStackAllocInstr   platform delta
       dealloc = mkStackDeallocInstr platform delta
 
-      new_blockmap :: BlockEnv BlockId
+      new_blockmap :: LabelMap BlockId
       new_blockmap = mapFromList (zip entries (map mkBlockId uniqs))
 
       insert_stack_insns (BasicBlock id insns)
@@ -1002,7 +1014,7 @@ canShortcut _                    = Nothing
 -- This helper shortcuts a sequence of branches.
 -- The blockset helps avoid following cycles.
 shortcutJump :: (BlockId -> Maybe JumpDest) -> Instr -> Instr
-shortcutJump fn insn = shortcutJump' fn (setEmpty :: BlockSet) insn
+shortcutJump fn insn = shortcutJump' fn (setEmpty :: LabelSet) insn
   where shortcutJump' fn seen insn@(JXX cc id) =
           if setMember id seen then insn
           else case fn id of

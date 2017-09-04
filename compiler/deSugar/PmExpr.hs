@@ -20,6 +20,7 @@ import Id
 import Name
 import NameSet
 import DataCon
+import ConLike
 import TysWiredIn
 import Outputable
 import Util
@@ -52,14 +53,18 @@ refer to variables that are otherwise substituted away.
 
 -- | Lifted expressions for pattern match checking.
 data PmExpr = PmExprVar   Name
-            | PmExprCon   DataCon [PmExpr]
+            | PmExprCon   ConLike [PmExpr]
             | PmExprLit   PmLit
             | PmExprEq    PmExpr PmExpr  -- Syntactic equality
-            | PmExprOther (HsExpr Id)    -- Note [PmExprOther in PmExpr]
+            | PmExprOther (HsExpr GhcTc)  -- Note [PmExprOther in PmExpr]
+
+
+mkPmExprData :: DataCon -> [PmExpr] -> PmExpr
+mkPmExprData dc args = PmExprCon (RealDataCon dc) args
 
 -- | Literals (simple and overloaded ones) for pattern match checking.
-data PmLit = PmSLit HsLit                                    -- simple
-           | PmOLit Bool {- is it negated? -} (HsOverLit Id) -- overloaded
+data PmLit = PmSLit (HsLit GhcTc)                               -- simple
+           | PmOLit Bool {- is it negated? -} (HsOverLit GhcTc) -- overloaded
 
 -- | Equality between literals for pattern match checking.
 eqPmLit :: PmLit -> PmLit -> Bool
@@ -147,11 +152,11 @@ toComplex (x,e) = (PmExprVar (idName x), e)
 
 -- | Expression `True'
 truePmExpr :: PmExpr
-truePmExpr = PmExprCon trueDataCon []
+truePmExpr = mkPmExprData trueDataCon []
 
 -- | Expression `False'
 falsePmExpr :: PmExpr
-falsePmExpr = PmExprCon falseDataCon []
+falsePmExpr = mkPmExprData falseDataCon []
 
 -- ----------------------------------------------------------------------------
 -- ** Predicates on PmExpr
@@ -168,17 +173,17 @@ isNegatedPmLit _other_lit   = False
 
 -- | Check whether a PmExpr is syntactically equal to term `True'.
 isTruePmExpr :: PmExpr -> Bool
-isTruePmExpr (PmExprCon c []) = c == trueDataCon
+isTruePmExpr (PmExprCon c []) = c == RealDataCon trueDataCon
 isTruePmExpr _other_expr      = False
 
 -- | Check whether a PmExpr is syntactically equal to term `False'.
 isFalsePmExpr :: PmExpr -> Bool
-isFalsePmExpr (PmExprCon c []) = c == falseDataCon
+isFalsePmExpr (PmExprCon c []) = c == RealDataCon falseDataCon
 isFalsePmExpr _other_expr      = False
 
 -- | Check whether a PmExpr is syntactically e
 isNilPmExpr :: PmExpr -> Bool
-isNilPmExpr (PmExprCon c _) = c == nilDataCon
+isNilPmExpr (PmExprCon c _) = c == RealDataCon nilDataCon
 isNilPmExpr _other_expr     = False
 
 -- | Check whether a PmExpr is syntactically equal to (x == y).
@@ -224,12 +229,13 @@ substComplexEq x e (ex, ey)
 -- -----------------------------------------------------------------------
 -- ** Lift source expressions (HsExpr Id) to PmExpr
 
-lhsExprToPmExpr :: LHsExpr Id -> PmExpr
+lhsExprToPmExpr :: LHsExpr GhcTc -> PmExpr
 lhsExprToPmExpr (L _ e) = hsExprToPmExpr e
 
-hsExprToPmExpr :: HsExpr Id -> PmExpr
+hsExprToPmExpr :: HsExpr GhcTc -> PmExpr
 
 hsExprToPmExpr (HsVar         x) = PmExprVar (idName (unLoc x))
+hsExprToPmExpr (HsConLikeOut  c) = PmExprVar (conLikeName c)
 hsExprToPmExpr (HsOverLit  olit) = PmExprLit (PmOLit False olit)
 hsExprToPmExpr (HsLit       lit) = PmExprLit (PmSLit lit)
 
@@ -240,7 +246,7 @@ hsExprToPmExpr e@(NegApp _ neg_e)
 hsExprToPmExpr (HsPar (L _ e)) = hsExprToPmExpr e
 
 hsExprToPmExpr e@(ExplicitTuple ps boxity)
-  | all tupArgPresent ps = PmExprCon tuple_con tuple_args
+  | all tupArgPresent ps = mkPmExprData tuple_con tuple_args
   | otherwise            = PmExprOther e
   where
     tuple_con  = tupleDataCon boxity (length ps)
@@ -250,13 +256,14 @@ hsExprToPmExpr e@(ExplicitList _elem_ty mb_ol elems)
   | Nothing <- mb_ol = foldr cons nil (map lhsExprToPmExpr elems)
   | otherwise        = PmExprOther e {- overloaded list: No PmExprApp -}
   where
-    cons x xs = PmExprCon consDataCon [x,xs]
-    nil       = PmExprCon nilDataCon  []
+    cons x xs = mkPmExprData consDataCon [x,xs]
+    nil       = mkPmExprData nilDataCon  []
 
 hsExprToPmExpr (ExplicitPArr _elem_ty elems)
-  = PmExprCon (parrFakeCon (length elems)) (map lhsExprToPmExpr elems)
+  = mkPmExprData (parrFakeCon (length elems)) (map lhsExprToPmExpr elems)
 
--- we want this but we would have to make evrything monadic :/
+
+-- we want this but we would have to make everything monadic :/
 -- ./compiler/deSugar/DsMonad.hs:397:dsLookupDataCon :: Name -> DsM DataCon
 --
 -- hsExprToPmExpr (RecordCon   c _ binds) = do
@@ -275,7 +282,7 @@ hsExprToPmExpr (ExprWithTySigOut  e _) = lhsExprToPmExpr e
 hsExprToPmExpr (HsWrap            _ e) =  hsExprToPmExpr e
 hsExprToPmExpr e = PmExprOther e -- the rest are not handled by the oracle
 
-synExprToPmExpr :: SyntaxExpr Id -> PmExpr
+synExprToPmExpr :: SyntaxExpr GhcTc -> PmExpr
 synExprToPmExpr = hsExprToPmExpr . syn_expr  -- ignore the wrappers
 
 {-
@@ -386,30 +393,22 @@ needsParens (PmExprVar   {}) = False
 needsParens (PmExprLit    l) = isNegatedPmLit l
 needsParens (PmExprEq    {}) = False -- will become a wildcard
 needsParens (PmExprOther {}) = False -- will become a wildcard
-needsParens (PmExprCon c es)
+needsParens (PmExprCon (RealDataCon c) es)
   | isTupleDataCon c || isPArrFakeCon c
   || isConsDataCon c || null es = False
   | otherwise                   = True
+needsParens (PmExprCon (PatSynCon _) es) = not (null es)
 
 pprPmExprWithParens :: PmExpr -> PmPprM SDoc
 pprPmExprWithParens expr
   | needsParens expr = parens <$> pprPmExpr expr
   | otherwise        =            pprPmExpr expr
 
-pprPmExprCon :: DataCon -> [PmExpr] -> PmPprM SDoc
-pprPmExprCon con args
+pprPmExprCon :: ConLike -> [PmExpr] -> PmPprM SDoc
+pprPmExprCon (RealDataCon con) args
   | isTupleDataCon con = mkTuple <$> mapM pprPmExpr args
   |  isPArrFakeCon con = mkPArr  <$> mapM pprPmExpr args
   |  isConsDataCon con = pretty_list
-  | dataConIsInfix con = case args of
-      [x, y] -> do x' <- pprPmExprWithParens x
-                   y' <- pprPmExprWithParens y
-                   return (x' <+> ppr con <+> y')
-      -- can it be infix but have more than two arguments?
-      list   -> pprPanic "pprPmExprCon:" (ppr list)
-  | null args = return (ppr con)
-  | otherwise = do args' <- mapM pprPmExprWithParens args
-                   return (fsep (ppr con : args'))
   where
     mkTuple, mkPArr :: [SDoc] -> SDoc
     mkTuple = parens     . fsep . punctuate comma
@@ -424,10 +423,22 @@ pprPmExprCon con args
     list = list_elements args
 
     list_elements [x,y]
-      | PmExprCon c es <- y,  nilDataCon == c = ASSERT(null es) [x,y]
-      | PmExprCon c es <- y, consDataCon == c = x : list_elements es
+      | PmExprCon c es <- y,  RealDataCon nilDataCon == c
+          = ASSERT(null es) [x,y]
+      | PmExprCon c es <- y, RealDataCon consDataCon == c
+          = x : list_elements es
       | otherwise = [x,y]
     list_elements list  = pprPanic "list_elements:" (ppr list)
+pprPmExprCon cl args
+  | conLikeIsInfix cl = case args of
+      [x, y] -> do x' <- pprPmExprWithParens x
+                   y' <- pprPmExprWithParens y
+                   return (x' <+> ppr cl <+> y')
+      -- can it be infix but have more than two arguments?
+      list   -> pprPanic "pprPmExprCon:" (ppr list)
+  | null args = return (ppr cl)
+  | otherwise = do args' <- mapM pprPmExprWithParens args
+                   return (fsep (ppr cl : args'))
 
 instance Outputable PmLit where
   ppr (PmSLit     l) = pmPprHsLit l

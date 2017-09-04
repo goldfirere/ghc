@@ -8,7 +8,7 @@
 -----------------------------------------------------------------------------
 -}
 
-{-# LANGUAGE CPP, ScopedTypeVariables #-}
+{-# LANGUAGE CPP, MultiWayIf, ScopedTypeVariables #-}
 
 module SysTools (
         -- Initialisation
@@ -31,30 +31,24 @@ module SysTools (
 
         linkDynLib,
 
-        askCc,
+        askLd,
 
         touch,                  -- String -> String -> IO ()
         copy,
         copyWithHeader,
 
-        -- Temporary-file management
-        setTmpDir,
-        newTempName, newTempLibName,
-        cleanTempDirs, cleanTempFiles, cleanTempFilesExcept,
-        addFilesToClean,
-
         Option(..),
+
+        -- platform-specifics
+        libmLinkOpts,
 
         -- frameworks
         getPkgFrameworkOpts,
         getFrameworkOpts
-
-
  ) where
 
 #include "HsVersions.h"
 
-import DriverPhases
 import Module
 import Packages
 import Config
@@ -65,11 +59,11 @@ import Platform
 import Util
 import DynFlags
 import Exception
+import FileCleanup
 
 import LlvmCodeGen.Base (llvmVersionStr, supportedLlvmVersion)
 
 import Data.IORef
-import Control.Monad
 import System.Exit
 import System.Environment
 import System.FilePath
@@ -78,21 +72,19 @@ import System.IO.Error as IO
 import System.Directory
 import Data.Char
 import Data.List
-import qualified Data.Map as Map
 
-#ifndef mingw32_HOST_OS
-import qualified System.Posix.Internals
-#else /* Must be Win32 */
+#if defined(mingw32_HOST_OS)
+#if MIN_VERSION_Win32(2,5,0)
+import qualified System.Win32.Types as Win32
+#else
+import qualified System.Win32.Info as Win32
+#endif
 import Foreign
 import Foreign.C.String
-import qualified System.Win32.Info as Info
-import Control.Exception (finally)
-import Foreign.Ptr (FunPtr, castPtrToFunPtr)
 import System.Win32.Types (DWORD, LPTSTR, HANDLE)
 import System.Win32.Types (failIfNull, failIf, iNVALID_HANDLE_VALUE)
 import System.Win32.File (createFile,closeHandle, gENERIC_READ, fILE_SHARE_READ, oPEN_EXISTING, fILE_ATTRIBUTE_NORMAL, fILE_FLAG_BACKUP_SEMANTICS )
 import System.Win32.DLL (loadLibrary, getProcAddress)
-import Data.Bits((.|.))
 #endif
 
 import System.Process
@@ -100,7 +92,7 @@ import Control.Concurrent
 import FastString
 import SrcLoc           ( SrcLoc, mkSrcLoc, noSrcSpan, mkSrcSpan )
 
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 # if defined(i386_HOST_ARCH)
 #  define WINDOWS_CCONV stdcall
 # elif defined(x86_64_HOST_ARCH)
@@ -126,9 +118,9 @@ On Unix:
 On Windows:
   - ghc never has a shell wrapper.
   - we can find the location of the ghc binary, which is
-        $topdir/bin/<something>.exe
+        $topdir/<foo>/<something>.exe
     where <something> may be "ghc", "ghc-stage2", or similar
-  - we strip off the "bin/<something>.exe" to leave $topdir.
+  - we strip off the "<foo>/<something>.exe" to leave $topdir.
 
 from topdir we can find package.conf, ghc-asm, etc.
 
@@ -251,6 +243,7 @@ initSysTools mbMinusB
        -- to make that possible, so for now you can't.
        gcc_prog <- getSetting "C compiler command"
        gcc_args_str <- getSetting "C compiler flags"
+       gccSupportsNoPie <- getBooleanSetting "C compiler supports -no-pie"
        cpp_prog <- getSetting "Haskell CPP command"
        cpp_args_str <- getSetting "Haskell CPP flags"
        let unreg_gcc_args = if targetUnregisterised
@@ -343,6 +336,7 @@ initSysTools mbMinusB
                     sLdSupportsBuildId       = ldSupportsBuildId,
                     sLdSupportsFilelist      = ldSupportsFilelist,
                     sLdIsGnuLd               = ldIsGnuLd,
+                    sGccSupportsNoPie        = gccSupportsNoPie,
                     sProgramName             = "ghc",
                     sProjectVersion          = cProjectVersion,
                     sPgm_L   = unlit_path,
@@ -476,11 +470,12 @@ runCc dflags args =   do
 isContainedIn :: String -> String -> Bool
 xs `isContainedIn` ys = any (xs `isPrefixOf`) (tails ys)
 
-askCc :: DynFlags -> [Option] -> IO String
-askCc dflags args = do
-  let (p,args0) = pgm_c dflags
-      args1 = map Option (getOpts dflags opt_c)
-      args2 = args0 ++ args1 ++ args
+-- | Run the linker with some arguments and return the output
+askLd :: DynFlags -> [Option] -> IO String
+askLd dflags args = do
+  let (p,args0) = pgm_l dflags
+      args1     = map Option (getOpts dflags opt_l)
+      args2     = args0 ++ args1 ++ args
   mb_env <- getGccEnv args2
   runSomethingWith dflags "gcc" p args2 $ \real_args ->
     readCreateProcessWithExitCode' (proc p real_args){ env = mb_env }
@@ -873,6 +868,9 @@ getCompilerInfo' dflags = do
         -- Regular clang
         | any ("clang version" `isInfixOf`) stde =
           return Clang
+        -- FreeBSD clang
+        | any ("FreeBSD clang version" `isInfixOf`) stde =
+          return Clang
         -- XCode 5.1 clang
         | any ("Apple LLVM version 5.1" `isPrefixOf`) stde =
           return AppleClang51
@@ -910,26 +908,9 @@ runLink dflags args = do
   let (p,args0) = pgm_l dflags
       args1     = map Option (getOpts dflags opt_l)
       args2     = args0 ++ linkargs ++ args1 ++ args
-      args3     = argFixup args2 []
-  mb_env <- getGccEnv args3
-  runSomethingResponseFile dflags ld_filter "Linker" p args3 mb_env
+  mb_env <- getGccEnv args2
+  runSomethingResponseFile dflags ld_filter "Linker" p args2 mb_env
   where
-    testLib lib = "-l" `isPrefixOf` lib || ".a" `isSuffixOf` lib
-    {- GHC is just blindly appending linker arguments from libraries and
-       the commandline together. This results in very problematic link orders
-       which will cause incorrect linking. Since we're changing the link
-       arguments anyway, let's just make sure libraries are last.
-       This functions moves libraries on the link all the way back
-       but keeps the order amongst them the same. -}
-    argFixup []                        r = [] ++ r
-    -- retain any lib in "-o" position.
-    argFixup (o@(Option "-o"):o'@(FileOption _ _):xs) r = o:o':argFixup xs r
-    argFixup (o@(Option       opt):xs) r = if testLib opt
-                                              then argFixup xs (r ++ [o])
-                                              else o:argFixup xs r
-    argFixup (o@(FileOption _ opt):xs) r = if testLib opt
-                                              then argFixup xs (r ++ [o])
-                                              else o:argFixup xs r
     ld_filter = case (platformOS (targetPlatform dflags)) of
                   OSSolaris2 -> sunos_ld_filter
                   _ -> id
@@ -1047,177 +1028,6 @@ copyWithHeader dflags purpose maybe_header from to = do
    hPutStr h str
    hSetBinaryMode h True
 
-
-
-{-
-************************************************************************
-*                                                                      *
-\subsection{Managing temporary files
-*                                                                      *
-************************************************************************
--}
-
-cleanTempDirs :: DynFlags -> IO ()
-cleanTempDirs dflags
-   = unless (gopt Opt_KeepTmpFiles dflags)
-   $ mask_
-   $ do let ref = dirsToClean dflags
-        ds <- atomicModifyIORef' ref $ \ds -> (Map.empty, ds)
-        removeTmpDirs dflags (Map.elems ds)
-
-cleanTempFiles :: DynFlags -> IO ()
-cleanTempFiles dflags
-   = unless (gopt Opt_KeepTmpFiles dflags)
-   $ mask_
-   $ do let ref = filesToClean dflags
-        fs <- atomicModifyIORef' ref $ \fs -> ([],fs)
-        removeTmpFiles dflags fs
-
-cleanTempFilesExcept :: DynFlags -> [FilePath] -> IO ()
-cleanTempFilesExcept dflags dont_delete
-   = unless (gopt Opt_KeepTmpFiles dflags)
-   $ mask_
-   $ do let ref = filesToClean dflags
-        to_delete <- atomicModifyIORef' ref $ \files ->
-            let (to_keep,to_delete) = partition (`elem` dont_delete) files
-            in  (to_keep,to_delete)
-        removeTmpFiles dflags to_delete
-
-
--- Return a unique numeric temp file suffix
-newTempSuffix :: DynFlags -> IO Int
-newTempSuffix dflags = atomicModifyIORef' (nextTempSuffix dflags) $ \n -> (n+1,n)
-
--- Find a temporary name that doesn't already exist.
-newTempName :: DynFlags -> Suffix -> IO FilePath
-newTempName dflags extn
-  = do d <- getTempDir dflags
-       findTempName (d </> "ghc_") -- See Note [Deterministic base name]
-  where
-    findTempName :: FilePath -> IO FilePath
-    findTempName prefix
-      = do n <- newTempSuffix dflags
-           let filename = prefix ++ show n <.> extn
-           b <- doesFileExist filename
-           if b then findTempName prefix
-                else do -- clean it up later
-                        consIORef (filesToClean dflags) filename
-                        return filename
-
-newTempLibName :: DynFlags -> Suffix -> IO (FilePath, FilePath, String)
-newTempLibName dflags extn
-  = do d <- getTempDir dflags
-       findTempName d ("ghc_")
-  where
-    findTempName :: FilePath -> String -> IO (FilePath, FilePath, String)
-    findTempName dir prefix
-      = do n <- newTempSuffix dflags -- See Note [Deterministic base name]
-           let libname = prefix ++ show n
-               filename = dir </> "lib" ++ libname <.> extn
-           b <- doesFileExist filename
-           if b then findTempName dir prefix
-                else do -- clean it up later
-                        consIORef (filesToClean dflags) filename
-                        return (filename, dir, libname)
-
-
--- Return our temporary directory within tmp_dir, creating one if we
--- don't have one yet.
-getTempDir :: DynFlags -> IO FilePath
-getTempDir dflags = do
-    mapping <- readIORef dir_ref
-    case Map.lookup tmp_dir mapping of
-        Nothing -> do
-            pid <- getProcessID
-            let prefix = tmp_dir </> "ghc" ++ show pid ++ "_"
-            mask_ $ mkTempDir prefix
-        Just dir -> return dir
-  where
-    tmp_dir = tmpDir dflags
-    dir_ref = dirsToClean dflags
-
-    mkTempDir :: FilePath -> IO FilePath
-    mkTempDir prefix = do
-        n <- newTempSuffix dflags
-        let our_dir = prefix ++ show n
-
-        -- 1. Speculatively create our new directory.
-        createDirectory our_dir
-
-        -- 2. Update the dirsToClean mapping unless an entry already exists
-        -- (i.e. unless another thread beat us to it).
-        their_dir <- atomicModifyIORef' dir_ref $ \mapping ->
-            case Map.lookup tmp_dir mapping of
-                Just dir -> (mapping, Just dir)
-                Nothing  -> (Map.insert tmp_dir our_dir mapping, Nothing)
-
-        -- 3. If there was an existing entry, return it and delete the
-        -- directory we created.  Otherwise return the directory we created.
-        case their_dir of
-            Nothing  -> do
-                debugTraceMsg dflags 2 $
-                    text "Created temporary directory:" <+> text our_dir
-                return our_dir
-            Just dir -> do
-                removeDirectory our_dir
-                return dir
-      `catchIO` \e -> if isAlreadyExistsError e
-                      then mkTempDir prefix else ioError e
-
--- Note [Deterministic base name]
--- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
---
--- The filename of temporary files, especially the basename of C files, can end
--- up in the output in some form, e.g. as part of linker debug information. In the
--- interest of bit-wise exactly reproducible compilation (#4012), the basename of
--- the temporary file no longer contains random information (it used to contain
--- the process id).
---
--- This is ok, as the temporary directory used contains the pid (see getTempDir).
-
-addFilesToClean :: DynFlags -> [FilePath] -> IO ()
--- May include wildcards [used by DriverPipeline.run_phase SplitMangle]
-addFilesToClean dflags new_files
-    = atomicModifyIORef' (filesToClean dflags) $ \files -> (new_files++files, ())
-
-removeTmpDirs :: DynFlags -> [FilePath] -> IO ()
-removeTmpDirs dflags ds
-  = traceCmd dflags "Deleting temp dirs"
-             ("Deleting: " ++ unwords ds)
-             (mapM_ (removeWith dflags removeDirectory) ds)
-
-removeTmpFiles :: DynFlags -> [FilePath] -> IO ()
-removeTmpFiles dflags fs
-  = warnNon $
-    traceCmd dflags "Deleting temp files"
-             ("Deleting: " ++ unwords deletees)
-             (mapM_ (removeWith dflags removeFile) deletees)
-  where
-     -- Flat out refuse to delete files that are likely to be source input
-     -- files (is there a worse bug than having a compiler delete your source
-     -- files?)
-     --
-     -- Deleting source files is a sign of a bug elsewhere, so prominently flag
-     -- the condition.
-    warnNon act
-     | null non_deletees = act
-     | otherwise         = do
-        putMsg dflags (text "WARNING - NOT deleting source files:" <+> hsep (map text non_deletees))
-        act
-
-    (non_deletees, deletees) = partition isHaskellUserSrcFilename fs
-
-removeWith :: DynFlags -> (FilePath -> IO ()) -> FilePath -> IO ()
-removeWith dflags remover f = remover f `catchIO`
-  (\e ->
-   let msg = if isDoesNotExistError e
-             then text "Warning: deleting non-existent" <+> text f
-             else text "Warning: exception raised when deleting"
-                                            <+> text f <> colon
-               $$ text (show e)
-   in debugTraceMsg dflags 2 msg
-  )
-
 -----------------------------------------------------------------------------
 -- Running an external program
 
@@ -1253,9 +1063,13 @@ runSomethingResponseFile dflags filter_fn phase_name pgm args mb_env =
         return (r,())
   where
     getResponseFile args = do
-      fp <- newTempName dflags "rsp"
+      fp <- newTempName dflags TFL_CurrentModule "rsp"
       withFile fp WriteMode $ \h -> do
+#if defined(mingw32_HOST_OS)
+          hSetEncoding h latin1
+#else
           hSetEncoding h utf8
+#endif
           hPutStr h $ unlines $ map escape args
       return fp
 
@@ -1326,48 +1140,60 @@ builderMainLoop :: DynFlags -> (String -> String) -> FilePath
                 -> IO ExitCode
 builderMainLoop dflags filter_fn pgm real_args mb_env = do
   chan <- newChan
-  (hStdIn, hStdOut, hStdErr, hProcess) <- runInteractiveProcess pgm real_args Nothing mb_env
 
-  -- and run a loop piping the output from the compiler to the log_action in DynFlags
-  hSetBuffering hStdOut LineBuffering
-  hSetBuffering hStdErr LineBuffering
-  _ <- forkIO (readerProc chan hStdOut filter_fn)
-  _ <- forkIO (readerProc chan hStdErr filter_fn)
-  -- we don't want to finish until 2 streams have been completed
-  -- (stdout and stderr)
-  -- nor until 1 exit code has been retrieved.
-  rc <- loop chan hProcess (2::Integer) (1::Integer) ExitSuccess
-  -- after that, we're done here.
-  hClose hStdIn
-  hClose hStdOut
-  hClose hStdErr
-  return rc
+  -- We use a mask here rather than a bracket because we want
+  -- to distinguish between cleaning up with and without an
+  -- exception. This is to avoid calling terminateProcess
+  -- unless an exception was raised.
+  let safely inner = mask $ \restore -> do
+        -- acquire
+        (hStdIn, hStdOut, hStdErr, hProcess) <- restore $
+          runInteractiveProcess pgm real_args Nothing mb_env
+        let cleanup_handles = do
+              hClose hStdIn
+              hClose hStdOut
+              hClose hStdErr
+        r <- try $ restore $ do
+          hSetBuffering hStdOut LineBuffering
+          hSetBuffering hStdErr LineBuffering
+          let make_reader_proc h = forkIO $ readerProc chan h filter_fn
+          bracketOnError (make_reader_proc hStdOut) killThread $ \_ ->
+            bracketOnError (make_reader_proc hStdErr) killThread $ \_ ->
+            inner hProcess
+        case r of
+          -- onException
+          Left (SomeException e) -> do
+            terminateProcess hProcess
+            cleanup_handles
+            throw e
+          -- cleanup when there was no exception
+          Right s -> do
+            cleanup_handles
+            return s
+  safely $ \h -> do
+    -- we don't want to finish until 2 streams have been complete
+    -- (stdout and stderr)
+    log_loop chan (2 :: Integer)
+    -- after that, we wait for the process to finish and return the exit code.
+    waitForProcess h
   where
-    -- status starts at zero, and increments each time either
-    -- a reader process gets EOF, or the build proc exits.  We wait
-    -- for all of these to happen (status==3).
-    -- ToDo: we should really have a contingency plan in case any of
-    -- the threads dies, such as a timeout.
-    loop _    _        0 0 exitcode = return exitcode
-    loop chan hProcess t p exitcode = do
-      mb_code <- if p > 0
-                   then getProcessExitCode hProcess
-                   else return Nothing
-      case mb_code of
-        Just code -> loop chan hProcess t (p-1) code
-        Nothing
-          | t > 0 -> do
-              msg <- readChan chan
-              case msg of
-                BuildMsg msg -> do
-                  log_action dflags dflags NoReason SevInfo noSrcSpan defaultUserStyle msg
-                  loop chan hProcess t p exitcode
-                BuildError loc msg -> do
-                  log_action dflags dflags NoReason SevError (mkSrcSpan loc loc) defaultUserStyle msg
-                  loop chan hProcess t p exitcode
-                EOF ->
-                  loop chan hProcess (t-1) p exitcode
-          | otherwise -> loop chan hProcess t p exitcode
+    -- t starts at the number of streams we're listening to (2) decrements each
+    -- time a reader process sends EOF. We are safe from looping forever if a
+    -- reader thread dies, because they send EOF in a finally handler.
+    log_loop _ 0 = return ()
+    log_loop chan t = do
+      msg <- readChan chan
+      case msg of
+        BuildMsg msg -> do
+          putLogMsg dflags NoReason SevInfo noSrcSpan
+              (defaultUserStyle dflags) msg
+          log_loop chan t
+        BuildError loc msg -> do
+          putLogMsg dflags NoReason SevError (mkSrcSpan loc loc)
+              (defaultUserStyle dflags) msg
+          log_loop chan t
+        EOF ->
+          log_loop chan  (t-1)
 
 readerProc :: Chan BuildMessage -> Handle -> (String -> String) -> IO ()
 readerProc chan hdl filter_fn =
@@ -1435,22 +1261,6 @@ data BuildMessage
   | BuildError !SrcLoc !SDoc
   | EOF
 
-traceCmd :: DynFlags -> String -> String -> IO a -> IO a
--- trace the command (at two levels of verbosity)
-traceCmd dflags phase_name cmd_line action
- = do   { let verb = verbosity dflags
-        ; showPass dflags phase_name
-        ; debugTraceMsg dflags 3 (text cmd_line)
-        ; case flushErr dflags of
-              FlushErr io -> io
-
-           -- And run it!
-        ; action `catchIO` handle_exn verb
-        }
-  where
-    handle_exn _verb exn = do { debugTraceMsg dflags 2 (char '\n')
-                              ; debugTraceMsg dflags 2 (text "Failed:" <+> text cmd_line <+> text (show exn))
-                              ; throwGhcExceptionIO (ProgramError (show exn))}
 
 {-
 ************************************************************************
@@ -1465,7 +1275,7 @@ traceCmd dflags phase_name cmd_line action
 
 getBaseDir :: IO (Maybe String)
 #if defined(mingw32_HOST_OS)
--- Assuming we are running ghc, accessed by path  $(stuff)/bin/ghc.exe,
+-- Assuming we are running ghc, accessed by path  $(stuff)/<foo>/ghc.exe,
 -- return the path $(stuff)/lib.
 getBaseDir = try_size 2048 -- plenty, PATH_MAX is 512 under Win32.
   where
@@ -1473,9 +1283,14 @@ getBaseDir = try_size 2048 -- plenty, PATH_MAX is 512 under Win32.
         ret <- c_GetModuleFileName nullPtr buf size
         case ret of
           0 -> return Nothing
-          _ | ret < size -> do path <- peekCWString buf
-                               real <- getFinalPath path -- try to resolve symlinks paths
-                               return $ (Just . rootDir . sanitize . maybe path id) real
+          _ | ret < size -> do
+                path <- peekCWString buf
+                real <- getFinalPath path -- try to resolve symlinks paths
+                let libdir = (rootDir . sanitize . maybe path id) real
+                exists <- doesDirectoryExist libdir
+                if exists
+                   then return $ Just libdir
+                   else fail path
             | otherwise  -> try_size (size * 2)
 
     -- getFinalPath returns paths in full raw form.
@@ -1494,11 +1309,11 @@ getBaseDir = try_size 2048 -- plenty, PATH_MAX is 512 under Win32.
                                          "ghc-stage3.exe"] ->
                     case splitFileName $ takeDirectory d of
                     -- ghc is in $topdir/bin/ghc.exe
-                    (d', bin) | lower bin == "bin" -> takeDirectory d' </> "lib"
-                    _ -> fail
-                _ -> fail
-        where fail = panic ("can't decompose ghc.exe path: " ++ show s)
-              lower = map toLower
+                    (d', _) -> takeDirectory d' </> "lib"
+                _ -> fail s
+
+    fail s = panic ("can't decompose ghc.exe path: " ++ show s)
+    lower = map toLower
 
 foreign import WINDOWS_CCONV unsafe "windows.h GetModuleFileNameW"
   c_GetModuleFileName :: Ptr () -> CWString -> Word32 -> IO Word32
@@ -1507,7 +1322,7 @@ foreign import WINDOWS_CCONV unsafe "windows.h GetModuleFileNameW"
 -- is located at. See Trac #11759.
 getFinalPath :: FilePath -> IO (Maybe FilePath)
 getFinalPath name = do
-    dllHwnd <- failIfNull "LoadLibray"     $ loadLibrary "kernel32.dll"
+    dllHwnd <- failIfNull "LoadLibrary"     $ loadLibrary "kernel32.dll"
     -- Note: The API GetFinalPathNameByHandleW is only available starting from Windows Vista.
     -- This means that we can't bind directly to it since it may be missing.
     -- Instead try to find it's address at runtime and if we don't succeed consider the
@@ -1525,9 +1340,18 @@ getFinalPath name = do
                                                      (fILE_ATTRIBUTE_NORMAL .|. fILE_FLAG_BACKUP_SEMANTICS)
                                                      Nothing
                       let fnPtr = makeGetFinalPathNameByHandle $ castPtrToFunPtr addr
-                      path    <- Info.try "GetFinalPathName"
+                      -- First try to resolve the path to get the actual path
+                      -- of any symlinks or other file system redirections that
+                      -- may be in place. However this function can fail, and in
+                      -- the event it does fail, we need to try using the
+                      -- original path and see if we can decompose that.
+                      -- If the call fails Win32.try will raise an exception
+                      -- that needs to be caught. See #14159
+                      path    <- (Win32.try "GetFinalPathName"
                                     (\buf len -> fnPtr handle buf len 0) 512
-                                    `finally` closeHandle handle
+                                    `finally` closeHandle handle)
+                                `catch`
+                                 (\(_ :: IOException) -> return name)
                       return $ Just path
 
 type GetFinalPath = HANDLE -> LPTSTR -> DWORD -> DWORD -> IO DWORD
@@ -1538,12 +1362,6 @@ foreign import WINDOWS_CCONV unsafe "dynamic"
 getBaseDir = return Nothing
 #endif
 
-#ifdef mingw32_HOST_OS
-foreign import ccall unsafe "_getpid" getProcessID :: IO Int -- relies on Int == Int32 on Windows
-#else
-getProcessID :: IO Int
-getProcessID = System.Posix.Internals.c_getpid >>= return . fromIntegral
-#endif
 
 -- Divvy up text stream into lines, taking platform dependent
 -- line termination into account.
@@ -1590,7 +1408,8 @@ linkDynLib dflags0 o_files dep_packages
              osMachOTarget (platformOS (targetPlatform dflags)) ) &&
            dynLibLoader dflags == SystemDependent &&
            WayDyn `elem` ways dflags
-            = ["-L" ++ l, "-Wl,-rpath", "-Wl," ++ l]
+            = ["-L" ++ l, "-Xlinker", "-rpath", "-Xlinker", l]
+              -- See Note [-Xlinker -rpath vs -Wl,-rpath]
          | otherwise = ["-L" ++ l]
 
     let lib_paths = libraryPaths dflags
@@ -1652,7 +1471,7 @@ linkDynLib dflags0 o_files dep_packages
                  ++ pkg_lib_path_opts
                  ++ pkg_link_opts
                 ))
-        OSDarwin -> do
+        _ | os `elem` [OSDarwin, OSiOS] -> do
             -------------------------------------------------------------------
             -- Making a darwin dylib
             -------------------------------------------------------------------
@@ -1712,7 +1531,6 @@ linkDynLib dflags0 o_files dep_packages
                  ++ map Option pkg_link_opts
                  ++ map Option pkg_framework_opts
               )
-        OSiOS -> throwGhcExceptionIO (ProgramError "dynamic libraries are not supported on iOS target")
         _ -> do
             -------------------------------------------------------------------
             -- Making a DSO
@@ -1725,6 +1543,7 @@ linkDynLib dflags0 o_files dep_packages
 
             runLink dflags (
                     map Option verbFlags
+                 ++ libmLinkOpts
                  ++ [ Option "-o"
                     , FileOption "" output_fn
                     ]
@@ -1739,6 +1558,16 @@ linkDynLib dflags0 o_files dep_packages
                  ++ map Option pkg_lib_path_opts
                  ++ map Option pkg_link_opts
               )
+
+-- | Some platforms require that we explicitly link against @libm@ if any
+-- math-y things are used (which we assume to include all programs). See #14022.
+libmLinkOpts :: [Option]
+libmLinkOpts =
+#if defined(HAVE_LIBM)
+  [Option "-lm"]
+#else
+  []
+#endif
 
 getPkgFrameworkOpts :: DynFlags -> Platform -> [InstalledUnitId] -> IO [String]
 getPkgFrameworkOpts dflags platform dep_packages

@@ -7,31 +7,31 @@ The Desugarer: turning HsSyn into Core.
 -}
 
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Desugar (
     -- * Desugaring operations
-    deSugar, deSugarExpr,
-    -- * Dependency/fingerprinting code (used by MkIface)
-    mkUsageInfo, mkUsedNames, mkDependencies
+    deSugar, deSugarExpr
     ) where
 
 #include "HsVersions.h"
 
+import DsUsage
 import DynFlags
 import HscTypes
 import HsSyn
 import TcRnTypes
-import TcRnMonad ( finalSafeMode, fixSafeInstances )
+import TcRnMonad  ( finalSafeMode, fixSafeInstances )
+import TcRnDriver ( runTcInteractive )
 import Id
 import Name
 import Type
-import FamInstEnv
 import InstEnv
 import Class
 import Avail
 import CoreSyn
-import CoreFVs( exprsSomeFreeVarsList )
-import CoreSubst
+import CoreFVs     ( exprsSomeFreeVarsList )
+import CoreOpt     ( simpleOptPgm, simpleOptExpr )
 import PprCore
 import DsMonad
 import DsExpr
@@ -60,201 +60,10 @@ import Coverage
 import Util
 import MonadUtils
 import OrdList
-import UniqFM
-import UniqDFM
-import ListSetOps
-import Fingerprint
-import Maybes
 
 import Data.List
 import Data.IORef
 import Control.Monad( when )
-import Data.Map (Map)
-import qualified Data.Map as Map
-
--- | Extract information from the rename and typecheck phases to produce
--- a dependencies information for the module being compiled.
-mkDependencies :: TcGblEnv -> IO Dependencies
-mkDependencies
-          TcGblEnv{ tcg_mod = mod,
-                    tcg_imports = imports,
-                    tcg_th_used = th_var
-                  }
- = do
-      -- Template Haskell used?
-      th_used <- readIORef th_var
-      let dep_mods = eltsUDFM (delFromUDFM (imp_dep_mods imports)
-                                           (moduleName mod))
-                -- M.hi-boot can be in the imp_dep_mods, but we must remove
-                -- it before recording the modules on which this one depends!
-                -- (We want to retain M.hi-boot in imp_dep_mods so that
-                --  loadHiBootInterface can see if M's direct imports depend
-                --  on M.hi-boot, and hence that we should do the hi-boot consistency
-                --  check.)
-
-          pkgs | th_used   = insertList (toInstalledUnitId thUnitId) (imp_dep_pkgs imports)
-               | otherwise = imp_dep_pkgs imports
-
-          -- Set the packages required to be Safe according to Safe Haskell.
-          -- See Note [RnNames . Tracking Trust Transitively]
-          sorted_pkgs = sort pkgs
-          trust_pkgs  = imp_trust_pkgs imports
-          dep_pkgs'   = map (\x -> (x, x `elem` trust_pkgs)) sorted_pkgs
-
-      return Deps { dep_mods   = dep_mods,
-                    dep_pkgs   = dep_pkgs',
-                    dep_orphs  = sortBy stableModuleCmp (imp_orphs  imports),
-                    dep_finsts = sortBy stableModuleCmp (imp_finsts imports) }
-                    -- sort to get into canonical order
-                    -- NB. remember to use lexicographic ordering
-
-mkUsedNames :: TcGblEnv -> NameSet
-mkUsedNames TcGblEnv{ tcg_dus = dus } = allUses dus
-
-mkUsageInfo :: HscEnv -> Module -> ImportedMods -> NameSet -> [FilePath] -> [(Module, Fingerprint)] -> IO [Usage]
-mkUsageInfo hsc_env this_mod dir_imp_mods used_names dependent_files merged
-  = do
-    eps <- hscEPS hsc_env
-    hashes <- mapM getFileHash dependent_files
-    let mod_usages = mk_mod_usage_info (eps_PIT eps) hsc_env this_mod
-                                       dir_imp_mods used_names
-        usages = mod_usages ++ [ UsageFile { usg_file_path = f
-                                           , usg_file_hash = hash }
-                               | (f, hash) <- zip dependent_files hashes ]
-                            ++ [ UsageMergedRequirement
-                                    { usg_mod = mod,
-                                      usg_mod_hash = hash
-                                    }
-                               | (mod, hash) <- merged ]
-    usages `seqList` return usages
-    -- seq the list of Usages returned: occasionally these
-    -- don't get evaluated for a while and we can end up hanging on to
-    -- the entire collection of Ifaces.
-
-mk_mod_usage_info :: PackageIfaceTable
-              -> HscEnv
-              -> Module
-              -> ImportedMods
-              -> NameSet
-              -> [Usage]
-mk_mod_usage_info pit hsc_env this_mod direct_imports used_names
-  = mapMaybe mkUsage usage_mods
-  where
-    hpt = hsc_HPT hsc_env
-    dflags = hsc_dflags hsc_env
-    this_pkg = thisPackage dflags
-
-    used_mods    = moduleEnvKeys ent_map
-    dir_imp_mods = moduleEnvKeys direct_imports
-    all_mods     = used_mods ++ filter (`notElem` used_mods) dir_imp_mods
-    usage_mods   = sortBy stableModuleCmp all_mods
-                        -- canonical order is imported, to avoid interface-file
-                        -- wobblage.
-
-    -- ent_map groups together all the things imported and used
-    -- from a particular module
-    ent_map :: ModuleEnv [OccName]
-    ent_map  = nonDetFoldUFM add_mv emptyModuleEnv used_names
-     -- nonDetFoldUFM is OK here. If you follow the logic, we sort by OccName
-     -- in ent_hashs
-     where
-      add_mv name mv_map
-        | isWiredInName name = mv_map  -- ignore wired-in names
-        | otherwise
-        = case nameModule_maybe name of
-             Nothing  -> ASSERT2( isSystemName name, ppr name ) mv_map
-                -- See Note [Internal used_names]
-
-             Just mod -> -- This lambda function is really just a
-                         -- specialised (++); originally came about to
-                         -- avoid quadratic behaviour (trac #2680)
-                         extendModuleEnvWith (\_ xs -> occ:xs) mv_map mod [occ]
-                where occ = nameOccName name
-
-    -- We want to create a Usage for a home module if
-    --  a) we used something from it; has something in used_names
-    --  b) we imported it, even if we used nothing from it
-    --     (need to recompile if its export list changes: export_fprint)
-    mkUsage :: Module -> Maybe Usage
-    mkUsage mod
-      | isNothing maybe_iface           -- We can't depend on it if we didn't
-                                        -- load its interface.
-      || mod == this_mod                -- We don't care about usages of
-                                        -- things in *this* module
-      = Nothing
-
-      | moduleUnitId mod /= this_pkg
-      = Just UsagePackageModule{ usg_mod      = mod,
-                                 usg_mod_hash = mod_hash,
-                                 usg_safe     = imp_safe }
-        -- for package modules, we record the module hash only
-
-      | (null used_occs
-          && isNothing export_hash
-          && not is_direct_import
-          && not finsts_mod)
-      = Nothing                 -- Record no usage info
-        -- for directly-imported modules, we always want to record a usage
-        -- on the orphan hash.  This is what triggers a recompilation if
-        -- an orphan is added or removed somewhere below us in the future.
-
-      | otherwise
-      = Just UsageHomeModule {
-                      usg_mod_name = moduleName mod,
-                      usg_mod_hash = mod_hash,
-                      usg_exports  = export_hash,
-                      usg_entities = Map.toList ent_hashs,
-                      usg_safe     = imp_safe }
-      where
-        maybe_iface  = lookupIfaceByModule dflags hpt pit mod
-                -- In one-shot mode, the interfaces for home-package
-                -- modules accumulate in the PIT not HPT.  Sigh.
-
-        Just iface   = maybe_iface
-        finsts_mod   = mi_finsts    iface
-        hash_env     = mi_hash_fn   iface
-        mod_hash     = mi_mod_hash  iface
-        export_hash | depend_on_exports = Just (mi_exp_hash iface)
-                    | otherwise         = Nothing
-
-        (is_direct_import, imp_safe)
-            = case lookupModuleEnv direct_imports mod of
-                Just (imv : _xs) -> (True, imv_is_safe imv)
-                Just _           -> pprPanic "mkUsage: empty direct import" Outputable.empty
-                Nothing          -> (False, safeImplicitImpsReq dflags)
-                -- Nothing case is for implicit imports like 'System.IO' when 'putStrLn'
-                -- is used in the source code. We require them to be safe in Safe Haskell
-
-        used_occs = lookupModuleEnv ent_map mod `orElse` []
-
-        -- Making a Map here ensures that (a) we remove duplicates
-        -- when we have usages on several subordinates of a single parent,
-        -- and (b) that the usages emerge in a canonical order, which
-        -- is why we use Map rather than OccEnv: Map works
-        -- using Ord on the OccNames, which is a lexicographic ordering.
-        ent_hashs :: Map OccName Fingerprint
-        ent_hashs = Map.fromList (map lookup_occ used_occs)
-
-        lookup_occ occ =
-            case hash_env occ of
-                Nothing -> pprPanic "mkUsage" (ppr mod <+> ppr occ <+> ppr used_names)
-                Just r  -> r
-
-        depend_on_exports = is_direct_import
-        {- True
-              Even if we used 'import M ()', we have to register a
-              usage on the export list because we are sensitive to
-              changes in orphan instances/rules.
-           False
-              In GHC 6.8.x we always returned true, and in
-              fact it recorded a dependency on *all* the
-              modules underneath in the dependency tree.  This
-              happens to make orphans work right, but is too
-              expensive: it'll read too many interface files.
-              The 'isNothing maybe_iface' check above saved us
-              from generating many of these usages (at least in
-              one-shot mode), but that's even more bogus!
-        -}
 
 {-
 ************************************************************************
@@ -289,6 +98,7 @@ deSugar hsc_env
                             tcg_imp_specs    = imp_specs,
                             tcg_dependent_files = dependent_files,
                             tcg_ev_binds     = ev_binds,
+                            tcg_th_foreign_files = th_foreign_files_var,
                             tcg_fords        = fords,
                             tcg_rules        = rules,
                             tcg_vects        = vects,
@@ -296,7 +106,9 @@ deSugar hsc_env
                             tcg_tcs          = tcs,
                             tcg_insts        = insts,
                             tcg_fam_insts    = fam_insts,
-                            tcg_hpc          = other_hpc_info})
+                            tcg_hpc          = other_hpc_info,
+                            tcg_complete_matches = complete_matches
+                            })
 
   = do { let dflags = hsc_dflags hsc_env
              print_unqual = mkPrintUnqualified dflags rdr_env
@@ -304,10 +116,7 @@ deSugar hsc_env
                      (text "Desugar"<+>brackets (ppr mod))
                      (const ()) $
      do { -- Desugar the program
-        ; let export_set =
-                -- Used to be 'availsToNameSet', but we now export selectors
-                -- only when necessary. See #12125.
-                availsToNameSetWithSelectors exports
+        ; let export_set = availsToNameSet exports
               target     = hscTarget dflags
               hpcInfo    = emptyHpcInfo other_hpc_info
 
@@ -316,8 +125,7 @@ deSugar hsc_env
                               then addTicksToBinds hsc_env mod mod_loc
                                        export_set (typeEnvTyCons type_env) binds
                               else return (binds, hpcInfo, Nothing)
-
-        ; (msgs, mb_res) <- initDs hsc_env mod rdr_env type_env fam_inst_env $
+        ; (msgs, mb_res) <- initDs hsc_env tcg_env $
                        do { ds_ev_binds <- dsEvBinds ev_binds
                           ; core_prs <- dsTopLHsBinds binds_cvr
                           ; (spec_prs, spec_rules) <- dsImpSpecs imp_specs
@@ -340,7 +148,8 @@ deSugar hsc_env
           keep_alive <- readIORef keep_var
         ; let (rules_for_locals, rules_for_imps) = partition isLocalRule all_rules
               final_prs = addExportFlagsAndRules target export_set keep_alive
-                                                 rules_for_locals (fromOL all_prs)
+                                                 mod rules_for_locals
+                                                 (fromOL all_prs)
 
               final_pgm = combineEvBinds ds_ev_binds final_prs
         -- Notice that we put the whole lot in a big Rec, even the foreign binds
@@ -349,7 +158,7 @@ deSugar hsc_env
         -- You might think it doesn't matter, but the simplifier brings all top-level
         -- things into the in-scope set before simplifying; so we get no unfolding for F#!
 
-#ifdef DEBUG
+#if defined(DEBUG)
           -- Debug only as pre-simple-optimisation program may be really big
         ; endPassIO hsc_env print_unqual CoreDesugar final_pgm rules_for_imps
 #endif
@@ -369,7 +178,11 @@ deSugar hsc_env
         ; usages <- mkUsageInfo hsc_env mod (imp_mods imports) used_names dep_files merged
         -- id_mod /= mod when we are processing an hsig, but hsigs
         -- never desugared and compiled (there's no code!)
+        -- Consequently, this should hold for any ModGuts that make
+        -- past desugaring. See Note [Identity versus semantic module].
         ; MASSERT( id_mod == mod )
+
+        ; foreign_files <- readIORef th_foreign_files_var
 
         ; let mod_guts = ModGuts {
                 mg_module       = mod,
@@ -392,12 +205,14 @@ deSugar hsc_env
                 mg_rules        = ds_rules_for_imps,
                 mg_binds        = ds_binds,
                 mg_foreign      = ds_fords,
+                mg_foreign_files = foreign_files,
                 mg_hpc_info     = ds_hpc_info,
                 mg_modBreaks    = modBreaks,
                 mg_vect_decls   = ds_vects,
                 mg_vect_info    = noVectInfo,
                 mg_safe_haskell = safe_mode,
-                mg_trust_pkg    = imp_trust_own_pkg imports
+                mg_trust_pkg    = imp_trust_own_pkg imports,
+                mg_complete_sigs = complete_matches
               }
         ; return (msgs, Just mod_guts)
         }}}}
@@ -437,27 +252,21 @@ So we pull out the type/coercion variables (which are in dependency order),
 and Rec the rest.
 -}
 
-deSugarExpr :: HscEnv -> LHsExpr Id -> IO (Messages, Maybe CoreExpr)
+deSugarExpr :: HscEnv -> LHsExpr GhcTc -> IO (Messages, Maybe CoreExpr)
 
-deSugarExpr hsc_env tc_expr
-  = do { let dflags       = hsc_dflags hsc_env
-             icntxt       = hsc_IC hsc_env
-             rdr_env      = ic_rn_gbl_env icntxt
-             type_env     = mkTypeEnvWithImplicits (ic_tythings icntxt)
-             fam_insts    = snd (ic_instances icntxt)
-             fam_inst_env = extendFamInstEnvList emptyFamInstEnv fam_insts
-             -- This stuff is a half baked version of TcRnDriver.setInteractiveContext
+deSugarExpr hsc_env tc_expr = do {
+         let dflags = hsc_dflags hsc_env
 
        ; showPass dflags "Desugar"
 
          -- Do desugaring
-       ; (msgs, mb_core_expr) <- initDs hsc_env (icInteractiveModule icntxt) rdr_env
-                                        type_env fam_inst_env $
+       ; (msgs, mb_core_expr) <- runTcInteractive hsc_env $ initDsTc $
                                  dsLExpr tc_expr
 
        ; case mb_core_expr of
             Nothing   -> return ()
-            Just expr -> dumpIfSet_dyn dflags Opt_D_dump_ds "Desugared" (pprCoreExpr expr)
+            Just expr -> dumpIfSet_dyn dflags Opt_D_dump_ds "Desugared"
+                         (pprCoreExpr expr)
 
        ; return (msgs, mb_core_expr) }
 
@@ -470,9 +279,9 @@ deSugarExpr hsc_env tc_expr
 -}
 
 addExportFlagsAndRules
-    :: HscTarget -> NameSet -> NameSet -> [CoreRule]
+    :: HscTarget -> NameSet -> NameSet -> Module -> [CoreRule]
     -> [(Id, t)] -> [(Id, t)]
-addExportFlagsAndRules target exports keep_alive rules prs
+addExportFlagsAndRules target exports keep_alive mod rules prs
   = mapFst add_one prs
   where
     add_one bndr = add_rules name (add_export name bndr)
@@ -505,10 +314,20 @@ addExportFlagsAndRules target exports keep_alive rules prs
         -- simplification), and retain them all in the TypeEnv so they are
         -- available from the command line.
         --
+        -- Most of the time, this can be accomplished by use of
+        -- targetRetainsAllBindings, which returns True if the target is
+        -- HscInteractive. However, there are cases when one can use GHCi with
+        -- a target other than HscInteractive (e.g., with the -fobject-code
+        -- flag enabled, as in #12091). In such scenarios,
+        -- targetRetainsAllBindings can return False, so we must fall back on
+        -- isInteractiveModule to be doubly sure we export entities defined in
+        -- a GHCi session.
+        --
         -- isExternalName separates the user-defined top-level names from those
         -- introduced by the type checker.
     is_exported :: Name -> Bool
-    is_exported | targetRetainsAllBindings target = isExternalName
+    is_exported | targetRetainsAllBindings target
+                  || isInteractiveModule mod      = isExternalName
                 | otherwise                       = (`elemNameSet` exports)
 
 {-
@@ -555,7 +374,7 @@ Reason
 ************************************************************************
 -}
 
-dsRule :: LRuleDecl Id -> DsM (Maybe CoreRule)
+dsRule :: LRuleDecl GhcTc -> DsM (Maybe CoreRule)
 dsRule (L loc (HsRule name rule_act vars lhs _tv_lhs rhs _fv_rhs))
   = putSrcSpanDs loc $
     do  { let bndrs' = [var | L _ (RuleBndr (L _ var)) <- vars]
@@ -616,7 +435,7 @@ warnRuleShadowing rule_name rule_act fn_id arg_ids
                                <+> text "might inline first")
                      , text "Probable fix: add an INLINE[n] or NOINLINE[n] pragma for"
                        <+> quotes (ppr lhs_id)
-                     , ifPprDebug (ppr (idInlineActivation lhs_id) $$ ppr rule_act) ])
+                     , whenPprDebug (ppr (idInlineActivation lhs_id) $$ ppr rule_act) ])
 
       | check_rules_too
       , bad_rule : _ <- get_bad_rules lhs_id
@@ -627,7 +446,7 @@ warnRuleShadowing rule_name rule_act fn_id arg_ids
                                <+> text "for"<+> quotes (ppr lhs_id)
                                <+> text "might fire first")
                       , text "Probable fix: add phase [n] or [~n] to the competing rule"
-                      , ifPprDebug (ppr bad_rule) ])
+                      , whenPprDebug (ppr bad_rule) ])
 
       | otherwise
       = return ()
@@ -716,7 +535,7 @@ by 'competesWith'
 Class methods have a built-in RULE to select the method from the dictionary,
 so you can't change the phase on this.  That makes id very dubious to
 match on class methods in RULE lhs's.   See Trac #10595.   I'm not happy
-about this. For exmaple in Control.Arrow we have
+about this. For example in Control.Arrow we have
 
 {-# RULES "compose/arr"   forall f g .
                           (arr f) . (arr g) = arr (f . g) #-}
@@ -734,7 +553,7 @@ subsequent transformations could fire.
 ************************************************************************
 -}
 
-dsVect :: LVectDecl Id -> DsM CoreVect
+dsVect :: LVectDecl GhcTc -> DsM CoreVect
 dsVect (L loc (HsVect _ (L _ v) rhs))
   = putSrcSpanDs loc $
     do { rhs' <- dsLExpr rhs

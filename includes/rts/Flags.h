@@ -11,10 +11,13 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef RTS_FLAGS_H
-#define RTS_FLAGS_H
+#pragma once
 
 #include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include "stg/Types.h"
+#include "Time.h"
 
 /* For defaults, see the @initRtsFlagsDefaults@ routine. */
 
@@ -45,22 +48,22 @@ typedef struct _GC_FLAGS {
     uint32_t     nurseryChunkSize;   /* in *blocks* */
     uint32_t     minOldGenSize;      /* in *blocks* */
     uint32_t     heapSizeSuggestion; /* in *blocks* */
-    rtsBool heapSizeSuggestionAuto;
+    bool heapSizeSuggestionAuto;
     double  oldGenFactor;
     double  pcFreeHeap;
 
     uint32_t     generations;
-    rtsBool squeezeUpdFrames;
+    bool squeezeUpdFrames;
 
-    rtsBool compact;		/* True <=> "compact all the time" */
+    bool compact;		/* True <=> "compact all the time" */
     double  compactThreshold;
 
-    rtsBool sweep;		/* use "mostly mark-sweep" instead of copying
+    bool sweep;		/* use "mostly mark-sweep" instead of copying
                                  * for the oldest generation */
-    rtsBool ringBell;
+    bool ringBell;
 
     Time    idleGCDelayTime;    /* units: TIME_RESOLUTION */
-    rtsBool doIdleGC;
+    bool doIdleGC;
 
     StgWord heapBase;           /* address to ask the OS for memory */
 
@@ -71,30 +74,37 @@ typedef struct _GC_FLAGS {
                                  * to handle the exception before we
                                  * raise it again.
                                  */
+    StgWord heapLimitGrace;     /* units: *blocks*
+                                 * After a HeapOverflow exception has
+                                 * been raised, how much extra space is
+                                 * given to the thread to handle the
+                                 * exception before we raise it again.
+                                 */
 
-    rtsBool numa;               /* Use NUMA */
+    bool numa;                   /* Use NUMA */
     StgWord numaMask;
 } GC_FLAGS;
 
 /* See Note [Synchronization of flags and base APIs] */
 typedef struct _DEBUG_FLAGS {
     /* flags to control debugging output & extra checking in various subsystems */
-    rtsBool scheduler;      /* 's' */
-    rtsBool interpreter;    /* 'i' */
-    rtsBool weak;           /* 'w' */
-    rtsBool gccafs;         /* 'G' */
-    rtsBool gc;             /* 'g' */
-    rtsBool block_alloc;    /* 'b' */
-    rtsBool sanity;         /* 'S'   warning: might be expensive! */
-    rtsBool stable;         /* 't' */
-    rtsBool prof;           /* 'p' */
-    rtsBool linker;         /* 'l'   the object linker */
-    rtsBool apply;          /* 'a' */
-    rtsBool stm;            /* 'm' */
-    rtsBool squeeze;        /* 'z'  stack squeezing & lazy blackholing */
-    rtsBool hpc; 	    /* 'c' coverage */
-    rtsBool sparks; 	    /* 'r' */
-    rtsBool numa; 	    /* '--debug-numa' */
+    bool scheduler;      /* 's' */
+    bool interpreter;    /* 'i' */
+    bool weak;           /* 'w' */
+    bool gccafs;         /* 'G' */
+    bool gc;             /* 'g' */
+    bool block_alloc;    /* 'b' */
+    bool sanity;         /* 'S'   warning: might be expensive! */
+    bool stable;         /* 't' */
+    bool prof;           /* 'p' */
+    bool linker;         /* 'l'   the object linker */
+    bool apply;          /* 'a' */
+    bool stm;            /* 'm' */
+    bool squeeze;        /* 'z'  stack squeezing & lazy blackholing */
+    bool hpc;            /* 'c' coverage */
+    bool sparks;         /* 'r' */
+    bool numa;           /* '--debug-numa' */
+    bool compact;        /* 'C' */
 } DEBUG_FLAGS;
 
 /* See Note [Synchronization of flags and base APIs] */
@@ -104,10 +114,11 @@ typedef struct _COST_CENTRE_FLAGS {
 # define COST_CENTRES_SUMMARY	1
 # define COST_CENTRES_VERBOSE	2 /* incl. serial time profile */
 # define COST_CENTRES_ALL	3
-# define COST_CENTRES_XML       4
+# define COST_CENTRES_JSON      4
 
     int	    profilerTicks;   /* derived */
     int	    msecsPerTick;    /* derived */
+    char const *outputFileNameStem;
 } COST_CENTRE_FLAGS;
 
 /* See Note [Synchronization of flags and base APIs] */
@@ -125,10 +136,10 @@ typedef struct _PROFILING_FLAGS {
 
     Time        heapProfileInterval; /* time between samples */
     uint32_t    heapProfileIntervalTicks; /* ticks between samples (derived) */
-    rtsBool     includeTSOs;
+    bool        includeTSOs;
 
 
-    rtsBool		showCCSOnException;
+    bool		showCCSOnException;
 
     uint32_t    maxRetainerSetSize;
 
@@ -151,12 +162,12 @@ typedef struct _PROFILING_FLAGS {
 /* See Note [Synchronization of flags and base APIs] */
 typedef struct _TRACE_FLAGS {
     int tracing;
-    rtsBool timestamp;      /* show timestamp in stderr output */
-    rtsBool scheduler;      /* trace scheduler events */
-    rtsBool gc;             /* trace GC events */
-    rtsBool sparks_sampled; /* trace spark events by a sampled method */
-    rtsBool sparks_full;    /* trace spark events 100% accurately */
-    rtsBool user;           /* trace user events (emitted from Haskell code) */
+    bool timestamp;      /* show timestamp in stderr output */
+    bool scheduler;      /* trace scheduler events */
+    bool gc;             /* trace GC events */
+    bool sparks_sampled; /* trace spark events by a sampled method */
+    bool sparks_full;    /* trace spark events 100% accurately */
+    bool user;           /* trace user events (emitted from Haskell code) */
 } TRACE_FLAGS;
 
 /* See Note [Synchronization of flags and base APIs] */
@@ -177,8 +188,8 @@ typedef struct _CONCURRENT_FLAGS {
 /* See Note [Synchronization of flags and base APIs] */
 typedef struct _MISC_FLAGS {
     Time    tickInterval;        /* units: TIME_RESOLUTION */
-    rtsBool install_signal_handlers;
-    rtsBool machineReadable;
+    bool install_signal_handlers;
+    bool machineReadable;
     StgWord linkerMemBase;       /* address to ask the OS for memory
                                   * for the linker, NULL ==> off */
 } MISC_FLAGS;
@@ -186,12 +197,12 @@ typedef struct _MISC_FLAGS {
 /* See Note [Synchronization of flags and base APIs] */
 typedef struct _PAR_FLAGS {
   uint32_t       nCapabilities;  /* number of threads to run simultaneously */
-  rtsBool        migrate;        /* migrate threads between capabilities */
+  bool           migrate;        /* migrate threads between capabilities */
   uint32_t       maxLocalSparks;
-  rtsBool        parGcEnabled;   /* enable parallel GC */
+  bool           parGcEnabled;   /* enable parallel GC */
   uint32_t       parGcGen;       /* do parallel GC in this generation
                                   * and higher only */
-  rtsBool        parGcLoadBalancingEnabled;
+  bool           parGcLoadBalancingEnabled;
                                  /* enable load-balancing in the
                                   * parallel GC */
   uint32_t       parGcLoadBalancingGen;
@@ -209,12 +220,12 @@ typedef struct _PAR_FLAGS {
                                  /* Use this many threads for parallel
                                   * GC (default: use all nNodes). */
 
-  rtsBool        setAffinity;    /* force thread affinity with CPUs */
+  bool           setAffinity;    /* force thread affinity with CPUs */
 } PAR_FLAGS;
 
 /* See Note [Synchronization of flags and base APIs] */
 typedef struct _TICKY_FLAGS {
-    rtsBool showTickyStats;
+    bool showTickyStats;
     FILE   *tickyFile;
 } TICKY_FLAGS;
 
@@ -234,7 +245,7 @@ typedef struct _RTS_FLAGS {
     PAR_FLAGS	      ParFlags;
 } RTS_FLAGS;
 
-#ifdef COMPILING_RTS_MAIN
+#if defined(COMPILING_RTS_MAIN)
 extern DLLIMPORT RTS_FLAGS RtsFlags;
 #elif IN_STG_CODE
 /* Hack because the C code generator can't generate '&label'. */
@@ -270,5 +281,3 @@ extern char  **prog_argv;
 */
 extern int      rts_argc;  /* ditto */
 extern char   **rts_argv;
-
-#endif	/* RTS_FLAGS_H */

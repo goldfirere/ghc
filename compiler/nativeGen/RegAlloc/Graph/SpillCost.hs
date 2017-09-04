@@ -20,7 +20,7 @@ import Reg
 
 import GraphBase
 
-import BlockId
+import Hoopl.Collections (mapLookup)
 import Cmm
 import UniqFM
 import UniqSet
@@ -108,7 +108,7 @@ slurpSpillCostInfo platform cmm
         countLIs rsLiveEntry (LiveInstr instr (Just live) : lis)
          = do
                 -- Increment the lifetime counts for regs live on entry to this instr.
-                mapM_ incLifetime $ nonDetEltsUFM rsLiveEntry
+                mapM_ incLifetime $ nonDetEltsUniqSet rsLiveEntry
                     -- This is non-deterministic but we do not
                     -- currently support deterministic code-generation.
                     -- See Note [Unique Determinism and code generation]
@@ -140,7 +140,7 @@ slurpSpillCostInfo platform cmm
 -- | Take all the virtual registers from this set.
 takeVirtuals :: UniqSet Reg -> UniqSet VirtualReg
 takeVirtuals set = mkUniqSet
-  [ vr | RegVirtual vr <- nonDetEltsUFM set ]
+  [ vr | RegVirtual vr <- nonDetEltsUniqSet set ]
   -- See Note [Unique Determinism and code generation]
 
 
@@ -165,7 +165,7 @@ chooseSpill info graph
 --   cost =     sum         loadCost * freq (u)  +    sum        storeCost * freq (d)
 --          u <- uses (v)                         d <- defs (v)
 --
---   There are no loops in our code at the momemnt, so we can set the freq's to 1.
+--   There are no loops in our code at the moment, so we can set the freq's to 1.
 --
 --  If we don't have live range splitting then Chaitins function performs badly
 --  if we have lots of nested live ranges and very few registers.
@@ -260,7 +260,7 @@ nodeDegree classOfVirtualReg graph reg
         , virtConflicts
            <- length
            $ filter (\r -> classOfVirtualReg r == classOfVirtualReg reg)
-           $ nonDetEltsUFM
+           $ nonDetEltsUniqSet
            -- See Note [Unique Determinism and code generation]
            $ nodeConflicts node
 

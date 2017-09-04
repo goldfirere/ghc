@@ -29,6 +29,7 @@ import StgCmmProf ( costCentreFrom, curCCS )
 import DynFlags
 import Platform
 import BasicTypes
+import BlockId
 import MkGraph
 import StgSyn
 import Cmm
@@ -618,7 +619,7 @@ emitPrimOp dflags [res] (VecBroadcastOp vcat n w) [e] = do
 
 emitPrimOp dflags [res] (VecPackOp vcat n w) es = do
     checkVecCompatibility dflags vcat n w
-    when (length es /= n) $
+    when (es `lengthIsNot` n) $
         panic "emitPrimOp: VecPackOp has wrong number of arguments"
     doVecPackOp (vecElemInjectCast dflags vcat w) ty zeros es res
   where
@@ -636,7 +637,7 @@ emitPrimOp dflags [res] (VecPackOp vcat n w) es = do
 
 emitPrimOp dflags res (VecUnpackOp vcat n w) [arg] = do
     checkVecCompatibility dflags vcat n w
-    when (length res /= n) $
+    when (res `lengthIsNot` n) $
         panic "emitPrimOp: VecUnpackOp has wrong number of results"
     doVecUnpackOp (vecElemProjectCast dflags vcat w) ty arg res
   where
@@ -814,35 +815,51 @@ type GenericOp = [CmmFormal] -> [CmmActual] -> FCode ()
 callishPrimOpSupported :: DynFlags -> PrimOp -> Either CallishMachOp GenericOp
 callishPrimOpSupported dflags op
   = case op of
-      IntQuotRemOp   | ncg && x86ish  -> Left (MO_S_QuotRem  (wordWidth dflags))
+      IntQuotRemOp   | ncg && (x86ish
+                              || ppc) -> Left (MO_S_QuotRem  (wordWidth dflags))
                      | otherwise      -> Right (genericIntQuotRemOp dflags)
 
-      WordQuotRemOp  | ncg && x86ish  -> Left (MO_U_QuotRem  (wordWidth dflags))
+      WordQuotRemOp  | ncg && (x86ish
+                              || ppc) -> Left (MO_U_QuotRem  (wordWidth dflags))
                      | otherwise      -> Right (genericWordQuotRemOp dflags)
 
-      WordQuotRem2Op | (ncg && x86ish)
+      WordQuotRem2Op | (ncg && (x86ish
+                                || ppc))
                           || llvm     -> Left (MO_U_QuotRem2 (wordWidth dflags))
                      | otherwise      -> Right (genericWordQuotRem2Op dflags)
 
-      WordAdd2Op     | (ncg && x86ish)
+      WordAdd2Op     | (ncg && (x86ish
+                                || ppc))
                          || llvm      -> Left (MO_Add2       (wordWidth dflags))
                      | otherwise      -> Right genericWordAdd2Op
 
-      WordSubCOp     | (ncg && x86ish)
+      WordSubCOp     | (ncg && (x86ish
+                                || ppc))
                          || llvm      -> Left (MO_SubWordC   (wordWidth dflags))
                      | otherwise      -> Right genericWordSubCOp
 
-      IntAddCOp      | (ncg && x86ish)
+      IntAddCOp      | (ncg && (x86ish
+                                || ppc))
                          || llvm      -> Left (MO_AddIntC    (wordWidth dflags))
                      | otherwise      -> Right genericIntAddCOp
 
-      IntSubCOp      | (ncg && x86ish)
+      IntSubCOp      | (ncg && (x86ish
+                                || ppc))
                          || llvm      -> Left (MO_SubIntC    (wordWidth dflags))
                      | otherwise      -> Right genericIntSubCOp
 
-      WordMul2Op     | ncg && x86ish
+      WordMul2Op     | ncg && (x86ish
+                               || ppc)
                          || llvm      -> Left (MO_U_Mul2     (wordWidth dflags))
                      | otherwise      -> Right genericWordMul2Op
+      FloatFabsOp    | (ncg && x86ish
+                               || ppc)
+                         || llvm      -> Left MO_F32_Fabs
+                     | otherwise      -> Right $ genericFabsOp W32
+      DoubleFabsOp   | (ncg && x86ish
+                               || ppc)
+                         || llvm      -> Left MO_F64_Fabs
+                     | otherwise      -> Right $ genericFabsOp W64
 
       _ -> pprPanic "emitPrimOp: can't translate PrimOp " (ppr op)
  where
@@ -856,6 +873,10 @@ callishPrimOpSupported dflags op
              ArchX86    -> True
              ArchX86_64 -> True
              _          -> False
+  ppc = case platformArch (targetPlatform dflags) of
+          ArchPPC      -> True
+          ArchPPC_64 _ -> True
+          _            -> False
 
 genericIntQuotRemOp :: DynFlags -> GenericOp
 genericIntQuotRemOp dflags [res_q, res_r] [arg_x, arg_y]
@@ -1062,6 +1083,34 @@ genericWordMul2Op [res_h, res_l] [arg_x, arg_y]
                         topHalf (CmmReg xlyh),
                         topHalf (CmmReg r)])]
 genericWordMul2Op _ _ = panic "genericWordMul2Op"
+
+-- This replicates what we had in libraries/base/GHC/Float.hs:
+--
+--    abs x    | x == 0    = 0 -- handles (-0.0)
+--             | x >  0    = x
+--             | otherwise = negateFloat x
+genericFabsOp :: Width -> GenericOp
+genericFabsOp w [res_r] [aa]
+ = do dflags <- getDynFlags
+      let zero   = CmmLit (CmmFloat 0 w)
+
+          eq x y = CmmMachOp (MO_F_Eq w) [x, y]
+          gt x y = CmmMachOp (MO_F_Gt w) [x, y]
+
+          neg x  = CmmMachOp (MO_F_Neg w) [x]
+
+          g1 = catAGraphs [mkAssign (CmmLocal res_r) zero]
+          g2 = catAGraphs [mkAssign (CmmLocal res_r) aa]
+
+      res_t <- CmmLocal <$> newTemp (cmmExprType dflags aa)
+      let g3 = catAGraphs [mkAssign res_t aa,
+                           mkAssign (CmmLocal res_r) (neg (CmmReg res_t))]
+
+      g4 <- mkCmmIfThenElse (gt aa zero) g2 g3
+
+      emit =<< mkCmmIfThenElse (eq aa zero) g1 g4
+
+genericFabsOp _ _ _ = panic "genericFabsOp"
 
 -- These PrimOps are NOPs in Cmm
 
@@ -1784,7 +1833,7 @@ doNewArrayOp res_r rep info payload n init = do
 
     -- Initialise all elements of the the array
     p <- assignTemp $ cmmOffsetB dflags (CmmReg arr) (hdrSize dflags rep)
-    for <- newLabelC
+    for <- newBlockId
     emitLabel for
     let loopBody =
             [ mkStore (CmmReg (CmmLocal p)) init

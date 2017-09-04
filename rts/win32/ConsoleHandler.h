@@ -2,8 +2,8 @@
  * Console control handler support.
  *
  */
-#ifndef WIN32_CONSOLEHANDLER_H
-#define WIN32_CONSOLEHANDLER_H
+
+#pragma once
 
 /*
  * Console control handlers lets an application handle Ctrl+C, Ctrl+Break etc.
@@ -41,7 +41,7 @@ extern StgInt stg_pending_events;
  * runnable. A console handler is used to handle termination events (Ctrl+C)
  * and isn't considered a 'user handler'.
  */
-#define anyUserHandlers() (rtsFalse)
+#define anyUserHandlers() (false)
 
 /*
  * Function: startSignalHandlers()
@@ -60,5 +60,3 @@ extern void startSignalHandlers(Capability *cap);
 extern int rts_waitConsoleHandlerCompletion(void);
 
 #endif /* THREADED_RTS */
-
-#endif /* Win32_CONSOLEHANDLER_H */

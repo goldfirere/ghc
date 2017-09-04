@@ -7,8 +7,7 @@
  *
  * -------------------------------------------------------------------------*/
 
-#ifndef SCHEDULE_H
-#define SCHEDULE_H
+#pragma once
 
 #include "rts/OSThreads.h"
 #include "Capability.h"
@@ -21,7 +20,7 @@
  * Locks assumed   :  none
  */
 void initScheduler (void);
-void exitScheduler (rtsBool wait_foreign);
+void exitScheduler (bool wait_foreign);
 void freeScheduler (void);
 void markScheduler (evac_fn evac, void *user);
 
@@ -101,7 +100,7 @@ extern  StgTSO *blocked_queue_hd, *blocked_queue_tl;
 extern  StgTSO *sleeping_queue;
 #endif
 
-extern rtsBool heap_overflow;
+extern bool heap_overflow;
 
 #if defined(THREADED_RTS)
 extern Mutex sched_mutex;
@@ -208,13 +207,13 @@ appendToBlockedQueue(StgTSO *tso)
 
 /* Check whether various thread queues are empty
  */
-INLINE_HEADER rtsBool
+INLINE_HEADER bool
 emptyQueue (StgTSO *q)
 {
     return (q == END_TSO_QUEUE);
 }
 
-INLINE_HEADER rtsBool
+INLINE_HEADER bool
 emptyRunQueue(Capability *cap)
 {
     return cap->n_run_queue == 0;
@@ -233,7 +232,7 @@ truncateRunQueue(Capability *cap)
 #define EMPTY_SLEEPING_QUEUE() (emptyQueue(sleeping_queue))
 #endif
 
-INLINE_HEADER rtsBool
+INLINE_HEADER bool
 emptyThreadQueues(Capability *cap)
 {
     return emptyRunQueue(cap)
@@ -246,5 +245,3 @@ emptyThreadQueues(Capability *cap)
 #endif /* !IN_STG_CODE */
 
 #include "EndPrivate.h"
-
-#endif /* SCHEDULE_H */

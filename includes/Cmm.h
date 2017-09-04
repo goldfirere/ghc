@@ -25,8 +25,7 @@
  *
  * -------------------------------------------------------------------------- */
 
-#ifndef CMM_H
-#define CMM_H
+#pragma once
 
 /*
  * In files that are included into both C and C-- (and perhaps
@@ -50,6 +49,7 @@
 
      CInt                 has the same size as an int in C on this platform
      CLong                has the same size as a long in C on this platform
+     CBool                has the same size as a bool in C on this platform
 
   --------------------------------------------------------------------------- */
 
@@ -95,6 +95,8 @@
 #error Unknown long size
 #endif
 
+#define CBool bits8
+
 #define F_   float32
 #define D_   float64
 #define L_   bits64
@@ -118,13 +120,13 @@
         name : bits8[] str;                     \
   }                                             \
 
-#ifdef TABLES_NEXT_TO_CODE
+#if defined(TABLES_NEXT_TO_CODE)
 #define RET_LBL(f) f##_info
 #else
 #define RET_LBL(f) f##_ret
 #endif
 
-#ifdef TABLES_NEXT_TO_CODE
+#if defined(TABLES_NEXT_TO_CODE)
 #define ENTRY_LBL(f) f##_info
 #else
 #define ENTRY_LBL(f) f##_entry
@@ -202,7 +204,7 @@
    Assertions and Debuggery
    -------------------------------------------------------------------------- */
 
-#ifdef DEBUG
+#if defined(DEBUG)
 #define ASSERT(predicate)                       \
         if (predicate) {                        \
             /*null*/;                           \
@@ -213,7 +215,7 @@
 #define ASSERT(p) /* nothing */
 #endif
 
-#ifdef DEBUG
+#if defined(DEBUG)
 #define DEBUG_ONLY(s) s
 #else
 #define DEBUG_ONLY(s) /* nothing */
@@ -228,8 +230,8 @@
  *
  * Note the syntax is slightly different to the C version of this macro.
  */
-#ifdef DEBUG
-#define IF_DEBUG(c,s)  if (RtsFlags_DebugFlags_##c(RtsFlags) != 0::I32) { s; }
+#if defined(DEBUG)
+#define IF_DEBUG(c,s)  if (RtsFlags_DebugFlags_##c(RtsFlags) != 0::CBool) { s; }
 #else
 #define IF_DEBUG(c,s)  /* nothing */
 #endif
@@ -254,7 +256,7 @@
    Indirections can contain tagged pointers, so their tag is checked.
    -------------------------------------------------------------------------- */
 
-#ifdef PROFILING
+#if defined(PROFILING)
 
 // When profiling, we cannot shortcut ENTER() by checking the tag,
 // because LDV profiling relies on entering closures to mark them as
@@ -285,7 +287,13 @@
 //    explicit jumps, for use when we are doing the stack management
 //    ourselves.
 
+#if defined(PROFILING)
+// See Note [Evaluating functions with profiling] in rts/Apply.cmm
+#define ENTER(x) jump stg_ap_0_fast(x);
+#else
 #define ENTER(x) ENTER_(return,x)
+#endif
+
 #define ENTER_R1() ENTER_(RET_R1,R1)
 
 #define RET_R1(x) jump %ENTRY_CODE(Sp(0)) [R1]
@@ -581,7 +589,7 @@
  * depending on TABLES_NEXT_TO_CODE.  So we define field access
  * macros which use the appropriate version here:
  */
-#ifdef TABLES_NEXT_TO_CODE
+#if defined(TABLES_NEXT_TO_CODE)
 /*
  * when TABLES_NEXT_TO_CODE, slow_apply is stored as an offset
  * instead of the normal pointer.
@@ -615,7 +623,7 @@
 #define OVERWRITING_CLOSURE_OFS(c,n) /* nothing */
 #endif
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
 #define prim_write_barrier prim %write_barrier()
 #else
 #define prim_write_barrier /* nothing */
@@ -625,7 +633,7 @@
    Ticky macros
    -------------------------------------------------------------------------- */
 
-#ifdef TICKY_TICKY
+#if defined(TICKY_TICKY)
 #define TICK_BUMP_BY(ctr,n) CLong[ctr] = CLong[ctr] + n
 #else
 #define TICK_BUMP_BY(ctr,n) /* nothing */
@@ -841,14 +849,7 @@
                                                                \
     dst_p = dst + SIZEOF_StgMutArrPtrs;                        \
     src_p = src + SIZEOF_StgMutArrPtrs + WDS(offset);          \
-  while:                                                       \
-    if (n != 0) {                                              \
-        n = n - 1;                                             \
-        W_[dst_p] = W_[src_p];                                 \
-        dst_p = dst_p + WDS(1);                                \
-        src_p = src_p + WDS(1);                                \
-        goto while;                                            \
-    }                                                          \
+    prim %memcpy(dst_p, src_p, n * SIZEOF_W, SIZEOF_W);        \
                                                                \
     return (dst);
 
@@ -923,15 +924,6 @@
                                                                \
     dst_p = dst + SIZEOF_StgSmallMutArrPtrs;                   \
     src_p = src + SIZEOF_StgSmallMutArrPtrs + WDS(offset);     \
-  while:                                                       \
-    if (n != 0) {                                              \
-        n = n - 1;                                             \
-        W_[dst_p] = W_[src_p];                                 \
-        dst_p = dst_p + WDS(1);                                \
-        src_p = src_p + WDS(1);                                \
-        goto while;                                            \
-    }                                                          \
+    prim %memcpy(dst_p, src_p, n * SIZEOF_W, SIZEOF_W);        \
                                                                \
     return (dst);
-
-#endif /* CMM_H */

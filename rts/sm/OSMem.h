@@ -6,8 +6,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef SM_OSMEM_H
-#define SM_OSMEM_H
+#pragma once
 
 #include "BeginPrivate.h"
 
@@ -18,10 +17,10 @@ void osReleaseFreeMemory(void);
 void osFreeAllMBlocks(void);
 size_t getPageSize (void);
 StgWord64 getPhysicalMemorySize (void);
-void setExecutable (void *p, W_ len, rtsBool exec);
-rtsBool osNumaAvailable(void);
+void setExecutable (void *p, W_ len, bool exec);
+bool osNumaAvailable(void);
 uint32_t osNumaNodes(void);
-StgWord osNumaMask(void);
+uint64_t osNumaMask(void);
 void osBindMBlocksToNode(void *addr, StgWord size, uint32_t node);
 
 INLINE_HEADER size_t
@@ -39,7 +38,7 @@ roundUpToPage (size_t x)
 }
 
 
-#ifdef USE_LARGE_ADDRESS_SPACE
+#if defined(USE_LARGE_ADDRESS_SPACE)
 
 /*
   If "large address space" is enabled, we allocate memory in two
@@ -88,5 +87,3 @@ void osReleaseHeapMemory(void);
 #endif
 
 #include "EndPrivate.h"
-
-#endif /* SM_OSMEM_H */

@@ -9,7 +9,6 @@ Provide trees (of instructions), so that lists of instructions
 can be appended in linear time.
 -}
 
-{-# LANGUAGE CPP #-}
 module OrdList (
         OrdList,
         nilOL, isNilOL, unitOL, appOL, consOL, snocOL, concatOL, lastOL,
@@ -18,10 +17,8 @@ module OrdList (
 
 import Outputable
 
-#if __GLASGOW_HASKELL__ > 710
 import Data.Semigroup   ( Semigroup )
 import qualified Data.Semigroup as Semigroup
-#endif
 
 infixl 5  `appOL`
 infixl 5  `snocOL`
@@ -39,15 +36,22 @@ data OrdList a
 instance Outputable a => Outputable (OrdList a) where
   ppr ol = ppr (fromOL ol)  -- Convert to list and print that
 
-#if __GLASGOW_HASKELL__ > 710
 instance Semigroup (OrdList a) where
   (<>) = appOL
-#endif
 
 instance Monoid (OrdList a) where
   mempty = nilOL
   mappend = appOL
   mconcat = concatOL
+
+instance Functor OrdList where
+  fmap = mapOL
+
+instance Foldable OrdList where
+  foldr = foldrOL
+
+instance Traversable OrdList where
+  traverse f xs = toOL <$> traverse f (fromOL xs)
 
 nilOL    :: OrdList a
 isNilOL  :: OrdList a -> Bool
@@ -97,9 +101,6 @@ mapOL f (Cons x xs) = Cons (f x) (mapOL f xs)
 mapOL f (Snoc xs x) = Snoc (mapOL f xs) (f x)
 mapOL f (Two x y) = Two (mapOL f x) (mapOL f y)
 mapOL f (Many xs) = Many (map f xs)
-
-instance Functor OrdList where
-  fmap = mapOL
 
 foldrOL :: (a->b->b) -> b -> OrdList a -> b
 foldrOL _ z None        = z

@@ -6,8 +6,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef RTS_STORAGE_FUNTYPES_H
-#define RTS_STORAGE_FUNTYPES_H
+#pragma once
 
 /* generic - function comes with a small bitmap */
 #define ARG_GEN      0   
@@ -24,8 +23,8 @@
  * generated code in ghc/rts/AutoApply.cmm.
  *
  *  NOTE: other places to change if you change this table:
- *       - utils/genapply/GenApply.hs: stackApplyTypes
- *       - compiler/codeGen/CgCallConv.lhs: stdPattern
+ *       - utils/genapply/Main.hs: stackApplyTypes
+ *       - compiler/codeGen/StgCmmLayout.hs: stdPattern
  */
 #define ARG_NONE     3 
 #define ARG_N        4  
@@ -53,5 +52,3 @@
 #define ARG_PPPPPP   26
 #define ARG_PPPPPPP  27
 #define ARG_PPPPPPPP 28
-
-#endif /* RTS_STORAGE_FUNTYPES_H */

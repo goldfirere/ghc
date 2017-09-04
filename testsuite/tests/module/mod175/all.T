@@ -1,5 +1,1 @@
-test('mod175',
-     clean_cmd('$MAKE -s clean'),
-     run_command,
-     ['$MAKE -s --no-print-directory mod175'])
-
+test('mod175', [extra_files(['Test.hs', 'Test2.hs'])], run_command, ['$MAKE -s --no-print-directory mod175'])

@@ -62,7 +62,8 @@ module Name (
         isWiredInName, isBuiltInSyntax,
         isHoleName,
         wiredInNameTyThing_maybe,
-        nameIsLocalOrFrom, nameIsHomePackageImport, nameIsFromExternalPackage,
+        nameIsLocalOrFrom, nameIsHomePackage,
+        nameIsHomePackageImport, nameIsFromExternalPackage,
         stableNameCmp,
 
         -- * Class 'NamedThing' and overloaded friends
@@ -269,6 +270,17 @@ nameIsLocalOrFrom from name
   | Just mod <- nameModule_maybe name = from == mod || isInteractiveModule mod
   | otherwise                         = True
 
+nameIsHomePackage :: Module -> Name -> Bool
+-- True if the Name is defined in module of this package
+nameIsHomePackage this_mod
+  = \nm -> case n_sort nm of
+              External nm_mod    -> moduleUnitId nm_mod == this_pkg
+              WiredIn nm_mod _ _ -> moduleUnitId nm_mod == this_pkg
+              Internal -> True
+              System   -> False
+  where
+    this_pkg = moduleUnitId this_mod
+
 nameIsHomePackageImport :: Module -> Name -> Bool
 -- True if the Name is defined in module of this package
 -- /other than/ the this_mod
@@ -371,7 +383,7 @@ mkSystemVarName :: Unique -> FastString -> Name
 mkSystemVarName uniq fs = mkSystemName uniq (mkVarOccFS fs)
 
 mkSysTvName :: Unique -> FastString -> Name
-mkSysTvName uniq fs = mkSystemName uniq (mkOccNameFS tvName fs)
+mkSysTvName uniq fs = mkSystemName uniq (mkTyVarOccFS fs)
 
 -- | Make a name for a foreign call
 mkFCallName :: Unique -> String -> Name
@@ -512,7 +524,6 @@ instance OutputableBndr Name where
     pprInfixOcc  = pprInfixName
     pprPrefixOcc = pprPrefixName
 
-
 pprName :: Name -> SDoc
 pprName (Name {n_sort = sort, n_uniq = u, n_occ = occ})
   = getPprStyle $ \ sty ->
@@ -548,7 +559,7 @@ pprExternal sty uniq mod occ is_wired is_builtin
 
 pprInternal :: PprStyle -> Unique -> OccName -> SDoc
 pprInternal sty uniq occ
-  | codeStyle sty  = pprUnique uniq
+  | codeStyle sty  = pprUniqueAlways uniq
   | debugStyle sty = ppr_occ_name occ <> braces (hsep [pprNameSpaceBrief (occNameSpace occ),
                                                        pprUnique uniq])
   | dumpStyle sty  = ppr_occ_name occ <> ppr_underscore_unique uniq
@@ -559,7 +570,7 @@ pprInternal sty uniq occ
 -- Like Internal, except that we only omit the unique in Iface style
 pprSystem :: PprStyle -> Unique -> OccName -> SDoc
 pprSystem sty uniq occ
-  | codeStyle sty  = pprUnique uniq
+  | codeStyle sty  = pprUniqueAlways uniq
   | debugStyle sty = ppr_occ_name occ <> ppr_underscore_unique uniq
                      <> braces (pprNameSpaceBrief (occNameSpace occ))
   | otherwise      = ppr_occ_name occ <> ppr_underscore_unique uniq
@@ -582,14 +593,20 @@ pprModulePrefix sty mod occ = sdocWithDynFlags $ \dflags ->
                           <> ppr (moduleName mod) <> dot          -- scope either
       NameUnqual       -> empty                   -- In scope unqualified
 
+pprUnique :: Unique -> SDoc
+-- Print a unique unless we are suppressing them
+pprUnique uniq
+  = sdocWithDynFlags $ \dflags ->
+    ppUnless (gopt Opt_SuppressUniques dflags) $
+    pprUniqueAlways uniq
+
 ppr_underscore_unique :: Unique -> SDoc
 -- Print an underscore separating the name from its unique
 -- But suppress it if we aren't printing the uniques anyway
 ppr_underscore_unique uniq
   = sdocWithDynFlags $ \dflags ->
-    if gopt Opt_SuppressUniques dflags
-    then empty
-    else char '_' <> pprUnique uniq
+    ppUnless (gopt Opt_SuppressUniques dflags) $
+    char '_' <> pprUniqueAlways uniq
 
 ppr_occ_name :: OccName -> SDoc
 ppr_occ_name occ = ftext (occNameFS occ)

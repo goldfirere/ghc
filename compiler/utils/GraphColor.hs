@@ -45,7 +45,7 @@ colorGraph
 
         -> ( Graph k cls color          -- the colored graph.
            , UniqSet k                  -- the set of nodes that we couldn't find a color for.
-           , UniqFM  k )                -- map of regs (r1 -> r2) that were coaleced
+           , UniqFM  k )                -- map of regs (r1 -> r2) that were coalesced
                                         --       r1 should be replaced by r2 in the source
 
 colorGraph iterative spinCount colors triv spill graph0
@@ -309,7 +309,7 @@ selectColor colors graph u
         Just nsConflicts
                         = sequence
                         $ map (lookupNode graph)
-                        $ nonDetEltsUFM
+                        $ nonDetEltsUniqSet
                         $ nodeConflicts node
                         -- See Note [Unique Determinism and code generation]
 
@@ -356,7 +356,7 @@ selectColor colors graph u
 
                 -- it wasn't a preference, but it was still ok
                 | not $ isEmptyUniqSet colors_ok
-                , c : _         <- nonDetEltsUFM colors_ok
+                , c : _         <- nonDetEltsUniqSet colors_ok
                 -- See Note [Unique Determinism and code generation]
                 = Just c
 

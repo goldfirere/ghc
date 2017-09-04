@@ -1,0 +1,184 @@
+.. _release-8-4-1:
+
+Release notes for version 8.4.1
+===============================
+
+The significant changes to the various parts of the compiler are listed in the
+following sections. There have also been numerous bug fixes and performance
+improvements over the 8.2.1 release.
+
+
+Highlights
+----------
+
+The highlights, since the 8.2.1 release, are:
+
+-  Many, many bug fixes.
+
+Full details
+------------
+
+Language
+~~~~~~~~
+
+- Data families have been generalised a bit: a data family declaration can now
+  end with a kind variable ``k`` instead of ``Type``. Additionally, data/newtype
+  instance no longer need to list all the patterns of the family if they don't
+  wish to; this is quite like how regular datatypes with a kind signature can omit
+  some type variables.
+
+- Implicitly bidirectional pattern synonyms no longer allow bang patterns
+  (``!``) or irrefutable patterns (``~``) on the right-hand side. Previously,
+  this was allowed, although the bang patterns and irrefutable patterns would
+  be silently ignored when used in an expression context. This is now a proper
+  error, and explicitly bidirectional pattern synonyms should be used in their
+  stead. That is, instead of using this (which is an error): ::
+
+      data StrictJust a = Just !a
+
+  Use this: ::
+
+      data StrictJust a <- Just !a where
+        StrictJust !a = Just a
+
+Compiler
+~~~~~~~~
+
+- The ``configure`` script now no longer accepts ``--with-TOOL`` flags (e.g.
+  ``--with-nm``, ``--with-ld``, etc.). Instead, these are taken from environment
+  variables, as is typical in ``autoconf`` scripts. For instance,
+  ``./configure --with-nm=/usr/local/bin/nm`` turns into
+  ``./configure NM=/usr/local/bin/nm``.
+
+- Derived ``Functor``, ``Foldable``, and ``Traversable`` instances are now
+  optimized when their last type parameters have phantom roles.
+  Specifically, ::
+
+    fmap _ = coerce
+    traverse _ x = pure (coerce x)
+    foldMap _ _ = mempty
+
+  These definitions of ``foldMap`` and ``traverse`` are lazier than the ones we
+  would otherwise derive, as they may produce results without inspecting their
+  arguments at all.
+
+  See also :ref:`deriving-functor`, :ref:`deriving-foldable`, and
+  :ref:`deriving-traversable`.
+
+- Derived ``Functor``, ``Foldable``, ``Traversable``, ``Generic``, and
+  ``Generic1`` instances now have better, and generally better-documented,
+  behaviors for types with no constructors. In particular, ::
+
+      fmap _ x = case x of
+      foldMap _ _ = mempty
+      traverse _ x = pure (case x of)
+      to x = case x of
+      to1 x = case x of
+      from x = case x of
+      from1 x = case x of
+
+  The new behavior generally leads to more useful error messages than the
+  old did, and lazier semantics for ``foldMap`` and ``traverse``.
+
+- Derived ``Foldable`` instances now derive custom definitions for ``null``
+  instead of using the default one. This leads to asymptotically better
+  performance for recursive types not shaped like cons-lists, and allows ``null``
+  to terminate for more (but not all) infinitely large structures.
+
+- Derived instances for types with no constructors now have appropriate
+  arities: they take all their arguments before producing errors. This may not
+  be terribly important in practice, but it seems like the right thing to do.
+  Previously, we generated ::
+
+      (==) = error ...
+
+Now we generate ::
+
+      _ == _ = error ...
+
+- `-fsplit-sections` is now supported on x86_64 Windows and is on by default.
+  See :ghc-ticket:`12913`.
+
+- Configure on Windows now supports ``--enable-distro-toolchain`` which can be
+  used to build a GHC using compilers on your ``PATH`` instead of using the
+  bundled bindist. See :ghc-ticket:`13792`
+
+- The optional ``instance`` keyword is now usable in type family instance
+  declarations. See :ghc-ticket:`13747`
+
+- Lots of other bugs. See `Trac <https://ghc.haskell.org/trac/ghc/query?status=closed&milestone=8.4.1&col=id&col=summary&col=status&col=type&col=priority&col=milestone&col=component&order=priority>`_
+  for a complete list.
+
+Runtime system
+~~~~~~~~~~~~~~
+
+- Function ``hs_add_root()`` was removed. It was a no-op since GHC-7.2.1
+  where module initialisation stopped requiring a call to ``hs_add_root()``.
+
+- Proper import library support added to GHC which can handle all of the libraries produced
+  by dlltool. The limitation of them needing to be named with the suffix .dll.a is also removed.
+  See :ghc-ticket:`13606`, :ghc-ticket:`12499`, :ghc-ticket:`12498`
+
+- The GHCi runtime linker on Windows now supports the `big-obj` file format.
+
+Template Haskell
+~~~~~~~~~~~~~~~~
+
+- Template Haskell now reifies data types with GADT syntax accurately.
+  Previously, TH used heuristics to determine whether a data type
+  should be reified using GADT syntax, which could lead to incorrect results,
+  such as ``data T1 a = (a ~ Int) => MkT1`` being reified as a GADT and
+  ``data T2 a where MkT2 :: Show a => T2 a`` *not* being reified as a GADT.
+
+``ghc`` library
+~~~~~~~~~~~~~~~
+
+- hsSyn Abstract Syntax Tree (AST) is now extensible via the mechanism described in `Trees that Grow <http://www.jucs.org/jucs_23_1/trees_that_grow/jucs_23_01_0042_0062_najd.pdf>`_
+
+  The main change for users of the GHC API is that the AST is no longer indexed
+  by the type used as the identifier, but by a specific index type, ::
+
+      type GhcPs   = GhcPass 'Parsed      -- Old 'RdrName' type param
+      type GhcRn   = GhcPass 'Renamed     -- Old 'Name' type param
+      type GhcTc   = GhcPass 'Typechecked -- Old 'Id' type para,
+      type GhcTcId = GhcTc                -- Old 'TcId' type param
+
+  The simplest way to support the current GHC as well as earlier ones is to define ::
+
+      #if MIN_VERSION_ghc(8,3,0)
+      type ParseI     = GhcPs
+      type RenameI    = GhcRn
+      type TypecheckI = GhcTc
+      #else
+      type ParseI     = RdrName
+      type RenameI    = Name
+      type TypecheckI = Var
+      #endif
+
+  and then replace all hardcoded index types accordingly. For polymorphic types,
+  the constraint ::
+
+      #if MIN_VERSION_ghc(8,3,0)
+      -- |bundle up the constraints required for a trees that grow pass
+      type IsPass pass = (DataId pass, OutputableBndrId pass, SourceTextX pass)
+      else
+      type IsPass pass = (DataId pass, OutputableBndrId pass)
+      #endif
+
+  can be used.
+
+``base`` library
+~~~~~~~~~~~~~~~~
+
+- Blank strings can now be used as values for environment variables using the
+  System.Environment.Blank module. See :ghc-ticket:`12494`
+
+Build system
+~~~~~~~~~~~~
+
+- ``dll-split`` has been removed and replaced with an automatic partitioning utility ``gen-dll``.
+  This utility can transparently split and compile any DLLs that require this. Note that the ``rts`` and
+  ``base`` can not be split at this point because of the mutual recursion between ``base`` and ``rts``.
+  There is currently no explicit dependency between the two in the build system and such there is no way
+  to notify ``base`` that the ``rts`` has been split, or vice versa.
+  (see :ghc-ticket:`5987`).

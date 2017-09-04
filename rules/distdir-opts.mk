@@ -11,7 +11,7 @@
 # -----------------------------------------------------------------------------
 
 
-# Set compilation flags that additionally depend on a particular way
+# Set compilation flags that do not depend on a particular way
 
 define distdir-opts # args: $1 = dir, $2 = distdir, $3 = stage
 
@@ -44,16 +44,11 @@ $1_$2_DIST_CC_OPTS = \
  $$($1_$2_DEP_CC_OPTS) \
  $$(SRC_CC_WARNING_OPTS)
 
-ifneq ($$(strip $$($1_$2_DEP_LIB_DIRS_SINGLE_QUOTED)),)
-$1_$2_DIST_LD_LIB_DIRS := $$(subst $$(space)',$$(space)-L',$$(space)$$($1_$2_DEP_LIB_DIRS_SINGLE_QUOTED))
-endif
-
 $1_$2_DIST_LD_OPTS = \
  $$(SRC_LD_OPTS) \
  $$($1_LD_OPTS) \
  $$($1_$2_LD_OPTS) \
  $$($1_$2_DIST_LD_LIB_DIRS) \
- $$(foreach opt,$$($1_$2_DEP_EXTRA_LIBS),-l$$(opt)) \
  $$($1_$2_DEP_LD_OPTS)
 
 # c.f. Cabal's Distribution.Simple.PreProcess.ppHsc2hs
@@ -93,6 +88,24 @@ $1_$2_ALL_HAPPY_OPTS = \
  $$($1_HAPPY_OPTS) \
  $$($1_$2_HAPPY_OPTS) \
  $$(EXTRA_HAPPY_OPTS)
+
+# We don't bother splitting the bootstrap packages (built with stage 0)
+ifeq "$$($1_$2_SplitObjs)" ""
+ifeq "$$(SplitObjs) $3" "YES 1"
+$1_$2_SplitObjs = YES
+else
+$1_$2_SplitObjs = NO
+endif
+endif
+# Disable split sections when building with stage0, it won't be supported yet
+# and it's probably not very relevant anyway (smaller stage1 ghc?).
+ifeq "$$($1_$2_SplitSections)" ""
+ifeq "$3" "1"
+$1_$2_SplitSections = $(SplitSections)
+else
+$1_$2_SplitSections = NO
+endif
+endif
 
 endef
 

@@ -19,9 +19,11 @@ import Control.Monad
 import System.IO
 
 main = do
-  [libdir] <- getArgs
+  libdir : args <- getArgs
   runGhc (Just libdir) $ do
-    dflags <- getSessionDynFlags
+    dflags0 <- getSessionDynFlags
+    (dflags, _, _) <- parseDynamicFlags dflags0
+      (map (mkGeneralLocated "on the commandline") args)
     setSessionDynFlags $ dflags { hscTarget = HscNothing
                                 , ghcLink  = LinkInMemory
                                 , verbosity = 0 -- silence please
@@ -40,7 +42,9 @@ main = do
 
     -- set context to module "A"
     mg <- getModuleGraph
-    let [mod] = [ ms_mod_name m | m <- mg, moduleNameString (ms_mod_name m) == "A" ]
+    let [mod] = [ ms_mod_name m
+                | m <- mgModSummaries mg
+                , moduleNameString (ms_mod_name m) == "A" ]
     setContext [IIModule mod]
     liftIO $ hFlush stdout  -- make sure things above are printed before
                             -- interactive output

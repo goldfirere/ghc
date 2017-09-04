@@ -27,6 +27,7 @@ available = False
 #else
 
 import Data.Bits (Bits(..), FiniteBits(..))
+import Data.Int
 import Data.Word (Word16, Word32)
 import Foreign.C.Error (throwErrnoIfMinus1, eINTR, eINVAL,
                         eNOTSUP, getErrno, throwErrno)
@@ -37,7 +38,7 @@ import Foreign.Storable (Storable(..))
 import GHC.Base
 import GHC.Enum (toEnum)
 import GHC.Num (Num(..))
-import GHC.Real (ceiling, floor, fromIntegral)
+import GHC.Real (quotRem, fromIntegral)
 import GHC.Show (Show(show))
 import GHC.Event.Internal (Timeout(..))
 import System.Posix.Internals (c_close)
@@ -55,7 +56,7 @@ import Data.Int (Int64)
 -- Handle brokenness on some BSD variants, notably OS X up to at least
 -- 10.6.  If NOTE_EOF isn't available, we have no way to receive a
 -- notification from the kernel when we reach EOF on a plain file.
-#ifndef NOTE_EOF
+#if !defined(NOTE_EOF)
 # define NOTE_EOF 0
 #endif
 
@@ -131,7 +132,7 @@ data Event = KEvent {
     , filter :: {-# UNPACK #-} !Filter
     , flags  :: {-# UNPACK #-} !Flag
     , fflags :: {-# UNPACK #-} !FFlag
-#ifdef netbsd_HOST_OS
+#if defined(netbsd_HOST_OS)
     , data_  :: {-# UNPACK #-} !Int64
 #else
     , data_  :: {-# UNPACK #-} !CIntPtr
@@ -186,10 +187,10 @@ newtype Flag = Flag Word16
  , flagOneshot = EV_ONESHOT
  }
 
-#if SIZEOF_KEV_FILTER == 4 /*kevent.filter: uint32_t or uint16_t. */
-newtype Filter = Filter Word32
+#if SIZEOF_KEV_FILTER == 4 /*kevent.filter: int32_t or int16_t. */
+newtype Filter = Filter Int32
 #else
-newtype Filter = Filter Word16
+newtype Filter = Filter Int16
 #endif
     deriving (Bits, FiniteBits, Eq, Num, Show, Storable)
 
@@ -264,13 +265,13 @@ withTimeSpec ts f
 
 fromTimeout :: Timeout -> TimeSpec
 fromTimeout Forever     = TimeSpec (-1) (-1)
-fromTimeout (Timeout s) = TimeSpec (toEnum sec) (toEnum nanosec)
+fromTimeout (Timeout s) = TimeSpec (toEnum sec') (toEnum nanosec')
   where
-    sec :: Int
-    sec     = floor s
+    (sec, nanosec) = s `quotRem` 1000000000
 
-    nanosec :: Int
-    nanosec = ceiling $ (s - fromIntegral sec) * 1000000000
+    nanosec', sec' :: Int
+    sec' = fromIntegral sec
+    nanosec' = fromIntegral nanosec
 
 toEvent :: Filter -> E.Event
 toEvent (Filter f)

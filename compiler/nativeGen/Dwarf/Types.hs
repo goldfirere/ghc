@@ -32,11 +32,13 @@ import Platform
 import Unique
 import Reg
 import SrcLoc
+import Util
 
 import Dwarf.Constants
 
+import qualified Control.Monad.Trans.State.Strict as S
+import Control.Monad (zipWithM, join)
 import Data.Bits
-import Data.List ( mapAccumL )
 import qualified Data.Map as Map
 import Data.Word
 import Data.Char
@@ -268,10 +270,14 @@ data DwarfFrameProc
 -- containing FDE.
 data DwarfFrameBlock
   = DwarfFrameBlock
-    { dwFdeBlock      :: CLabel
-    , dwFdeBlkHasInfo :: Bool
-    , dwFdeUnwind     :: UnwindTable
+    { dwFdeBlkHasInfo :: Bool
+    , dwFdeUnwind     :: [UnwindPoint]
+      -- ^ these unwind points must occur in the same order as they occur
+      -- in the block
     }
+
+instance Outputable DwarfFrameBlock where
+  ppr (DwarfFrameBlock hasInfo unwinds) = braces $ ppr hasInfo <+> ppr unwinds
 
 -- | Header for the @.debug_frame@ section. Here we emit the "Common
 -- Information Entry" record that etablishes general call frame
@@ -285,6 +291,7 @@ pprDwarfFrame DwarfFrame{dwCieLabel=cieLabel,dwCieInit=cieInit,dwCieProcs=procs}
         spReg       = dwarfGlobalRegNo plat Sp
         retReg      = dwarfReturnRegNo plat
         wordSize    = platformWordSize plat
+        pprInit :: (GlobalReg, Maybe UnwindExpr) -> SDoc
         pprInit (g, uw) = pprSetUnwind plat g (Nothing, uw)
 
         -- Preserve C stack pointer: This necessary to override that default
@@ -337,7 +344,8 @@ pprFrameProc frameLbl initUw (DwarfFrameProc procLbl hasInfo blocks)
         procEnd     = mkAsmTempEndLabel procLbl
         ifInfo str  = if hasInfo then text str else empty
                       -- see [Note: Info Offset]
-    in vcat [ pprData4' (ppr fdeEndLabel <> char '-' <> ppr fdeLabel)
+    in vcat [ whenPprDebug $ text "# Unwinding for" <+> ppr procLbl <> colon
+            , pprData4' (ppr fdeEndLabel <> char '-' <> ppr fdeLabel)
             , ppr fdeLabel <> colon
             , pprData4' (ppr frameLbl <> char '-' <>
                          ptext dwarfFrameLabel)    -- Reference to CIE
@@ -345,7 +353,7 @@ pprFrameProc frameLbl initUw (DwarfFrameProc procLbl hasInfo blocks)
             , pprWord (ppr procEnd <> char '-' <>
                        ppr procLbl <> ifInfo "+1") -- Block byte length
             ] $$
-       vcat (snd $ mapAccumL pprFrameBlock initUw blocks) $$
+       vcat (S.evalState (mapM pprFrameBlock blocks) initUw) $$
        wordAlign $$
        ppr fdeEndLabel <> colon
 
@@ -353,22 +361,38 @@ pprFrameProc frameLbl initUw (DwarfFrameProc procLbl hasInfo blocks)
 -- instructions where unwind information actually changes. This small
 -- optimisations saves a lot of space, as subsequent blocks often have
 -- the same unwind information.
-pprFrameBlock :: UnwindTable -> DwarfFrameBlock -> (UnwindTable, SDoc)
-pprFrameBlock oldUws (DwarfFrameBlock blockLbl hasInfo uws)
-  | uws == oldUws
-  = (oldUws, empty)
-  | otherwise
-  = (,) uws $ sdocWithPlatform $ \plat ->
-    let lbl = ppr blockLbl <> if hasInfo then text "-1" else empty
-              -- see [Note: Info Offset]
-        isChanged g v | old == Just v  = Nothing
-                      | otherwise      = Just (old, v)
-                      where old = Map.lookup g oldUws
-        changed = Map.toList $ Map.mapMaybeWithKey isChanged uws
-        died    = Map.toList $ Map.difference oldUws uws
-    in pprByte dW_CFA_set_loc $$ pprWord lbl $$
-       vcat (map (uncurry $ pprSetUnwind plat) changed) $$
-       vcat (map (pprUndefUnwind plat . fst) died)
+pprFrameBlock :: DwarfFrameBlock -> S.State UnwindTable SDoc
+pprFrameBlock (DwarfFrameBlock hasInfo uws0) =
+    vcat <$> zipWithM pprFrameDecl (True : repeat False) uws0
+  where
+    pprFrameDecl :: Bool -> UnwindPoint -> S.State UnwindTable SDoc
+    pprFrameDecl firstDecl (UnwindPoint lbl uws) = S.state $ \oldUws ->
+        let -- Did a register's unwind expression change?
+            isChanged :: GlobalReg -> Maybe UnwindExpr
+                      -> Maybe (Maybe UnwindExpr, Maybe UnwindExpr)
+            isChanged g new
+                -- the value didn't change
+              | Just new == old = Nothing
+                -- the value was and still is undefined
+              | Nothing <- old
+              , Nothing <- new  = Nothing
+                -- the value changed
+              | otherwise       = Just (join old, new)
+              where
+                old = Map.lookup g oldUws
+
+            changed = Map.toList $ Map.mapMaybeWithKey isChanged uws
+
+        in if oldUws == uws
+             then (empty, oldUws)
+             else let -- see [Note: Info Offset]
+                      needsOffset = firstDecl && hasInfo
+                      lblDoc = ppr lbl <>
+                               if needsOffset then text "-1" else empty
+                      doc = sdocWithPlatform $ \plat ->
+                           pprByte dW_CFA_set_loc $$ pprWord lblDoc $$
+                           vcat (map (uncurry $ pprSetUnwind plat) changed)
+                  in (doc, uws)
 
 -- Note [Info Offset]
 --
@@ -398,37 +422,53 @@ dwarfGlobalRegNo p reg = maybe 0 (dwarfRegNo p . RegReal) $ globalRegMaybe p reg
 -- | Generate code for setting the unwind information for a register,
 -- optimized using its known old value in the table. Note that "Sp" is
 -- special: We see it as synonym for the CFA.
-pprSetUnwind :: Platform -> GlobalReg -> (Maybe UnwindExpr, UnwindExpr) -> SDoc
-pprSetUnwind _    Sp (Just (UwReg s _), UwReg s' o') | s == s'
+pprSetUnwind :: Platform
+             -> GlobalReg
+                -- ^ the register to produce an unwinding table entry for
+             -> (Maybe UnwindExpr, Maybe UnwindExpr)
+                -- ^ the old and new values of the register
+             -> SDoc
+pprSetUnwind plat g  (_, Nothing)
+  = pprUndefUnwind plat g
+pprSetUnwind _    Sp (Just (UwReg s _), Just (UwReg s' o')) | s == s'
   = if o' >= 0
     then pprByte dW_CFA_def_cfa_offset $$ pprLEBWord (fromIntegral o')
     else pprByte dW_CFA_def_cfa_offset_sf $$ pprLEBInt o'
-pprSetUnwind plat Sp (_, UwReg s' o')
+pprSetUnwind plat Sp (_, Just (UwReg s' o'))
   = if o' >= 0
     then pprByte dW_CFA_def_cfa $$
-         pprLEBWord (fromIntegral $ dwarfGlobalRegNo plat s') $$
+         pprLEBRegNo plat s' $$
          pprLEBWord (fromIntegral o')
     else pprByte dW_CFA_def_cfa_sf $$
-         pprLEBWord (fromIntegral $ dwarfGlobalRegNo plat s') $$
+         pprLEBRegNo plat s' $$
          pprLEBInt o'
-pprSetUnwind _    Sp (_, uw)
+pprSetUnwind _    Sp (_, Just uw)
   = pprByte dW_CFA_def_cfa_expression $$ pprUnwindExpr False uw
-pprSetUnwind plat g  (_, UwDeref (UwReg Sp o))
+pprSetUnwind plat g  (_, Just (UwDeref (UwReg Sp o)))
   | o < 0 && ((-o) `mod` platformWordSize plat) == 0 -- expected case
   = pprByte (dW_CFA_offset + dwarfGlobalRegNo plat g) $$
     pprLEBWord (fromIntegral ((-o) `div` platformWordSize plat))
   | otherwise
   = pprByte dW_CFA_offset_extended_sf $$
-    pprLEBWord (fromIntegral (dwarfGlobalRegNo plat g)) $$
+    pprLEBRegNo plat g $$
     pprLEBInt o
-pprSetUnwind plat g  (_, UwDeref uw)
+pprSetUnwind plat g  (_, Just (UwDeref uw))
   = pprByte dW_CFA_expression $$
-    pprLEBWord (fromIntegral (dwarfGlobalRegNo plat g)) $$
+    pprLEBRegNo plat g $$
     pprUnwindExpr True uw
-pprSetUnwind plat g  (_, uw)
+pprSetUnwind plat g  (_, Just (UwReg g' 0))
+  | g == g'
+  = pprByte dW_CFA_same_value $$
+    pprLEBRegNo plat g
+pprSetUnwind plat g  (_, Just uw)
   = pprByte dW_CFA_val_expression $$
-    pprLEBWord (fromIntegral (dwarfGlobalRegNo plat g)) $$
+    pprLEBRegNo plat g $$
     pprUnwindExpr True uw
+
+-- | Print the register number of the given 'GlobalReg' as an unsigned LEB128
+-- encoded number.
+pprLEBRegNo :: Platform -> GlobalReg -> SDoc
+pprLEBRegNo plat = pprLEBWord . fromIntegral . dwarfGlobalRegNo plat
 
 -- | Generates a DWARF expression for the given unwind expression. If
 -- @spIsCFA@ is true, we see @Sp@ as the frame base CFA where it gets
@@ -442,7 +482,7 @@ pprUnwindExpr spIsCFA expr
         pprE (UwReg Sp i) | spIsCFA
                              = if i == 0
                                then pprByte dW_OP_call_frame_cfa
-                               else ppr (UwPlus (UwReg Sp 0) (UwConst i))
+                               else pprE (UwPlus (UwReg Sp 0) (UwConst i))
         pprE (UwReg g i)      = pprByte (dW_OP_breg0+dwarfGlobalRegNo plat g) $$
                                pprLEBInt i
         pprE (UwDeref u)      = pprE u $$ pprByte dW_OP_deref
@@ -457,9 +497,8 @@ pprUnwindExpr spIsCFA expr
 -- | Generate code for re-setting the unwind information for a
 -- register to @undefined@
 pprUndefUnwind :: Platform -> GlobalReg -> SDoc
-pprUndefUnwind _    Sp = panic "pprUndefUnwind Sp" -- should never happen
 pprUndefUnwind plat g  = pprByte dW_CFA_undefined $$
-                         pprLEBWord (fromIntegral $ dwarfGlobalRegNo plat g)
+                         pprLEBRegNo plat g
 
 
 -- | Align assembly at (machine) word boundary
@@ -478,14 +517,7 @@ pprByte x = text "\t.byte " <> ppr (fromIntegral x :: Word)
 
 -- | Assembly for a two-byte constant integer
 pprHalf :: Word16 -> SDoc
-pprHalf x = sdocWithPlatform $ \plat ->
-  -- Naturally Darwin doesn't support `.hword` and binutils uses `.short`
-  -- as a synonym for `.word` (but only some of the time!). The madness
-  -- is nearly too much to bear.
-  let dir = case platformOS plat of
-        OSDarwin -> text ".short"
-        _        -> text ".hword"
-  in text "\t" <> dir <+> ppr (fromIntegral x :: Word)
+pprHalf x = text "\t.short" <+> ppr (fromIntegral x :: Word)
 
 -- | Assembly for a constant DWARF flag
 pprFlag :: Bool -> SDoc
@@ -539,7 +571,7 @@ pprString' str = text "\t.asciz \"" <> str <> char '"'
 pprString :: String -> SDoc
 pprString str
   = pprString' $ hcat $ map escapeChar $
-    if utf8EncodedLength str == length str
+    if str `lengthIs` utf8EncodedLength str
     then str
     else map (chr . fromIntegral) $ bytesFS $ mkFastString str
 

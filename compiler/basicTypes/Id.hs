@@ -28,12 +28,15 @@ module Id (
         -- * The main types
         Var, Id, isId,
 
+        -- * In and Out variants
+        InVar,  InId,
+        OutVar, OutId,
+
         -- ** Simple construction
         mkGlobalId, mkVanillaGlobal, mkVanillaGlobalWithInfo,
         mkLocalId, mkLocalCoVar, mkLocalIdOrCoVar,
         mkLocalIdOrCoVarWithInfo,
         mkLocalIdWithInfo, mkExportedLocalId, mkExportedVanillaId,
-        mkNonExportedLocalId,
         mkSysLocal, mkSysLocalM, mkSysLocalOrCoVar, mkSysLocalOrCoVarM,
         mkUserLocal, mkUserLocalOrCoVar,
         mkTemplateLocals, mkTemplateLocalsNum, mkTemplateLocal,
@@ -49,8 +52,8 @@ module Id (
         globaliseId, localiseId,
         setIdInfo, lazySetIdInfo, modifyIdInfo, maybeModifyIdInfo,
         zapLamIdInfo, zapIdDemandInfo, zapIdUsageInfo, zapIdUsageEnvInfo,
-        zapIdUsedOnceInfo,
-        zapFragileIdInfo, zapIdStrictness,
+        zapIdUsedOnceInfo, zapIdTailCallInfo,
+        zapFragileIdInfo, zapIdStrictness, zapStableUnfolding,
         transferPolyIdInfo,
 
         -- ** Predicates on Ids
@@ -70,6 +73,10 @@ module Id (
         -- ** Evidence variables
         DictId, isDictId, isEvVar,
 
+        -- ** Join variables
+        JoinId, isJoinId, isJoinId_maybe, idJoinArity,
+        asJoinId, asJoinId_maybe, zapJoinId,
+
         -- ** Inline pragma stuff
         idInlinePragma, setInlinePragma, modifyInlinePragma,
         idInlineActivation, setInlineActivation, idRuleMatchInfo,
@@ -82,15 +89,16 @@ module Id (
 
         -- ** Reading 'IdInfo' fields
         idArity,
-        idCallArity,
+        idCallArity, idFunRepArity,
         idUnfolding, realIdUnfolding,
         idSpecialisation, idCoreRules, idHasRules,
         idCafInfo,
         idOneShotInfo, idStateHackOneShotInfo,
         idOccInfo,
+        isNeverLevPolyId,
 
         -- ** Writing 'IdInfo' fields
-        setIdUnfolding,
+        setIdUnfolding, setCaseBndrEvald,
         setIdArity,
         setIdCallArity,
 
@@ -108,18 +116,22 @@ module Id (
 
 #include "HsVersions.h"
 
-import CoreSyn ( CoreRule, Unfolding( NoUnfolding ) )
+import DynFlags
+import CoreSyn ( CoreRule, isStableUnfolding, evaldUnfolding, Unfolding( NoUnfolding ) )
 
 import IdInfo
 import BasicTypes
 
 -- Imported and re-exported
-import Var( Id, CoVar, DictId,
-            idInfo, idDetails, globaliseId, varType,
+import Var( Id, CoVar, DictId, JoinId,
+            InId,  InVar,
+            OutId, OutVar,
+            idInfo, idDetails, setIdDetails, globaliseId, varType,
             isId, isLocalId, isGlobalId, isExportedId )
 import qualified Var
 
 import Type
+import RepType
 import TysPrim
 import DataCon
 import Demand
@@ -135,7 +147,6 @@ import Unique
 import UniqSupply
 import FastString
 import Util
-import StaticFlags
 
 -- infixl so you can say (id `set` a `set` b)
 infixl  1 `setIdUnfolding`,
@@ -150,7 +161,10 @@ infixl  1 `setIdUnfolding`,
           `idCafInfo`,
 
           `setIdDemandInfo`,
-          `setIdStrictness`
+          `setIdStrictness`,
+
+          `asJoinId`,
+          `asJoinId_maybe`
 
 {-
 ************************************************************************
@@ -286,12 +300,6 @@ mkExportedLocalId :: IdDetails -> Name -> Type -> Id
 mkExportedLocalId details name ty = Var.mkExportedLocalVar details name ty vanillaIdInfo
         -- Note [Free type variables]
 
--- | Create a local 'Id' that is marked as not-exported.
--- These may be removed as dead code.
-mkNonExportedLocalId :: IdDetails -> Name -> Type -> Id
-mkNonExportedLocalId details name ty =
-  Var.mkLocalVar details name ty vanillaIdInfo
-
 mkExportedVanillaId :: Name -> Type -> Id
 mkExportedVanillaId name ty = Var.mkExportedLocalVar VanillaId name ty vanillaIdInfo
         -- Note [Free type variables]
@@ -338,7 +346,7 @@ mkWorkerId uniq unwrkr ty
 
 -- | Create a /template local/: a family of system local 'Id's in bijection with @Int@s, typically used in unfoldings
 mkTemplateLocal :: Int -> Type -> Id
-mkTemplateLocal i ty = mkSysLocalOrCoVar (fsLit "tpl") (mkBuiltinUnique i) ty
+mkTemplateLocal i ty = mkSysLocalOrCoVar (fsLit "v") (mkBuiltinUnique i) ty
 
 -- | Create a template local for a series of types
 mkTemplateLocals :: [Type] -> [Id]
@@ -469,6 +477,24 @@ isDataConId_maybe id = case Var.idDetails id of
                          DataConWrapId con -> Just con
                          _                 -> Nothing
 
+isJoinId :: Var -> Bool
+-- It is convenient in SetLevels.lvlMFE to apply isJoinId
+-- to the free vars of an expression, so it's convenient
+-- if it returns False for type variables
+isJoinId id
+  | isId id = case Var.idDetails id of
+                JoinId {} -> True
+                _         -> False
+  | otherwise = False
+
+isJoinId_maybe :: Var -> Maybe JoinArity
+isJoinId_maybe id
+ | isId id  = ASSERT2( isId id, ppr id )
+              case Var.idDetails id of
+                JoinId arity -> Just arity
+                _            -> Nothing
+ | otherwise = Nothing
+
 idDataCon :: Id -> DataCon
 -- ^ Get from either the worker or the wrapper 'Id' to the 'DataCon'. Currently used only in the desugarer.
 --
@@ -545,6 +571,40 @@ isDictId id = isDictTy (idType id)
 {-
 ************************************************************************
 *                                                                      *
+              Join variables
+*                                                                      *
+************************************************************************
+-}
+
+idJoinArity :: JoinId -> JoinArity
+idJoinArity id = isJoinId_maybe id `orElse` pprPanic "idJoinArity" (ppr id)
+
+asJoinId :: Id -> JoinArity -> JoinId
+asJoinId id arity = WARN(not (isLocalId id),
+                         text "global id being marked as join var:" <+> ppr id)
+                    WARN(not (is_vanilla_or_join id),
+                         ppr id <+> pprIdDetails (idDetails id))
+                    id `setIdDetails` JoinId arity
+  where
+    is_vanilla_or_join id = case Var.idDetails id of
+                              VanillaId -> True
+                              JoinId {} -> True
+                              _         -> False
+
+zapJoinId :: Id -> Id
+-- May be a regular id already
+zapJoinId jid | isJoinId jid = zapIdTailCallInfo (jid `setIdDetails` VanillaId)
+                                 -- Core Lint may complain if still marked
+                                 -- as AlwaysTailCalled
+              | otherwise    = jid
+
+asJoinId_maybe :: Id -> Maybe JoinArity -> Id
+asJoinId_maybe id (Just arity) = asJoinId id arity
+asJoinId_maybe id Nothing      = zapJoinId id
+
+{-
+************************************************************************
+*                                                                      *
 \subsection{IdInfo stuff}
 *                                                                      *
 ************************************************************************
@@ -564,9 +624,14 @@ idCallArity id = callArityInfo (idInfo id)
 setIdCallArity :: Id -> Arity -> Id
 setIdCallArity id arity = modifyIdInfo (`setCallArityInfo` arity) id
 
+idFunRepArity :: Id -> RepArity
+idFunRepArity x = countFunRepArgs (idArity x) (idType x)
+
 -- | Returns true if an application to n args would diverge
-isBottomingId :: Id -> Bool
-isBottomingId id = isBottomingSig (idStrictness id)
+isBottomingId :: Var -> Bool
+isBottomingId v
+  | isId v    = isBottomingSig (idStrictness v)
+  | otherwise = False
 
 idStrictness :: Id -> StrictSig
 idStrictness id = strictnessInfo (idInfo id)
@@ -586,9 +651,11 @@ zapIdStrictness id = modifyIdInfo (`setStrictnessInfo` nopSig) id
 isStrictId :: Id -> Bool
 isStrictId id
   = ASSERT2( isId id, text "isStrictId: not an id: " <+> ppr id )
+         not (isJoinId id) && (
            (isStrictType (idType id)) ||
            -- Take the best of both strictnesses - old and new
            (isStrictDmd (idDemandInfo id))
+         )
 
         ---------------------------------
         -- UNFOLDING
@@ -612,6 +679,15 @@ idDemandInfo       id = demandInfo (idInfo id)
 
 setIdDemandInfo :: Id -> Demand -> Id
 setIdDemandInfo id dmd = modifyIdInfo (`setDemandInfo` dmd) id
+
+setCaseBndrEvald :: StrictnessMark -> Id -> Id
+-- Used for variables bound by a case expressions, both the case-binder
+-- itself, and any pattern-bound variables that are argument of a
+-- strict constructor.  It just marks the variable as already-evaluated,
+-- so that (for example) a subsequent 'seq' can be dropped
+setCaseBndrEvald str id
+  | isMarkedStrict str = id `setIdUnfolding` evaldUnfolding
+  | otherwise          = id
 
         ---------------------------------
         -- SPECIALISATION
@@ -639,7 +715,7 @@ setIdCafInfo :: Id -> CafInfo -> Id
 setIdCafInfo id caf_info = modifyIdInfo (`setCafInfo` caf_info) id
 
         ---------------------------------
-        -- Occcurrence INFO
+        -- Occurrence INFO
 idOccInfo :: Id -> OccInfo
 idOccInfo id = occInfo (idInfo id)
 
@@ -647,7 +723,7 @@ setIdOccInfo :: Id -> OccInfo -> Id
 setIdOccInfo id occ_info = modifyIdInfo (`setOccInfo` occ_info) id
 
 zapIdOccInfo :: Id -> Id
-zapIdOccInfo b = b `setIdOccInfo` NoOccInfo
+zapIdOccInfo b = b `setIdOccInfo` noOccInfo
 
 {-
         ---------------------------------
@@ -705,7 +781,7 @@ isOneShotBndr var
 
 -- | Should we apply the state hack to values of this 'Type'?
 stateHackOneShot :: OneShotInfo
-stateHackOneShot = OneShotLam         -- Or maybe ProbOneShot?
+stateHackOneShot = OneShotLam
 
 typeOneShot :: Type -> OneShotInfo
 typeOneShot ty
@@ -714,7 +790,7 @@ typeOneShot ty
 
 isStateHackType :: Type -> Bool
 isStateHackType ty
-  | opt_NoStateHack
+  | hasNoStateHack unsafeGlobalDynFlags
   = False
   | otherwise
   = case tyConAppTyCon_maybe ty of
@@ -741,7 +817,6 @@ isStateHackType ty
 isProbablyOneShotLambda :: Id -> Bool
 isProbablyOneShotLambda id = case idStateHackOneShotInfo id of
                                OneShotLam    -> True
-                               ProbOneShot   -> True
                                NoOneShotInfo -> False
 
 setOneShotLambda :: Id -> Id
@@ -762,8 +837,6 @@ updOneShotInfo id one_shot
     do_upd = case (idOneShotInfo id, one_shot) of
                 (NoOneShotInfo, _) -> True
                 (OneShotLam,    _) -> False
-                (_, NoOneShotInfo) -> False
-                _                  -> True
 
 -- The OneShotLambda functions simply fiddle with the IdInfo flag
 -- But watch out: this may change the type of something else
@@ -790,6 +863,14 @@ zapIdUsageEnvInfo = zapInfo zapUsageEnvInfo
 
 zapIdUsedOnceInfo :: Id -> Id
 zapIdUsedOnceInfo = zapInfo zapUsedOnceInfo
+
+zapIdTailCallInfo :: Id -> Id
+zapIdTailCallInfo = zapInfo zapTailCallInfo
+
+zapStableUnfolding :: Id -> Id
+zapStableUnfolding id
+ | isStableUnfolding (realIdUnfolding id) = setIdUnfolding id NoUnfolding
+ | otherwise                              = id
 
 {-
 Note [transferPolyIdInfo]
@@ -856,11 +937,15 @@ transferPolyIdInfo old_id abstract_wrt new_id
     old_inline_prag = inlinePragInfo old_info
     old_occ_info    = occInfo old_info
     new_arity       = old_arity + arity_increase
+    new_occ_info    = zapOccTailCallInfo old_occ_info
 
     old_strictness  = strictnessInfo old_info
     new_strictness  = increaseStrictSigArity arity_increase old_strictness
 
     transfer new_info = new_info `setArityInfo` new_arity
                                  `setInlinePragInfo` old_inline_prag
-                                 `setOccInfo` old_occ_info
+                                 `setOccInfo` new_occ_info
                                  `setStrictnessInfo` new_strictness
+
+isNeverLevPolyId :: Id -> Bool
+isNeverLevPolyId = isNeverLevPolyIdInfo . idInfo

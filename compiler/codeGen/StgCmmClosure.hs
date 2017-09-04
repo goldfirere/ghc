@@ -13,7 +13,6 @@
 
 module StgCmmClosure (
         DynTag,  tagForCon, isSmallFamily,
-        ConTagZ, dataConTagZ,
 
         idPrimRep, isVoidRep, isGcPtrRep, addIdReps, addArgReps,
         argPrimRep,
@@ -26,6 +25,7 @@ module StgCmmClosure (
         StandardFormInfo,        -- ...ditto...
         mkLFThunk, mkLFReEntrant, mkConLFInfo, mkSelectorLFInfo,
         mkApLFInfo, mkLFImported, mkLFArgument, mkLFLetNoEscape,
+        mkLFStringLit,
         lfDynTag,
         maybeIsLFCon, isLFThunk, isLFReEntrant, lfUpdatable,
 
@@ -163,8 +163,8 @@ assertNonVoidStgArgs args = ASSERT(not (any (isVoidTy . stgArgType) args))
 -- Why are these here?
 
 idPrimRep :: Id -> PrimRep
-idPrimRep id = typePrimRep (idType id)
-    -- NB: typePrimRep fails on unboxed tuples,
+idPrimRep id = typePrimRep1 (idType id)
+    -- NB: typePrimRep1 fails on unboxed tuples,
     --     but by StgCmm no Ids have unboxed tuple type
 
 addIdReps :: [NonVoid Id] -> [NonVoid (PrimRep, Id)]
@@ -176,7 +176,7 @@ addArgReps = map (\arg -> let arg' = fromNonVoid arg
                            in NonVoid (argPrimRep arg', arg'))
 
 argPrimRep :: StgArg -> PrimRep
-argPrimRep arg = typePrimRep (stgArgType arg)
+argPrimRep arg = typePrimRep1 (stgArgType arg)
 
 
 -----------------------------------------------------------------------------
@@ -292,8 +292,8 @@ might_be_a_function :: Type -> Bool
 -- Return False only if we are *sure* it's a data type
 -- Look through newtypes etc as much as poss
 might_be_a_function ty
-  | UnaryRep rep <- repType ty
-  , Just tc <- tyConAppTyCon_maybe rep
+  | [LiftedRep] <- typePrimRep ty
+  , Just tc <- tyConAppTyCon_maybe (unwrapType ty)
   , isDataTyCon tc
   = False
   | otherwise
@@ -332,6 +332,10 @@ mkLFImported id
   where
     arity = idFunRepArity id
 
+-------------
+mkLFStringLit :: LambdaFormInfo
+mkLFStringLit = LFUnlifted
+
 -----------------------------------------------------
 --                Dynamic pointer tagging
 -----------------------------------------------------
@@ -355,17 +359,12 @@ type DynTag = Int       -- The tag on a *pointer*
 isSmallFamily :: DynFlags -> Int -> Bool
 isSmallFamily dflags fam_size = fam_size <= mAX_PTR_TAG dflags
 
--- We keep the *zero-indexed* tag in the srt_len field of the info
--- table of a data constructor.
-dataConTagZ :: DataCon -> ConTagZ
-dataConTagZ con = dataConTag con - fIRST_TAG
-
 tagForCon :: DynFlags -> DataCon -> DynTag
 tagForCon dflags con
-  | isSmallFamily dflags fam_size = con_tag + 1
+  | isSmallFamily dflags fam_size = con_tag
   | otherwise                     = 1
   where
-    con_tag  = dataConTagZ con
+    con_tag  = dataConTag con -- NB: 1-indexed
     fam_size = tyConFamilySize (dataConTyCon con)
 
 tagForArity :: DynFlags -> RepArity -> DynTag
@@ -406,7 +405,7 @@ isLFReEntrant _                = False
 lfClosureType :: LambdaFormInfo -> ClosureTypeInfo
 lfClosureType (LFReEntrant _ _ arity _ argd) = Fun arity argd
 lfClosureType (LFCon con)                    = Constr (dataConTagZ con)
-                                                    (dataConIdentity con)
+                                                      (dataConIdentity con)
 lfClosureType (LFThunk _ _ _ is_sel _)       = thunkClosureType is_sel
 lfClosureType _                              = panic "lfClosureType"
 
@@ -554,7 +553,7 @@ getCallMethod dflags _ id _ n_args v_args _cg_loc
               (Just (self_loop_id, block_id, args))
   | gopt Opt_Loopification dflags
   , id == self_loop_id
-  , n_args - v_args == length args
+  , args `lengthIs` (n_args - v_args)
   -- If these patterns match then we know that:
   --   * loopification optimisation is turned on
   --   * function is performing a self-recursive call in a tail position
@@ -565,8 +564,10 @@ getCallMethod dflags _ id _ n_args v_args _cg_loc
 
 getCallMethod dflags name id (LFReEntrant _ _ arity _ _) n_args _v_args _cg_loc
               _self_loop_info
-  | n_args == 0    = ASSERT( arity /= 0 )
-                     ReturnIt        -- No args at all
+  | n_args == 0 -- No args at all
+  && not (gopt Opt_SccProfilingOn dflags)
+     -- See Note [Evaluating functions with profiling] in rts/Apply.cmm
+  = ASSERT( arity /= 0 ) ReturnIt
   | n_args < arity = SlowCall        -- Not enough args
   | otherwise      = DirectEntry (enterIdLabel dflags name (idCafInfo id)) arity
 
@@ -826,7 +827,7 @@ we run into issues like Trac #10414. Specifically:
 
   * It is dangerous to black-hole a non-updatable thunk because
      - is not updated (of course)
-     - hence, if it is black-holed and another thread tries to evalute
+     - hence, if it is black-holed and another thread tries to evaluate
        it, that thread will block forever
     This actually happened in Trac #10414.  So we do not black-hole
     non-updatable thunks.
@@ -1040,13 +1041,11 @@ mkDataConInfoTable dflags data_con is_static ptr_wds nonptr_wds
                 , cit_srt  = NoC_SRT }
  where
    name = dataConName data_con
-
-   info_lbl | is_static = mkStaticInfoTableLabel name NoCafRefs
-            | otherwise = mkConInfoTableLabel    name NoCafRefs
-
+   info_lbl = mkConInfoTableLabel name NoCafRefs
    sm_rep = mkHeapRep dflags is_static ptr_wds nonptr_wds cl_type
-
    cl_type = Constr (dataConTagZ data_con) (dataConIdentity data_con)
+                  -- We keep the *zero-indexed* tag in the srt_len field
+                  -- of the info table of a data constructor.
 
    prof | not (gopt Opt_SccProfilingOn dflags) = NoProfilingInfo
         | otherwise                            = ProfilingInfo ty_descr val_descr
@@ -1074,16 +1073,10 @@ indStaticInfoTable
 staticClosureNeedsLink :: Bool -> CmmInfoTable -> Bool
 -- A static closure needs a link field to aid the GC when traversing
 -- the static closure graph.  But it only needs such a field if either
---         a) it has an SRT
+--        a) it has an SRT
 --        b) it's a constructor with one or more pointer fields
 -- In case (b), the constructor's fields themselves play the role
 -- of the SRT.
---
--- At this point, the cit_srt field has not been calculated (that
--- happens right at the end of the Cmm pipeline), but we do have the
--- VarSet of CAFs that CoreToStg attached, and if that is empty there
--- will definitely not be an SRT.
---
 staticClosureNeedsLink has_srt CmmInfoTable{ cit_rep = smrep }
   | isConRep smrep         = not (isStaticNoCafCon smrep)
   | otherwise              = has_srt -- needsSRT (cit_srt info_tbl)

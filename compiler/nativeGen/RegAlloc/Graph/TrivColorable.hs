@@ -13,7 +13,7 @@ import Reg
 
 import GraphBase
 
-import UniqFM
+import UniqSet
 import Platform
 import Panic
 
@@ -56,10 +56,10 @@ accSqueeze
         :: Int
         -> Int
         -> (reg -> Int)
-        -> UniqFM reg
+        -> UniqSet reg
         -> Int
 
-accSqueeze count maxCount squeeze ufm = acc count (nonDetEltsUFM ufm)
+accSqueeze count maxCount squeeze us = acc count (nonDetEltsUniqSet us)
   -- See Note [Unique Determinism and code generation]
   where acc count [] = count
         acc count _ | count >= maxCount = count
@@ -111,7 +111,7 @@ trivColorable platform virtualRegSqueeze realRegSqueeze RcInteger conflicts excl
                             ArchPPC       -> 16
                             ArchSPARC     -> 14
                             ArchSPARC64   -> panic "trivColorable ArchSPARC64"
-                            ArchPPC_64 _  -> panic "trivColorable ArchPPC_64"
+                            ArchPPC_64 _  -> 15
                             ArchARM _ _ _ -> panic "trivColorable ArchARM"
                             ArchARM64     -> panic "trivColorable ArchARM64"
                             ArchAlpha     -> panic "trivColorable ArchAlpha"
@@ -137,7 +137,7 @@ trivColorable platform virtualRegSqueeze realRegSqueeze RcFloat conflicts exclus
                             ArchPPC       -> 0
                             ArchSPARC     -> 22
                             ArchSPARC64   -> panic "trivColorable ArchSPARC64"
-                            ArchPPC_64 _  -> panic "trivColorable ArchPPC_64"
+                            ArchPPC_64 _  -> 0
                             ArchARM _ _ _ -> panic "trivColorable ArchARM"
                             ArchARM64     -> panic "trivColorable ArchARM64"
                             ArchAlpha     -> panic "trivColorable ArchAlpha"
@@ -163,7 +163,7 @@ trivColorable platform virtualRegSqueeze realRegSqueeze RcDouble conflicts exclu
                             ArchPPC       -> 26
                             ArchSPARC     -> 11
                             ArchSPARC64   -> panic "trivColorable ArchSPARC64"
-                            ArchPPC_64 _  -> panic "trivColorable ArchPPC_64"
+                            ArchPPC_64 _  -> 20
                             ArchARM _ _ _ -> panic "trivColorable ArchARM"
                             ArchARM64     -> panic "trivColorable ArchARM64"
                             ArchAlpha     -> panic "trivColorable ArchAlpha"
@@ -189,7 +189,7 @@ trivColorable platform virtualRegSqueeze realRegSqueeze RcDoubleSSE conflicts ex
                             ArchPPC       -> 0
                             ArchSPARC     -> 0
                             ArchSPARC64   -> panic "trivColorable ArchSPARC64"
-                            ArchPPC_64 _  -> panic "trivColorable ArchPPC_64"
+                            ArchPPC_64 _  -> 0
                             ArchARM _ _ _ -> panic "trivColorable ArchARM"
                             ArchARM64     -> panic "trivColorable ArchARM64"
                             ArchAlpha     -> panic "trivColorable ArchAlpha"

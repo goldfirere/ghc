@@ -6,11 +6,14 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef LINKERINTERNALS_H
-#define LINKERINTERNALS_H
+#pragma once
 
 #include "Rts.h"
 #include "Hash.h"
+
+#if RTS_LINKER_USE_MMAP
+#include <sys/mman.h>
+#endif
 
 #include "BeginPrivate.h"
 
@@ -29,13 +32,23 @@ typedef enum {
 /* Indication of section kinds for loaded objects.  Needed by
    the GC for deciding whether or not a pointer on the stack
    is a code pointer.
+   See Note [BFD import library].
 */
 typedef
-   enum { SECTIONKIND_CODE_OR_RODATA,
+   enum { /* Section is code or readonly. e.g. .text or .r(o)data.  */
+          SECTIONKIND_CODE_OR_RODATA,
+          /* Section contains read/write data. e.g. .data.  */
           SECTIONKIND_RWDATA,
+          /* Static initializer section. e.g. .ctors.  */
           SECTIONKIND_INIT_ARRAY,
+          /* We don't know what the section is and don't care.  */
           SECTIONKIND_OTHER,
-          SECTIONKIND_NOINFOAVAIL }
+          /* Section belongs to an import section group. e.g. .idata$.  */
+          SECTIONKIND_IMPORT,
+          /* Section defines an import library entry, e.g. idata$7.  */
+          SECTIONKIND_IMPORT_LIBRARY,
+          SECTIONKIND_NOINFOAVAIL
+        }
    SectionKind;
 
 typedef
@@ -45,6 +58,18 @@ typedef
           SECTION_MALLOC,
         }
    SectionAlloc;
+
+/*
+ * Note [No typedefs for customizable types]
+ * Some pointer-to-struct types are defined opaquely
+ * first, and customized later to architecture/ABI-specific
+ * instantiations. Having the usual
+ *   typedef struct _Foo {...} Foo;
+ * wrappers is hard to get right with older versions of GCC,
+ * so just have a
+ *   struct Foo {...};
+ * and always refer to it with the 'struct' qualifier.
+ */
 
 typedef
    struct _Section {
@@ -59,6 +84,11 @@ typedef
       StgWord mapped_offset;      /* offset from the image of mapped_start */
       void* mapped_start;         /* start of mmap() block */
       StgWord mapped_size;        /* size of mmap() block */
+
+      /* A customizable type to augment the Section type.
+       * See Note [No typedefs for customizable types]
+       */
+      struct SectionFormatInfo* info;
    }
    Section;
 
@@ -81,7 +111,7 @@ typedef struct ForeignExportStablePtr_ {
     struct ForeignExportStablePtr_ *next;
 } ForeignExportStablePtr;
 
-#if powerpc_HOST_ARCH || x86_64_HOST_ARCH || arm_HOST_ARCH
+#if defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH)
 #define NEED_SYMBOL_EXTRAS 1
 #endif
 
@@ -89,17 +119,17 @@ typedef struct ForeignExportStablePtr_ {
  * address relocations on the PowerPC, x86_64 and ARM.
  */
 typedef struct {
-#ifdef powerpc_HOST_ARCH
+#if defined(powerpc_HOST_ARCH)
     struct {
         short lis_r12, hi_addr;
         short ori_r12_r12, lo_addr;
         long mtctr_r12;
         long bctr;
     } jumpIsland;
-#elif x86_64_HOST_ARCH
+#elif defined(x86_64_HOST_ARCH)
     uint64_t    addr;
     uint8_t     jumpIsland[6];
-#elif arm_HOST_ARCH
+#elif defined(arm_HOST_ARCH)
     uint8_t     jumpIsland[16];
 #endif
 } SymbolExtra;
@@ -128,6 +158,12 @@ typedef struct _ObjectCode {
 
     /* ptr to mem containing the object file image */
     char*      image;
+
+    /* A customizable type, that formats can use to augment ObjectCode
+     * See Note [No typedefs for customizable types]
+     */
+    struct ObjectCodeFormatInfo* info;
+
     /* non-zero if the object file was mmap'd, otherwise malloc'd */
     int        imageMapped;
 
@@ -151,13 +187,13 @@ typedef struct _ObjectCode {
        outside one of these is an error in the linker. */
     ProddableBlock* proddables;
 
-#ifdef ia64_HOST_ARCH
+#if defined(ia64_HOST_ARCH)
     /* Procedure Linkage Table for this object */
     void *plt;
     unsigned int pltIndex;
 #endif
 
-#if NEED_SYMBOL_EXTRAS
+#if defined(NEED_SYMBOL_EXTRAS)
     SymbolExtra    *symbol_extras;
     unsigned long   first_symbol_extra;
     unsigned long   n_symbol_extras;
@@ -180,7 +216,7 @@ typedef struct _ObjectCode {
 extern ObjectCode *objects;
 extern ObjectCode *unloaded_objects;
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
 extern Mutex linker_mutex;
 extern Mutex linker_unloaded_mutex;
 #endif
@@ -259,6 +295,68 @@ extern /*Str*/HashTable *symhash;
 #define USE_CONTIGUOUS_MMAP 0
 #endif
 
-#include "EndPrivate.h"
+HsInt isAlreadyLoaded( pathchar *path );
+HsInt loadOc( ObjectCode* oc );
+ObjectCode* mkOc( pathchar *path, char *image, int imageSize,
+                  bool mapped, char *archiveMemberName,
+                  int misalignment
+                  );
 
-#endif /* LINKERINTERNALS_H */
+#if defined(mingw32_HOST_OS)
+/* We use myindex to calculate array addresses, rather than
+   simply doing the normal subscript thing.  That's because
+   some of the above structs have sizes which are not
+   a whole number of words.  GCC rounds their sizes up to a
+   whole number of words, which means that the address calcs
+   arising from using normal C indexing or pointer arithmetic
+   are just plain wrong.  Sigh.
+*/
+INLINE_HEADER unsigned char *
+myindex ( int scale, void* base, int index )
+{
+    return
+        ((unsigned char*)base) + scale * index;
+}
+
+// Defined in linker/PEi386.c
+char *cstring_from_section_name(
+    unsigned char* name,
+    unsigned char* strtab);
+#endif /* mingw32_HOST_OS */
+
+/* MAP_ANONYMOUS is MAP_ANON on some systems,
+   e.g. OS X (before Sierra), OpenBSD etc */
+#if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+
+/* Which object file format are we targetting? */
+#if defined(linux_HOST_OS) || defined(solaris2_HOST_OS) \
+|| defined(linux_android_HOST_OS) \
+|| defined(freebsd_HOST_OS) || defined(kfreebsdgnu_HOST_OS) \
+|| defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) \
+|| defined(openbsd_HOST_OS) || defined(gnu_HOST_OS)
+#  define OBJFORMAT_ELF
+#  include "linker/ElfTypes.h"
+#elif defined (mingw32_HOST_OS)
+#  define OBJFORMAT_PEi386
+struct SectionFormatInfo { void* placeholder; };
+struct ObjectCodeFormatInfo { void* placeholder; };
+#elif defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+#  define OBJFORMAT_MACHO
+#  include "linker/MachOTypes.h"
+#else
+#error "Unknown OBJECT_FORMAT for HOST_OS"
+#endif
+
+/* In order to simplify control flow a bit, some references to mmap-related
+   definitions are blocked off by a C-level if statement rather than a CPP-level
+   #if statement. Since those are dead branches when !RTS_LINKER_USE_MMAP, we
+   just stub out the relevant symbols here
+*/
+#if !RTS_LINKER_USE_MMAP
+#define munmap(x,y) /* nothing */
+#define MAP_ANONYMOUS 0
+#endif
+
+#include "EndPrivate.h"

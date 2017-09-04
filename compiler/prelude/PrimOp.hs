@@ -22,7 +22,7 @@ module PrimOp (
         primOpOkForSpeculation, primOpOkForSideEffects,
         primOpIsCheap, primOpFixity,
 
-        getPrimOpResultInfo,  PrimOpResultInfo(..),
+        getPrimOpResultInfo,  isComparisonPrimOp, PrimOpResultInfo(..),
 
         PrimCall(..)
     ) where
@@ -37,8 +37,9 @@ import Demand
 import OccName          ( OccName, pprOccName, mkVarOccFS )
 import TyCon            ( TyCon, isPrimTyCon, PrimRep(..) )
 import Type
-import RepType          ( typePrimRep, tyConPrimRep )
-import BasicTypes       ( Arity, Fixity(..), FixityDirection(..), Boxity(..) )
+import RepType          ( typePrimRep1, tyConPrimRep1 )
+import BasicTypes       ( Arity, Fixity(..), FixityDirection(..), Boxity(..),
+                          SourceText(..) )
 import ForeignCall      ( CLabelString )
 import Unique           ( Unique, mkPrimOpIdUnique )
 import Outputable
@@ -356,7 +357,7 @@ The can_fail and has_side_effects properties have the following effect
 on program transformations.  Summary table is followed by details.
 
             can_fail     has_side_effects
-Discard        NO            NO
+Discard        YES           NO
 Float in       YES           YES
 Float out      NO            NO
 Duplicate      YES           NO
@@ -551,6 +552,11 @@ primOpOcc op = case primOpInfo op of
                Compare   occ _     -> occ
                GenPrimOp occ _ _ _ -> occ
 
+isComparisonPrimOp :: PrimOp -> Bool
+isComparisonPrimOp op = case primOpInfo op of
+                          Compare {} -> True
+                          _          -> False
+
 -- primOpSig is like primOpType but gives the result split apart:
 -- (type variables, argument types, result type)
 -- It also gives arity, strictness info
@@ -578,10 +584,10 @@ data PrimOpResultInfo
 getPrimOpResultInfo :: PrimOp -> PrimOpResultInfo
 getPrimOpResultInfo op
   = case (primOpInfo op) of
-      Dyadic  _ ty                        -> ReturnsPrim (typePrimRep ty)
-      Monadic _ ty                        -> ReturnsPrim (typePrimRep ty)
-      Compare _ _                         -> ReturnsPrim (tyConPrimRep intPrimTyCon)
-      GenPrimOp _ _ _ ty | isPrimTyCon tc -> ReturnsPrim (tyConPrimRep tc)
+      Dyadic  _ ty                        -> ReturnsPrim (typePrimRep1 ty)
+      Monadic _ ty                        -> ReturnsPrim (typePrimRep1 ty)
+      Compare _ _                         -> ReturnsPrim (tyConPrimRep1 intPrimTyCon)
+      GenPrimOp _ _ _ ty | isPrimTyCon tc -> ReturnsPrim (tyConPrimRep1 tc)
                          | otherwise      -> ReturnsAlg tc
                          where
                            tc = tyConAppTyCon ty

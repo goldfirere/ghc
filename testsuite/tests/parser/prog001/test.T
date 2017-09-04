@@ -1,4 +1,1 @@
-test('parser.prog001',
-     extra_clean(['Read006.hi', 'Read006.o', 'Read007.hi', 'Read007.o']),
-     multimod_compile,
-     ['Read007.hs', '-v0'])
+test('parser.prog001', [extra_files(['Read006.hs', 'Read007.hs'])], multimod_compile, ['Read007.hs', '-v0'])

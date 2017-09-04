@@ -17,7 +17,7 @@ import Vectorise.Env
 import Vectorise.Monad
 
 import HscTypes hiding      ( MonadThings(..) )
-import CoreUnfold           ( mkInlineUnfolding )
+import CoreUnfold           ( mkInlineUnfoldingWithArity )
 import PprCore
 import CoreSyn
 import CoreMonad            ( CoreM, getHscEnv )
@@ -70,8 +70,8 @@ vectModule guts@(ModGuts { mg_tcs        = tycons
             cls_vect_decls = [vd | vd@(VectClass _)    <- vect_decls]
 
           -- Vectorise the type environment.  This will add vectorised
-          -- type constructors, their representaions, and the
-          -- conrresponding data constructors.  Moreover, we produce
+          -- type constructors, their representations, and the
+          -- corresponding data constructors.  Moreover, we produce
           -- bindings for dfuns and family instances of the classes
           -- and type families used in the DPH library to represent
           -- array types.
@@ -275,7 +275,7 @@ vectTopBind b@(Rec binds)
 -- Add a vectorised binding to an imported top-level variable that has a VECTORISE pragma
 -- in this module.
 --
--- RESTIRCTION: Currently, we cannot use the pragma for mutually recursive definitions.
+-- RESTRICTION: Currently, we cannot use the pragma for mutually recursive definitions.
 --
 vectImpBind :: (Id, CoreExpr) -> VM CoreBind
 vectImpBind (var, expr)
@@ -300,7 +300,7 @@ vectTopBinder var inline expr
  = do {   -- Vectorise the type attached to the var.
       ; vty  <- vectType (idType var)
 
-          -- If there is a vectorisation declartion for this binding, make sure its type matches
+          -- If there is a vectorisation declaration for this binding, make sure its type matches
       ; (_, vectDecl) <- lookupVectDecl var
       ; case vectDecl of
           Nothing             -> return ()
@@ -325,7 +325,7 @@ vectTopBinder var inline expr
     }
   where
     unfolding = case inline of
-                  Inline arity -> mkInlineUnfolding (Just arity) expr
+                  Inline arity -> mkInlineUnfoldingWithArity arity expr
                   DontInline   -> noUnfolding
 {-
 !!!TODO: dfuns and unfoldings:

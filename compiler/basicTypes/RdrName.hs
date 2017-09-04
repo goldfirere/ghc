@@ -34,7 +34,8 @@ module RdrName (
         -- ** Destruction
         rdrNameOcc, rdrNameSpace, demoteRdrName,
         isRdrDataCon, isRdrTyVar, isRdrTc, isQual, isQual_maybe, isUnqual,
-        isOrig, isOrig_maybe, isExact, isExact_maybe, isSrcRdrName,
+        isOrig, isOrig_maybe, isExact, isExact_maybe, isSrcRdrName, isStar,
+        isUniStar,
 
         -- * Local mapping of 'RdrName' to 'Name.Name'
         LocalRdrEnv, emptyLocalRdrEnv, extendLocalRdrEnv, extendLocalRdrEnvList,
@@ -46,12 +47,14 @@ module RdrName (
         GlobalRdrEnv, emptyGlobalRdrEnv, mkGlobalRdrEnv, plusGlobalRdrEnv,
         lookupGlobalRdrEnv, extendGlobalRdrEnv, greOccName, shadowNames,
         pprGlobalRdrEnv, globalRdrEnvElts,
-        lookupGRE_RdrName, lookupGRE_Name, lookupGRE_Field_Name, getGRE_NameQualifier_maybes,
+        lookupGRE_RdrName, lookupGRE_Name, lookupGRE_FieldLabel,
+        getGRE_NameQualifier_maybes,
         transformGREs, pickGREs, pickGREsModExp,
 
         -- * GlobalRdrElts
         gresFromAvails, gresFromAvail, localGREsFromAvail, availFromGRE,
         greUsedRdrName, greRdrNames, greSrcSpan, greQualModName,
+        gresToAvailInfo,
 
         -- ** Global 'RdrName' mapping elements: 'GlobalRdrElt', 'Provenance', 'ImportSpec'
         GlobalRdrElt(..), isLocalGRE, isRecFldGRE, greLabel,
@@ -75,11 +78,12 @@ import FieldLabel
 import Outputable
 import Unique
 import UniqFM
+import UniqSet
 import Util
-import StaticFlags( opt_PprStyle_Debug )
+import NameEnv
 
 import Data.Data
-import Data.List( sortBy )
+import Data.List( sortBy, foldl', nub )
 
 {-
 ************************************************************************
@@ -255,6 +259,10 @@ isExact_maybe :: RdrName -> Maybe Name
 isExact_maybe (Exact n) = Just n
 isExact_maybe _         = Nothing
 
+isStar, isUniStar :: RdrName -> Bool
+isStar     = (fsLit "*" ==) . occNameFS . rdrNameOcc
+isUniStar = (fsLit "★" ==) . occNameFS . rdrNameOcc
+
 {-
 ************************************************************************
 *                                                                      *
@@ -344,7 +352,7 @@ instance Outputable LocalRdrEnv where
     = hang (text "LocalRdrEnv {")
          2 (vcat [ text "env =" <+> pprOccEnv ppr_elt env
                  , text "in_scope ="
-                    <+> pprUFM ns (braces . pprWithCommas ppr)
+                    <+> pprUFM (getUniqSet ns) (braces . pprWithCommas ppr)
                  ] <+> char '}')
     where
       ppr_elt name = parens (ppr (getUnique (nameOccName name))) <+> ppr name
@@ -453,7 +461,7 @@ data GlobalRdrElt
         , gre_par  :: Parent
         , gre_lcl :: Bool          -- ^ True <=> the thing was defined locally
         , gre_imp :: [ImportSpec]  -- ^ In scope through these imports
-    } deriving Data
+    } deriving (Data, Eq)
          -- INVARIANT: either gre_lcl = True or gre_imp is non-empty
          -- See Note [GlobalRdrElt provenance]
 
@@ -480,7 +488,7 @@ plusParent p1 p2@(FldParent _ _) = hasParent p2 p1
 plusParent _ _                   = NoParent
 
 hasParent :: Parent -> Parent -> Parent
-#ifdef DEBUG
+#if defined(DEBUG)
 hasParent p NoParent = p
 hasParent p p'
   | p /= p' = pprPanic "hasParent" (ppr p <+> ppr p')  -- Parents should agree
@@ -687,15 +695,59 @@ mkParent _ (Avail _)           = NoParent
 mkParent n (AvailTC m _ _) | n == m    = NoParent
                          | otherwise = ParentIs m
 
+greParentName :: GlobalRdrElt -> Maybe Name
+greParentName gre = case gre_par gre of
+                      NoParent -> Nothing
+                      ParentIs n -> Just n
+                      FldParent n _ -> Just n
+
+-- | Takes a list of distinct GREs and folds them
+-- into AvailInfos. This is more efficient than mapping each individual
+-- GRE to an AvailInfo and the folding using `plusAvail` but needs the
+-- uniqueness assumption.
+gresToAvailInfo :: [GlobalRdrElt] -> [AvailInfo]
+gresToAvailInfo gres
+  = ASSERT( nub gres == gres ) nameEnvElts avail_env
+  where
+    avail_env :: NameEnv AvailInfo -- keyed by the parent
+    avail_env = foldl' add emptyNameEnv gres
+
+    add :: NameEnv AvailInfo -> GlobalRdrElt -> NameEnv AvailInfo
+    add env gre = extendNameEnv_Acc comb availFromGRE env
+                    (fromMaybe (gre_name gre)
+                               (greParentName gre)) gre
+
+      where
+        -- We want to insert the child `k` into a list of children but
+        -- need to maintain the invariant that the parent is first.
+        --
+        -- We also use the invariant that `k` is not already in `ns`.
+        insertChildIntoChildren :: Name -> [Name] -> Name -> [Name]
+        insertChildIntoChildren _ [] k = [k]
+        insertChildIntoChildren p (n:ns) k
+          | p == k = k:n:ns
+          | otherwise = n:k:ns
+
+        comb :: GlobalRdrElt -> AvailInfo -> AvailInfo
+        comb _ (Avail n) = Avail n -- Duplicated name
+        comb gre (AvailTC m ns fls) =
+          let n = gre_name gre
+          in case gre_par gre of
+              NoParent -> AvailTC m (n:ns) fls -- Not sure this ever happens
+              ParentIs {} -> AvailTC m (insertChildIntoChildren m ns n) fls
+              FldParent _ mb_lbl ->  AvailTC m ns (mkFieldLabel n mb_lbl : fls)
+
 availFromGRE :: GlobalRdrElt -> AvailInfo
 availFromGRE (GRE { gre_name = me, gre_par = parent })
   = case parent of
       ParentIs p                  -> AvailTC p [me] []
       NoParent   | isTyConName me -> AvailTC me [me] []
                  | otherwise      -> avail   me
-      FldParent p mb_lbl -> AvailTC p [] [fld]
-        where
-         fld = case mb_lbl of
+      FldParent p mb_lbl -> AvailTC p [] [mkFieldLabel me mb_lbl]
+
+mkFieldLabel :: Name -> Maybe FastString -> FieldLabel
+mkFieldLabel me mb_lbl =
+          case mb_lbl of
                  Nothing  -> FieldLabel { flLabel = occNameFS (nameOccName me)
                                         , flIsOverloaded = False
                                         , flSelector = me }
@@ -746,20 +798,31 @@ lookupGRE_RdrName rdr_name env
     Just gres -> pickGREs rdr_name gres
 
 lookupGRE_Name :: GlobalRdrEnv -> Name -> Maybe GlobalRdrElt
+-- ^ Look for precisely this 'Name' in the environment.  This tests
+-- whether it is in scope, ignoring anything else that might be in
+-- scope with the same 'OccName'.
 lookupGRE_Name env name
-  = case [ gre | gre <- lookupGlobalRdrEnv env (nameOccName name)
+  = lookupGRE_Name_OccName env name (nameOccName name)
+
+lookupGRE_FieldLabel :: GlobalRdrEnv -> FieldLabel -> Maybe GlobalRdrElt
+-- ^ Look for a particular record field selector in the environment, where the
+-- selector name and field label may be different: the GlobalRdrEnv is keyed on
+-- the label.  See Note [Parents for record fields] for why this happens.
+lookupGRE_FieldLabel env fl
+  = lookupGRE_Name_OccName env (flSelector fl) (mkVarOccFS (flLabel fl))
+
+lookupGRE_Name_OccName :: GlobalRdrEnv -> Name -> OccName -> Maybe GlobalRdrElt
+-- ^ Look for precisely this 'Name' in the environment, but with an 'OccName'
+-- that might differ from that of the 'Name'.  See 'lookupGRE_FieldLabel' and
+-- Note [Parents for record fields].
+lookupGRE_Name_OccName env name occ
+  = case [ gre | gre <- lookupGlobalRdrEnv env occ
                , gre_name gre == name ] of
       []    -> Nothing
       [gre] -> Just gre
-      gres  -> pprPanic "lookupGRE_Name" (ppr name $$ ppr gres)
+      gres  -> pprPanic "lookupGRE_Name_OccName"
+                        (ppr name $$ ppr occ $$ ppr gres)
                -- See INVARIANT 1 on GlobalRdrEnv
-
-lookupGRE_Field_Name :: GlobalRdrEnv -> Name -> FastString -> [GlobalRdrElt]
--- Used when looking up record fields, where the selector name and
--- field label are different: the GlobalRdrEnv is keyed on the label
-lookupGRE_Field_Name env sel_name lbl
-  = [ gre | gre <- lookupGlobalRdrEnv env (mkVarOccFS lbl),
-            gre_name gre == sel_name ]
 
 
 getGRE_NameQualifier_maybes :: GlobalRdrEnv -> Name -> [Maybe [ModuleName]]
@@ -789,7 +852,7 @@ greLabel (GRE{gre_name = n, gre_par = FldParent{}})     = Just (occNameFS (nameO
 greLabel _                                              = Nothing
 
 unQualOK :: GlobalRdrElt -> Bool
--- ^ Test if an unqualifed version of this thing would be in scope
+-- ^ Test if an unqualified version of this thing would be in scope
 unQualOK (GRE {gre_lcl = lcl, gre_imp = iss })
   | lcl = True
   | otherwise = any unQualSpecOK iss
@@ -804,7 +867,7 @@ as 'rdr', say "x".  It does two things:
     * Unqualified, as 'x'    if want_unqual  is Unqual _
 
 (b) for that subset, filter the provenance field (gre_lcl and gre_imp)
-    to ones that brought it into scope qualifed or unqualified resp.
+    to ones that brought it into scope qualified or unqualified resp.
 
 Example:
       module A ( f ) where
@@ -834,7 +897,7 @@ pickGREs :: RdrName -> [GlobalRdrElt] -> [GlobalRdrElt]
 --    * Unqualified, as 'x'    if want_unqual  is Unqual _
 --
 -- Return each such GRE, with its ImportSpecs filtered, to reflect
--- how it is in scope qualifed or unqualified respectively.
+-- how it is in scope qualified or unqualified respectively.
 -- See Note [GRE filtering]
 pickGREs (Unqual {})  gres = mapMaybe pickUnqualGRE     gres
 pickGREs (Qual mod _) gres = mapMaybe (pickQualGRE mod) gres
@@ -936,15 +999,44 @@ shadowNames = foldl shadowName
 {- Note [GlobalRdrEnv shadowing]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Before adding new names to the GlobalRdrEnv we nuke some existing entries;
-this is "shadowing".  The actual work is done by RdrEnv.shadowNames.
+this is "shadowing".  The actual work is done by RdrEnv.shadowName.
+Suppose
+   env' = shadowName env M.f
+
+Then:
+   * Looking up (Unqual f) in env' should succeed, returning M.f,
+     even if env contains existing unqualified bindings for f.
+     They are shadowed
+
+   * Looking up (Qual M.f) in env' should succeed, returning M.f
+
+   * Looking up (Qual X.f) in env', where X /= M, should be the same as
+     looking up (Qual X.f) in env.
+     That is, shadowName does /not/ delete earlier qualified bindings
+
 There are two reasons for shadowing:
 
 * The GHCi REPL
 
   - Ids bought into scope on the command line (eg let x = True) have
     External Names, like Ghci4.x.  We want a new binding for 'x' (say)
-    to override the existing binding for 'x'.
-    See Note [Interactively-bound Ids in GHCi] in HscTypes
+    to override the existing binding for 'x'.  Example:
+
+           ghci> :load M    -- Brings `x` and `M.x` into scope
+           ghci> x
+           ghci> "Hello"
+           ghci> M.x
+           ghci> "hello"
+           ghci> let x = True  -- Shadows `x`
+           ghci> x             -- The locally bound `x`
+                               -- NOT an ambiguous reference
+           ghci> True
+           ghci> M.x           -- M.x is still in scope!
+           ghci> "Hello"
+    So when we add `x = True` we must not delete the `M.x` from the
+    `GlobalRdrEnv`; rather we just want to make it "qualified only";
+    hence the `mk_fake-imp_spec` in `shadowName`.  See also Note
+    [Interactively-bound Ids in GHCi] in HscTypes
 
   - Data types also have Extenal Names, like Ghci4.T; but we still want
     'T' to mean the newly-declared 'T', not an old one.
@@ -954,10 +1046,10 @@ There are two reasons for shadowing:
 
   Consider a TH decl quote:
       module M where
-        f x = h [d| f = 3 |]
-  We must shadow the outer declaration of 'f', else we'll get a
-  complaint when extending the GlobalRdrEnv, saying that there are two
-  bindings for 'f'.  There are several tricky points:
+        f x = h [d| f = ...f...M.f... |]
+  We must shadow the outer unqualified binding of 'f', else we'll get
+  a complaint when extending the GlobalRdrEnv, saying that there are
+  two bindings for 'f'.  There are several tricky points:
 
     - This shadowing applies even if the binding for 'f' is in a
       where-clause, and hence is in the *local* RdrEnv not the *global*
@@ -1090,12 +1182,17 @@ instance Eq ImpItemSpec where
   p1 == p2 = case p1 `compare` p2 of EQ -> True; _ -> False
 
 instance Ord ImpItemSpec where
-   compare is1 is2 = is_iloc is1 `compare` is_iloc is2
+   compare is1 is2 =
+    case (is1, is2) of
+      (ImpAll, ImpAll) -> EQ
+      (ImpAll, _)      -> GT
+      (_, ImpAll)      -> LT
+      (ImpSome _ l1, ImpSome _ l2) -> l1 `compare` l2
 
 
 bestImport :: [ImportSpec] -> ImportSpec
 -- Given a non-empty bunch of ImportSpecs, return the one that
--- imported the item most specficially (e.g. by name), using
+-- imported the item most specifically (e.g. by name), using
 -- textually-first as a tie breaker. This is used when reporting
 -- redundant imports
 bestImport iss
@@ -1140,8 +1237,8 @@ pprNameProvenance :: GlobalRdrElt -> SDoc
 -- ^ Print out one place where the name was define/imported
 -- (With -dppr-debug, print them all)
 pprNameProvenance (GRE { gre_name = name, gre_lcl = lcl, gre_imp = iss })
-  | opt_PprStyle_Debug = vcat pp_provs
-  | otherwise          = head pp_provs
+  = ifPprDebug (vcat pp_provs)
+               (head pp_provs)
   where
     pp_provs = pp_lcl ++ map pp_is iss
     pp_lcl = if lcl then [text "defined at" <+> ppr (nameSrcLoc name)]

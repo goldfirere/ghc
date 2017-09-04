@@ -5,6 +5,7 @@
 -}
 
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module TcSigs(
        TcSigInfo(..),
@@ -12,7 +13,7 @@ module TcSigs(
        TcPatSynInfo(..),
        TcSigFun,
 
-       isPartialSig, noCompleteSig, tcIdSigName, tcSigInfoName,
+       isPartialSig, hasCompleteSig, tcIdSigName, tcSigInfoName,
        completeSigPolyId_maybe,
 
        tcTySigs, tcUserTypeSig, completeSigFromId,
@@ -30,7 +31,8 @@ import TcRnTypes
 import TcRnMonad
 import TcType
 import TcMType
-import TcUnify( tcSkolemise, unifyType, noThing )
+import TcValidity ( checkValidType )
+import TcUnify( tcSkolemise, unifyType )
 import Inst( topInstantiate )
 import TcEnv( tcLookupId )
 import TcEvidence( HsWrapper, (<.>) )
@@ -77,7 +79,7 @@ especially on value bindings.  Here's an overview.
     the HsType, producing a Type, and wraps it in a CompleteSig, and
     extend the type environment with this polymorphic 'f'.
 
-  - For a /partial/signauture, like 'g' above, tcTySig does nothing
+  - For a /partial/signature, like 'g' above, tcTySig does nothing
     Instead it just wraps the pieces in a PartialSig, to be handled
     later.
 
@@ -142,13 +144,6 @@ errors were dealt with by the renamer.
 *                                                                      *
 ********************************************************************* -}
 
-type TcSigFun  = Name -> Maybe TcSigInfo
-
--- | No signature or a partial signature
-noCompleteSig :: Maybe TcSigInfo -> Bool
-noCompleteSig (Just (TcIdSig (CompleteSig {}))) = False
-noCompleteSig _                                 = True
-
 tcIdSigName :: TcIdSigInfo -> Name
 tcIdSigName (CompleteSig { sig_bndr = id }) = idName id
 tcIdSigName (PartialSig { psig_name = n })  = n
@@ -170,7 +165,7 @@ completeSigPolyId_maybe sig
 *                                                                      *
 ********************************************************************* -}
 
-tcTySigs :: [LSig Name] -> TcM ([TcId], TcSigFun)
+tcTySigs :: [LSig GhcRn] -> TcM ([TcId], TcSigFun)
 tcTySigs hs_sigs
   = checkNoErrs $   -- See Note [Fail eagerly on bad signatures]
     do { ty_sigs_s <- mapAndRecoverM tcTySig hs_sigs
@@ -182,7 +177,7 @@ tcTySigs hs_sigs
              env = mkNameEnv [(tcSigInfoName sig, sig) | sig <- ty_sigs]
        ; return (poly_ids, lookupNameEnv env) }
 
-tcTySig :: LSig Name -> TcM [TcSigInfo]
+tcTySig :: LSig GhcRn -> TcM [TcSigInfo]
 tcTySig (L _ (IdSig id))
   = do { let ctxt = FunSigCtxt (idName id) False
                     -- False: do not report redundant constraints
@@ -205,7 +200,8 @@ tcTySig (L loc (PatSynSig names sig_ty))
 tcTySig _ = return []
 
 
-tcUserTypeSig :: SrcSpan -> LHsSigWcType Name -> Maybe Name -> TcM TcIdSigInfo
+tcUserTypeSig :: SrcSpan -> LHsSigWcType GhcRn -> Maybe Name
+              -> TcM TcIdSigInfo
 -- A function or expression type signature
 -- Returns a fully quantified type signature; even the wildcards
 -- are quantified with ordinary skolems that should be instantiated
@@ -250,13 +246,13 @@ completeSigFromId ctxt id
                 , sig_ctxt = ctxt
                 , sig_loc  = getSrcSpan id }
 
-isCompleteHsSig :: LHsSigWcType Name -> Bool
+isCompleteHsSig :: LHsSigWcType GhcRn -> Bool
 -- ^ If there are no wildcards, return a LHsSigType
 isCompleteHsSig (HsWC { hswc_wcs = wcs }) = null wcs
 
 {- Note [Fail eagerly on bad signatures]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-If a type signaure is wrong, fail immediately:
+If a type signature is wrong, fail immediately:
 
  * the type sigs may bind type variables, so proceeding without them
    can lead to a cascade of errors
@@ -341,7 +337,7 @@ for example, in hs-boot file, we may need to think what to do...
 (eg don't have any implicitly-bound variables).
 -}
 
-tcPatSynSig :: Name -> LHsSigType Name -> TcM TcPatSynInfo
+tcPatSynSig :: Name -> LHsSigType GhcRn -> TcM TcPatSynInfo
 tcPatSynSig name sig_ty
   | HsIB { hsib_vars = implicit_hs_tvs
          , hsib_body = hs_ty }  <- sig_ty
@@ -367,16 +363,12 @@ tcPatSynSig name sig_ty
 
        -- Kind generalisation
        ; kvs <- kindGeneralize $
-                mkSpecForAllTys (implicit_tvs ++ univ_tvs) $
-                mkFunTys req $
-                mkSpecForAllTys ex_tvs $
-                mkFunTys prov $
-                body_ty
+                build_patsyn_type [] implicit_tvs univ_tvs req
+                                  ex_tvs prov body_ty
 
        -- These are /signatures/ so we zonk to squeeze out any kind
        -- unification variables.  Do this after quantifyTyVars which may
        -- default kind variables to *.
-       -- ToDo: checkValidType?
        ; traceTc "about zonk" empty
        ; implicit_tvs <- mapM zonkTcTyCoVarBndr implicit_tvs
        ; univ_tvs     <- mapM zonkTcTyCoVarBndr univ_tvs
@@ -384,6 +376,15 @@ tcPatSynSig name sig_ty
        ; req          <- zonkTcTypes req
        ; prov         <- zonkTcTypes prov
        ; body_ty      <- zonkTcType  body_ty
+
+       -- Now do validity checking
+       ; checkValidType ctxt $
+         build_patsyn_type kvs implicit_tvs univ_tvs req ex_tvs prov body_ty
+
+       -- arguments become the types of binders. We thus cannot allow
+       -- levity polymorphism here
+       ; let (arg_tys, _) = tcSplitFunTys body_ty
+       ; mapM_ (checkForLevPoly empty) arg_tys
 
        ; traceTc "tcTySig }" $
          vcat [ text "implicit_tvs" <+> ppr_tvs implicit_tvs
@@ -402,6 +403,15 @@ tcPatSynSig name sig_ty
                       , patsig_prov           = prov
                       , patsig_body_ty        = body_ty }) }
   where
+    ctxt = PatSynCtxt name
+
+    build_patsyn_type kvs imp univ req ex prov body
+      = mkInvForAllTys kvs $
+        mkSpecForAllTys (imp ++ univ) $
+        mkFunTys req $
+        mkSpecForAllTys ex $
+        mkFunTys prov $
+        body
 
 ppr_tvs :: [TyVar] -> SDoc
 ppr_tvs tvs = braces (vcat [ ppr tv <+> dcolon <+> ppr (tyVarKind tv)
@@ -455,7 +465,7 @@ the signature types for f and g, we'll end up unifying 'a' and 'b'
 So we instantiate f and g's signature with SigTv skolems
 (newMetaSigTyVars) that can unify with each other.  If too much
 unification takes place, we'll find out when we do the final
-impedence-matching check in TcBinds.mkExport
+impedance-matching check in TcBinds.mkExport
 
 See Note [Signature skolems] in TcType
 
@@ -469,25 +479,25 @@ signature, which doesn't use tcInstSig.  See TcBinds.tcPolyCheck.
 *                                                                      *
 ********************************************************************* -}
 
-type TcPragEnv = NameEnv [LSig Name]
+type TcPragEnv = NameEnv [LSig GhcRn]
 
 emptyPragEnv :: TcPragEnv
 emptyPragEnv = emptyNameEnv
 
-lookupPragEnv :: TcPragEnv -> Name -> [LSig Name]
+lookupPragEnv :: TcPragEnv -> Name -> [LSig GhcRn]
 lookupPragEnv prag_fn n = lookupNameEnv prag_fn n `orElse` []
 
-extendPragEnv :: TcPragEnv -> (Name, LSig Name) -> TcPragEnv
+extendPragEnv :: TcPragEnv -> (Name, LSig GhcRn) -> TcPragEnv
 extendPragEnv prag_fn (n, sig) = extendNameEnv_Acc (:) singleton prag_fn n sig
 
 ---------------
-mkPragEnv :: [LSig Name] -> LHsBinds Name -> TcPragEnv
+mkPragEnv :: [LSig GhcRn] -> LHsBinds GhcRn -> TcPragEnv
 mkPragEnv sigs binds
   = foldl extendPragEnv emptyNameEnv prs
   where
     prs = mapMaybe get_sig sigs
 
-    get_sig :: LSig Name -> Maybe (Name, LSig Name)
+    get_sig :: LSig GhcRn -> Maybe (Name, LSig GhcRn)
     get_sig (L l (SpecSig lnm@(L _ nm) ty inl)) = Just (nm, L l $ SpecSig   lnm ty (add_arity nm inl))
     get_sig (L l (InlineSig lnm@(L _ nm) inl))  = Just (nm, L l $ InlineSig lnm    (add_arity nm inl))
     get_sig (L l (SCCFunSig st lnm@(L _ nm) str))  = Just (nm, L l $ SCCFunSig st lnm str)
@@ -508,14 +518,14 @@ mkPragEnv sigs binds
     ar_env :: NameEnv Arity
     ar_env = foldrBag lhsBindArity emptyNameEnv binds
 
-lhsBindArity :: LHsBind Name -> NameEnv Arity -> NameEnv Arity
+lhsBindArity :: LHsBind GhcRn -> NameEnv Arity -> NameEnv Arity
 lhsBindArity (L _ (FunBind { fun_id = id, fun_matches = ms })) env
   = extendNameEnv env (unLoc id) (matchGroupArity ms)
 lhsBindArity _ env = env        -- PatBind/VarBind
 
 
 -----------------
-addInlinePrags :: TcId -> [LSig Name] -> TcM TcId
+addInlinePrags :: TcId -> [LSig GhcRn] -> TcM TcId
 addInlinePrags poly_id prags_for_me
   | inl@(L _ prag) : inls <- inl_prags
   = do { traceTc "addInlinePrag" (ppr poly_id $$ ppr prag)
@@ -652,7 +662,7 @@ Some wrinkles
    well as the dict.  That's what goes on in TcInstDcls.mk_meth_spec_prags
 -}
 
-tcSpecPrags :: Id -> [LSig Name]
+tcSpecPrags :: Id -> [LSig GhcRn]
             -> TcM [LTcSpecPrag]
 -- Add INLINE and SPECIALSE pragmas
 --    INLINE prags are added to the (polymorphic) Id directly
@@ -675,7 +685,7 @@ tcSpecPrags poly_id prag_sigs
                       2 (vcat (map (ppr . getLoc) bad_sigs)))
 
 --------------
-tcSpecPrag :: TcId -> Sig Name -> TcM [TcSpecPrag]
+tcSpecPrag :: TcId -> Sig GhcRn -> TcM [TcSpecPrag]
 tcSpecPrag poly_id prag@(SpecSig fun_name hs_tys inl)
 -- See Note [Handling SPECIALISE pragmas]
 --
@@ -685,7 +695,7 @@ tcSpecPrag poly_id prag@(SpecSig fun_name hs_tys inl)
 -- However we want to use fun_name in the error message, since that is
 -- what the user wrote (Trac #8537)
   = addErrCtxt (spec_ctxt prag) $
-    do  { warnIf NoReason (not (isOverloadedTy poly_ty || isInlinePragma inl))
+    do  { warnIf (not (isOverloadedTy poly_ty || isInlinePragma inl))
                  (text "SPECIALISE pragma for non-overloaded function"
                   <+> quotes (ppr fun_name))
                   -- Note [SPECIALISE pragmas]
@@ -712,7 +722,7 @@ tcSpecWrapper ctxt poly_ty spec_ty
   = do { (sk_wrap, inst_wrap)
                <- tcSkolemise ctxt spec_ty $ \ _ spec_tau ->
                   do { (inst_wrap, tau) <- topInstantiate orig poly_ty
-                     ; _ <- unifyType noThing spec_tau tau
+                     ; _ <- unifyType Nothing spec_tau tau
                             -- Deliberately ignore the evidence
                             -- See Note [Handling SPECIALISE pragmas],
                             --   wrinkle (2)
@@ -722,7 +732,7 @@ tcSpecWrapper ctxt poly_ty spec_ty
     orig = SpecPragOrigin ctxt
 
 --------------
-tcImpPrags :: [LSig Name] -> TcM [LTcSpecPrag]
+tcImpPrags :: [LSig GhcRn] -> TcM [LTcSpecPrag]
 -- SPECIALISE pragmas for imported things
 tcImpPrags prags
   = do { this_mod <- getModule
@@ -739,7 +749,7 @@ tcImpPrags prags
     -- Ignore SPECIALISE pragmas for imported things
     -- when we aren't specialising, or when we aren't generating
     -- code.  The latter happens when Haddocking the base library;
-    -- we don't wnat complaints about lack of INLINABLE pragmas
+    -- we don't want complaints about lack of INLINABLE pragmas
     not_specialising dflags
       | not (gopt Opt_Specialise dflags) = True
       | otherwise = case hscTarget dflags of
@@ -747,7 +757,7 @@ tcImpPrags prags
                       HscInterpreted -> True
                       _other         -> False
 
-tcImpSpec :: (Name, Sig Name) -> TcM [TcSpecPrag]
+tcImpSpec :: (Name, Sig GhcRn) -> TcM [TcSpecPrag]
 tcImpSpec (name, prag)
  = do { id <- tcLookupId name
       ; unless (isAnyInlinePragma (idInlinePragma id))

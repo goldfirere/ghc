@@ -4,11 +4,6 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE BangPatterns #-}
-#if __GLASGOW_HASKELL__ < 800
--- For CallStack business
-{-# LANGUAGE ImplicitParams #-}
-{-# LANGUAGE FlexibleContexts #-}
-#endif
 
 -- | Highly random utility functions
 --
@@ -36,9 +31,10 @@ module Util (
 
         foldl1', foldl2, count, all2,
 
-        lengthExceeds, lengthIs, lengthAtLeast,
+        lengthExceeds, lengthIs, lengthIsNot,
+        lengthAtLeast, lengthAtMost, lengthLessThan,
         listLengthCmp, atLength,
-        equalLength, compareLength, leLength,
+        equalLength, neLength, compareLength, leLength, ltLength,
 
         isSingleton, only, singleton,
         notNull, snocView,
@@ -46,6 +42,8 @@ module Util (
         isIn, isn'tIn,
 
         chunkList,
+
+        changeLast,
 
         -- * Tuples
         fstOf3, sndOf3, thdOf3,
@@ -102,6 +100,7 @@ module Util (
         hSetTranslit,
 
         global, consIORef, globalM,
+        sharedGlobal, sharedGlobalM,
 
         -- * Filenames and paths
         Suffix,
@@ -120,10 +119,12 @@ module Util (
         hashString,
 
         -- * Call stacks
-        GHC.Stack.CallStack,
         HasCallStack,
         HasDebugCallStack,
-        prettyCurrentCallStack,
+
+        -- * Utils for flags
+        OverridingBool(..),
+        overrideWith,
     ) where
 
 #include "HsVersions.h"
@@ -137,11 +138,12 @@ import System.IO.Unsafe ( unsafePerformIO )
 import Data.List        hiding (group)
 
 import GHC.Exts
-import qualified GHC.Stack
+import GHC.Stack (HasCallStack)
 
 import Control.Applicative ( liftA2 )
 import Control.Monad    ( liftM )
 import GHC.IO.Encoding (mkTextEncoding, textEncodingName)
+import GHC.Conc.Sync ( sharedCAF )
 import System.IO (Handle, hGetEncoding, hSetEncoding)
 import System.IO.Error as IO ( isDoesNotExistError )
 import System.Directory ( doesDirectoryExist, getModificationTime )
@@ -157,6 +159,10 @@ import qualified Data.IntMap as IM
 import qualified Data.Set as Set
 
 import Data.Time
+
+#if defined(DEBUG)
+import {-# SOURCE #-} Outputable ( warnPprTrace, text )
+#endif
 
 infixr 9 `thenCmp`
 
@@ -178,42 +184,42 @@ the flags are off.
 -}
 
 ghciSupported :: Bool
-#ifdef GHCI
+#if defined(GHCI)
 ghciSupported = True
 #else
 ghciSupported = False
 #endif
 
 debugIsOn :: Bool
-#ifdef DEBUG
+#if defined(DEBUG)
 debugIsOn = True
 #else
 debugIsOn = False
 #endif
 
 ncgDebugIsOn :: Bool
-#ifdef NCG_DEBUG
+#if defined(NCG_DEBUG)
 ncgDebugIsOn = True
 #else
 ncgDebugIsOn = False
 #endif
 
 ghciTablesNextToCode :: Bool
-#ifdef GHCI_TABLES_NEXT_TO_CODE
+#if defined(GHCI_TABLES_NEXT_TO_CODE)
 ghciTablesNextToCode = True
 #else
 ghciTablesNextToCode = False
 #endif
 
 isWindowsHost :: Bool
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 isWindowsHost = True
 #else
 isWindowsHost = False
 #endif
 
 isDarwinHost :: Bool
-#ifdef darwin_HOST_OS
+#if defined(darwin_HOST_OS)
 isDarwinHost = True
 #else
 isDarwinHost = False
@@ -295,7 +301,7 @@ splitEithers (e : es) = case e of
     where (xs,ys) = splitEithers es
 
 chkAppend :: [a] -> [a] -> [a]
--- Checks for the second arguemnt being empty
+-- Checks for the second argument being empty
 -- Used in situations where that situation is common
 chkAppend xs ys
   | null ys   = xs
@@ -312,7 +318,7 @@ zipWithEqual    :: String -> (a->b->c) -> [a]->[b]->[c]
 zipWith3Equal   :: String -> (a->b->c->d) -> [a]->[b]->[c]->[d]
 zipWith4Equal   :: String -> (a->b->c->d->e) -> [a]->[b]->[c]->[d]->[e]
 
-#ifndef DEBUG
+#if !defined(DEBUG)
 zipEqual      _ = zip
 zipWithEqual  _ = zipWith
 zipWith3Equal _ = zipWith3
@@ -480,6 +486,7 @@ lengthExceeds lst n
   | otherwise
   = atLength notNull False lst n
 
+-- | @(lengthAtLeast xs n) = (length xs >= n)@
 lengthAtLeast :: [a] -> Int -> Bool
 lengthAtLeast = atLength (const True) False
 
@@ -491,6 +498,24 @@ lengthIs lst n
   | otherwise
   = atLength null False lst n
 
+-- | @(lengthIsNot xs n) = (length xs /= n)@
+lengthIsNot :: [a] -> Int -> Bool
+lengthIsNot lst n
+  | n < 0 = True
+  | otherwise = atLength notNull True lst n
+
+-- | @(lengthAtMost xs n) = (length xs <= n)@
+lengthAtMost :: [a] -> Int -> Bool
+lengthAtMost lst n
+  | n < 0
+  = False
+  | otherwise
+  = atLength null True lst n
+
+-- | @(lengthLessThan xs n) == (length xs < n)@
+lengthLessThan :: [a] -> Int -> Bool
+lengthLessThan = atLength (const False) True
+
 listLengthCmp :: [a] -> Int -> Ordering
 listLengthCmp = atLength atLen atEnd
  where
@@ -500,9 +525,16 @@ listLengthCmp = atLength atLen atEnd
   atLen _      = GT
 
 equalLength :: [a] -> [b] -> Bool
+-- ^ True if length xs == length ys
 equalLength []     []     = True
 equalLength (_:xs) (_:ys) = equalLength xs ys
 equalLength _      _      = False
+
+neLength :: [a] -> [b] -> Bool
+-- ^ True if length xs /= length ys
+neLength []     []     = False
+neLength (_:xs) (_:ys) = neLength xs ys
+neLength _      _      = True
 
 compareLength :: [a] -> [b] -> Ordering
 compareLength []     []     = EQ
@@ -515,6 +547,13 @@ leLength :: [a] -> [b] -> Bool
 leLength xs ys = case compareLength xs ys of
                    LT -> True
                    EQ -> True
+                   GT -> False
+
+ltLength :: [a] -> [b] -> Bool
+-- ^ True if length xs < length ys
+ltLength xs ys = case compareLength xs ys of
+                   LT -> True
+                   EQ -> False
                    GT -> False
 
 ----------------------------
@@ -530,7 +569,7 @@ notNull [] = False
 notNull _  = True
 
 only :: [a] -> a
-#ifdef DEBUG
+#if defined(DEBUG)
 only [a] = a
 #else
 only (a:_) = a
@@ -552,7 +591,7 @@ isIn msg x ys
     elem100 :: Eq a => Int -> a -> [a] -> Bool
     elem100 _ _ [] = False
     elem100 i x (y:ys)
-      | i > 100 = trace ("Over-long elem in " ++ msg) (x `elem` (y:ys))
+      | i > 100 = WARN(True, text ("Over-long elem in " ++ msg)) (x `elem` (y:ys))
       | otherwise = x == y || elem100 (i + 1) x ys
 
 isn'tIn msg x ys
@@ -561,7 +600,7 @@ isn'tIn msg x ys
     notElem100 :: Eq a => Int -> a -> [a] -> Bool
     notElem100 _ _ [] =  True
     notElem100 i x (y:ys)
-      | i > 100 = trace ("Over-long notElem in " ++ msg) (x `notElem` (y:ys))
+      | i > 100 = WARN(True, text ("Over-long notElem in " ++ msg)) (x `notElem` (y:ys))
       | otherwise = x /= y && notElem100 (i + 1) x ys
 # endif /* DEBUG */
 
@@ -570,6 +609,12 @@ isn'tIn msg x ys
 chunkList :: Int -> [a] -> [[a]]
 chunkList _ [] = []
 chunkList n xs = as : chunkList n bs where (as,bs) = splitAt n xs
+
+-- | Replace the last element of a list with another element.
+changeLast :: [a] -> a -> [a]
+changeLast []     _  = panic "changeLast"
+changeLast [_]    x  = [x]
+changeLast (x:xs) x' = x : changeLast xs x'
 
 {-
 ************************************************************************
@@ -895,7 +940,7 @@ fuzzyLookup user_entered possibilites
   where
     -- Work out an approriate match threshold:
     -- We report a candidate if its edit distance is <= the threshold,
-    -- The threshhold is set to about a quarter of the # of characters the user entered
+    -- The threshold is set to about a quarter of the # of characters the user entered
     --   Length    Threshold
     --     1         0          -- Don't suggest *any* candidates
     --     2         1          -- for single-char identifiers
@@ -922,6 +967,28 @@ seqList :: [a] -> b -> b
 seqList [] b = b
 seqList (x:xs) b = x `seq` seqList xs b
 
+
+{-
+************************************************************************
+*                                                                      *
+                        Globals and the RTS
+*                                                                      *
+************************************************************************
+
+When a plugin is loaded, it currently gets linked against a *newly
+loaded* copy of the GHC package. This would not be a problem, except
+that the new copy has its own mutable state that is not shared with
+that state that has already been initialized by the original GHC
+package.
+
+(Note that if the GHC executable was dynamically linked this
+wouldn't be a problem, because we could share the GHC library it
+links to; this is only a problem if DYNAMIC_GHC_PROGRAMS=NO.)
+
+The solution is to make use of @sharedCAF@ through @sharedGlobal@
+for globals that are shared between multiple copies of ghc packages.
+-}
+
 -- Global variables:
 
 global :: a -> IORef a
@@ -933,6 +1000,16 @@ consIORef var x = do
 
 globalM :: IO a -> IORef a
 globalM ma = unsafePerformIO (ma >>= newIORef)
+
+-- Shared global variables:
+
+sharedGlobal :: a -> (Ptr (IORef a) -> IO (Ptr (IORef a))) -> IORef a
+sharedGlobal a get_or_set = unsafePerformIO $
+  newIORef a >>= flip sharedCAF get_or_set
+
+sharedGlobalM :: IO a -> (Ptr (IORef a) -> IO (Ptr (IORef a))) -> IORef a
+sharedGlobalM ma get_or_set = unsafePerformIO $
+  ma >>= newIORef >>= flip sharedCAF get_or_set
 
 -- Module names:
 
@@ -1282,31 +1359,20 @@ mulHi a b = fromIntegral (r `shiftR` 32)
    where r :: Int64
          r = fromIntegral a * fromIntegral b
 
--- | A compatibility wrapper for the @GHC.Stack.HasCallStack@ constraint.
-#if __GLASGOW_HASKELL__ >= 800
-type HasCallStack = GHC.Stack.HasCallStack
-#elif MIN_VERSION_GLASGOW_HASKELL(7,10,2,0)
-type HasCallStack = (?callStack :: GHC.Stack.CallStack)
--- CallStack wasn't present in GHC 7.10.1, disable callstacks in stage 1
-#else
-type HasCallStack = (() :: Constraint)
-#endif
-
 -- | A call stack constraint, but only when 'isDebugOn'.
-#if DEBUG
+#if defined(DEBUG)
 type HasDebugCallStack = HasCallStack
 #else
 type HasDebugCallStack = (() :: Constraint)
 #endif
 
--- | Pretty-print the current callstack
-#if __GLASGOW_HASKELL__ >= 800
-prettyCurrentCallStack :: HasCallStack => String
-prettyCurrentCallStack = GHC.Stack.prettyCallStack GHC.Stack.callStack
-#elif MIN_VERSION_GLASGOW_HASKELL(7,10,2,0)
-prettyCurrentCallStack :: (?callStack :: GHC.Stack.CallStack) => String
-prettyCurrentCallStack = GHC.Stack.showCallStack ?callStack
-#else
-prettyCurrentCallStack :: HasCallStack => String
-prettyCurrentCallStack = "Call stack unavailable"
-#endif
+data OverridingBool
+  = Auto
+  | Always
+  | Never
+  deriving Show
+
+overrideWith :: Bool -> OverridingBool -> Bool
+overrideWith b Auto   = b
+overrideWith _ Always = True
+overrideWith _ Never  = False

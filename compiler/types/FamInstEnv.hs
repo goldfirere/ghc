@@ -11,8 +11,8 @@ module FamInstEnv (
         mkImportedFamInst,
 
         FamInstEnvs, FamInstEnv, emptyFamInstEnv, emptyFamInstEnvs,
-        extendFamInstEnv, deleteFromFamInstEnv, extendFamInstEnvList,
-        identicalFamInstHead, famInstEnvElts, familyInstances,
+        extendFamInstEnv, extendFamInstEnvList,
+        famInstEnvElts, famInstEnvSize, familyInstances,
 
         -- * CoAxioms
         mkCoAxBranch, mkBranchedCoAxiom, mkUnbranchedCoAxiom, mkSingleCoAxiom,
@@ -29,7 +29,7 @@ module FamInstEnv (
 
         -- Normalisation
         topNormaliseType, topNormaliseType_maybe,
-        normaliseType, normaliseTcApp,
+        normaliseType, normaliseTcApp, normaliseTcArgs,
         reduceTyFamApp_maybe,
 
         -- Flattening
@@ -60,7 +60,6 @@ import SrcLoc
 import FastString
 import MonadUtils
 import Control.Monad
-import Data.Function ( on )
 import Data.List( mapAccumL )
 
 {-
@@ -124,8 +123,50 @@ data FamFlavor
   = SynFamilyInst         -- A synonym family
   | DataFamilyInst TyCon  -- A data family, with its representation TyCon
 
-{- Note [Eta reduction for data families]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+{-
+Note [Arity of data families]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Data family instances might legitimately be over- or under-saturated.
+
+Under-saturation has two potential causes:
+ U1) Eta reduction. See Note [Eta reduction for data families].
+ U2) When the user has specified a return kind instead of written out patterns.
+     Example:
+
+       data family Sing (a :: k)
+       data instance Sing :: Bool -> Type
+
+     The data family tycon Sing has an arity of 2, the k and the a. But
+     the data instance has only one pattern, Bool (standing in for k).
+     This instance is equivalent to `data instance Sing (a :: Bool)`, but
+     without the last pattern, we have an under-saturated data family instance.
+     On its own, this example is not compelling enough to add support for
+     under-saturation, but U1 makes this feature more compelling.
+
+Over-saturation is also possible:
+  O1) If the data family's return kind is a type variable (see also #12369),
+      an instance might legitimately have more arguments than the family.
+      Example:
+
+        data family Fix :: (Type -> k) -> k
+        data instance Fix f = MkFix1 (f (Fix f))
+        data instance Fix f x = MkFix2 (f (Fix f x) x)
+
+      In the first instance here, the k in the data family kind is chosen to
+      be Type. In the second, it's (Type -> Type).
+
+      However, we require that any over-saturation is eta-reducible. That is,
+      we require that any extra patterns be bare unrepeated type variables;
+      see Note [Eta reduction for data families]. Accordingly, the FamInst
+      is never over-saturated.
+
+Why can we allow such flexibility for data families but not for type families?
+Because data families can be decomposed -- that is, they are generative and
+injective. A Type family is neither and so always must be applied to all its
+arguments.
+
+Note [Eta reduction for data families]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Consider this
    data family T a b :: *
    newtype instance T Int a = MkT (IO a) deriving( Monad )
@@ -155,7 +196,7 @@ See also Note [Newtype eta] in TyCon.
 
 Bottom line:
   For a FamInst with fi_flavour = DataFamilyInst rep_tc,
-  - fi_tvs may be shorter than tyConTyVars of rep_tc
+  - fi_tvs may be shorter than tyConTyVars of rep_tc.
   - fi_tys may be shorter than tyConArity of the family tycon
        i.e. LHS is unsaturated
   - fi_rhs will be (rep_tc fi_tvs)
@@ -218,7 +259,7 @@ instance Outputable FamInst where
 --     See pprTyThing.pprFamInst for printing for the user
 pprFamInst :: FamInst -> SDoc
 pprFamInst famInst
-  = hang (pprFamInstHdr famInst) 2 (ifPprDebug debug_stuff)
+  = hang (pprFamInstHdr famInst) 2 (whenPprDebug debug_stuff)
   where
     ax = fi_axiom famInst
     debug_stuff = vcat [ text "Coercion axiom:" <+> ppr ax
@@ -400,6 +441,11 @@ famInstEnvElts :: FamInstEnv -> [FamInst]
 famInstEnvElts fi = [elt | FamIE elts <- eltsUDFM fi, elt <- elts]
   -- See Note [FamInstEnv determinism]
 
+famInstEnvSize :: FamInstEnv -> Int
+famInstEnvSize = nonDetFoldUDFM (\(FamIE elt) sum -> sum + length elt) 0
+  -- It's OK to use nonDetFoldUDFM here since we're just computing the
+  -- size.
+
 familyInstances :: (FamInstEnv, FamInstEnv) -> TyCon -> [FamInst]
 familyInstances (pkg_fie, home_fie) fam
   = get home_fie ++ get pkg_fie
@@ -417,33 +463,6 @@ extendFamInstEnv inst_env
   = addToUDFM_C add inst_env cls_nm (FamIE [ins_item])
   where
     add (FamIE items) _ = FamIE (ins_item:items)
-
-deleteFromFamInstEnv :: FamInstEnv -> FamInst -> FamInstEnv
--- Used only for overriding in GHCi
-deleteFromFamInstEnv inst_env fam_inst@(FamInst {fi_fam = fam_nm})
- = adjustUDFM adjust inst_env fam_nm
- where
-   adjust :: FamilyInstEnv -> FamilyInstEnv
-   adjust (FamIE items)
-     = FamIE (filterOut (identicalFamInstHead fam_inst) items)
-
-identicalFamInstHead :: FamInst -> FamInst -> Bool
--- ^ True when the LHSs are identical
--- Used for overriding in GHCi
-identicalFamInstHead (FamInst { fi_axiom = ax1 }) (FamInst { fi_axiom = ax2 })
-  =  coAxiomTyCon ax1 == coAxiomTyCon ax2
-  && numBranches brs1 == numBranches brs2
-  && and ((zipWith identical_branch `on` fromBranches) brs1 brs2)
-  where
-    brs1 = coAxiomBranches ax1
-    brs2 = coAxiomBranches ax2
-
-    identical_branch br1 br2
-      =  isJust (tcMatchTys lhs1 lhs2)
-      && isJust (tcMatchTys lhs2 lhs1)
-      where
-        lhs1 = coAxBranchLHS br1
-        lhs2 = coAxBranchLHS br2
 
 {-
 ************************************************************************
@@ -870,7 +889,7 @@ lookupFamInstEnvInjectivityConflicts
                       -- INVARIANT: list contains at least one True value
     ->  FamInstEnvs   -- all type instances seens so far
     ->  FamInst       -- new type instance that we're checking
-    -> [CoAxBranch]   -- conflicting instance delcarations
+    -> [CoAxBranch]   -- conflicting instance declarations
 lookupFamInstEnvInjectivityConflicts injList (pkg_ie, home_ie)
                              fam_inst@(FamInst { fi_axiom = new_axiom })
   -- See Note [Verifying injectivity annotation]. This function implements
@@ -1197,6 +1216,22 @@ coercion. Because coercions are irrelevant anyway, there is no point in doing
 this. So, whenever we encounter a coercion, we just say that it won't change.
 That's what the CoercionTy case is doing within normalise_type.
 
+Note [Normalisation and type synonyms]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We need to be a bit careful about normalising in the presence of type
+synonyms (Trac #13035).  Suppose S is a type synonym, and we have
+   S t1 t2
+If S is family-free (on its RHS) we can just normalise t1 and t2 and
+reconstruct (S t1' t2').   Expanding S could not reveal any new redexes
+because type families are saturated.
+
+But if S has a type family on its RHS we expand /before/ normalising
+the args t1, t2.  If we normalise t1, t2 first, we'll re-normalise them
+after expansion, and that can lead to /exponential/ behavour; see Trac #13035.
+
+Notice, though, that expanding first can in principle duplicate t1,t2,
+which might contain redexes. I'm sure you could conjure up an exponential
+case by that route too, but it hasn't happened in practice yet!
 -}
 
 topNormaliseType :: FamInstEnvs -> Type -> Type
@@ -1211,22 +1246,20 @@ topNormaliseType_maybe :: FamInstEnvs -> Type -> Maybe (Coercion, Type)
 --      * data family redex
 --      * newtypes
 -- returning an appropriate Representational coercion.  Specifically, if
---   topNormaliseType_maybe env ty = Maybe (co, ty')
+--   topNormaliseType_maybe env ty = Just (co, ty')
 -- then
 --   (a) co :: ty ~R ty'
 --   (b) ty' is not a newtype, and is not a type-family or data-family redex
 --
 -- However, ty' can be something like (Maybe (F ty)), where
 -- (F ty) is a redex.
---
--- Its a bit like Type.repType, but handles type families too
 
 topNormaliseType_maybe env ty
   = topNormaliseTypeX stepper mkTransCo ty
   where
     stepper = unwrapNewTypeStepper `composeSteppers` tyFamStepper
 
-    tyFamStepper rec_nts tc tys  -- Try to step a type/data familiy
+    tyFamStepper rec_nts tc tys  -- Try to step a type/data family
       = let (args_co, ntys) = normaliseTcArgs env Representational tc tys in
           -- NB: It's OK to use normaliseTcArgs here instead of
           -- normalise_tc_args (which takes the LiftingContext described
@@ -1248,18 +1281,18 @@ normaliseTcApp env role tc tys
 -- See Note [Normalising types] about the LiftingContext
 normalise_tc_app :: TyCon -> [Type] -> NormM (Coercion, Type)
 normalise_tc_app tc tys
-  = do { (args_co, ntys) <- normalise_tc_args tc tys
-       ; case expandSynTyCon_maybe tc ntys of
-         { Just (tenv, rhs, ntys') ->
-           do { (co2, ninst_rhs)
-                  <- normalise_type (substTy (mkTvSubstPrs tenv) rhs)
-              ; return $
-                if isReflCo co2
-                then (args_co,                 mkTyConApp tc ntys)
-                else (args_co `mkTransCo` co2, mkAppTys ninst_rhs ntys') }
-         ; Nothing ->
+  | Just (tenv, rhs, tys') <- expandSynTyCon_maybe tc tys
+  , not (isFamFreeTyCon tc)  -- Expand and try again
+  = -- A synonym with type families in the RHS
+    -- Expand and try again
+    -- See Note [Normalisation and type synonyms]
+    normalise_type (mkAppTys (substTy (mkTvSubstPrs tenv) rhs) tys')
+
+  | isFamilyTyCon tc
+  = -- A type-family application
     do { env <- getEnv
        ; role <- getRole
+       ; (args_co, ntys) <- normalise_tc_args tc tys
        ; case reduceTyFamApp_maybe env role tc ntys of
            Just (first_co, ty')
              -> do { (rest_co,nty) <- normalise_type ty'
@@ -1267,7 +1300,13 @@ normalise_tc_app tc tys
                             , nty ) }
            _ -> -- No unique matching family instance exists;
                 -- we do not do anything
-                return (args_co, mkTyConApp tc ntys) }}}
+                return (args_co, mkTyConApp tc ntys) }
+
+  | otherwise
+  = -- A synonym with no type families in the RHS; or data type etc
+    -- Just normalise the arguments and rebuild
+    do { (args_co, ntys) <- normalise_tc_args tc tys
+       ; return (args_co, mkTyConApp tc ntys) }
 
 ---------------
 -- | Normalise arguments to a tycon
@@ -1309,8 +1348,8 @@ normalise_type :: Type                     -- old type
 -- See Note [Normalising types]
 -- Try to not to disturb type synonyms if possible
 
-normalise_type
-  = go
+normalise_type ty
+  = go ty
   where
     go (TyConApp tc tys) = normalise_tc_app tc tys
     go ty@(LitTy {})     = do { r <- getRole
@@ -1586,6 +1625,7 @@ allTyVarsInTy = go
     go_co (AppCo co arg)        = go_co co `unionVarSet` go_co arg
     go_co (ForAllCo tv h co)
       = unionVarSets [unitVarSet tv, go_co co, go_co h]
+    go_co (FunCo _ c1 c2)       = go_co c1 `unionVarSet` go_co c2
     go_co (CoVarCo cv)          = unitVarSet cv
     go_co (AxiomInstCo _ _ cos) = go_cos cos
     go_co (UnivCo p _ t1 t2)    = go_prov p `unionVarSet` go t1 `unionVarSet` go t2

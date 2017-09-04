@@ -6,8 +6,7 @@
  *
  * -------------------------------------------------------------------------- */
 
-#ifndef HASH_H
-#define HASH_H
+#pragma once
 
 #include "BeginPrivate.h"
 
@@ -32,6 +31,10 @@ int keyCountHashTable (HashTable *table);
 // If the table is modified concurrently, the function behavior is undefined.
 //
 int keysHashTable(HashTable *table, StgWord keys[], int szKeys);
+
+typedef void (*MapHashFn)(void *data, StgWord key, const void *value);
+
+void mapHashTable(HashTable *table, void *data, MapHashFn fn);
 
 /* Hash table access where the keys are C strings (the strings are
  * assumed to be allocated by the caller, and mustn't be deallocated
@@ -62,5 +65,3 @@ void freeHashTable ( HashTable *table, void (*freeDataFun)(void *) );
 void exitHashTable ( void );
 
 #include "EndPrivate.h"
-
-#endif /* HASH_H */

@@ -53,19 +53,35 @@
         "2": "disabled"
       }
     },
+    "cabal": {
+      "type": "text",
+      "include": ["(\\.cabal(\\.in)?$)"],
+      "severity": {
+        "5": "disabled",
+        "2": "warning"
+      }
+    },
+    "other-text": {
+      "type": "text",
+      "include": ["(.travis.yml?)", "(.md$)", "(.txt$)"],
+      "severity": {
+        "5": "disabled",
+        "2": "warning"
+      }
+    },
     "check-binaries": {
       "type": "external-json",
-      "external-json.script": "python .arc-linters/check-binaries.py"
+      "external-json.script": "python3 .arc-linters/check-binaries.py"
     },
     "check-makefiles": {
       "type": "external-json",
       "include": ["(Makefile$)"],
-      "external-json.script": "python .arc-linters/check-makefiles.py"
+      "external-json.script": "python3 .arc-linters/check-makefiles.py"
     },
     "bad-assert-clang-cpp": {
       "type": "external-json",
       "include": ["(\\.(l?hs|x|y\\.pp)(\\.in)?$)", "(\\.(c|h)$)"],
-      "external-json.script": "python .arc-linters/check-cpp.py"
+      "external-json.script": "python3 .arc-linters/check-cpp.py"
     }
   },
 

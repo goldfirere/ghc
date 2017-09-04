@@ -568,6 +568,10 @@ wanteds os = concat
           ,closureField C "StgCompactNFData" "autoBlockW"
           ,closureField C "StgCompactNFData" "nursery"
           ,closureField C "StgCompactNFData" "last"
+          ,closureField C "StgCompactNFData" "hp"
+          ,closureField C "StgCompactNFData" "hpLim"
+          ,closureField C "StgCompactNFData" "hash"
+          ,closureField C "StgCompactNFData" "result"
 
           ,structSize   C "StgCompactNFDataBlock"
           ,structField  C "StgCompactNFDataBlock" "self"
@@ -649,7 +653,7 @@ wanteds os = concat
           ,constantWord Haskell "MAX_Real_Long_REG"    "MAX_REAL_LONG_REG"
 
           -- This tells the native code generator the size of the spill
-          -- area is has available.
+          -- area it has available.
           ,constantWord Haskell "RESERVED_C_STACK_BYTES" "RESERVED_C_STACK_BYTES"
           -- The amount of (Haskell) stack to leave free for saving
           -- registers when returning to the scheduler.

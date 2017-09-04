@@ -15,7 +15,12 @@ ToDo:
 {-# LANGUAGE CPP, RankNTypes #-}
 {-# OPTIONS_GHC -optc-DNON_POSIX_SOURCE #-}
 
-module PrelRules ( primOpRules, builtinRules ) where
+module PrelRules
+   ( primOpRules
+   , builtinRules
+   , caseRules
+   )
+where
 
 #include "HsVersions.h"
 #include "../includes/MachDeps.h"
@@ -26,12 +31,13 @@ import CoreSyn
 import MkCore
 import Id
 import Literal
-import CoreSubst   ( exprIsLiteral_maybe )
+import CoreOpt     ( exprIsLiteral_maybe )
 import PrimOp      ( PrimOp(..), tagToEnumKey )
 import TysWiredIn
 import TysPrim
-import TyCon       ( tyConDataCons_maybe, isEnumerationTyCon, isNewTyCon, unwrapNewTyCon_maybe )
-import DataCon     ( dataConTag, dataConTyCon, dataConWorkId )
+import TyCon       ( tyConDataCons_maybe, isEnumerationTyCon, isNewTyCon
+                   , unwrapNewTyCon_maybe, tyConDataCons )
+import DataCon     ( DataCon, dataConTagZ, dataConTyCon, dataConWorkId )
 import CoreUtils   ( cheapEqExpr, exprIsHNF )
 import CoreUnfold  ( exprIsConApp_maybe )
 import Type
@@ -533,25 +539,15 @@ isMaxBound dflags (MachWord i)   = i == tARGET_MAX_WORD dflags
 isMaxBound _      (MachWord64 i) = i == toInteger (maxBound :: Word64)
 isMaxBound _      _              = False
 
-
--- Note that we *don't* warn the user about overflow. It's not done at
--- runtime either, and compilation of completely harmless things like
---    ((124076834 :: Word32) + (2147483647 :: Word32))
--- would yield a warning. Instead we simply squash the value into the
--- *target* Int/Word range.
+-- | Create an Int literal expression while ensuring the given Integer is in the
+-- target Int range
 intResult :: DynFlags -> Integer -> Maybe CoreExpr
-intResult dflags result = Just (mkIntVal dflags result')
-    where result' = case platformWordSize (targetPlatform dflags) of
-                    4 -> toInteger (fromInteger result :: Int32)
-                    8 -> toInteger (fromInteger result :: Int64)
-                    w -> panic ("intResult: Unknown platformWordSize: " ++ show w)
+intResult dflags result = Just (Lit (mkMachIntWrap dflags result))
 
+-- | Create a Word literal expression while ensuring the given Integer is in the
+-- target Word range
 wordResult :: DynFlags -> Integer -> Maybe CoreExpr
-wordResult dflags result = Just (mkWordVal dflags result')
-    where result' = case platformWordSize (targetPlatform dflags) of
-                    4 -> toInteger (fromInteger result :: Word32)
-                    8 -> toInteger (fromInteger result :: Word64)
-                    w -> panic ("wordResult: Unknown platformWordSize: " ++ show w)
+wordResult dflags result = Just (Lit (mkMachWordWrap dflags result))
 
 inversePrimOp :: PrimOp -> RuleM CoreExpr
 inversePrimOp primop = do
@@ -841,8 +837,6 @@ gtVal = Var gtDataConId
 
 mkIntVal :: DynFlags -> Integer -> Expr CoreBndr
 mkIntVal dflags i = Lit (mkMachInt dflags i)
-mkWordVal :: DynFlags -> Integer -> Expr CoreBndr
-mkWordVal dflags w = Lit (mkMachWord dflags w)
 mkFloatVal :: DynFlags -> Rational -> Expr CoreBndr
 mkFloatVal dflags f = Lit (convFloating dflags (MachFloat  f))
 mkDoubleVal :: DynFlags -> Rational -> Expr CoreBndr
@@ -890,7 +884,7 @@ tagToEnumRule = do
   case splitTyConApp_maybe ty of
     Just (tycon, tc_args) | isEnumerationTyCon tycon -> do
       let tag = fromInteger i
-          correct_tag dc = (dataConTag dc - fIRST_TAG) == tag
+          correct_tag dc = (dataConTagZ dc) == tag
       (dc:rest) <- return $ filter correct_tag (tyConDataCons_maybe tycon `orElse` [])
       ASSERT(null rest) return ()
       return $ mkTyApps (Var (dataConWorkId dc)) tc_args
@@ -920,7 +914,7 @@ dataToTagRule = a `mplus` b
       in_scope <- getInScopeEnv
       (dc,_,_) <- liftMaybe $ exprIsConApp_maybe in_scope val_arg
       ASSERT( not (isNewTyCon (dataConTyCon dc)) ) return ()
-      return $ mkIntVal dflags (toInteger (dataConTag dc - fIRST_TAG))
+      return $ mkIntVal dflags (toInteger (dataConTagZ dc))
 
 {-
 ************************************************************************
@@ -982,9 +976,9 @@ builtinRules :: [CoreRule]
 builtinRules
   = [BuiltinRule { ru_name = fsLit "AppendLitString",
                    ru_fn = unpackCStringFoldrName,
-                   ru_nargs = 4, ru_try = \_ _ _ -> match_append_lit },
+                   ru_nargs = 4, ru_try = match_append_lit },
      BuiltinRule { ru_name = fsLit "EqString", ru_fn = eqStringName,
-                   ru_nargs = 2, ru_try = \dflags _ _ -> match_eq_string dflags },
+                   ru_nargs = 2, ru_try = match_eq_string },
      BuiltinRule { ru_name = fsLit "Inline", ru_fn = inlineIdName,
                    ru_nargs = 2, ru_try = \_ _ _ -> match_inline },
      BuiltinRule { ru_name = fsLit "MagicDict", ru_fn = idName magicDictId,
@@ -1128,37 +1122,42 @@ builtinIntegerRules =
 --      unpackFoldrCString# "foo" c (unpackFoldrCString# "baz" c n)
 --      =  unpackFoldrCString# "foobaz" c n
 
-match_append_lit :: [Expr CoreBndr] -> Maybe (Expr CoreBndr)
-match_append_lit [Type ty1,
-                    Lit (MachStr s1),
-                    c1,
-                    Var unpk `App` Type ty2
-                             `App` Lit (MachStr s2)
-                             `App` c2
-                             `App` n
-                   ]
+match_append_lit :: RuleFun
+match_append_lit _ id_unf _
+        [ Type ty1
+        , lit1
+        , c1
+        , Var unpk `App` Type ty2
+                   `App` lit2
+                   `App` c2
+                   `App` n
+        ]
   | unpk `hasKey` unpackCStringFoldrIdKey &&
     c1 `cheapEqExpr` c2
+  , Just (MachStr s1) <- exprIsLiteral_maybe id_unf lit1
+  , Just (MachStr s2) <- exprIsLiteral_maybe id_unf lit2
   = ASSERT( ty1 `eqType` ty2 )
     Just (Var unpk `App` Type ty1
                    `App` Lit (MachStr (s1 `BS.append` s2))
                    `App` c1
                    `App` n)
 
-match_append_lit _ = Nothing
+match_append_lit _ _ _ _ = Nothing
 
 ---------------------------------------------------
 -- The rule is this:
---      eqString (unpackCString# (Lit s1)) (unpackCString# (Lit s2) = s1==s2
+--      eqString (unpackCString# (Lit s1)) (unpackCString# (Lit s2)) = s1==s2
 
-match_eq_string :: DynFlags -> [Expr CoreBndr] -> Maybe (Expr CoreBndr)
-match_eq_string _ [Var unpk1 `App` Lit (MachStr s1),
-                        Var unpk2 `App` Lit (MachStr s2)]
-  | unpk1 `hasKey` unpackCStringIdKey,
-    unpk2 `hasKey` unpackCStringIdKey
+match_eq_string :: RuleFun
+match_eq_string _ id_unf _
+        [Var unpk1 `App` lit1, Var unpk2 `App` lit2]
+  | unpk1 `hasKey` unpackCStringIdKey
+  , unpk2 `hasKey` unpackCStringIdKey
+  , Just (MachStr s1) <- exprIsLiteral_maybe id_unf lit1
+  , Just (MachStr s2) <- exprIsLiteral_maybe id_unf lit2
   = Just (if s1 == s2 then trueValBool else falseValBool)
 
-match_eq_string _ _ = Nothing
+match_eq_string _ _ _ _ = Nothing
 
 
 ---------------------------------------------------
@@ -1385,3 +1384,161 @@ match_smallIntegerTo primOp _ _ _ [App (Var x) y]
   | idName x == smallIntegerName
   = Just $ App (Var (mkPrimOpId primOp)) y
 match_smallIntegerTo _ _ _ _ _ = Nothing
+
+
+
+--------------------------------------------------------
+-- Constant folding through case-expressions
+--
+-- cf Scrutinee Constant Folding in simplCore/SimplUtils
+--------------------------------------------------------
+
+-- | Match the scrutinee of a case and potentially return a new scrutinee and a
+-- function to apply to each literal alternative.
+caseRules :: DynFlags
+          -> CoreExpr                    -- Scrutinee
+          -> Maybe ( CoreExpr            -- New scrutinee
+                   , AltCon -> AltCon    -- How to fix up the alt pattern
+                   , Id -> CoreExpr)     -- How to reconstruct the original scrutinee
+                                         -- from the new case-binder
+-- e.g  case e of b {
+--         ...;
+--         con bs -> rhs;
+--         ... }
+--  ==>
+--      case e' of b' {
+--         ...;
+--         fixup_altcon[con] bs -> let b = mk_orig[b] in rhs;
+--         ... }
+
+caseRules dflags (App (App (Var f) v) (Lit l))   -- v `op` x#
+  | Just op <- isPrimOpId_maybe f
+  , Just x  <- isLitValue_maybe l
+  , Just adjust_lit <- adjustDyadicRight op x
+  = Just (v, tx_lit_con dflags adjust_lit
+           , \v -> (App (App (Var f) (Var v)) (Lit l)))
+
+caseRules dflags (App (App (Var f) (Lit l)) v)   -- x# `op` v
+  | Just op <- isPrimOpId_maybe f
+  , Just x  <- isLitValue_maybe l
+  , Just adjust_lit <- adjustDyadicLeft x op
+  = Just (v, tx_lit_con dflags adjust_lit
+           , \v -> (App (App (Var f) (Lit l)) (Var v)))
+
+
+caseRules dflags (App (Var f) v              )   -- op v
+  | Just op <- isPrimOpId_maybe f
+  , Just adjust_lit <- adjustUnary op
+  = Just (v, tx_lit_con dflags adjust_lit
+           , \v -> App (Var f) (Var v))
+
+-- See Note [caseRules for tagToEnum]
+caseRules dflags (App (App (Var f) type_arg) v)
+  | Just TagToEnumOp <- isPrimOpId_maybe f
+  = Just (v, tx_con_tte dflags
+           , \v -> (App (App (Var f) type_arg) (Var v)))
+
+-- See Note [caseRules for dataToTag]
+caseRules _ (App (App (Var f) (Type ty)) v)       -- dataToTag x
+  | Just DataToTagOp <- isPrimOpId_maybe f
+  = Just (v, tx_con_dtt ty
+           , \v -> App (App (Var f) (Type ty)) (Var v))
+
+caseRules _ _ = Nothing
+
+
+tx_lit_con :: DynFlags -> (Integer -> Integer) -> AltCon -> AltCon
+tx_lit_con _      _      DEFAULT    = DEFAULT
+tx_lit_con dflags adjust (LitAlt l) = LitAlt (mapLitValue dflags adjust l)
+tx_lit_con _      _      alt        = pprPanic "caseRules" (ppr alt)
+   -- NB: mapLitValue uses mkMachIntWrap etc, to ensure that the
+   -- literal alternatives remain in Word/Int target ranges
+   -- (See Note [Word/Int underflow/overflow] in Literal and #13172).
+
+adjustDyadicRight :: PrimOp -> Integer -> Maybe (Integer -> Integer)
+-- Given (x `op` lit) return a function 'f' s.t.  f (x `op` lit) = x
+adjustDyadicRight op lit
+  = case op of
+         WordAddOp -> Just (\y -> y-lit      )
+         IntAddOp  -> Just (\y -> y-lit      )
+         WordSubOp -> Just (\y -> y+lit      )
+         IntSubOp  -> Just (\y -> y+lit      )
+         XorOp     -> Just (\y -> y `xor` lit)
+         XorIOp    -> Just (\y -> y `xor` lit)
+         _         -> Nothing
+
+adjustDyadicLeft :: Integer -> PrimOp -> Maybe (Integer -> Integer)
+-- Given (lit `op` x) return a function 'f' s.t.  f (lit `op` x) = x
+adjustDyadicLeft lit op
+  = case op of
+         WordAddOp -> Just (\y -> y-lit      )
+         IntAddOp  -> Just (\y -> y-lit      )
+         WordSubOp -> Just (\y -> lit-y      )
+         IntSubOp  -> Just (\y -> lit-y      )
+         XorOp     -> Just (\y -> y `xor` lit)
+         XorIOp    -> Just (\y -> y `xor` lit)
+         _         -> Nothing
+
+
+adjustUnary :: PrimOp -> Maybe (Integer -> Integer)
+-- Given (op x) return a function 'f' s.t.  f (op x) = x
+adjustUnary op
+  = case op of
+         NotOp     -> Just (\y -> complement y)
+         NotIOp    -> Just (\y -> complement y)
+         IntNegOp  -> Just (\y -> negate y    )
+         _         -> Nothing
+
+tx_con_tte :: DynFlags -> AltCon -> AltCon
+tx_con_tte _      DEFAULT      = DEFAULT
+tx_con_tte dflags (DataAlt dc)
+  | tag == 0  = DEFAULT   -- See Note [caseRules for tagToEnum]
+  | otherwise = LitAlt (mkMachInt dflags (toInteger tag))
+  where
+    tag = dataConTagZ dc
+tx_con_tte _      alt          = pprPanic "caseRules" (ppr alt)
+
+tx_con_dtt :: Type -> AltCon -> AltCon
+tx_con_dtt _  DEFAULT              = DEFAULT
+tx_con_dtt ty (LitAlt (MachInt i)) = DataAlt (get_con ty (fromInteger i))
+tx_con_dtt _  alt                  = pprPanic "caseRules" (ppr alt)
+
+get_con :: Type -> ConTagZ -> DataCon
+get_con ty tag = tyConDataCons (tyConAppTyCon ty) !! tag
+
+{- Note [caseRules for tagToEnum]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We want to transform
+   case tagToEnum x of
+     False -> e1
+     True  -> e2
+into
+   case x of
+     0# -> e1
+     1# -> e1
+
+This rule eliminates a lot of boilerplate. For
+  if (x>y) then e1 else e2
+we generate
+  case tagToEnum (x ># y) of
+    False -> e2
+    True  -> e1
+and it is nice to then get rid of the tagToEnum.
+
+NB: in SimplUtils, where we invoke caseRules,
+    we convert that 0# to DEFAULT
+
+Note [caseRules for dataToTag]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We want to transform
+  case dataToTag x of
+    DEFAULT -> e1
+    1# -> e2
+into
+  case x of
+    DEFAULT -> e1
+    (:) _ _ -> e2
+
+Note the need for some wildcard binders in
+the 'cons' case.
+-}

@@ -4,7 +4,7 @@ module Vectorise.Utils.Base
   ( voidType
   , newLocalVVar
 
-  , mkDataConTag, dataConTagZ
+  , mkDataConTag
   , mkWrapType
   , mkClosureTypes
   , mkPReprType
@@ -66,9 +66,6 @@ newLocalVVar fs vty
 mkDataConTag :: DynFlags -> DataCon -> CoreExpr
 mkDataConTag dflags = mkIntLitInt dflags . dataConTagZ
 
-dataConTagZ :: DataCon -> Int
-dataConTagZ con = dataConTag con - fIRST_TAG
-
 
 -- Type Construction ----------------------------------------------------------
 
@@ -87,7 +84,7 @@ mkClosureTypes = mkBuiltinTyConApps closureTyCon
 mkPReprType :: Type -> VM Type
 mkPReprType ty = mkBuiltinTyConApp preprTyCon [ty]
 
--- | Make an appliction of the 'PData' tycon to some argument.
+-- | Make an application of the 'PData' tycon to some argument.
 --
 mkPDataType :: Type -> VM Type
 mkPDataType ty = mkBuiltinTyConApp pdataTyCon [ty]
@@ -222,7 +219,7 @@ pdataReprTyCon ty
 --
 pdataReprTyConExact :: TyCon -> VM TyCon
 pdataReprTyConExact tycon
-  = do {   -- look up the representation tycon; if there is a match at all, it will be be exact
+  = do {   -- look up the representation tycon; if there is a match at all, it will be exact
        ;   -- (i.e.,' _tys' will be distinct type variables)
        ; (ptycon, _tys) <- pdataReprTyCon (tycon `mkTyConApp` mkTyVarTys (tyConTyVars tycon))
        ; return ptycon
@@ -235,7 +232,7 @@ pdataReprTyConExact tycon
 --
 pdatasReprTyConExact :: TyCon -> VM TyCon
 pdatasReprTyConExact tycon
-  = do {   -- look up the representation tycon; if there is a match at all, it will be be exact
+  = do {   -- look up the representation tycon; if there is a match at all, it will be exact
        ; (FamInstMatch { fim_instance = ptycon }) <- pdatasReprTyCon (tycon `mkTyConApp` mkTyVarTys (tyConTyVars tycon))
        ; return $ dataFamInstRepTyCon ptycon
        }

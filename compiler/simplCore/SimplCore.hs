@@ -56,7 +56,7 @@ import Outputable
 import Control.Monad
 import qualified GHC.LanguageExtensions as LangExt
 
-#ifdef GHCI
+#if defined(GHCI)
 import DynamicLoading   ( loadPlugins )
 import Plugins          ( installCoreToDos )
 #else
@@ -132,6 +132,7 @@ getCoreToDo dflags
     rules_on      = gopt Opt_EnableRewriteRules           dflags
     eta_expand_on = gopt Opt_DoLambdaEtaExpansion         dflags
     ww_on         = gopt Opt_WorkerWrapper                dflags
+    vectorise_on  = gopt Opt_Vectorise                    dflags
     static_ptrs   = xopt LangExt.StaticPointers           dflags
 
     maybe_rule_check phase = runMaybe rule_check (CoreDoRuleCheck phase)
@@ -141,6 +142,7 @@ getCoreToDo dflags
 
     base_mode = SimplMode { sm_phase      = panic "base_mode"
                           , sm_names      = []
+                          , sm_dflags     = dflags
                           , sm_rules      = rules_on
                           , sm_eta_expand = eta_expand_on
                           , sm_inline     = True
@@ -160,12 +162,12 @@ getCoreToDo dflags
           --  We need to eliminate these common sub expressions before their definitions
           --  are inlined in phase 2. The CSE introduces lots of  v1 = v2 bindings,
           --  so we also run simpl_gently to inline them.
-      ++  (if gopt Opt_Vectorise dflags && phase == 3
+      ++  (if vectorise_on && phase == 3
             then [CoreCSE, simpl_gently]
             else [])
 
     vectorisation
-      = runWhen (gopt Opt_Vectorise dflags) $
+      = runWhen vectorise_on $
           CoreDoPasses [ simpl_gently, CoreDoVectorisation ]
 
                 -- By default, we have 2 phases before phase 0.
@@ -188,7 +190,8 @@ getCoreToDo dflags
                        (base_mode { sm_phase = InitialPhase
                                   , sm_names = ["Gentle"]
                                   , sm_rules = rules_on   -- Note [RULEs enabled in SimplGently]
-                                  , sm_inline = False
+                                  , sm_inline = not vectorise_on
+                                              -- See Note [Inline in InitialPhase]
                                   , sm_case_case = False })
                           -- Don't do case-of-case transformations.
                           -- This makes full laziness work better
@@ -205,14 +208,18 @@ getCoreToDo dflags
                            ))
 
     -- Static forms are moved to the top level with the FloatOut pass.
-    -- See Note [Grand plan for static forms].
+    -- See Note [Grand plan for static forms] in StaticPtrTable.
     static_ptrs_float_outwards =
-      runWhen static_ptrs $ CoreDoFloatOutwards FloatOutSwitches
-        { floatOutLambdas   = Just 0
-        , floatOutConstants = True
-        , floatOutOverSatApps = False
-        , floatToTopLevelOnly = True
-        }
+      runWhen static_ptrs $ CoreDoPasses
+        [ simpl_gently -- Float Out can't handle type lets (sometimes created
+                       -- by simpleOptPgm via mkParallelBindings)
+        , CoreDoFloatOutwards FloatOutSwitches
+          { floatOutLambdas   = Just 0
+          , floatOutConstants = True
+          , floatOutOverSatApps = False
+          , floatToTopLevelOnly = True
+          }
+        ]
 
     core_todo =
      if opt_level == 0 then
@@ -267,7 +274,8 @@ getCoreToDo dflags
                 -- the simplifier.
         else
            -- Even with full laziness turned off, we still need to float static
-           -- forms to the top level. See Note [Grand plan for static forms].
+           -- forms to the top level. See Note [Grand plan for static forms] in
+           -- StaticPtrTable.
            static_ptrs_float_outwards,
 
         simpl_phases,
@@ -277,7 +285,7 @@ getCoreToDo dflags
 
                 -- At least 3 iterations because otherwise we land up with
                 -- huge dead expressions because of an infelicity in the
-                -- simpifier.
+                -- simplifier.
                 --      let k = BIG in foldr k z xs
                 -- ==>  let k = BIG in letrec go = \xs -> ...(k x).... in go xs
                 -- ==>  let k = BIG in letrec go = \xs -> ...(BIG x).... in go xs
@@ -326,7 +334,7 @@ getCoreToDo dflags
             CoreLiberateCase,
             simpl_phase 0 ["post-liberate-case"] max_iter
             ]),         -- Run the simplifier after LiberateCase to vastly
-                        -- reduce the possiblility of shadowing
+                        -- reduce the possibility of shadowing
                         -- Reason: see Note [Shadowing] in SpecConstr.hs
 
         runWhen spec_constr CoreDoSpecConstr,
@@ -344,6 +352,8 @@ getCoreToDo dflags
         -- Final run of the demand_analyser, ensures that one-shot thunks are
         -- really really one-shot thunks. Only needed if the demand analyser
         -- has run at all. See Note [Final Demand Analyser run] in DmdAnal
+        -- It is EXTREMELY IMPORTANT to run this pass, otherwise execution
+        -- can become /exponentially/ more expensive. See Trac #11731, #12996.
         runWhen (strictness || late_dmd_anal) CoreDoStrictness,
 
         maybe_rule_check (Phase 0)
@@ -359,7 +369,7 @@ getCoreToDo dflags
 -- Loading plugins
 
 addPluginPasses :: [CoreToDo] -> CoreM [CoreToDo]
-#ifndef GHCI
+#if !defined(GHCI)
 addPluginPasses builtin_passes
   = do { dflags <- getDynFlags
        ; let pluginMods = pluginModNames dflags
@@ -374,7 +384,35 @@ addPluginPasses builtin_passes
     query_plug todos (_, plug, options) = installCoreToDos plug options todos
 #endif
 
-{-
+{- Note [Inline in InitialPhase]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In GHC 8 and earlier we did not inline anything in the InitialPhase. But that is
+confusing for users because when they say INLINE they expect the function to inline
+right away.
+
+So now we do inlining immediately, even in the InitialPhase, assuming that the
+Id's Activation allows it.
+
+This is a surprisingly big deal. Compiler performance improved a lot
+when I made this change:
+
+   perf/compiler/T5837.run            T5837 [stat too good] (normal)
+   perf/compiler/parsing001.run       parsing001 [stat too good] (normal)
+   perf/compiler/T12234.run           T12234 [stat too good] (optasm)
+   perf/compiler/T9020.run            T9020 [stat too good] (optasm)
+   perf/compiler/T3064.run            T3064 [stat too good] (normal)
+   perf/compiler/T9961.run            T9961 [stat too good] (normal)
+   perf/compiler/T13056.run           T13056 [stat too good] (optasm)
+   perf/compiler/T9872d.run           T9872d [stat too good] (normal)
+   perf/compiler/T783.run             T783 [stat too good] (normal)
+   perf/compiler/T12227.run           T12227 [stat too good] (normal)
+   perf/should_run/lazy-bs-alloc.run  lazy-bs-alloc [stat too good] (normal)
+   perf/compiler/T1969.run            T1969 [stat too good] (normal)
+   perf/compiler/T9872a.run           T9872a [stat too good] (normal)
+   perf/compiler/T9872c.run           T9872c [stat too good] (normal)
+   perf/compiler/T9872b.run           T9872b [stat too good] (normal)
+   perf/compiler/T9872d.run           T9872d [stat too good] (normal)
+
 Note [RULEs enabled in SimplGently]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 RULES are enabled when doing "gentle" simplification.  Two reasons:
@@ -425,7 +463,7 @@ doCorePass CoreLiberateCase          = {-# SCC "LiberateCase" #-}
                                        doPassD liberateCase
 
 doCorePass CoreDoFloatInwards        = {-# SCC "FloatInwards" #-}
-                                       doPassD floatInwards
+                                       floatInwards
 
 doCorePass (CoreDoFloatOutwards f)   = {-# SCC "FloatOutwards" #-}
                                        doPassDUM (floatOutwards f)
@@ -456,7 +494,7 @@ doCorePass (CoreDoRuleCheck phase pat)  = ruleCheckPass phase pat
 doCorePass CoreDoNothing                = return
 doCorePass (CoreDoPasses passes)        = runCorePasses passes
 
-#ifdef GHCI
+#if defined(GHCI)
 doCorePass (CoreDoPluginPass _ pass) = {-# SCC "Plugin" #-} pass
 #endif
 
@@ -482,8 +520,8 @@ ruleCheckPass current_phase pat guts =
     { rb <- getRuleBase
     ; dflags <- getDynFlags
     ; vis_orphs <- getVisibleOrphanMods
-    ; liftIO $ log_action dflags dflags NoReason Err.SevDump noSrcSpan
-                   defaultDumpStyle
+    ; liftIO $ putLogMsg dflags NoReason Err.SevDump noSrcSpan
+                   (defaultDumpStyle dflags)
                    (ruleCheckProgram current_phase pat
                       (RuleEnv rb vis_orphs) (mg_binds guts))
     ; return guts }
@@ -582,7 +620,7 @@ simplExprGently :: SimplEnv -> CoreExpr -> SimplM CoreExpr
 --      (b) the LHS and RHS of a RULE
 --      (c) Template Haskell splices
 --
--- The name 'Gently' suggests that the SimplifierMode is SimplGently,
+-- The name 'Gently' suggests that the SimplMode is SimplGently,
 -- and in fact that is so.... but the 'Gently' in simplExprGently doesn't
 -- enforce that; it just simplifies the expression twice
 
@@ -717,8 +755,8 @@ simplifyPgmIO pass@(CoreDoSimplify max_iterations mode)
                 -- Simplify the program
            ((binds1, rules1), counts1) <-
              initSmpl dflags (mkRuleEnv rule_base2 vis_orphs) fam_envs us1 sz $
-               do { env1 <- {-# SCC "SimplTopBinds" #-}
-                            simplTopBinds simpl_env tagged_binds
+               do { (floats, env1) <- {-# SCC "SimplTopBinds" #-}
+                                      simplTopBinds simpl_env tagged_binds
 
                       -- Apply the substitution to rules defined in this module
                       -- for imported Ids.  Eg  RULE map my_f = blah
@@ -726,7 +764,7 @@ simplifyPgmIO pass@(CoreDoSimplify max_iterations mode)
                       -- apply it to the rule to, or it'll never match
                   ; rules1 <- simplRules env1 Nothing rules
 
-                  ; return (getFloatBinds env1, rules1) } ;
+                  ; return (getTopFloatBinds floats, rules1) } ;
 
                 -- Stop if nothing happened; don't dump output
            if isZeroSimplCount counts1 then
@@ -1022,57 +1060,3 @@ transferIdInfo exported_id local_id
                                (ruleInfo local_info)
         -- Remember to set the function-name field of the
         -- rules as we transfer them from one function to another
-
-
-{- Note [Grand plan for static forms]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Static forms go through the compilation phases as follows.
-Here is a running example:
-
-   f x = let k = map toUpper
-         in ...(static k)...
-
-* The renamer looks for out-of-scope names in the body of the static
-  form, as always If all names are in scope, the free variables of the
-  body are stored in AST at the location of the static form.
-
-* The typechecker verifies that all free variables occurring in the
-  static form are closed (see Note [Bindings with closed types] in
-  TcRnTypes).  In our example, 'k' is closed, even though it is bound
-  in a nested let, we are fine.
-
-* The desugarer replaces the static form with an application of the
-  data constructor 'StaticPtr' (defined in module GHC.StaticPtr of
-  base).  So we get
-
-   f x = let k = map toUpper
-         in ...(StaticPtr <fingerprint> k)...
-
-* The simplifier runs the FloatOut pass which moves the applications
-  of 'StaticPtr' to the top level. Thus the FloatOut pass is always
-  executed, even when optimizations are disabled.  So we get
-
-   k = map toUpper
-   static_ptr = StaticPtr <fingerprint> k
-   f x = ...static_ptr...
-
-  The FloatOut pass is careful to produce an /exported/ Id for a floated
-  'StaticPtr', so the binding is not removed by the simplifier (see #12207).
-  E.g. the code for `f` above might look like
-
-    static_ptr = StaticPtr <fingerprint> k
-    f x = ...(staticKey static_ptr)...
-
-  which might correctly be simplified to
-
-    f x = ...<fingerprint>...
-
-  BUT the top-level binding for static_ptr must remain, so that it can be
-  collected to populate the Static Pointer Table.
-
-* The CoreTidy pass produces a C function which inserts all the
-  floated 'StaticPtr' in the static pointer table (see the call to
-  StaticPtrTable.sptModuleInitCode in TidyPgm). CoreTidy pass also
-  exports the Ids of floated 'StaticPtr's so they can be linked with
-  the C function.
--}

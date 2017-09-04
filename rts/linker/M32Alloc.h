@@ -6,22 +6,16 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef RTS_LINKER_M32ALLOC
-#define RTS_LINKER_M32ALLOC
+#pragma once
 
 #if RTS_LINKER_USE_MMAP
 #include <fcntl.h>
 #include <sys/mman.h>
 
-#ifdef HAVE_UNISTD_H
+#if defined(HAVE_UNISTD_H)
 #include <unistd.h>
 #endif
 
-#endif
-
-/* MAP_ANONYMOUS is MAP_ANON on some systems, e.g. OS X, OpenBSD etc */
-#if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
-#define MAP_ANONYMOUS MAP_ANON
 #endif
 
 #include "BeginPrivate.h"
@@ -41,5 +35,3 @@ void m32_free(void *addr, size_t size) M32_NO_RETURN;
 void * m32_alloc(size_t size, size_t alignment) M32_NO_RETURN;
 
 #include "EndPrivate.h"
-
-#endif

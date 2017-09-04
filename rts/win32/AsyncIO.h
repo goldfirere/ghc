@@ -5,23 +5,20 @@
  * (c) sof, 2002-2003.
  */
 
-#ifndef WIN32_ASYNCHIO_H
-#define WIN32_ASYNCHIO_H
+#pragma once
 
 extern unsigned int
 addIORequest(int   fd,
-             int   forWriting,
-             int   isSock,
-             int   len,
+             bool  forWriting,
+             bool  isSock,
+             HsInt len,
              char* buf);
-extern unsigned int addDelayRequest(int   usecs);
+extern unsigned int addDelayRequest(HsInt usecs);
 extern unsigned int addDoProcRequest(void* proc, void* param);
 extern int  startupAsyncIO(void);
-extern void shutdownAsyncIO(rtsBool wait_threads);
+extern void shutdownAsyncIO(bool wait_threads);
 
-extern int awaitRequests(rtsBool wait);
+extern int awaitRequests(bool wait);
 
 extern void abandonRequestWait(void);
 extern void resetAbandonRequestWait(void);
-
-#endif /* WIN32_ASYNCHIO_H */

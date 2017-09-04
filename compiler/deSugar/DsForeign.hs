@@ -7,6 +7,8 @@ Desugaring foreign declarations (see also DsCCall).
 -}
 
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module DsForeign ( dsForeigns ) where
 
@@ -50,6 +52,7 @@ import OrdList
 import Pair
 import Util
 import Hooks
+import Encoding
 
 import Data.Maybe
 import Data.List
@@ -69,14 +72,14 @@ is the same as
 so we reuse the desugaring code in @DsCCall@ to deal with these.
 -}
 
-type Binding = (Id, CoreExpr)   -- No rec/nonrec structure;
-                                -- the occurrence analyser will sort it all out
+type Binding = (Id, CoreExpr) -- No rec/nonrec structure;
+                              -- the occurrence analyser will sort it all out
 
-dsForeigns :: [LForeignDecl Id]
+dsForeigns :: [LForeignDecl GhcTc]
            -> DsM (ForeignStubs, OrdList Binding)
 dsForeigns fos = getHooked dsForeignsHook dsForeigns' >>= ($ fos)
 
-dsForeigns' :: [LForeignDecl Id]
+dsForeigns' :: [LForeignDecl GhcTc]
             -> DsM (ForeignStubs, OrdList Binding)
 dsForeigns' []
   = return (NoStubs, nilOL)
@@ -200,7 +203,7 @@ dsFCall fn_id co fcall mDeclHeader = do
         (tv_bndrs, rho)      = tcSplitForAllTyVarBndrs ty
         (arg_tys, io_res_ty) = tcSplitFunTys rho
 
-    args <- newSysLocalsDs arg_tys
+    args <- newSysLocalsDs arg_tys  -- no FFI levity-polymorphism
     (val_args, arg_wrappers) <- mapAndUnzipM unboxArg (map Var args)
 
     let
@@ -218,7 +221,7 @@ dsFCall fn_id co fcall mDeclHeader = do
                                CApiConv safety) ->
                do wrapperName <- mkWrapperName "ghc_wrapper" (unpackFS cName)
                   let fcall' = CCall (CCallSpec
-                                      (StaticTarget (unpackFS wrapperName)
+                                      (StaticTarget NoSourceText
                                                     wrapperName mUnitId
                                                     True)
                                       CApiConv safety)
@@ -272,7 +275,8 @@ dsFCall fn_id co fcall mDeclHeader = do
         wrapper_body = foldr ($) (res_wrapper work_app) arg_wrappers
         wrap_rhs     = mkLams (tvs ++ args) wrapper_body
         wrap_rhs'    = Cast wrap_rhs co
-        fn_id_w_inl  = fn_id `setIdUnfolding` mkInlineUnfolding (Just (length args)) wrap_rhs'
+        fn_id_w_inl  = fn_id `setIdUnfolding` mkInlineUnfoldingWithArity
+                                                (length args) wrap_rhs'
 
     return ([(work_id, work_rhs), (fn_id_w_inl, wrap_rhs')], empty, cDoc)
 
@@ -299,7 +303,7 @@ dsPrimCall fn_id co fcall = do
         (tvs, fun_ty)        = tcSplitForAllTys ty
         (arg_tys, io_res_ty) = tcSplitFunTys fun_ty
 
-    args <- newSysLocalsDs arg_tys
+    args <- newSysLocalsDs arg_tys  -- no FFI levity-polymorphism
 
     ccall_uniq <- newUnique
     dflags <- getDynFlags
@@ -409,16 +413,12 @@ dsFExportDynamic :: Id
                  -> CCallConv
                  -> DsM ([Binding], SDoc, SDoc)
 dsFExportDynamic id co0 cconv = do
-    fe_id <-  newSysLocalDs ty
     mod <- getModule
     dflags <- getDynFlags
-    let
-        -- hack: need to get at the name of the C stub we're about to generate.
-        -- TODO: There's no real need to go via String with
-        -- (mkFastString . zString). In fact, is there a reason to convert
-        -- to FastString at all now, rather than sticking with FastZString?
-        fe_nm    = mkFastString (zString (zEncodeFS (moduleNameFS (moduleName mod))) ++ "_" ++ toCName dflags fe_id)
-
+    let fe_nm = mkFastString $ zEncodeString
+            (moduleStableString mod ++ "$" ++ toCName dflags id)
+        -- Construct the label based on the passed id, don't use names
+        -- depending on Unique. See #13807 and Note [Unique Determinism].
     cback <- newSysLocalDs arg_ty
     newStablePtrId <- dsLookupGlobalId newStablePtrName
     stable_ptr_tycon <- dsLookupTyCon stablePtrTyConName
@@ -723,8 +723,7 @@ toCType = f False
 
 typeTyCon :: Type -> TyCon
 typeTyCon ty
-  | UnaryRep rep_ty <- repType ty
-  , Just (tc, _) <- tcSplitTyConApp_maybe rep_ty
+  | Just (tc, _) <- tcSplitTyConApp_maybe (unwrapType ty)
   = tc
   | otherwise
   = pprPanic "DsForeign.typeTyCon" (ppr ty)
@@ -783,7 +782,7 @@ getPrimTyOf ty
         prim_ty
      _other -> pprPanic "DsForeign.getPrimTyOf" (ppr ty)
   where
-        UnaryRep rep_ty = repType ty
+        rep_ty = unwrapType ty
 
 -- represent a primitive type as a Char, for building a string that
 -- described the foreign function type.  The types are size-dependent,
@@ -792,7 +791,7 @@ primTyDescChar :: DynFlags -> Type -> Char
 primTyDescChar dflags ty
  | ty `eqType` unitTy = 'v'
  | otherwise
- = case typePrimRep (getPrimTyOf ty) of
+ = case typePrimRep1 (getPrimTyOf ty) of
      IntRep      -> signed_word
      WordRep     -> unsigned_word
      Int64Rep    -> 'L'

@@ -6,7 +6,7 @@
 -- how to achieve something similar to the old behavior. This is
 -- preventing HSP (and by extension, happstack) from migrating to GHC
 -- 7. I reported this earlier on the mailing lists, but I have further
--- simplied the test case here.
+-- simplified the test case here.
 
 {-# LANGUAGE TypeFamilies, MultiParamTypeClasses
   , FlexibleContexts, FlexibleInstances, UndecidableInstances
@@ -48,7 +48,7 @@ data FooBar = FooBar
 
 instance {-# OVERLAPPING #-} EmbedAsChild (IdentityT IO) FooBar where
   asChild b = asChild $ (genElement "foo")
-  -- asChild :: FooBar -> XMLGenT (XMLGenT (IdentityT IO) [Child (IdentitiyT IO)])
+  -- asChild :: FooBar -> XMLGenT (XMLGenT (IdentityT IO) [Child (IdentityT IO)])
 
 {-     ---------- Deriving the constraints ----------
  asChild :: EmbedAsChild m c => c -> XMLGenT m [Child m]

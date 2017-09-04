@@ -1,8 +1,10 @@
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE CPP
+           , GHCForeignImportPrim
            , NoImplicitPrelude
            , MagicHash
            , UnboxedTuples
+           , UnliftedFFITypes
   #-}
 {-# LANGUAGE CApiFFI #-}
 -- We believe we could deorphan this module, by moving lots of things
@@ -21,11 +23,13 @@
 -- Stability   :  internal
 -- Portability :  non-portable (GHC Extensions)
 --
--- The types 'Float' and 'Double', and the classes 'Floating' and 'RealFloat'.
+-- The types 'Float' and 'Double', the classes 'Floating' and 'RealFloat' and
+-- casting between Word32 and Float and Word64 and Double.
 --
 -----------------------------------------------------------------------------
 
 #include "ieee-flpt.h"
+#include "MachDeps.h"
 
 module GHC.Float
    ( module GHC.Float
@@ -46,6 +50,7 @@ import GHC.Enum
 import GHC.Show
 import GHC.Num
 import GHC.Real
+import GHC.Word
 import GHC.Arr
 import GHC.Float.RealFracMethods
 import GHC.Float.ConversionUtils
@@ -245,9 +250,7 @@ instance  Num Float  where
     (-)         x y     =  minusFloat x y
     negate      x       =  negateFloat x
     (*)         x y     =  timesFloat x y
-    abs x    | x == 0    = 0 -- handles (-0.0)
-             | x >  0    = x
-             | otherwise = negateFloat x
+    abs         x       =  fabsFloat x
     signum x | x > 0     = 1
              | x < 0     = negateFloat 1
              | otherwise = x -- handles 0.0, (-0.0), and NaN
@@ -427,9 +430,7 @@ instance  Num Double  where
     (-)         x y     =  minusDouble x y
     negate      x       =  negateDouble x
     (*)         x y     =  timesDouble x y
-    abs x    | x == 0    = 0 -- handles (-0.0)
-             | x >  0    = x
-             | otherwise = negateDouble x
+    abs         x       =  fabsDouble x
     signum x | x > 0     = 1
              | x < 0     = negateDouble 1
              | otherwise = x -- handles 0.0, (-0.0), and NaN
@@ -1087,13 +1088,14 @@ geFloat     (F# x) (F# y) = isTrue# (geFloat# x y)
 ltFloat     (F# x) (F# y) = isTrue# (ltFloat# x y)
 leFloat     (F# x) (F# y) = isTrue# (leFloat# x y)
 
-expFloat, logFloat, sqrtFloat :: Float -> Float
+expFloat, logFloat, sqrtFloat, fabsFloat :: Float -> Float
 sinFloat, cosFloat, tanFloat  :: Float -> Float
 asinFloat, acosFloat, atanFloat  :: Float -> Float
 sinhFloat, coshFloat, tanhFloat  :: Float -> Float
 expFloat    (F# x) = F# (expFloat# x)
 logFloat    (F# x) = F# (logFloat# x)
 sqrtFloat   (F# x) = F# (sqrtFloat# x)
+fabsFloat   (F# x) = F# (fabsFloat# x)
 sinFloat    (F# x) = F# (sinFloat# x)
 cosFloat    (F# x) = F# (cosFloat# x)
 tanFloat    (F# x) = F# (tanFloat# x)
@@ -1131,13 +1133,14 @@ double2Float (D# x) = F# (double2Float# x)
 float2Double :: Float -> Double
 float2Double (F# x) = D# (float2Double# x)
 
-expDouble, logDouble, sqrtDouble :: Double -> Double
+expDouble, logDouble, sqrtDouble, fabsDouble :: Double -> Double
 sinDouble, cosDouble, tanDouble  :: Double -> Double
 asinDouble, acosDouble, atanDouble  :: Double -> Double
 sinhDouble, coshDouble, tanhDouble  :: Double -> Double
 expDouble    (D# x) = D# (expDouble# x)
 logDouble    (D# x) = D# (logDouble# x)
 sqrtDouble   (D# x) = D# (sqrtDouble# x)
+fabsDouble   (D# x) = D# (fabsDouble# x)
 sinDouble    (D# x) = D# (sinDouble# x)
 cosDouble    (D# x) = D# (cosDouble# x)
 tanDouble    (D# x) = D# (tanDouble# x)
@@ -1255,3 +1258,87 @@ exponents returned by decodeFloat.
 -}
 clamp :: Int -> Int -> Int
 clamp bd k = max (-bd) (min bd k)
+
+
+{-
+Note [Casting from integral to floating point types]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+To implement something like `reinterpret_cast` from C++ to go from a
+floating-point type to an integral type one might niavely think that the
+following should work:
+
+      cast :: Float -> Word32
+      cast (F# f#) = W32# (unsafeCoerce# f#)
+
+Unfortunately that is not the case, because all the `unsafeCoerce#` does is tell
+the compiler that the types have changed. When one does the above cast and
+tries to operate on the resulting `Word32` the code generator will generate code
+that performs an integer/word operation on a floating-point register, which
+results in a compile error.
+
+The correct way of implementing `reinterpret_cast` to implement a primpop, but
+that requires a unique implementation for all supported archetectures. The next
+best solution is to write the value from the source register to memory and then
+read it from memory into the destination register and the best way to do that
+is using CMM.
+-}
+
+-- | @'castWord32ToFloat' w@ does a bit-for-bit copy from an integral value
+-- to a floating-point value.
+--
+-- @since 4.10.0.0
+
+{-# INLINE castWord32ToFloat #-}
+castWord32ToFloat :: Word32 -> Float
+castWord32ToFloat (W32# w#) = F# (stgWord32ToFloat w#)
+
+foreign import prim "stg_word32ToFloatzh"
+    stgWord32ToFloat :: Word# -> Float#
+
+
+-- | @'castFloatToWord32' f@ does a bit-for-bit copy from a floating-point value
+-- to an integral value.
+--
+-- @since 4.10.0.0
+
+{-# INLINE castFloatToWord32 #-}
+castFloatToWord32 :: Float -> Word32
+castFloatToWord32 (F# f#) = W32# (stgFloatToWord32 f#)
+
+foreign import prim "stg_floatToWord32zh"
+    stgFloatToWord32 :: Float# -> Word#
+
+
+
+-- | @'castWord64ToDouble' w@ does a bit-for-bit copy from an integral value
+-- to a floating-point value.
+--
+-- @since 4.10.0.0
+
+{-# INLINE castWord64ToDouble #-}
+castWord64ToDouble :: Word64 -> Double
+castWord64ToDouble (W64# w) = D# (stgWord64ToDouble w)
+
+foreign import prim "stg_word64ToDoublezh"
+#if WORD_SIZE_IN_BITS == 64
+    stgWord64ToDouble :: Word# -> Double#
+#else
+    stgWord64ToDouble :: Word64# -> Double#
+#endif
+
+
+-- | @'castFloatToWord32' f@ does a bit-for-bit copy from a floating-point value
+-- to an integral value.
+--
+-- @since 4.10.0.0
+
+{-# INLINE castDoubleToWord64 #-}
+castDoubleToWord64 :: Double -> Word64
+castDoubleToWord64 (D# d#) = W64# (stgDoubleToWord64 d#)
+
+foreign import prim "stg_doubleToWord64zh"
+#if WORD_SIZE_IN_BITS == 64
+    stgDoubleToWord64 :: Double# -> Word#
+#else
+    stgDoubleToWord64 :: Double# -> Word64#
+#endif

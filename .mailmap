@@ -11,6 +11,8 @@ Alexander Lukyanov      <alex.dontexist@gmail.com>          # Ticket #9360.
 Alexander Vershilov     <alexander.vershilov@gmail.com>     <alexander.vershilov@tweag.io>
 Alexey Rodriguez        <mrchebas@gmail.com>
 Alexey Rodriguez        <mrchebas@gmail.com>                mrchebas@gmail.com <unknown>
+Alex Biehl              <alex.biehl@gmail.com>
+Alex Biehl              <alex.biehl@gmail.com>              <alexbiehl@gmail.com>
 Andrew Farmer           <anfarmer@fb.com>                   <anfarmer@ku.edu>
 Andrew Farmer           <anfarmer@fb.com>                   <afarmer@ittc.ku.edu>
 Andrew Pimlott          <andrew.pimlott.ctr@metnet.navy.mil> andrew.pimlott.ctr@metnet.navy.mil <unknown>
@@ -71,6 +73,7 @@ Dana N. Xu              <na.xu@inria.fr>                    nx <unknown>
 Daniel Fischer          <daniel.is.fischer@googlemail.com>  <daniel.is.fischer@web.de>
 Daniel Franke           <df@dfranke.us>                     df@dfranke.us <unknown>
 Daniel Rogers           <daniel@phasevelocity.org>          daniel@phasevelocity.org <unknown>
+Darshan Kapashi         <darshan@fb.com>                    <darshankapashi@gmail.com>
 David Feuer             <david.feuer@gmail.com>             <David.Feuer@gmail.com>
 David Himmelstrup       <lemmih@gmail.com>                  # http://www.haskellers.com/user/Lemmih
 David M Peixotto        <dmp@rice.edu>                      dmp@rice.edu <unknown>
@@ -90,13 +93,17 @@ Don Stewart             <dons@galois.com>                   <dons@cse.unsw.edu.a
 Don Stewart             <dons@galois.com>                   dons <unknown>
 Don Stewart             <dons@galois.com>                   dons@cse.unsw.edu.au <unknown>
 Don Syme                <dsyme@microsoft.com>               dsyme <unknown>
+Douglas Wilson          <douglas.wilson@gmail.com>          doug <douglas.wilson@gmail.com>
 Donnie Jones            <donnie@darthik.com>                donnie@darthik.com <unknown>
 Duncan Coutts           <duncan@well-typed.com>             <duncan.coutts@worc.ox.ac.uk>
 Duncan Coutts           <duncan@well-typed.com>             <duncan@community.haskell.org>
 Duncan Coutts           <duncan@well-typed.com>             <duncan@haskell.org>
 Edward Z. Yang          <ezyang@cs.stanford.edu>            <ezyang@mit.edu>
+Eric Seidel             <eric@seidel.io>                    <gridaphobe@gmail.com>
+Erik de Castro Lopo     <erikd@mega-nerd.com>               <erik.decastrolopo@ambiata.com>
 Evan Hauck              <khyperia@live.com>
 Fumiaki Kinoshita       <fumiexcel@gmail.com>
+Gabor Greif             <ggreif@gmail.com>
 Gabor Pali              <pali.gabor@gmail.com>              <pgj@FreeBSD.org>
 Gabriele Keller         <keller@cse.unsw.edu.au>            keller <unknown>
 Gabriele Keller         <keller@cse.unsw.edu.au>            keller@.cse.unsw.edu.au <unknown>
@@ -137,11 +144,13 @@ Jose Pedro Magalhaes    <jpm@cs.ox.ac.uk>                   <dreixel@gmail.com>
 Jose Pedro Magalhaes    <jpm@cs.ox.ac.uk>                   <jpm@cs.uu.nl>
 Jose Pedro Magalhaes    <jpm@cs.ox.ac.uk>                   jpm@cs.uu.nl <unknown>
 Josef Svenningsson      <josef.svenningsson@gmail.com>      josefs <unknown>
+Josh Price              <joshprice247+git@gmail.com>        <thepig247@gmail.com>
 Jost Berthold           <jb.diku@gmail.com>                 <berthold@mathematik.uni-marburg.de>
 Jost Berthold           <jb.diku@gmail.com>                 berthold@mathematik.uni-marburg.de <unknown>
 Juan J. Quintela        <quintela@fi.udc.es>                quintela <unknown>
 Judah Jacobson          <judah.jacobson@gmail.com>          judah.jacobson@gmail.com <unknown>
 Julian Seward           <jseward@acm.org>                   sewardj <unknown>
+Julie Moronuki          <jdog74@gmail.com>
 Karel Gardas            <karel.gardas@centrum.cz>           <karel.gardas@centrumcz>
 Karel Gardas            <karel.gardas@centrum.cz>           <kgardas@objectsecurity.com>
 Keith Wansbrough        <keith.wansbrough@cl.cam.ac.uk>     keithw <unknown>
@@ -180,6 +189,7 @@ Michael D. Adams        <t-madams@microsoft.com>            <adamsmd@cs.indiana.
 Michael Weber           <michaelw@debian.org>               michaelw <unknown>
 Mike Thomas             <mthomas@gil.com.au>                mthomas <unknown>
 Mikolaj Konarski        <mikolaj@well-typed.com>            <mikolaj.konarski@gmail.com>
+Moritz Angermann        <moritz.angermann@gmail.com>        <moritz@lichtzwerge.de>
 Nathan Huesken          <nathan.huesken@posteo.de>
 Neil Mitchell           <ndmitchell@gmail.com>              <http://www.cs.york.ac.uk/~ndm/>
 Neil Mitchell           <ndmitchell@gmail.com>              Neil Mitchell <unknown>
@@ -196,12 +206,14 @@ Pepe Iborra             <mnislaih@gmail.com>                pepe <unknown>
 Pepe Iborra             <mnislaih@gmail.com>                pepeiborra@gmail.com <unknown>
 Peter Jonsson           <t-peterj@microsoft.com>            t-peterj@microsoft.com <unknown>
 Peter Trommler          <ptrommler@acm.org>                 <ptrommler@scm.org>
-Peter Wortmann          <scpmw@leeds.ac.uk>                 <peter@grayson-heights-pc028-118.student-halls.leeds.ac.uk>
-Peter Wortmann          <scpmw@leeds.ac.uk>                 scpmw@leeds.ac.uk <unknown>
+Peter Wortmann          <Peter.Wortmann@googlemail.com>     <scpmw@leeds.ac.uk>
+Peter Wortmann          <Peter.Wortmann@googlemail.com>     <peter@grayson-heights-pc028-118.student-halls.leeds.ac.uk>
+Peter Wortmann          <Peter.Wortmann@googlemail.com>     scpmw@leeds.ac.uk <unknown>
 Ralf Laemmel            <softlang@uni-koblenz.de>           ralf <unknown> # https://ghc.haskell.org/trac/ghc/wiki/TeamGHC
 Ravi Nanavati           <ravi@bluespec.com>                 # Commit 70c044.
 Reuben Thomas           <rrt@sc3d.org>                      rrt <unknown>
-Richard Eisenberg       <eir@cis.upenn.edu>                 <eir@seas.upenn.edu>
+Richard Eisenberg       <rae@cs.brynmawr.edu>               <eir@seas.upenn.edu>
+Richard Eisenberg       <rae@cs.brynmawr.edu>               <eir@cis.upenn.edu>
 Rob Ennals              <rob@ennals.org>                    rje <unknown> # SPJ's student (rje33@cam.ac.uk)
 Roman Leshchinskiy      <rl@cse.unsw.edu.au>                rl@cse.unsw.edu.au <unknown>
 Ross Paterson           <ross@soi.city.ac.uk>               ross <unknown>
@@ -211,11 +223,14 @@ Ryan Scott              <ryan.gl.scott@gmail.com>           <ryan.gl.scott@ku.ed
 Sam Anklesaria          <amsay@amsay.net>
 Sam Anklesaria          <amsay@amsay.net>                   amsay@amsay.net <unknown>
 Sean Seefried           <sean.seefried@gmail.com>           sseefried <unknown>
+Sean Innes              <sean.r.innes@googlemail.com>
 Sergei Trofimovich      <slyfox@gentoo.org>                 <siarheit@google.com>
 Sergei Trofimovich      <slyfox@gentoo.org>                 <slyfox at gentoo.org>
 Sergei Trofimovich      <slyfox@gentoo.org>                 <slyfox@community.haskell.org>
 Sergei Trofimovich      <slyfox@gentoo.org>                 <slyfox@inbox.ru>
 Shae Matijs Erisson     <shae@ScannedInAvian.com>           shae@ScannedInAvian.com <unknown>
+Siddhanathan Shanmugam  <siddhanathan@gmail.com>            <siddhanathan+social@gmail.com>
+Siddharth Bhat          <siddu.druid@gmail.com>
 Sigbjorn Finne          <sof@galois.com>                    sof <unknown>
 Sigbjorn Finne          <sof@galois.com>                    sof@galois.com <unknown>
 Simon Hengel            <sol@typeful.net>                   <simon.hengel@wiktory.org>
@@ -245,8 +260,10 @@ Sungwoo Park            <gla@postech.ac.kr>                 gla <unknown> # http
 Sven Panne              <sven.panne@aedion.de>              panne <unknown>
 Sven Panne              <sven.panne@aedion.de>              sven.panne@aedion.de <unknown>
 Sylvain Henry           <hsyl20@gmail.com>
+Sylvain Henry           <hsyl20@gmail.com>                  <sylvain@haskus.fr>
 Sébastien Carlier       <sebc@posse42.net>                  sebc <unknown>
 Takano Akio             <tak@anoak.io>                      <aljee@hyper.cx>
+Thijs Alkemade          <me@thijsalkema.de>                 <thijsalkemade@gmail.com>
 Thorkil Naur            <naur@post11.tele.dk>               naur@post11.tele.dk <unknown>
 Tibor Erdesz            <erdeszt@gmail.com>
 Tim Chevalier           <chevalier@alum.wellesley.edu>
@@ -257,6 +274,7 @@ Tim Harris              <tharris@microsoft.com>             tharris <unknown>
 Tim Harris              <tharris@microsoft.com>             tharris@microsoft.com <unknown>
 Tobias Gedell           <d99getob@dtek.chalmers.se>         tgedell <unknown>
 Tom Schrijvers          <tom.schrijvers@cs.kuleuven.be>     tom.schrijvers@cs.kuleuven.be <unknown>
+Tom Murphy              <vivid.haskell@gmail.com>
 Umut Acar               <umut@cs.cmu.edu>                   umuta <unknown> # POPL 2002 paper Adaptive Functional Programming
 Vitaly Bragilevsky      <bravit111@gmail.com>
 Volker Stolz            <stolz@i2.informatik.rwth-aachen.de>

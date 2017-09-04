@@ -49,11 +49,13 @@ module UniqFM (
         plusUFM,
         plusUFM_C,
         plusUFM_CD,
+        plusMaybeUFM_C,
         plusUFMList,
         minusUFM,
         intersectUFM,
         intersectUFM_C,
         disjointUFM,
+        equalKeysUFM,
         nonDetFoldUFM, foldUFM, nonDetFoldUFM_Directly,
         anyUFM, allUFM, seqEltsUFM,
         mapUFM, mapUFM_Directly,
@@ -75,13 +77,15 @@ import Outputable
 import Data.List (foldl')
 
 import qualified Data.IntMap as M
+#if MIN_VERSION_containers(0,5,9)
+import qualified Data.IntMap.Merge.Lazy as M
+import Control.Applicative (Const (..))
+import qualified Data.Monoid as Mon
+#endif
 import qualified Data.IntSet as S
 import Data.Typeable
 import Data.Data
-#if __GLASGOW_HASKELL__ > 710
-import Data.Semigroup   ( Semigroup )
-import qualified Data.Semigroup as Semigroup
-#endif
+import qualified Data.Semigroup as Semi
 
 
 newtype UniqFM ele = UFM (M.IntMap ele)
@@ -217,13 +221,22 @@ plusUFM_CD f (UFM xm) dx (UFM ym) dy
       (M.map (\y -> dx `f` y))
       xm ym
 
+plusMaybeUFM_C :: (elt -> elt -> Maybe elt)
+               -> UniqFM elt -> UniqFM elt -> UniqFM elt
+plusMaybeUFM_C f (UFM xm) (UFM ym)
+    = UFM $ M.mergeWithKey
+        (\_ x y -> x `f` y)
+        id
+        id
+        xm ym
+
 plusUFMList :: [UniqFM elt] -> UniqFM elt
 plusUFMList = foldl' plusUFM emptyUFM
 
 minusUFM :: UniqFM elt1 -> UniqFM elt2 -> UniqFM elt1
 minusUFM (UFM x) (UFM y) = UFM (M.difference x y)
 
-intersectUFM :: UniqFM elt -> UniqFM elt -> UniqFM elt
+intersectUFM :: UniqFM elt1 -> UniqFM elt2 -> UniqFM elt1
 intersectUFM (UFM x) (UFM y) = UFM (M.intersection x y)
 
 intersectUFM_C
@@ -237,7 +250,7 @@ disjointUFM :: UniqFM elt1 -> UniqFM elt2 -> Bool
 disjointUFM (UFM x) (UFM y) = M.null (M.intersection x y)
 
 foldUFM :: (elt -> a -> a) -> a -> UniqFM elt -> a
-foldUFM k z (UFM m) = M.fold k z m
+foldUFM k z (UFM m) = M.foldr k z m
 
 mapUFM :: (elt1 -> elt2) -> UniqFM elt1 -> UniqFM elt2
 mapUFM f (UFM m) = UFM (M.map f m)
@@ -285,10 +298,10 @@ ufmToSet_Directly :: UniqFM elt -> S.IntSet
 ufmToSet_Directly (UFM m) = M.keysSet m
 
 anyUFM :: (elt -> Bool) -> UniqFM elt -> Bool
-anyUFM p (UFM m) = M.fold ((||) . p) False m
+anyUFM p (UFM m) = M.foldr ((||) . p) False m
 
 allUFM :: (elt -> Bool) -> UniqFM elt -> Bool
-allUFM p (UFM m) = M.fold ((&&) . p) True m
+allUFM p (UFM m) = M.foldr ((&&) . p) True m
 
 seqEltsUFM :: ([elt] -> ()) -> UniqFM elt -> ()
 seqEltsUFM seqList = seqList . nonDetEltsUFM
@@ -312,13 +325,13 @@ nonDetKeysUFM (UFM m) = map getUnique $ M.keys m
 -- If you use this please provide a justification why it doesn't introduce
 -- nondeterminism.
 nonDetFoldUFM :: (elt -> a -> a) -> a -> UniqFM elt -> a
-nonDetFoldUFM k z (UFM m) = M.fold k z m
+nonDetFoldUFM k z (UFM m) = M.foldr k z m
 
 -- See Note [Deterministic UniqFM] to learn about nondeterminism.
 -- If you use this please provide a justification why it doesn't introduce
 -- nondeterminism.
 nonDetFoldUFM_Directly:: (Unique -> elt -> a -> a) -> a -> UniqFM elt -> a
-nonDetFoldUFM_Directly k z (UFM m) = M.foldWithKey (k . getUnique) z m
+nonDetFoldUFM_Directly k z (UFM m) = M.foldrWithKey (k . getUnique) z m
 
 -- See Note [Deterministic UniqFM] to learn about nondeterminism.
 -- If you use this please provide a justification why it doesn't introduce
@@ -329,16 +342,25 @@ nonDetUFMToList (UFM m) = map (\(k, v) -> (getUnique k, v)) $ M.toList m
 ufmToIntMap :: UniqFM elt -> M.IntMap elt
 ufmToIntMap (UFM m) = m
 
+-- Determines whether two 'UniqFm's contain the same keys.
+equalKeysUFM :: UniqFM a -> UniqFM b -> Bool
+#if MIN_VERSION_containers(0,5,9)
+equalKeysUFM (UFM m1) (UFM m2) = Mon.getAll $ getConst $
+      M.mergeA (M.traverseMissing (\_ _ -> Const (Mon.All False)))
+               (M.traverseMissing (\_ _ -> Const (Mon.All False)))
+               (M.zipWithAMatched (\_ _ _ -> Const (Mon.All True))) m1 m2
+#else
+equalKeysUFM (UFM m1) (UFM m2) = M.keys m1 == M.keys m2
+#endif
+
 -- Instances
 
-#if __GLASGOW_HASKELL__ > 710
-instance Semigroup (UniqFM a) where
+instance Semi.Semigroup (UniqFM a) where
   (<>) = plusUFM
-#endif
 
 instance Monoid (UniqFM a) where
     mempty = emptyUFM
-    mappend = plusUFM
+    mappend = (Semi.<>)
 
 -- Output-ery
 

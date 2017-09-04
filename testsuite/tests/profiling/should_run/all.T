@@ -1,19 +1,17 @@
 # Test for #1227, #1418
 
 test('heapprof002',
-     [ pre_cmd('cp heapprof001.hs heapprof002.hs')
-     , extra_clean(['heapprof002.hs'])
-     , extra_ways(['normal_h'])
-     , extra_run_opts('7')
-     ],
+     [extra_files(['heapprof001.hs']),
+      pre_cmd('cp heapprof001.hs heapprof002.hs'), extra_ways(['normal_h']),
+      extra_run_opts('7')],
      compile_and_run, [''])
 
-test('T11489', [req_profiling, extra_clean(['T11489.prof', 'T11489.hp'])],
-     run_command, ['$MAKE -s --no-print-directory T11489'])
+test('T11489', [req_profiling], run_command,
+     ['$MAKE -s --no-print-directory T11489'])
 
 # Below this line, run tests only with profiling ways.
 setTestOpts(req_profiling)
-setTestOpts(extra_ways(['prof']))
+setTestOpts(extra_ways(['prof', 'ghci-ext-prof']))
 setTestOpts(only_ways(prof_ways))
 setTestOpts(keep_prof_callstacks)
 
@@ -21,7 +19,8 @@ extra_prof_ways = ['prof', 'prof_hc_hb', 'prof_hb', 'prof_hd', 'prof_hy', 'prof_
 
 expect_broken_for_10037 = expect_broken_for(
   10037,
-  [w for w in prof_ways if w not in opt_ways]) # e.g. prof and profllvm
+  [w for w in prof_ways if w not in opt_ways and w != 'ghci-ext-prof'])
+     # e.g. prof and profllvm
 
 test('heapprof001',
      [when(have_profiling(), extra_ways(extra_prof_ways)), extra_run_opts('7')],
@@ -39,7 +38,7 @@ test('T3001-2', [only_ways(['prof_hb']), extra_ways(['prof_hb'])],
 
 # As with ioprof001, the unoptimised profile is different but
 # not badly wrong (CAF attribution is different).
-test('scc001', [], compile_and_run,
+test('scc001', expect_broken_for_10037, compile_and_run,
      ['-fno-state-hack -fno-full-laziness']) # Note [consistent stacks]
 
 test('scc002', [], compile_and_run, [''])
@@ -47,7 +46,9 @@ test('scc002', [], compile_and_run, [''])
 test('scc003', [], compile_and_run,
      ['-fno-state-hack']) # Note [consistent stacks]
 
-test('T5654', [expect_broken(5654)], compile_and_run, [''])
+test('T5654-O0', [only_ways(['prof'])], compile_and_run, [''])
+
+test('T5654-O1', [only_ways(['profasm'])], compile_and_run, [''])
 
 test('T5654b-O0', [only_ways(['prof'])], compile_and_run, [''])
 
@@ -67,7 +68,12 @@ test('T949', [extra_ways(extra_prof_ways)], compile_and_run, [''])
 # The results for 'prof' are fine, but the ordering changes.
 # We care more about getting the optimised results right, so ignoring
 # this for now.
-test('ioprof', [expect_broken_for_10037, exit_code(1)], compile_and_run,
+test('ioprof',
+     [expect_broken_for_10037,
+      exit_code(1),
+      omit_ways(['ghci-ext-prof']) # doesn't work with exit_code(1)
+     ],
+     compile_and_run,
      ['-fno-full-laziness -fno-state-hack']) # Note [consistent stacks]
 
 # These two examples are from the User's Guide:
@@ -87,11 +93,16 @@ test('T5559', [], compile_and_run, [''])
 #       -fno-state-hack
 #       -fno-full-laziness
 
-test('callstack001', [expect_broken_for_10037],
+test('callstack001',
      # unoptimised results are different w.r.t. CAF attribution
-     compile_and_run, ['-fprof-auto-calls -fno-full-laziness -fno-state-hack'])
+     [ omit_ways(['ghci-ext-prof']), # produces a different stack
+     ], compile_and_run,
+     ['-fprof-auto-calls -fno-full-laziness -fno-state-hack'])
 
-test('callstack002', [], compile_and_run,
+test('callstack002',
+     [ omit_ways(['ghci-ext-prof']), # produces a different stack
+     ],
+     compile_and_run,
      ['-fprof-auto-calls -fno-full-laziness -fno-state-hack'])
 
 # Should not stack overflow with -prof -fprof-auto
@@ -119,3 +130,5 @@ test('toplevel_scc_1',
      [extra_ways(['prof_no_auto']), only_ways(['prof_no_auto'])],
      compile_and_run,
      [''])
+
+test('T12962', [], compile_and_run, [''])

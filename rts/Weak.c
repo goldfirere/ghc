@@ -39,7 +39,7 @@ runAllCFinalizers(StgWeak *list)
 
     task = myTask();
     if (task != NULL) {
-        task->running_finalizers = rtsTrue;
+        task->running_finalizers = true;
     }
 
     for (w = list; w; w = w->link) {
@@ -56,7 +56,7 @@ runAllCFinalizers(StgWeak *list)
     }
 
     if (task != NULL) {
-        task->running_finalizers = rtsFalse;
+        task->running_finalizers = false;
     }
 }
 
@@ -87,7 +87,7 @@ scheduleFinalizers(Capability *cap, StgWeak *list)
 
     task = myTask();
     if (task != NULL) {
-        task->running_finalizers = rtsTrue;
+        task->running_finalizers = true;
     }
 
     // count number of finalizers, and kill all the weak pointers first...
@@ -103,20 +103,20 @@ scheduleFinalizers(Capability *cap, StgWeak *list)
 
         runCFinalizers((StgCFinalizerList *)w->cfinalizers);
 
-#ifdef PROFILING
+#if defined(PROFILING)
         // A weak pointer is inherently used, so we do not need to call
         // LDV_recordDead().
         //
         // Furthermore, when PROFILING is turned on, dead weak
         // pointers are exactly as large as weak pointers, so there is
         // no need to fill the slop, either.  See stg_DEAD_WEAK_info
-        // in StgMiscClosures.hc.
+        // in StgMiscClosures.cmm.
 #endif
         SET_HDR(w, &stg_DEAD_WEAK_info, w->header.prof.ccs);
     }
 
     if (task != NULL) {
-        task->running_finalizers = rtsFalse;
+        task->running_finalizers = false;
     }
 
     // No finalizers to run?

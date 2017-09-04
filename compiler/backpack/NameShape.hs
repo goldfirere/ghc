@@ -7,6 +7,7 @@ module NameShape(
     extendNameShape,
     nameShapeExports,
     substNameShape,
+    maybeSubstNameShape,
     ) where
 
 #include "HsVersions.h"
@@ -82,7 +83,7 @@ mkNameShape :: ModuleName -> [AvailInfo] -> NameShape
 mkNameShape mod_name as =
     NameShape mod_name as $ mkOccEnv $ do
         a <- as
-        n <- availName a : availNames a
+        n <- availName a : availNamesWithSelectors a
         return (occName n, n)
 
 -- | Given an existing 'NameShape', merge it with a list of 'AvailInfo's
@@ -134,6 +135,15 @@ substNameShape ns n | nameModule n == ns_module ns
                     | otherwise
                     = n
 
+-- | Like 'substNameShape', but returns @Nothing@ if no substitution
+-- works.
+maybeSubstNameShape :: NameShape -> Name -> Maybe Name
+maybeSubstNameShape ns n
+    | nameModule n == ns_module ns
+    = lookupOccEnv (ns_map ns) (occName n)
+    | otherwise
+    = Nothing
+
 -- | The 'Module' of any 'Name's a 'NameShape' has action over.
 ns_module :: NameShape -> Module
 ns_module = mkHoleModule . ns_mod_name
@@ -149,7 +159,7 @@ ns_module = mkHoleModule . ns_mod_name
 -- | Substitution on @{A.T}@.  We enforce the invariant that the
 -- 'nameModule' of keys of this map have 'moduleUnitId' @hole@
 -- (meaning that if we have a hole substitution, the keys of the map
--- are never affected.)  Alternately, this is ismorphic to
+-- are never affected.)  Alternatively, this is isomorphic to
 -- @Map ('ModuleName', 'OccName') 'Name'@.
 type ShNameSubst = NameEnv Name
 

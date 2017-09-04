@@ -8,6 +8,7 @@ TcPat: Typechecking patterns
 
 {-# LANGUAGE CPP, RankNTypes, TupleSections #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module TcPat ( tcLetPat, newLetBndr, LetBndrSpec(..)
              , tcPat, tcPat_O, tcPats
@@ -29,6 +30,7 @@ import RdrName
 import TcEnv
 import TcMType
 import TcValidity( arityErr )
+import Type ( pprTyVars )
 import TcType
 import TcUnify
 import TcHsType
@@ -46,7 +48,6 @@ import VarSet
 import Util
 import Outputable
 import qualified GHC.LanguageExtensions as LangExt
-import Control.Monad
 import Control.Arrow  ( second )
 import ListSetOps ( getNth )
 
@@ -60,9 +61,9 @@ import ListSetOps ( getNth )
 
 tcLetPat :: (Name -> Maybe TcId)
          -> LetBndrSpec
-         -> LPat Name -> ExpSigmaType
+         -> LPat GhcRn -> ExpSigmaType
          -> TcM a
-         -> TcM (LPat TcId, a)
+         -> TcM (LPat GhcTcId, a)
 tcLetPat sig_fn no_gen pat pat_ty thing_inside
   = do { bind_lvl <- getTcLevel
        ; let ctxt = LetPat { pc_lvl    = bind_lvl
@@ -76,10 +77,10 @@ tcLetPat sig_fn no_gen pat pat_ty thing_inside
 
 -----------------
 tcPats :: HsMatchContext Name
-       -> [LPat Name]            -- Patterns,
+       -> [LPat GhcRn]            -- Patterns,
        -> [ExpSigmaType]         --   and their types
        -> TcM a                  --   and the checker for the body
-       -> TcM ([LPat TcId], a)
+       -> TcM ([LPat GhcTcId], a)
 
 -- This is the externally-callable wrapper function
 -- Typecheck the patterns, extend the environment to bind the variables,
@@ -98,17 +99,17 @@ tcPats ctxt pats pat_tys thing_inside
     penv = PE { pe_lazy = False, pe_ctxt = LamPat ctxt, pe_orig = PatOrigin }
 
 tcPat :: HsMatchContext Name
-      -> LPat Name -> ExpSigmaType
+      -> LPat GhcRn -> ExpSigmaType
       -> TcM a                     -- Checker for body
-      -> TcM (LPat TcId, a)
+      -> TcM (LPat GhcTcId, a)
 tcPat ctxt = tcPat_O ctxt PatOrigin
 
 -- | A variant of 'tcPat' that takes a custom origin
 tcPat_O :: HsMatchContext Name
         -> CtOrigin              -- ^ origin to use if the type needs inst'ing
-        -> LPat Name -> ExpSigmaType
+        -> LPat GhcRn -> ExpSigmaType
         -> TcM a                 -- Checker for body
-        -> TcM (LPat TcId, a)
+        -> TcM (LPat GhcTcId, a)
 tcPat_O ctxt orig pat pat_ty thing_inside
   = tc_lpat pat pat_ty penv thing_inside
   where
@@ -243,7 +244,7 @@ subsumption, not equality, check against the context type.  e.g.
 
 Since 'blah' returns a value of type T, its payload is a polymorphic
 function of type (forall a. a->a).  And that's enough to bind the
-less-polymorphic function 'f', but we need some impedence matching
+less-polymorphic function 'f', but we need some impedance matching
 to witness the instantiation.
 
 
@@ -292,11 +293,11 @@ tcMultiple tc_pat args penv thing_inside
         ; loop penv args }
 
 --------------------
-tc_lpat :: LPat Name
+tc_lpat :: LPat GhcRn
         -> ExpSigmaType
         -> PatEnv
         -> TcM a
-        -> TcM (LPat TcId, a)
+        -> TcM (LPat GhcTcId, a)
 tc_lpat (L span pat) pat_ty penv thing_inside
   = setSrcSpan span $
     do  { (pat', res) <- maybeWrapPatCtxt pat (tc_pat penv pat pat_ty)
@@ -304,9 +305,9 @@ tc_lpat (L span pat) pat_ty penv thing_inside
         ; return (L span pat', res) }
 
 tc_lpats :: PatEnv
-         -> [LPat Name] -> [ExpSigmaType]
+         -> [LPat GhcRn] -> [ExpSigmaType]
          -> TcM a
-         -> TcM ([LPat TcId], a)
+         -> TcM ([LPat GhcTcId], a)
 tc_lpats penv pats tys thing_inside
   = ASSERT2( equalLength pats tys, ppr pats $$ ppr tys )
     tcMultiple (\(p,t) -> tc_lpat p t)
@@ -315,10 +316,10 @@ tc_lpats penv pats tys thing_inside
 
 --------------------
 tc_pat  :: PatEnv
-        -> Pat Name
+        -> Pat GhcRn
         -> ExpSigmaType  -- Fully refined result type
         -> TcM a                -- Thing inside
-        -> TcM (Pat TcId,       -- Translated pattern
+        -> TcM (Pat GhcTcId,    -- Translated pattern
                 a)              -- Result of thing inside
 
 tc_pat penv (VarPat (L l name)) pat_ty thing_inside
@@ -335,7 +336,7 @@ tc_pat penv (BangPat pat) pat_ty thing_inside
   = do  { (pat', res) <- tc_lpat pat pat_ty penv thing_inside
         ; return (BangPat pat', res) }
 
-tc_pat penv lpat@(LazyPat pat) pat_ty thing_inside
+tc_pat penv (LazyPat pat) pat_ty thing_inside
   = do  { (pat', (res, pat_ct))
                 <- tc_lpat pat pat_ty (makeLazy penv) $
                    captureConstraints thing_inside
@@ -345,21 +346,9 @@ tc_pat penv lpat@(LazyPat pat) pat_ty thing_inside
         -- captureConstraints/extendConstraints:
         --   see Note [Hopping the LIE in lazy patterns]
 
-        -- Check there are no unlifted types under the lazy pattern
-        -- This is a very unsatisfactory test.  We have to zonk because
-        -- the binder-tys are typically just a unification variable,
-        -- which should by now have been unified... but it might be
-        -- deferred for the constraint solver...Ugh!  Also
-        -- collecting the pattern binders again is not very cool.
-        -- But it's all very much a corner case: a lazy pattern with
-        -- unboxed types inside it
-        ; bndr_tys <- mapM (zonkTcType . idType) (collectPatBinders pat')
-        ; when (any isUnliftedType bndr_tys)
-               (lazyUnliftedPatErr lpat)
-
         -- Check that the expected pattern type is itself lifted
         ; pat_ty <- readExpType pat_ty
-        ; _ <- unifyType noThing (typeKind pat_ty) liftedTypeKind
+        ; _ <- unifyType Nothing (typeKind pat_ty) liftedTypeKind
 
         ; return (LazyPat pat', res) }
 
@@ -390,10 +379,10 @@ tc_pat penv (ViewPat expr pat _) overall_pat_ty thing_inside
         ; (expr',expr'_inferred) <- tcInferSigma expr
 
          -- expression must be a function
-        ; let expr_orig = exprCtOrigin (unLoc expr)
+        ; let expr_orig = lexprCtOrigin expr
               herald    = text "A view pattern expression expects"
         ; (expr_wrap1, [inf_arg_ty], inf_res_ty)
-            <- matchActualFunTys herald expr_orig (Just expr) 1 expr'_inferred
+            <- matchActualFunTys herald expr_orig (Just (unLoc expr)) 1 expr'_inferred
             -- expr_wrap1 :: expr'_inferred "->" (inf_arg_ty -> inf_res_ty)
 
          -- check that overall pattern is more polymorphic than arg type
@@ -405,10 +394,11 @@ tc_pat penv (ViewPat expr pat _) overall_pat_ty thing_inside
 
         ; overall_pat_ty <- readExpType overall_pat_ty
         ; let expr_wrap2' = mkWpFun expr_wrap2 idHsWrapper
-                                    overall_pat_ty inf_res_ty
+                                    overall_pat_ty inf_res_ty doc
                -- expr_wrap2' :: (inf_arg_ty -> inf_res_ty) "->"
                --                (overall_pat_ty -> inf_res_ty)
               expr_wrap = expr_wrap2' <.> expr_wrap1
+              doc = text "When checking the view pattern function:" <+> (ppr expr)
         ; return (ViewPat (mkLHsWrap expr_wrap expr') pat' overall_pat_ty, res) }
 
 -- Type signatures in patterns
@@ -416,8 +406,8 @@ tc_pat penv (ViewPat expr pat _) overall_pat_ty thing_inside
 tc_pat penv (SigPatIn pat sig_ty) pat_ty thing_inside
   = do  { (inner_ty, tv_binds, wcs, wrap) <- tcPatSig (inPatBind penv)
                                                             sig_ty pat_ty
-        ; (pat', res) <- tcExtendTyVarEnv2 wcs     $
-                         tcExtendTyVarEnv tv_binds $
+        ; (pat', res) <- tcExtendTyVarEnv2 wcs      $
+                         tcExtendTyVarEnv2 tv_binds $
                          tc_lpat pat (mkCheckExpType inner_ty) penv thing_inside
         ; pat_ty <- readExpType pat_ty
         ; return (mkHsWrapPat wrap (SigPatOut pat' inner_ty) pat_ty, res) }
@@ -479,7 +469,7 @@ tc_pat penv (TuplePat pats boxity _) pat_ty thing_inside
                 | otherwise                 = unmangled_result
 
         ; pat_ty <- readExpType pat_ty
-        ; ASSERT( length con_arg_tys == length pats ) -- Syntactically enforced
+        ; ASSERT( con_arg_tys `equalLength` pats ) -- Syntactically enforced
           return (mkHsWrapPat coi possibly_mangled_result pat_ty, res)
         }
 
@@ -507,7 +497,7 @@ tc_pat penv (LitPat simple_lit) pat_ty thing_inside
         ; wrap   <- tcSubTypePat penv pat_ty lit_ty
         ; res    <- thing_inside
         ; pat_ty <- readExpType pat_ty
-        ; return ( mkHsWrapPat wrap (LitPat simple_lit) pat_ty
+        ; return ( mkHsWrapPat wrap (LitPat (convertLit simple_lit)) pat_ty
                  , res) }
 
 ------------------------
@@ -713,8 +703,8 @@ to express the local scope of GADT refinements.
 
 tcConPat :: PatEnv -> Located Name
          -> ExpSigmaType           -- Type of the pattern
-         -> HsConPatDetails Name -> TcM a
-         -> TcM (Pat TcId, a)
+         -> HsConPatDetails GhcRn -> TcM a
+         -> TcM (Pat GhcTcId, a)
 tcConPat penv con_lname@(L _ con_name) pat_ty arg_pats thing_inside
   = do  { con_like <- tcLookupConLike con_name
         ; case con_like of
@@ -726,8 +716,8 @@ tcConPat penv con_lname@(L _ con_name) pat_ty arg_pats thing_inside
 
 tcDataConPat :: PatEnv -> Located Name -> DataCon
              -> ExpSigmaType               -- Type of the pattern
-             -> HsConPatDetails Name -> TcM a
-             -> TcM (Pat TcId, a)
+             -> HsConPatDetails GhcRn -> TcM a
+             -> TcM (Pat GhcTcId, a)
 tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
   = do  { let tycon = dataConTyCon data_con
                   -- For data families this is the representation tycon
@@ -746,8 +736,13 @@ tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
 
         ; let all_arg_tys = eqSpecPreds eq_spec ++ theta ++ arg_tys
         ; checkExistentials ex_tvs all_arg_tys penv
-        ; (tenv, ex_tvs') <- tcInstSuperSkolTyVarsX
-                               (zipTvSubst univ_tvs ctxt_res_tys) ex_tvs
+
+        ; tenv <- instTyVarsWith PatOrigin univ_tvs ctxt_res_tys
+                  -- NB: Do not use zipTvSubst!  See Trac #14154
+                  -- We want to create a well-kinded substitution, so
+                  -- that the instantiated type is well-kinded
+
+        ; (tenv, ex_tvs') <- tcInstSuperSkolTyVarsX tenv ex_tvs
                      -- Get location from monad, not from ex_tvs
 
         ; let -- pat_ty' = mkTyConApp tycon ctxt_res_tys
@@ -757,11 +752,11 @@ tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
               arg_tys' = substTys tenv arg_tys
 
         ; traceTc "tcConPat" (vcat [ ppr con_name
-                                   , pprTvBndrs univ_tvs
-                                   , pprTvBndrs ex_tvs
+                                   , pprTyVars univ_tvs
+                                   , pprTyVars ex_tvs
                                    , ppr eq_spec
                                    , ppr theta
-                                   , pprTvBndrs ex_tvs'
+                                   , pprTyVars ex_tvs'
                                    , ppr ctxt_res_tys
                                    , ppr arg_tys'
                                    , ppr arg_pats ])
@@ -816,8 +811,8 @@ tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
 
 tcPatSynPat :: PatEnv -> Located Name -> PatSyn
             -> ExpSigmaType                -- Type of the pattern
-            -> HsConPatDetails Name -> TcM a
-            -> TcM (Pat TcId, a)
+            -> HsConPatDetails GhcRn -> TcM a
+            -> TcM (Pat GhcTcId, a)
 tcPatSynPat penv (L con_span _) pat_syn pat_ty arg_pats thing_inside
   = do  { let (univ_tvs, req_theta, ex_tvs, prov_theta, arg_tys, ty) = patSynSig pat_syn
 
@@ -906,7 +901,7 @@ matchExpectedConTy (PE { pe_orig = orig }) data_tc exp_pat_ty
                                              ppr exp_pat_ty,
                                              ppr pat_ty,
                                              ppr pat_rho, ppr wrap])
-       ; co1 <- unifyType noThing (mkTyConApp fam_tc (substTys subst fam_args)) pat_rho
+       ; co1 <- unifyType Nothing (mkTyConApp fam_tc (substTys subst fam_args)) pat_rho
              -- co1 : T (ty1,ty2) ~N pat_rho
              -- could use tcSubType here... but it's the wrong way round
              -- for actual vs. expected in error messages.
@@ -956,11 +951,11 @@ Suppose (coi, tys) = matchExpectedConType data_tc pat_ty
 -}
 
 tcConArgs :: ConLike -> [TcSigmaType]
-          -> Checker (HsConPatDetails Name) (HsConPatDetails Id)
+          -> Checker (HsConPatDetails GhcRn) (HsConPatDetails GhcTc)
 
 tcConArgs con_like arg_tys (PrefixCon arg_pats) penv thing_inside
   = do  { checkTc (con_arity == no_of_args)     -- Check correct arity
-                  (arityErr "constructor" con_like con_arity no_of_args)
+                  (arityErr (text "constructor") con_like con_arity no_of_args)
         ; let pats_w_tys = zipEqual "tcConArgs" arg_pats arg_tys
         ; (arg_pats', res) <- tcMultiple tcConArg pats_w_tys
                                               penv thing_inside
@@ -971,7 +966,7 @@ tcConArgs con_like arg_tys (PrefixCon arg_pats) penv thing_inside
 
 tcConArgs con_like arg_tys (InfixCon p1 p2) penv thing_inside
   = do  { checkTc (con_arity == 2)      -- Check correct arity
-                  (arityErr "constructor" con_like con_arity 2)
+                  (arityErr (text "constructor") con_like con_arity 2)
         ; let [arg_ty1,arg_ty2] = arg_tys       -- This can't fail after the arity check
         ; ([p1',p2'], res) <- tcMultiple tcConArg [(p1,arg_ty1),(p2,arg_ty2)]
                                               penv thing_inside
@@ -983,8 +978,8 @@ tcConArgs con_like arg_tys (RecCon (HsRecFields rpats dd)) penv thing_inside
   = do  { (rpats', res) <- tcMultiple tc_field rpats penv thing_inside
         ; return (RecCon (HsRecFields rpats' dd), res) }
   where
-    tc_field :: Checker (LHsRecField Name (LPat Name))
-                        (LHsRecField TcId (LPat TcId))
+    tc_field :: Checker (LHsRecField GhcRn (LPat GhcRn))
+                        (LHsRecField GhcTcId (LPat GhcTcId))
     tc_field (L l (HsRecField (L loc (FieldOcc (L lr rdr) sel)) pat pun)) penv
                                                                     thing_inside
       = do { sel'   <- tcLookupId sel
@@ -1016,7 +1011,7 @@ tcConArgs con_like arg_tys (RecCon (HsRecFields rpats dd)) penv thing_inside
           -- dataConFieldLabels will be empty (and each field in the pattern
           -- will generate an error below).
 
-tcConArg :: Checker (LPat Name, TcSigmaType) (LPat Id)
+tcConArg :: Checker (LPat GhcRn, TcSigmaType) (LPat GhcTc)
 tcConArg (arg_pat, arg_ty) penv thing_inside
   = tc_lpat arg_pat (mkCheckExpType arg_ty) penv thing_inside
 
@@ -1040,7 +1035,7 @@ addDataConStupidTheta data_con inst_tys
 {-
 Note [Arrows and patterns]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-(Oct 07) Arrow noation has the odd property that it involves
+(Oct 07) Arrow notation has the odd property that it involves
 "holes in the scope". For example:
   expr :: Arrow a => a () Int
   expr = proc (y,z) -> do
@@ -1140,7 +1135,7 @@ pattern (perhaps deeply)
 See also Note [Typechecking pattern bindings] in TcBinds
 -}
 
-maybeWrapPatCtxt :: Pat Name -> (TcM a -> TcM b) -> TcM a -> TcM b
+maybeWrapPatCtxt :: Pat GhcRn -> (TcM a -> TcM b) -> TcM a -> TcM b
 -- Not all patterns are worth pushing a context
 maybeWrapPatCtxt pat tcm thing_inside
   | not (worth_wrapping pat) = tcm thing_inside
@@ -1184,9 +1179,3 @@ polyPatSig :: TcType -> SDoc
 polyPatSig sig_ty
   = hang (text "Illegal polymorphic type signature in pattern:")
        2 (ppr sig_ty)
-
-lazyUnliftedPatErr :: (OutputableBndrId name) => Pat name -> TcM ()
-lazyUnliftedPatErr pat
-  = failWithTc $
-    hang (text "A lazy (~) pattern cannot contain unlifted types:")
-       2 (ppr pat)

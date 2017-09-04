@@ -31,7 +31,9 @@ import CLabel
 import ForeignCall
 import Cmm hiding (pprBBlock)
 import PprCmm ()
-import Hoopl
+import Hoopl.Block
+import Hoopl.Collections
+import Hoopl.Graph
 import CmmUtils
 import CmmSwitch
 
@@ -62,17 +64,13 @@ import Data.Array.ST
 -- --------------------------------------------------------------------------
 -- Top level
 
-pprCs :: DynFlags -> [RawCmmGroup] -> SDoc
-pprCs dflags cmms
- = pprCode CStyle (vcat $ map (\c -> split_marker $$ pprC c) cmms)
- where
-   split_marker
-     | gopt Opt_SplitObjs dflags = text "__STG_SPLIT_MARKER"
-     | otherwise                 = empty
+pprCs :: [RawCmmGroup] -> SDoc
+pprCs cmms
+ = pprCode CStyle (vcat $ map pprC cmms)
 
 writeCs :: DynFlags -> Handle -> [RawCmmGroup] -> IO ()
 writeCs dflags handle cmms
-  = printForC dflags handle (pprCs dflags cmms)
+  = printForC dflags handle (pprCs cmms)
 
 -- --------------------------------------------------------------------------
 -- Now do some real work
@@ -87,12 +85,13 @@ pprC tops = vcat $ intersperse blankLine $ map pprTop tops
 -- top level procs
 --
 pprTop :: RawCmmDecl -> SDoc
-pprTop (CmmProc infos clbl _ graph) =
+pprTop (CmmProc infos clbl _in_live_regs graph) =
 
     (case mapLookup (g_entry graph) infos of
        Nothing -> empty
-       Just (Statics info_clbl info_dat) -> pprDataExterns info_dat $$
-                                            pprWordArray info_clbl info_dat) $$
+       Just (Statics info_clbl info_dat) ->
+           pprDataExterns info_dat $$
+           pprWordArray info_is_in_rodata info_clbl info_dat) $$
     (vcat [
            blankLine,
            extern_decls,
@@ -103,6 +102,8 @@ pprTop (CmmProc infos clbl _ graph) =
            rbrace ]
     )
   where
+        -- info tables are always in .rodata
+        info_is_in_rodata = True
         blocks = toBlockListEntryFirst graph
         (temp_decls, extern_decls) = pprTempAndExternDecls blocks
 
@@ -111,21 +112,23 @@ pprTop (CmmProc infos clbl _ graph) =
 
 -- We only handle (a) arrays of word-sized things and (b) strings.
 
-pprTop (CmmData _section (Statics lbl [CmmString str])) =
+pprTop (CmmData section (Statics lbl [CmmString str])) =
+  pprExternDecl lbl $$
   hcat [
-    pprLocalness lbl, text "char ", ppr lbl,
+    pprLocalness lbl, pprConstness (isSecConstant section), text "char ", ppr lbl,
     text "[] = ", pprStringInCStyle str, semi
   ]
 
-pprTop (CmmData _section (Statics lbl [CmmUninitialised size])) =
+pprTop (CmmData section (Statics lbl [CmmUninitialised size])) =
+  pprExternDecl lbl $$
   hcat [
-    pprLocalness lbl, text "char ", ppr lbl,
+    pprLocalness lbl, pprConstness (isSecConstant section), text "char ", ppr lbl,
     brackets (int size), semi
   ]
 
-pprTop (CmmData _section (Statics lbl lits)) =
+pprTop (CmmData section (Statics lbl lits)) =
   pprDataExterns lits $$
-  pprWordArray lbl lits
+  pprWordArray (isSecConstant section) lbl lits
 
 -- --------------------------------------------------------------------------
 -- BasicBlocks are self-contained entities: they always end in a jump.
@@ -145,10 +148,12 @@ pprBBlock block =
 -- Info tables. Just arrays of words.
 -- See codeGen/ClosureInfo, and nativeGen/PprMach
 
-pprWordArray :: CLabel -> [CmmStatic] -> SDoc
-pprWordArray lbl ds
+pprWordArray :: Bool -> CLabel -> [CmmStatic] -> SDoc
+pprWordArray is_ro lbl ds
   = sdocWithDynFlags $ \dflags ->
-    hcat [ pprLocalness lbl, text "StgWord"
+    -- TODO: align closures only
+    pprExternDecl lbl $$
+    hcat [ pprLocalness lbl, pprConstness is_ro, text "StgWord"
          , space, ppr lbl, text "[]"
          -- See Note [StgWord alignment]
          , pprAlignment (wordWidth dflags)
@@ -183,6 +188,10 @@ pprAlignment words =
 pprLocalness :: CLabel -> SDoc
 pprLocalness lbl | not $ externallyVisibleCLabel lbl = text "static "
                  | otherwise = empty
+
+pprConstness :: Bool -> SDoc
+pprConstness is_ro | is_ro = text "const "
+                   | otherwise = empty
 
 -- --------------------------------------------------------------------------
 -- Statements.
@@ -754,6 +763,7 @@ pprCallishMachOp_for_C mop
         MO_F64_Log      -> text "log"
         MO_F64_Exp      -> text "exp"
         MO_F64_Sqrt     -> text "sqrt"
+        MO_F64_Fabs     -> text "fabs"
         MO_F32_Pwr      -> text "powf"
         MO_F32_Sin      -> text "sinf"
         MO_F32_Cos      -> text "cosf"
@@ -767,6 +777,7 @@ pprCallishMachOp_for_C mop
         MO_F32_Log      -> text "logf"
         MO_F32_Exp      -> text "expf"
         MO_F32_Sqrt     -> text "sqrtf"
+        MO_F32_Fabs     -> text "fabsf"
         MO_WriteBarrier -> text "write_barrier"
         MO_Memcpy _     -> text "memcpy"
         MO_Memset _     -> text "memset"
@@ -985,31 +996,39 @@ is_cishCC JavaScriptCallConv = False
 --
 pprTempAndExternDecls :: [CmmBlock] -> (SDoc{-temps-}, SDoc{-externs-})
 pprTempAndExternDecls stmts
-  = (pprUFM temps (vcat . map pprTempDecl),
-     vcat (map (pprExternDecl False{-ToDo-}) (Map.keys lbls)))
+  = (pprUFM (getUniqSet temps) (vcat . map pprTempDecl),
+     vcat (map pprExternDecl (Map.keys lbls)))
   where (temps, lbls) = runTE (mapM_ te_BB stmts)
 
 pprDataExterns :: [CmmStatic] -> SDoc
 pprDataExterns statics
-  = vcat (map (pprExternDecl False{-ToDo-}) (Map.keys lbls))
+  = vcat (map pprExternDecl (Map.keys lbls))
   where (_, lbls) = runTE (mapM_ te_Static statics)
 
 pprTempDecl :: LocalReg -> SDoc
 pprTempDecl l@(LocalReg _ rep)
   = hcat [ machRepCType rep, space, pprLocalReg l, semi ]
 
-pprExternDecl :: Bool -> CLabel -> SDoc
-pprExternDecl _in_srt lbl
+pprExternDecl :: CLabel -> SDoc
+pprExternDecl lbl
   -- do not print anything for "known external" things
   | not (needsCDecl lbl) = empty
   | Just sz <- foreignLabelStdcallInfo lbl = stdcall_decl sz
   | otherwise =
-        hcat [ visibility, label_type lbl,
-               lparen, ppr lbl, text ");" ]
+        hcat [ visibility, label_type lbl , lparen, ppr lbl, text ");"
+             -- occasionally useful to see label type
+             -- , text "/* ", pprDebugCLabel lbl, text " */"
+             ]
  where
-  label_type lbl | isForeignLabel lbl && isCFunctionLabel lbl = text "FF_"
-                 | isCFunctionLabel lbl = text "F_"
-                 | otherwise            = text "I_"
+  label_type lbl | isBytesLabel lbl         = text "B_"
+                 | isForeignLabel lbl && isCFunctionLabel lbl
+                                            = text "FF_"
+                 | isCFunctionLabel lbl     = text "F_"
+                 | isStaticClosureLabel lbl = text "C_"
+                 -- generic .rodata labels
+                 | isSomeRODataLabel lbl    = text "RO_"
+                 -- generic .data labels (common case)
+                 | otherwise                = text "RW_"
 
   visibility
      | externallyVisibleCLabel lbl = char 'E'

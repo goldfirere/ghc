@@ -19,7 +19,8 @@ import BlockId
 import CgUtils ( fixStgRegisters )
 import Cmm
 import CmmUtils
-import Hoopl
+import Hoopl.Block
+import Hoopl.Collections
 import PprCmm
 
 import BufWrite
@@ -188,12 +189,13 @@ cmmMetaLlvmPrelude = do
     setUniqMeta uniq tbaaId
     parentId <- maybe (return Nothing) getUniqMeta parent
     -- Build definition
-    return $ MetaUnnamed tbaaId $ MetaStruct
-        [ MetaStr name
-        , case parentId of
-          Just p  -> MetaNode p
-          Nothing -> MetaVar $ LMLitVar $ LMNullLit i8Ptr
-        ]
+    return $ MetaUnnamed tbaaId $ MetaStruct $
+          case parentId of
+              Just p  -> [ MetaStr name, MetaNode p ]
+              -- As of LLVM 4.0, a node without parents should be rendered as
+              -- just a name on its own. Previously `null` was accepted as the
+              -- name.
+              Nothing -> [ MetaStr name ]
   renderLlvm $ ppLlvmMetas metas
 
 -- -----------------------------------------------------------------------------

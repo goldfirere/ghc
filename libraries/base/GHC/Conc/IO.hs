@@ -39,7 +39,7 @@ module GHC.Conc.IO
         , threadWaitWriteSTM
         , closeFdWith
 
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
         , asyncRead
         , asyncWrite
         , asyncDoProc
@@ -59,7 +59,7 @@ import GHC.Conc.Sync as Sync
 import GHC.Real ( fromIntegral )
 import System.Posix.Types
 
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 import qualified GHC.Conc.Windows as Windows
 import GHC.Conc.Windows (asyncRead, asyncWrite, asyncDoProc, asyncReadBA,
                          asyncWriteBA, ConsoleEvent(..), win32ConsoleHandler,
@@ -69,14 +69,14 @@ import qualified GHC.Event.Thread as Event
 #endif
 
 ensureIOManagerIsRunning :: IO ()
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
 ensureIOManagerIsRunning = Event.ensureIOManagerIsRunning
 #else
 ensureIOManagerIsRunning = Windows.ensureIOManagerIsRunning
 #endif
 
 ioManagerCapabilitiesChanged :: IO ()
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
 ioManagerCapabilitiesChanged = Event.ioManagerCapabilitiesChanged
 #else
 ioManagerCapabilitiesChanged = return ()
@@ -90,7 +90,7 @@ ioManagerCapabilitiesChanged = return ()
 -- that has been used with 'threadWaitRead', use 'closeFdWith'.
 threadWaitRead :: Fd -> IO ()
 threadWaitRead fd
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
   | threaded  = Event.threadWaitRead fd
 #endif
   | otherwise = IO $ \s ->
@@ -106,7 +106,7 @@ threadWaitRead fd
 -- that has been used with 'threadWaitWrite', use 'closeFdWith'.
 threadWaitWrite :: Fd -> IO ()
 threadWaitWrite fd
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
   | threaded  = Event.threadWaitWrite fd
 #endif
   | otherwise = IO $ \s ->
@@ -119,18 +119,18 @@ threadWaitWrite fd
 -- is an IO action that can be used to deregister interest
 -- in the file descriptor.
 threadWaitReadSTM :: Fd -> IO (Sync.STM (), IO ())
-threadWaitReadSTM fd 
-#ifndef mingw32_HOST_OS
+threadWaitReadSTM fd
+#if !defined(mingw32_HOST_OS)
   | threaded  = Event.threadWaitReadSTM fd
 #endif
   | otherwise = do
       m <- Sync.newTVarIO False
-      _ <- Sync.forkIO $ do
+      t <- Sync.forkIO $ do
         threadWaitRead fd
         Sync.atomically $ Sync.writeTVar m True
       let waitAction = do b <- Sync.readTVar m
                           if b then return () else retry
-      let killAction = return ()
+      let killAction = Sync.killThread t
       return (waitAction, killAction)
 
 -- | Returns an STM action that can be used to wait until data
@@ -138,18 +138,18 @@ threadWaitReadSTM fd
 -- is an IO action that can be used to deregister interest
 -- in the file descriptor.
 threadWaitWriteSTM :: Fd -> IO (Sync.STM (), IO ())
-threadWaitWriteSTM fd 
-#ifndef mingw32_HOST_OS
+threadWaitWriteSTM fd
+#if !defined(mingw32_HOST_OS)
   | threaded  = Event.threadWaitWriteSTM fd
 #endif
   | otherwise = do
       m <- Sync.newTVarIO False
-      _ <- Sync.forkIO $ do
+      t <- Sync.forkIO $ do
         threadWaitWrite fd
         Sync.atomically $ Sync.writeTVar m True
       let waitAction = do b <- Sync.readTVar m
                           if b then return () else retry
-      let killAction = return ()
+      let killAction = Sync.killThread t
       return (waitAction, killAction)
 
 -- | Close a file descriptor in a concurrency-safe way (GHC only).  If
@@ -164,7 +164,7 @@ closeFdWith :: (Fd -> IO ()) -- ^ Low-level action that performs the real close.
             -> Fd            -- ^ File descriptor to close.
             -> IO ()
 closeFdWith close fd
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
   | threaded  = Event.closeFdWith close fd
 #endif
   | otherwise = close fd
@@ -178,7 +178,7 @@ closeFdWith close fd
 --
 threadDelay :: Int -> IO ()
 threadDelay time
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
   | threaded  = Windows.threadDelay time
 #else
   | threaded  = Event.threadDelay time
@@ -193,7 +193,7 @@ threadDelay time
 --
 registerDelay :: Int -> IO (TVar Bool)
 registerDelay usecs
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
   | threaded = Windows.registerDelay usecs
 #else
   | threaded = Event.registerDelay usecs

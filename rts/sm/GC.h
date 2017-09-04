@@ -11,16 +11,15 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef SM_GC_H
-#define SM_GC_H
+#pragma once
 
 #include "BeginPrivate.h"
 
 #include "HeapAlloc.h"
 
-void GarbageCollect (rtsBool force_major_gc,
-                     rtsBool do_heap_census,
-                     uint32_t gc_type, Capability *cap, rtsBool idle_cap[]);
+void GarbageCollect (uint32_t force_major_gc,
+                     bool do_heap_census,
+                     uint32_t gc_type, Capability *cap, bool idle_cap[]);
 
 typedef void (*evac_fn)(void *user, StgClosure **root);
 
@@ -28,15 +27,15 @@ StgClosure * isAlive      ( StgClosure *p );
 void         markCAFs     ( evac_fn evac, void *user );
 
 extern uint32_t N;
-extern rtsBool major_gc;
+extern bool major_gc;
 
 extern bdescr *mark_stack_bd;
 extern bdescr *mark_stack_top_bd;
 extern StgPtr mark_sp;
 
-extern rtsBool work_stealing;
+extern bool work_stealing;
 
-#ifdef DEBUG
+#if defined(DEBUG)
 extern uint32_t mutlist_MUTVARS, mutlist_MUTARRS, mutlist_MVARS, mutlist_OTHERS,
     mutlist_TVAR,
     mutlist_TVAR_WATCH_QUEUE,
@@ -55,12 +54,10 @@ void initGcThreads (uint32_t from, uint32_t to);
 void freeGcThreads (void);
 
 #if defined(THREADED_RTS)
-void waitForGcThreads (Capability *cap, rtsBool idle_cap[]);
-void releaseGCThreads (Capability *cap, rtsBool idle_cap[]);
+void waitForGcThreads (Capability *cap, bool idle_cap[]);
+void releaseGCThreads (Capability *cap, bool idle_cap[]);
 #endif
 
 #define WORK_UNIT_WORDS 128
 
 #include "EndPrivate.h"
-
-#endif /* SM_GC_H */

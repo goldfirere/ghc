@@ -50,3 +50,15 @@ Tc267:
 	'$(TEST_HC)' $(TEST_HC_OPTS) -c Tc267b.hs-boot
 	'$(TEST_HC)' $(TEST_HC_OPTS) -c Tc267a.hs
 	'$(TEST_HC)' $(TEST_HC_OPTS) -c Tc267b.hs
+
+Tc271:
+	$(RM) -f Tc271.hi-boot Tc271.o-boot Tc271a.hi Tc271a.o Tc271.hi Tc271.o
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c Tc271.hs-boot
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c Tc271a.hs
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c Tc271.hs
+
+T13585:
+	$(RM) -f T13585a.o T13585a.hi T13585b.o T13585b.hi T13585.o T13585.hi
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c T13585a.hs -O
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c T13585b.hs -O
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c T13585.hs  -O

@@ -34,6 +34,8 @@ module Module
         unitIdKey,
         IndefUnitId(..),
         IndefModule(..),
+        indefUnitIdToUnitId,
+        indefModuleToModule,
         InstalledUnitId(..),
         toInstalledUnitId,
         ShHoleSubst,
@@ -60,6 +62,7 @@ module Module
         splitModuleInsts,
         splitUnitIdInsts,
         generalizeIndefUnitId,
+        generalizeIndefModule,
 
         -- * Parsers
         parseModuleName,
@@ -128,7 +131,10 @@ module Module
 
         -- * Sets of Modules
         ModuleSet,
-        emptyModuleSet, mkModuleSet, moduleSetElts, extendModuleSet, elemModuleSet
+        emptyModuleSet, mkModuleSet, moduleSetElts,
+        extendModuleSet, extendModuleSetList, delModuleSet,
+        elemModuleSet, intersectModuleSet, minusModuleSet, unionModuleSet,
+        unitModuleSet
     ) where
 
 import Config
@@ -189,7 +195,7 @@ import {-# SOURCE #-} Packages (componentIdString, improveUnitId, PackageConfigM
 --      - Same as Distribution.Package.ComponentId
 --
 -- UnitId/InstalledUnitId: A ComponentId + a mapping from hole names
--- (ModuleName) to Modules.  This is how the compiler identifies instantatiated
+-- (ModuleName) to Modules.  This is how the compiler identifies instantiated
 -- components, and also is the main identifier by which GHC identifies things.
 --      - When Backpack is not being used, UnitId = ComponentId.
 --        this means a useful fiction for end-users is that there are
@@ -619,6 +625,20 @@ newIndefUnitId cid insts =
      fs = hashUnitId cid sorted_insts
      sorted_insts = sortBy (stableModuleNameCmp `on` fst) insts
 
+-- | Injects an 'IndefUnitId' (indefinite library which
+-- was on-the-fly instantiated) to a 'UnitId' (either
+-- an indefinite or definite library).
+indefUnitIdToUnitId :: DynFlags -> IndefUnitId -> UnitId
+indefUnitIdToUnitId dflags iuid =
+    -- NB: suppose that we want to compare the indefinite
+    -- unit id p[H=impl:H] against p+abcd (where p+abcd
+    -- happens to be the existing, installed version of
+    -- p[H=impl:H].  If we *only* wrap in p[H=impl:H]
+    -- IndefiniteUnitId, they won't compare equal; only
+    -- after improvement will the equality hold.
+    improveUnitId (getPackageConfigMap dflags) $
+        IndefiniteUnitId iuid
+
 data IndefModule = IndefModule {
         indefModuleUnitId :: IndefUnitId,
         indefModuleName   :: ModuleName
@@ -627,6 +647,12 @@ data IndefModule = IndefModule {
 instance Outputable IndefModule where
   ppr (IndefModule uid m) =
     ppr uid <> char ':' <> ppr m
+
+-- | Injects an 'IndefModule' to 'Module' (see also
+-- 'indefUnitIdToUnitId'.
+indefModuleToModule :: DynFlags -> IndefModule -> Module
+indefModuleToModule dflags (IndefModule iuid mod_name) =
+    mkModule (indefUnitIdToUnitId dflags iuid) mod_name
 
 -- | An installed unit identifier identifies a library which has
 -- been installed to the package database.  These strings are
@@ -690,21 +716,10 @@ instance Outputable IndefUnitId where
       ppr cid <>
         (if not (null insts) -- pprIf
           then
-            -- TODO: Print an instantiation if (1) we would not have qualified
-            -- the module and (2) the module name and module agree
-            let -- is_wanted (mod_name, mod) = qualModule sty mod
-                --                         || mod_name /= moduleName mod
-                (wanted, unwanted) = (insts, [])
-                    {-
-                    -- This was more annoying than helpful
-                    | debugStyle sty = (insts, [])
-                    | otherwise = partition is_wanted insts
-                    -}
-            in brackets (hsep
+            brackets (hcat
                 (punctuate comma $
                     [ ppr modname <> text "=" <> ppr m
-                    | (modname, m) <- wanted] ++
-                    if not (null unwanted) then [text "..."] else []))
+                    | (modname, m) <- insts]))
           else empty)
      where
       cid   = indefUnitIdComponentId uid
@@ -989,6 +1004,9 @@ generalizeIndefUnitId IndefUnitId{ indefUnitIdComponentId = cid
                                  , indefUnitIdInsts = insts } =
     newIndefUnitId cid (map (\(m,_) -> (m, mkHoleModule m)) insts)
 
+generalizeIndefModule :: IndefModule -> IndefModule
+generalizeIndefModule (IndefModule uid n) = IndefModule (generalizeIndefUnitId uid) n
+
 parseModuleName :: ReadP ModuleName
 parseModuleName = fmap mkModuleName
                 $ Parse.munch1 (\c -> isAlphaNum c || c `elem` "_.")
@@ -1234,17 +1252,38 @@ isEmptyModuleEnv (ModuleEnv e) = Map.null e
 -- | A set of 'Module's
 type ModuleSet = Set NDModule
 
-mkModuleSet     :: [Module] -> ModuleSet
-extendModuleSet :: ModuleSet -> Module -> ModuleSet
-emptyModuleSet  :: ModuleSet
-moduleSetElts   :: ModuleSet -> [Module]
-elemModuleSet   :: Module -> ModuleSet -> Bool
+mkModuleSet :: [Module] -> ModuleSet
+mkModuleSet = Set.fromList . coerce
 
-emptyModuleSet    = Set.empty
-mkModuleSet       = Set.fromList . coerce
+extendModuleSet :: ModuleSet -> Module -> ModuleSet
 extendModuleSet s m = Set.insert (NDModule m) s
-moduleSetElts     = sort . coerce . Set.toList
-elemModuleSet     = Set.member . coerce
+
+extendModuleSetList :: ModuleSet -> [Module] -> ModuleSet
+extendModuleSetList s ms = foldl' (coerce . flip Set.insert) s ms
+
+emptyModuleSet :: ModuleSet
+emptyModuleSet = Set.empty
+
+moduleSetElts :: ModuleSet -> [Module]
+moduleSetElts = sort . coerce . Set.toList
+
+elemModuleSet :: Module -> ModuleSet -> Bool
+elemModuleSet = Set.member . coerce
+
+intersectModuleSet :: ModuleSet -> ModuleSet -> ModuleSet
+intersectModuleSet = coerce Set.intersection
+
+minusModuleSet :: ModuleSet -> ModuleSet -> ModuleSet
+minusModuleSet = coerce Set.difference
+
+delModuleSet :: ModuleSet -> Module -> ModuleSet
+delModuleSet = coerce (flip Set.delete)
+
+unionModuleSet :: ModuleSet -> ModuleSet -> ModuleSet
+unionModuleSet = coerce Set.union
+
+unitModuleSet :: Module -> ModuleSet
+unitModuleSet = coerce Set.singleton
 
 {-
 A ModuleName has a Unique, so we can build mappings of these using

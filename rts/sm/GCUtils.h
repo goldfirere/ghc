@@ -11,8 +11,7 @@
  *
  * --------------------------------------------------------------------------*/
 
-#ifndef SM_GCUTILS_H
-#define SM_GCUTILS_H
+#pragma once
 
 #include "BeginPrivate.h"
 
@@ -45,14 +44,14 @@ bdescr *steal_todo_block       (uint32_t s);
 // Returns true if a block is partially full.  This predicate is used to try
 // to re-use partial blocks wherever possible, and to reduce wastage.
 // We might need to tweak the actual value.
-INLINE_HEADER rtsBool
+INLINE_HEADER bool
 isPartiallyFull(bdescr *bd)
 {
     return (bd->free + WORK_UNIT_WORDS < bd->start + BLOCK_SIZE_W);
 }
 
 
-#if DEBUG
+#if defined(DEBUG)
 void printMutableList (bdescr *bd);
 #endif
 
@@ -76,5 +75,3 @@ recordMutableGen_GC (StgClosure *p, uint32_t gen_no)
 }
 
 #include "EndPrivate.h"
-
-#endif /* SM_GCUTILS_H */

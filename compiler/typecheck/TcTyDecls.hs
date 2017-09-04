@@ -3,18 +3,19 @@
 (c) The GRASP/AQUA Project, Glasgow University, 1992-1999
 
 
-Analysis functions over data types.  Specficially, detecting recursive types.
+Analysis functions over data types.  Specifically, detecting recursive types.
 
 This stuff is only used for source-code decls; it's recorded in interface
 files for imported data types.
 -}
 
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module TcTyDecls(
         RolesInfo,
         inferRoles,
-        calcSynCycles,
+        checkSynCycles,
         checkClassCycles,
 
         -- * Implicits
@@ -29,8 +30,7 @@ module TcTyDecls(
 import TcRnMonad
 import TcEnv
 import TcBinds( tcRecSelBinds )
-import RnEnv( RoleAnnotEnv, lookupRoleAnnot )
-import TyCoRep( Type(..) )
+import TyCoRep( Type(..), Coercion(..), UnivCoProvenance(..) )
 import TcType
 import TysWiredIn( unitTy )
 import MkCore( rEC_SEL_ERROR_ID )
@@ -43,14 +43,13 @@ import ConLike
 import DataCon
 import Name
 import NameEnv
+import NameSet hiding (unitFV)
 import RdrName ( mkVarUnqual )
 import Id
 import IdInfo
 import VarEnv
 import VarSet
-import NameSet  ( NameSet, unitNameSet, extendNameSet, elemNameSet )
 import Coercion ( ltRole )
-import Digraph
 import BasicTypes
 import SrcLoc
 import Unique ( mkBuiltinUnique )
@@ -60,7 +59,7 @@ import Maybes
 import Bag
 import FastString
 import FV
-import UniqFM
+import Module
 
 import Control.Monad
 
@@ -70,77 +69,164 @@ import Control.Monad
         Cycles in type synonym declarations
 *                                                                      *
 ************************************************************************
-
-Checking for class-decl loops is easy, because we don't allow class decls
-in interface files.
-
-We allow type synonyms in hi-boot files, but we *trust* hi-boot files,
-so we don't check for loops that involve them.  So we only look for synonym
-loops in the module being compiled.
-
-We check for type synonym and class cycles on the *source* code.
-Main reasons:
-
-  a) Otherwise we'd need a special function to extract type-synonym tycons
-     from a type, whereas we already have the free vars pinned on the decl
-
-  b) If we checked for type synonym loops after building the TyCon, we
-        can't do a hoistForAllTys on the type synonym rhs, (else we fall into
-        a black hole) which seems unclean.  Apart from anything else, it'd mean
-        that a type-synonym rhs could have for-alls to the right of an arrow,
-        which means adding new cases to the validity checker
-
-        Indeed, in general, checking for cycles beforehand means we need to
-        be less careful about black holes through synonym cycles.
-
-The main disadvantage is that a cycle that goes via a type synonym in an
-.hi-boot file can lead the compiler into a loop, because it assumes that cycles
-only occur entirely within the source code of the module being compiled.
-But hi-boot files are trusted anyway, so this isn't much worse than (say)
-a kind error.
-
-[  NOTE ----------------------------------------------
-If we reverse this decision, this comment came from tcTyDecl1, and should
- go back there
-        -- dsHsType, not tcHsKindedType, to avoid a loop.  tcHsKindedType does hoisting,
-        -- which requires looking through synonyms... and therefore goes into a loop
-        -- on (erroneously) recursive synonyms.
-        -- Solution: do not hoist synonyms, because they'll be hoisted soon enough
-        --           when they are substituted
-
-We'd also need to add back in this definition
+-}
 
 synonymTyConsOfType :: Type -> [TyCon]
 -- Does not look through type synonyms at all
 -- Return a list of synonym tycons
+-- Keep this synchronized with 'expandTypeSynonyms'
 synonymTyConsOfType ty
   = nameEnvElts (go ty)
   where
      go :: Type -> NameEnv TyCon  -- The NameEnv does duplicate elim
-     go (TyVarTy v)               = emptyNameEnv
-     go (TyConApp tc tys)         = go_tc tc tys
+     go (TyConApp tc tys)         = go_tc tc `plusNameEnv` go_s tys
+     go (LitTy _)                 = emptyNameEnv
+     go (TyVarTy _)               = emptyNameEnv
      go (AppTy a b)               = go a `plusNameEnv` go b
      go (FunTy a b)               = go a `plusNameEnv` go b
      go (ForAllTy _ ty)           = go ty
+     go (CastTy ty co)            = go ty `plusNameEnv` go_co co
+     go (CoercionTy co)           = go_co co
 
-     go_tc tc tys | isTypeSynonymTyCon tc = extendNameEnv (go_s tys)
-                                                          (tyConName tc) tc
-                  | otherwise             = go_s tys
+     -- Note [TyCon cycles through coercions?!]
+     -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     -- Although, in principle, it's possible for a type synonym loop
+     -- could go through a coercion (since a coercion can refer to
+     -- a TyCon or Type), it doesn't seem possible to actually construct
+     -- a Haskell program which tickles this case.  Here is an example
+     -- program which causes a coercion:
+     --
+     --   type family Star where
+     --       Star = Type
+     --
+     --   data T :: Star -> Type
+     --   data S :: forall (a :: Type). T a -> Type
+     --
+     -- Here, the application 'T a' must first coerce a :: Type to a :: Star,
+     -- witnessed by the type family.  But if we now try to make Type refer
+     -- to a type synonym which in turn refers to Star, we'll run into
+     -- trouble: we're trying to define and use the type constructor
+     -- in the same recursive group.  Possibly this restriction will be
+     -- lifted in the future but for now, this code is "just for completeness
+     -- sake".
+     go_co (Refl _ ty)            = go ty
+     go_co (TyConAppCo _ tc cs)   = go_tc tc `plusNameEnv` go_co_s cs
+     go_co (AppCo co co')         = go_co co `plusNameEnv` go_co co'
+     go_co (ForAllCo _ co co')    = go_co co `plusNameEnv` go_co co'
+     go_co (FunCo _ co co')       = go_co co `plusNameEnv` go_co co'
+     go_co (CoVarCo _)            = emptyNameEnv
+     go_co (AxiomInstCo _ _ cs)   = go_co_s cs
+     go_co (UnivCo p _ ty ty')    = go_prov p `plusNameEnv` go ty `plusNameEnv` go ty'
+     go_co (SymCo co)             = go_co co
+     go_co (TransCo co co')       = go_co co `plusNameEnv` go_co co'
+     go_co (NthCo _ co)           = go_co co
+     go_co (LRCo _ co)            = go_co co
+     go_co (InstCo co co')        = go_co co `plusNameEnv` go_co co'
+     go_co (CoherenceCo co co')   = go_co co `plusNameEnv` go_co co'
+     go_co (KindCo co)            = go_co co
+     go_co (SubCo co)             = go_co co
+     go_co (AxiomRuleCo _ cs)     = go_co_s cs
+
+     go_prov UnsafeCoerceProv     = emptyNameEnv
+     go_prov (PhantomProv co)     = go_co co
+     go_prov (ProofIrrelProv co)  = go_co co
+     go_prov (PluginProv _)       = emptyNameEnv
+     go_prov (HoleProv _)         = emptyNameEnv
+
+     go_tc tc | isTypeSynonymTyCon tc = unitNameEnv (tyConName tc) tc
+              | otherwise             = emptyNameEnv
      go_s tys = foldr (plusNameEnv . go) emptyNameEnv tys
----------------------------------------- END NOTE ]
--}
+     go_co_s cos = foldr (plusNameEnv . go_co) emptyNameEnv cos
 
-mkSynEdges :: [LTyClDecl Name] -> [(LTyClDecl Name, Name, [Name])]
-mkSynEdges syn_decls = [ (ldecl, name, nonDetEltsUFM fvs)
-                       | ldecl@(L _ (SynDecl { tcdLName = L _ name
-                                             , tcdFVs = fvs })) <- syn_decls ]
-            -- It's OK to use nonDetEltsUFM here as
-            -- stronglyConnCompFromEdgedVertices is still deterministic even
-            -- if the edges are in nondeterministic order as explained in
-            -- Note [Deterministic SCC] in Digraph.
+-- | A monad for type synonym cycle checking, which keeps
+-- track of the TyCons which are known to be acyclic, or
+-- a failure message reporting that a cycle was found.
+newtype SynCycleM a = SynCycleM {
+    runSynCycleM :: SynCycleState -> Either (SrcSpan, SDoc) (a, SynCycleState) }
 
-calcSynCycles :: [LTyClDecl Name] -> [SCC (LTyClDecl Name)]
-calcSynCycles = stronglyConnCompFromEdgedVerticesUniq . mkSynEdges
+type SynCycleState = NameSet
+
+instance Functor SynCycleM where
+    fmap = liftM
+
+instance Applicative SynCycleM where
+    pure x = SynCycleM $ \state -> Right (x, state)
+    (<*>) = ap
+
+instance Monad SynCycleM where
+    m >>= f = SynCycleM $ \state ->
+        case runSynCycleM m state of
+            Right (x, state') ->
+                runSynCycleM (f x) state'
+            Left err -> Left err
+
+failSynCycleM :: SrcSpan -> SDoc -> SynCycleM ()
+failSynCycleM loc err = SynCycleM $ \_ -> Left (loc, err)
+
+-- | Test if a 'Name' is acyclic, short-circuiting if we've
+-- seen it already.
+checkNameIsAcyclic :: Name -> SynCycleM () -> SynCycleM ()
+checkNameIsAcyclic n m = SynCycleM $ \s ->
+    if n `elemNameSet` s
+        then Right ((), s) -- short circuit
+        else case runSynCycleM m s of
+                Right ((), s') -> Right ((), extendNameSet s' n)
+                Left err -> Left err
+
+-- | Checks if any of the passed in 'TyCon's have cycles.
+-- Takes the 'UnitId' of the home package (as we can avoid
+-- checking those TyCons: cycles never go through foreign packages) and
+-- the corresponding @LTyClDecl Name@ for each 'TyCon', so we
+-- can give better error messages.
+checkSynCycles :: UnitId -> [TyCon] -> [LTyClDecl GhcRn] -> TcM ()
+checkSynCycles this_uid tcs tyclds = do
+    case runSynCycleM (mapM_ (go emptyNameSet []) tcs) emptyNameSet of
+        Left (loc, err) -> setSrcSpan loc $ failWithTc err
+        Right _  -> return ()
+  where
+    -- Try our best to print the LTyClDecl for locally defined things
+    lcl_decls = mkNameEnv (zip (map tyConName tcs) tyclds)
+
+    -- Short circuit if we've already seen this Name and concluded
+    -- it was acyclic.
+    go :: NameSet -> [TyCon] -> TyCon -> SynCycleM ()
+    go so_far seen_tcs tc =
+        checkNameIsAcyclic (tyConName tc) $ go' so_far seen_tcs tc
+
+    -- Expand type synonyms, complaining if you find the same
+    -- type synonym a second time.
+    go' :: NameSet -> [TyCon] -> TyCon -> SynCycleM ()
+    go' so_far seen_tcs tc
+        | n `elemNameSet` so_far
+            = failSynCycleM (getSrcSpan (head seen_tcs)) $
+                  sep [ text "Cycle in type synonym declarations:"
+                      , nest 2 (vcat (map ppr_decl seen_tcs)) ]
+        -- Optimization: we don't allow cycles through external packages,
+        -- so once we find a non-local name we are guaranteed to not
+        -- have a cycle.
+        --
+        -- This won't hold once we get recursive packages with Backpack,
+        -- but for now it's fine.
+        | not (isHoleModule mod ||
+               moduleUnitId mod == this_uid ||
+               isInteractiveModule mod)
+            = return ()
+        | Just ty <- synTyConRhs_maybe tc =
+            go_ty (extendNameSet so_far (tyConName tc)) (tc:seen_tcs) ty
+        | otherwise = return ()
+      where
+        n = tyConName tc
+        mod = nameModule n
+        ppr_decl tc =
+          case lookupNameEnv lcl_decls n of
+            Just (L loc decl) -> ppr loc <> colon <+> ppr decl
+            Nothing -> ppr (getSrcSpan n) <> colon <+> ppr n <+> text "from external module"
+         where
+          n = tyConName tc
+
+    go_ty :: NameSet -> [TyCon] -> Type -> SynCycleM ()
+    go_ty so_far seen_tcs ty =
+        mapM_ (go so_far seen_tcs) (synonymTyConsOfType ty)
 
 {- Note [Superclass cycle check]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -156,7 +242,7 @@ one approach is to instantiate all of C's superclasses, transitively.
 We can only do so if that set is finite.
 
 This potential loop occurs only through superclasses.  This, for
-exmaple, is fine
+example, is fine
   class C a where
     op :: C b => a -> b -> b
 even though C's full definition uses C.
@@ -366,20 +452,20 @@ type RoleEnv = NameEnv [Role]        -- from tycon names to roles
 -- This, and any of the functions it calls, must *not* look at the roles
 -- field of a tycon we are inferring roles about!
 -- See Note [Role inference]
-inferRoles :: Bool -> RoleAnnotEnv -> [TyCon] -> Name -> [Role]
-inferRoles is_boot annots tycons
-  = let role_env  = initialRoleEnv is_boot annots tycons
+inferRoles :: HscSource -> RoleAnnotEnv -> [TyCon] -> Name -> [Role]
+inferRoles hsc_src annots tycons
+  = let role_env  = initialRoleEnv hsc_src annots tycons
         role_env' = irGroup role_env tycons in
     \name -> case lookupNameEnv role_env' name of
       Just roles -> roles
       Nothing    -> pprPanic "inferRoles" (ppr name)
 
-initialRoleEnv :: Bool -> RoleAnnotEnv -> [TyCon] -> RoleEnv
-initialRoleEnv is_boot annots = extendNameEnvList emptyNameEnv .
-                                map (initialRoleEnv1 is_boot annots)
+initialRoleEnv :: HscSource -> RoleAnnotEnv -> [TyCon] -> RoleEnv
+initialRoleEnv hsc_src annots = extendNameEnvList emptyNameEnv .
+                                map (initialRoleEnv1 hsc_src annots)
 
-initialRoleEnv1 :: Bool -> RoleAnnotEnv -> TyCon -> (Name, [Role])
-initialRoleEnv1 is_boot annots_env tc
+initialRoleEnv1 :: HscSource -> RoleAnnotEnv -> TyCon -> (Name, [Role])
+initialRoleEnv1 hsc_src annots_env tc
   | isFamilyTyCon tc      = (name, map (const Nominal) bndrs)
   | isAlgTyCon tc         = (name, default_roles)
   | isTypeSynonymTyCon tc = (name, default_roles)
@@ -409,8 +495,38 @@ initialRoleEnv1 is_boot annots_env tc
 
         default_role
           | isClassTyCon tc               = Nominal
-          | is_boot && isAbstractTyCon tc = Representational
+          -- Note [Default roles for abstract TyCons in hs-boot/hsig]
+          | HsBootFile <- hsc_src
+          , isAbstractTyCon tc            = Representational
+          | HsigFile   <- hsc_src
+          , isAbstractTyCon tc            = Nominal
           | otherwise                     = Phantom
+
+-- Note [Default roles for abstract TyCons in hs-boot/hsig]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- What should the default role for an abstract TyCon be?
+--
+-- Originally, we inferred phantom role for abstract TyCons
+-- in hs-boot files, because the type variables were never used.
+--
+-- This was silly, because the role of the abstract TyCon
+-- was required to match the implementation, and the roles of
+-- data types are almost never phantom.  Thus, in ticket #9204,
+-- the default was changed so be representational (the most common case).  If
+-- the implementing data type was actually nominal, you'd get an easy
+-- to understand error, and add the role annotation yourself.
+--
+-- Then Backpack was added, and with it we added role *subtyping*
+-- the matching judgment: if an abstract TyCon has a nominal
+-- parameter, it's OK to implement it with a representational
+-- parameter.  But now, the representational default is not a good
+-- one, because you should *only* request representational if
+-- you're planning to do coercions. To be maximally flexible
+-- with what data types you will accept, you want the default
+-- for hsig files is nominal.  We don't allow role subtyping
+-- with hs-boot files (it's good practice to give an exactly
+-- accurate role here, because any types that use the abstract
+-- type will propagate the role information.)
 
 irGroup :: RoleEnv -> [TyCon] -> RoleEnv
 irGroup env tcs
@@ -464,6 +580,8 @@ irDataCon datacon
 irType :: VarSet -> Type -> RoleM ()
 irType = go
   where
+    go lcls ty                 | Just ty' <- coreView ty -- #14101
+                               = go lcls ty'
     go lcls (TyVarTy tv)       = unless (tv `elemVarSet` lcls) $
                                  updateRole Representational tv
     go lcls (AppTy t1 t2)      = go lcls t1 >> markNominal lcls t2
@@ -547,7 +665,7 @@ data RoleInferenceState = RIS { role_env  :: RoleEnv
 type VarPositions = VarEnv Int
 
 -- See [Role inference]
-newtype RoleM a = RM { unRM :: Maybe Name   -- of the tycon
+newtype RoleM a = RM { unRM :: Maybe Name -- of the tycon
                             -> VarPositions
                             -> Int          -- size of VarPositions
                             -> RoleInferenceState
@@ -655,10 +773,18 @@ mkDefaultMethodIds tycons
 mkDefaultMethodType :: Class -> Id -> DefMethSpec Type -> Type
 -- Returns the top-level type of the default method
 mkDefaultMethodType _ sel_id VanillaDM        = idType sel_id
-mkDefaultMethodType cls _   (GenericDM dm_ty) = mkSpecSigmaTy cls_tvs [pred] dm_ty
+mkDefaultMethodType cls _   (GenericDM dm_ty) = mkSigmaTy tv_bndrs [pred] dm_ty
    where
-     cls_tvs = classTyVars cls
-     pred    = mkClassPred cls (mkTyVarTys cls_tvs)
+     pred      = mkClassPred cls (mkTyVarTys (binderVars cls_bndrs))
+     cls_bndrs = tyConBinders (classTyCon cls)
+     tv_bndrs  = tyConTyVarBinders cls_bndrs
+     -- NB: the Class doesn't have TyConBinders; we reach into its
+     --     TyCon to get those.  We /do/ need the TyConBinders because
+     --     we need the correct visiblity: these default methods are
+     --     used in code generated by the the fill-in for missing
+     --     methods in instances (TcInstDcls.mkDefMethBind), and
+     --     then typechecked.  So we need the right visibilty info
+     --     (Trac #13998)
 
 {-
 ************************************************************************
@@ -694,7 +820,7 @@ when typechecking the [d| .. |] quote, and typecheck them later.
 ************************************************************************
 -}
 
-mkRecSelBinds :: [TyCon] -> HsValBinds Name
+mkRecSelBinds :: [TyCon] -> HsValBinds GhcRn
 -- NB We produce *un-typechecked* bindings, rather like 'deriving'
 --    This makes life easier, because the later type checking will add
 --    all necessary type abstractions and applications
@@ -706,14 +832,14 @@ mkRecSelBinds tycons
                                 | tc <- tycons
                                 , fld <- tyConFieldLabels tc ]
 
-mkRecSelBind :: (TyCon, FieldLabel) -> (LSig Name, (RecFlag, LHsBinds Name))
+mkRecSelBind :: (TyCon, FieldLabel) -> (LSig GhcRn, (RecFlag, LHsBinds GhcRn))
 mkRecSelBind (tycon, fl)
   = mkOneRecordSelector all_cons (RecSelData tycon) fl
   where
     all_cons = map RealDataCon (tyConDataCons tycon)
 
 mkOneRecordSelector :: [ConLike] -> RecSelParent -> FieldLabel
-                    -> (LSig Name, (RecFlag, LHsBinds Name))
+                    -> (LSig GhcRn, (RecFlag, LHsBinds GhcRn))
 mkOneRecordSelector all_cons idDetails fl
   = (L loc (IdSig sel_id), (NonRecursive, unitBag (L loc sel_bind)))
   where
@@ -721,12 +847,7 @@ mkOneRecordSelector all_cons idDetails fl
     lbl      = flLabel fl
     sel_name = flSelector fl
 
-    sel_id =
-      -- Do not mark record selectors as exported to avoid keeping these Ids
-      -- alive unnecessarily. See #12125. Selectors are now marked as exported
-      -- when necessary by desugarer ('Desugar.addExportFlagsAndRules', also see
-      -- uses of 'availsToNameSetWithSelectors' in 'Desugar.hs').
-      mkNonExportedLocalId rec_details sel_name sel_ty
+    sel_id = mkExportedLocalId rec_details sel_name sel_ty
     rec_details = RecSelId { sel_tycon = idDetails, sel_naughty = is_naughty }
 
     -- Find a representative constructor, con1
@@ -735,7 +856,7 @@ mkOneRecordSelector all_cons idDetails fl
 
     -- Selector type; Note [Polymorphic selectors]
     field_ty   = conLikeFieldType con1 lbl
-    data_tvs   = tyCoVarsOfTypeWellScoped data_ty
+    data_tvs   = tyCoVarsOfTypesWellScoped inst_tys
     data_tv_set= mkVarSet data_tvs
     is_naughty = not (tyCoVarsOfType field_ty `subVarSet` data_tv_set)
     (field_tvs, field_theta, field_tau) = tcSplitSigmaTy field_ty
@@ -754,10 +875,10 @@ mkOneRecordSelector all_cons idDetails fl
     --    where cons_w_field = [C2,C7]
     sel_bind = mkTopFunBind Generated sel_lname alts
       where
-        alts | is_naughty = [mkSimpleMatch (FunRhs sel_lname Prefix)
+        alts | is_naughty = [mkSimpleMatch (mkPrefixFunRhs sel_lname)
                                            [] unit_rhs]
              | otherwise =  map mk_match cons_w_field ++ deflt
-    mk_match con = mkSimpleMatch (FunRhs sel_lname Prefix)
+    mk_match con = mkSimpleMatch (mkPrefixFunRhs sel_lname)
                                  [L loc (mk_sel_pat con)]
                                  (L loc (HsVar (L loc field_var)))
     mk_sel_pat con = ConPatIn (L loc (getName con)) (RecCon rec_fields)
@@ -800,7 +921,7 @@ mkOneRecordSelector all_cons idDetails fl
     inst_tys = substTyVars eq_subst univ_tvs
 
     unit_rhs = mkLHsTupleExpr []
-    msg_lit = HsStringPrim "" (fastStringToByteString lbl)
+    msg_lit = HsStringPrim NoSourceText (fastStringToByteString lbl)
 
 {-
 Note [Polymorphic selectors]

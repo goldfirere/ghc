@@ -10,13 +10,15 @@ module CmmLint (
     cmmLint, cmmLintGraph
   ) where
 
-import Hoopl
+import Hoopl.Block
+import Hoopl.Collections
+import Hoopl.Graph
+import Hoopl.Label
 import Cmm
 import CmmUtils
 import CmmLive
 import CmmSwitch (switchTargetsToList)
 import PprCmm ()
-import BlockId
 import Outputable
 import DynFlags
 
@@ -64,7 +66,7 @@ lintCmmGraph dflags g =
        labels = setFromList (map entryLabel blocks)
 
 
-lintCmmBlock :: BlockSet -> CmmBlock -> CmmLint ()
+lintCmmBlock :: LabelSet -> CmmBlock -> CmmLint ()
 lintCmmBlock labels block
   = addLintInfo (text "in basic block " <> ppr (entryLabel block)) $ do
         let (_, middle, last) = blockSplit block
@@ -157,7 +159,7 @@ lintCmmMiddle node = case node of
             mapM_ lintCmmExpr actuals
 
 
-lintCmmLast :: BlockSet -> CmmNode O C -> CmmLint ()
+lintCmmLast :: LabelSet -> CmmNode O C -> CmmLint ()
 lintCmmLast labels node = case node of
   CmmBranch id -> checkTarget id
 

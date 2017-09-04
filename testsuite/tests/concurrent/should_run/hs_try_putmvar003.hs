@@ -10,6 +10,7 @@ import GHC.Conc
 import GHC.MVar (MVar(..))
 import GHC.Prim
 import System.Environment
+import System.Exit
 
 -- Measure C to Haskell callback throughput under a workload with
 -- several dimensions:
@@ -29,6 +30,8 @@ import System.Environment
 -- hs_try_putmvar() is 9x faster with these parameters.
 
 main = do
+   when (not rtsSupportsBoundThreads) $
+     die "This test requires -threaded"
    args <- getArgs
    case args of
      ["1",x,y,z] -> experiment False (read x) (read y) (read z)
@@ -48,7 +51,7 @@ makeExternalCall q = mask_ $ do
 data CallbackQueue
 
 foreign import ccall "mkCallbackQueue"
-  mkCallbackQueue :: Int -> IO (Ptr CallbackQueue)
+  mkCallbackQueue :: Int -> Int -> IO (Ptr CallbackQueue)
 
 foreign import ccall "destroyCallbackQueue"
   destroyCallbackQueue :: Ptr CallbackQueue -> IO ()
@@ -74,7 +77,7 @@ foreign export ccall callbackPutMVar :: StablePtr PrimMVar -> IO ()
 experiment :: Bool -> Int -> Int -> Int -> IO ()
 experiment use_foreign_export x y z = do
   mvars <- replicateM x $ async $ do
-    bracket (mkCallbackQueue (fromEnum use_foreign_export))
+    bracket (mkCallbackQueue (fromEnum use_foreign_export) (z*y))
             destroyCallbackQueue $ \q -> do
       mvars <- replicateM y $ async $
         replicateM_ z $ void $ makeExternalCall q

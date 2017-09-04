@@ -19,20 +19,24 @@ types that
 module BasicTypes(
         Version, bumpVersion, initialVersion,
 
+        LeftOrRight(..),
+        pickLR,
+
         ConTag, ConTagZ, fIRST_TAG,
 
-        Arity, RepArity,
+        Arity, RepArity, JoinArity,
 
         Alignment,
 
         FunctionOrData(..),
 
-        WarningTxt(..), StringLiteral(..),
+        WarningTxt(..), pprWarningTxtForMsg, StringLiteral(..),
 
         Fixity(..), FixityDirection(..),
         defaultFixity, maxPrecedence, minPrecedence,
         negateFixity, funTyFixity,
         compareFixity,
+        LexicalFixity(..),
 
         RecFlag(..), isRec, isNonRec, boolToRecFlag,
         Origin(..), isGenerated,
@@ -48,6 +52,8 @@ module BasicTypes(
 
         Boxity(..), isBoxed,
 
+        TyPrec(..), maybeParen,
+
         TupleSort(..), tupleSortBoxity, boxityTupleSort,
         tupleParens,
 
@@ -58,13 +64,15 @@ module BasicTypes(
         noOneShotInfo, hasNoOneShotInfo, isOneShotInfo,
         bestOneShot, worstOneShot,
 
-        OccInfo(..), seqOccInfo, zapFragileOcc, isOneOcc,
-        isDeadOcc, isStrongLoopBreaker, isWeakLoopBreaker, isNoOcc,
+        OccInfo(..), noOccInfo, seqOccInfo, zapFragileOcc, isOneOcc,
+        isDeadOcc, isStrongLoopBreaker, isWeakLoopBreaker, isManyOccs,
         strongLoopBreaker, weakLoopBreaker,
 
         InsideLam, insideLam, notInsideLam,
         OneBranch, oneBranch, notOneBranch,
         InterestingCxt,
+        TailCallInfo(..), tailCallInfo, zapOccTailCallInfo,
+        isAlwaysTailCalled,
 
         EP(..),
 
@@ -85,22 +93,46 @@ module BasicTypes(
         inlinePragmaSpec, inlinePragmaSat,
         inlinePragmaActivation, inlinePragmaRuleMatchInfo,
         setInlinePragmaActivation, setInlinePragmaRuleMatchInfo,
+        pprInline, pprInlineDebug,
 
         SuccessFlag(..), succeeded, failed, successIf,
 
-        FractionalLit(..), negateFractionalLit, integralFractionalLit,
+        IntegralLit(..), FractionalLit(..),
+        negateIntegralLit, negateFractionalLit,
+        mkIntegralLit, mkFractionalLit,
+        integralFractionalLit,
 
-        SourceText,
+        SourceText(..), pprWithSourceText,
 
-        IntWithInf, infinity, treatZeroAsInf, mkIntWithInf, intGtLimit
+        IntWithInf, infinity, treatZeroAsInf, mkIntWithInf, intGtLimit,
+
+        SpliceExplicitFlag(..)
    ) where
 
 import FastString
 import Outputable
 import SrcLoc ( Located,unLoc )
-import StaticFlags( opt_PprStyle_Debug )
-import Data.Data hiding (Fixity)
+import Data.Data hiding (Fixity, Prefix, Infix)
 import Data.Function (on)
+
+{-
+************************************************************************
+*                                                                      *
+          Binary choice
+*                                                                      *
+************************************************************************
+-}
+
+data LeftOrRight = CLeft | CRight
+                 deriving( Eq, Data )
+
+pickLR :: LeftOrRight -> (a,a) -> a
+pickLR CLeft  (l,_) = l
+pickLR CRight (_,r) = r
+
+instance Outputable LeftOrRight where
+  ppr CLeft    = text "Left"
+  ppr CRight   = text "Right"
 
 {-
 ************************************************************************
@@ -125,6 +157,12 @@ type Arity = Int
 --  \x -> fib x                has representation arity 1
 --  \(# x, y #) -> fib (x + y) has representation arity 2
 type RepArity = Int
+
+-- | The number of arguments that a join point takes. Unlike the arity of a
+-- function, this is a purely syntactic property and is fixed when the join
+-- point is created (or converted from a value). Both type and value arguments
+-- are counted.
+type JoinArity = Int
 
 {-
 ************************************************************************
@@ -175,8 +213,6 @@ type Alignment = Int -- align to next N-byte boundary (N must be a power of 2).
 -- work.
 data OneShotInfo
   = NoOneShotInfo -- ^ No information
-  | ProbOneShot   -- ^ The lambda is probably applied at most once
-                  -- See Note [Computing one-shot info, and ProbOneShot] in Demand
   | OneShotLam    -- ^ The lambda is applied at most once.
   deriving (Eq)
 
@@ -193,18 +229,13 @@ hasNoOneShotInfo _             = False
 
 worstOneShot, bestOneShot :: OneShotInfo -> OneShotInfo -> OneShotInfo
 worstOneShot NoOneShotInfo _             = NoOneShotInfo
-worstOneShot ProbOneShot   NoOneShotInfo = NoOneShotInfo
-worstOneShot ProbOneShot   _             = ProbOneShot
 worstOneShot OneShotLam    os            = os
 
 bestOneShot NoOneShotInfo os         = os
-bestOneShot ProbOneShot   OneShotLam = OneShotLam
-bestOneShot ProbOneShot   _          = ProbOneShot
 bestOneShot OneShotLam    _          = OneShotLam
 
 pprOneShotInfo :: OneShotInfo -> SDoc
 pprOneShotInfo NoOneShotInfo = empty
-pprOneShotInfo ProbOneShot   = text "ProbOneShot"
 pprOneShotInfo OneShotLam    = text "OneShot"
 
 instance Outputable OneShotInfo where
@@ -288,6 +319,9 @@ data StringLiteral = StringLiteral
 instance Eq StringLiteral where
   (StringLiteral _ a) == (StringLiteral _ b) = a == b
 
+instance Outputable StringLiteral where
+  ppr sl = pprWithSourceText (sl_st sl) (ftext $ sl_fs sl)
+
 -- | Warning Text
 --
 -- reason/explanation from a WARNING or DEPRECATED pragma
@@ -298,11 +332,30 @@ data WarningTxt = WarningTxt (Located SourceText)
     deriving (Eq, Data)
 
 instance Outputable WarningTxt where
-    ppr (WarningTxt    _ ws)
-                         = doubleQuotes (vcat (map (ftext . sl_fs . unLoc) ws))
-    ppr (DeprecatedTxt _ ds)
-                         = text "Deprecated:" <+>
-                           doubleQuotes (vcat (map (ftext . sl_fs . unLoc) ds))
+    ppr (WarningTxt    lsrc ws)
+      = case unLoc lsrc of
+          NoSourceText   -> pp_ws ws
+          SourceText src -> text src <+> pp_ws ws <+> text "#-}"
+
+    ppr (DeprecatedTxt lsrc  ds)
+      = case unLoc lsrc of
+          NoSourceText   -> pp_ws ds
+          SourceText src -> text src <+> pp_ws ds <+> text "#-}"
+
+pp_ws :: [Located StringLiteral] -> SDoc
+pp_ws [l] = ppr $ unLoc l
+pp_ws ws
+  = text "["
+    <+> vcat (punctuate comma (map (ppr . unLoc) ws))
+    <+> text "]"
+
+
+pprWarningTxtForMsg :: WarningTxt -> SDoc
+pprWarningTxtForMsg (WarningTxt    _ ws)
+                     = doubleQuotes (vcat (map (ftext . sl_fs . unLoc) ws))
+pprWarningTxtForMsg (DeprecatedTxt _ ds)
+                     = text "Deprecated:" <+>
+                       doubleQuotes (vcat (map (ftext . sl_fs . unLoc) ds))
 
 {-
 ************************************************************************
@@ -351,12 +404,12 @@ maxPrecedence = 9
 minPrecedence = 0
 
 defaultFixity :: Fixity
-defaultFixity = Fixity (show maxPrecedence) maxPrecedence InfixL
+defaultFixity = Fixity NoSourceText maxPrecedence InfixL
 
 negateFixity, funTyFixity :: Fixity
 -- Wired-in fixities
-negateFixity = Fixity "6" 6 InfixL  -- Fixity of unary negate
-funTyFixity  = Fixity "0" 0 InfixR  -- Fixity of '->'
+negateFixity = Fixity NoSourceText 6 InfixL  -- Fixity of unary negate
+funTyFixity  = Fixity NoSourceText 0 InfixR  -- Fixity of '->'
 
 {-
 Consider
@@ -364,7 +417,7 @@ Consider
 \begin{verbatim}
         a `op1` b `op2` c
 \end{verbatim}
-@(compareFixity op1 op2)@ tells which way to arrange appication, or
+@(compareFixity op1 op2)@ tells which way to arrange application, or
 whether there's an error.
 -}
 
@@ -383,6 +436,15 @@ compareFixity (Fixity _ prec1 dir1) (Fixity _ prec2 dir2)
     right        = (False, True)
     left         = (False, False)
     error_please = (True,  False)
+
+-- |Captures the fixity of declarations as they are parsed. This is not
+-- necessarily the same as the fixity declaration, as the normal fixity may be
+-- overridden using parens or backticks.
+data LexicalFixity = Prefix | Infix deriving (Typeable,Data,Eq)
+
+instance Outputable LexicalFixity where
+  ppr Prefix = text "Prefix"
+  ppr Infix  = text "Infix"
 
 {-
 ************************************************************************
@@ -489,18 +551,19 @@ instance Outputable Origin where
 -- | Which technique the user explicitly requested when deriving an instance.
 data DerivStrategy
   -- See Note [Deriving strategies] in TcDeriv
-  = DerivStock    -- ^ GHC's \"standard\" strategy, which is to implement a
-                  --   custom instance for the data type. This only works for
-                  --   certain types that GHC knows about (e.g., 'Eq', 'Show',
-                  --   'Functor' when @-XDeriveFunctor@ is enabled, etc.)
-  | DerivAnyclass -- ^ @-XDeriveAnyClass@
-  | DerivNewtype  -- ^ @-XGeneralizedNewtypeDeriving@
+  = StockStrategy    -- ^ GHC's \"standard\" strategy, which is to implement a
+                     --   custom instance for the data type. This only works
+                     --   for certain types that GHC knows about (e.g., 'Eq',
+                     --   'Show', 'Functor' when @-XDeriveFunctor@ is enabled,
+                     --   etc.)
+  | AnyclassStrategy -- ^ @-XDeriveAnyClass@
+  | NewtypeStrategy  -- ^ @-XGeneralizedNewtypeDeriving@
   deriving (Eq, Data)
 
 instance Outputable DerivStrategy where
-    ppr DerivStock    = text "stock"
-    ppr DerivAnyclass = text "anyclass"
-    ppr DerivNewtype  = text "newtype"
+    ppr StockStrategy    = text "stock"
+    ppr AnyclassStrategy = text "anyclass"
+    ppr NewtypeStrategy  = text "newtype"
 
 {-
 ************************************************************************
@@ -627,6 +690,81 @@ pprSafeOverlap False = empty
 {-
 ************************************************************************
 *                                                                      *
+                Type precedence
+*                                                                      *
+************************************************************************
+-}
+
+data TyPrec   -- See Note [Precedence in types] in TyCoRep.hs
+  = TopPrec         -- No parens
+  | FunPrec         -- Function args; no parens for tycon apps
+  | TyOpPrec        -- Infix operator
+  | TyConPrec       -- Tycon args; no parens for atomic
+
+instance Eq TyPrec where
+  (==) a b = case compare a b of
+               EQ -> True
+               _  -> False
+
+instance Ord TyPrec where
+  compare TopPrec TopPrec  = EQ
+  compare TopPrec _        = LT
+
+  compare FunPrec TopPrec   = GT
+  compare FunPrec FunPrec   = EQ
+  compare FunPrec TyOpPrec  = EQ   -- See Note [Type operator precedence]
+  compare FunPrec TyConPrec = LT
+
+  compare TyOpPrec TopPrec   = GT
+  compare TyOpPrec FunPrec   = EQ  -- See Note [Type operator precedence]
+  compare TyOpPrec TyOpPrec  = EQ
+  compare TyOpPrec TyConPrec = LT
+
+  compare TyConPrec TyConPrec = EQ
+  compare TyConPrec _         = GT
+
+maybeParen :: TyPrec -> TyPrec -> SDoc -> SDoc
+maybeParen ctxt_prec inner_prec pretty
+  | ctxt_prec < inner_prec = pretty
+  | otherwise              = parens pretty
+
+{- Note [Precedence in types]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Many pretty-printing functions have type
+    ppr_ty :: TyPrec -> Type -> SDoc
+
+The TyPrec gives the binding strength of the context.  For example, in
+   T ty1 ty2
+we will pretty-print 'ty1' and 'ty2' with the call
+  (ppr_ty TyConPrec ty)
+to indicate that the context is that of an argument of a TyConApp.
+
+We use this consistently for Type and HsType.
+
+Note [Type operator precedence]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We don't keep the fixity of type operators in the operator. So the
+pretty printer follows the following precedence order:
+
+   TyConPrec         Type constructor application
+   TyOpPrec/FunPrec  Operator application and function arrow
+
+We have FunPrec and TyOpPrec to represent the precedence of function
+arrow and type operators respectively, but currently we implement
+FunPred == TyOpPrec, so that we don't distinguish the two. Reason:
+it's hard to parse a type like
+    a ~ b => c * d -> e - f
+
+By treating TyOpPrec = FunPrec we end up with more parens
+    (a ~ b) => (c * d) -> (e - f)
+
+But the two are different constructors of TyPrec so we could make
+(->) bind more or less tightly if we wanted.
+-}
+
+{-
+************************************************************************
+*                                                                      *
                 Tuples
 *                                                                      *
 ************************************************************************
@@ -651,8 +789,8 @@ tupleParens :: TupleSort -> SDoc -> SDoc
 tupleParens BoxedTuple      p = parens p
 tupleParens UnboxedTuple    p = text "(#" <+> p <+> ptext (sLit "#)")
 tupleParens ConstraintTuple p   -- In debug-style write (% Eq a, Ord b %)
-  | opt_PprStyle_Debug        = text "(%" <+> p <+> ptext (sLit "%)")
-  | otherwise                 = parens p
+  = ifPprDebug (text "(%" <+> p <+> ptext (sLit "%)"))
+               (parens p)
 
 {-
 ************************************************************************
@@ -673,7 +811,7 @@ pprAlternative :: (a -> SDoc) -- ^ The pretty printing function to use
                -> SDoc        -- ^ 'SDoc' where the alternative havs been pretty
                               -- printed and finally packed into a paragraph.
 pprAlternative pp x alt arity =
-    fsep (replicate (alt - 1) vbar ++ [pp x] ++ replicate (arity - alt - 1) vbar)
+    fsep (replicate (alt - 1) vbar ++ [pp x] ++ replicate (arity - alt) vbar)
 
 {-
 ************************************************************************
@@ -728,20 +866,23 @@ defn of OccInfo here, safely at the bottom
 
 -- | identifier Occurrence Information
 data OccInfo
-  = NoOccInfo           -- ^ There are many occurrences, or unknown occurrences
+  = ManyOccs        { occ_tail    :: !TailCallInfo }
+                        -- ^ There are many occurrences, or unknown occurrences
 
   | IAmDead             -- ^ Marks unused variables.  Sometimes useful for
                         -- lambda and case-bound variables.
 
-  | OneOcc
-        !InsideLam
-        !OneBranch
-        !InterestingCxt -- ^ Occurs exactly once, not inside a rule
+  | OneOcc          { occ_in_lam  :: !InsideLam
+                    , occ_one_br  :: !OneBranch
+                    , occ_int_cxt :: !InterestingCxt
+                    , occ_tail    :: !TailCallInfo }
+                        -- ^ Occurs exactly once (per branch), not inside a rule
 
   -- | This identifier breaks a loop of mutually recursive functions. The field
   -- marks whether it is only a loop breaker due to a reference in a rule
-  | IAmALoopBreaker     -- Note [LoopBreaker OccInfo]
-        !RulesOnly
+  | IAmALoopBreaker { occ_rules_only :: !RulesOnly
+                    , occ_tail       :: !TailCallInfo }
+                        -- Note [LoopBreaker OccInfo]
 
   deriving (Eq)
 
@@ -759,9 +900,12 @@ Note [LoopBreaker OccInfo]
 See OccurAnal Note [Weak loop breakers]
 -}
 
-isNoOcc :: OccInfo -> Bool
-isNoOcc NoOccInfo = True
-isNoOcc _         = False
+noOccInfo :: OccInfo
+noOccInfo = ManyOccs { occ_tail = NoTailCallInfo }
+
+isManyOccs :: OccInfo -> Bool
+isManyOccs ManyOccs{} = True
+isManyOccs _          = False
 
 seqOccInfo :: OccInfo -> ()
 seqOccInfo occ = occ `seq` ()
@@ -788,17 +932,41 @@ oneBranch, notOneBranch :: OneBranch
 oneBranch    = True
 notOneBranch = False
 
+-----------------
+data TailCallInfo = AlwaysTailCalled JoinArity -- See Note [TailCallInfo]
+                  | NoTailCallInfo
+  deriving (Eq)
+
+tailCallInfo :: OccInfo -> TailCallInfo
+tailCallInfo IAmDead   = NoTailCallInfo
+tailCallInfo other     = occ_tail other
+
+zapOccTailCallInfo :: OccInfo -> OccInfo
+zapOccTailCallInfo IAmDead   = IAmDead
+zapOccTailCallInfo occ       = occ { occ_tail = NoTailCallInfo }
+
+isAlwaysTailCalled :: OccInfo -> Bool
+isAlwaysTailCalled occ
+  = case tailCallInfo occ of AlwaysTailCalled{} -> True
+                             NoTailCallInfo     -> False
+
+instance Outputable TailCallInfo where
+  ppr (AlwaysTailCalled ar) = sep [ text "Tail", int ar ]
+  ppr _                     = empty
+
+-----------------
 strongLoopBreaker, weakLoopBreaker :: OccInfo
-strongLoopBreaker = IAmALoopBreaker False
-weakLoopBreaker   = IAmALoopBreaker True
+strongLoopBreaker = IAmALoopBreaker False NoTailCallInfo
+weakLoopBreaker   = IAmALoopBreaker True  NoTailCallInfo
 
 isWeakLoopBreaker :: OccInfo -> Bool
-isWeakLoopBreaker (IAmALoopBreaker _) = True
+isWeakLoopBreaker (IAmALoopBreaker{}) = True
 isWeakLoopBreaker _                   = False
 
 isStrongLoopBreaker :: OccInfo -> Bool
-isStrongLoopBreaker (IAmALoopBreaker False) = True   -- Loop-breaker that breaks a non-rule cycle
-isStrongLoopBreaker _                       = False
+isStrongLoopBreaker (IAmALoopBreaker { occ_rules_only = False }) = True
+  -- Loop-breaker that breaks a non-rule cycle
+isStrongLoopBreaker _                                            = False
 
 isDeadOcc :: OccInfo -> Bool
 isDeadOcc IAmDead = True
@@ -809,16 +977,21 @@ isOneOcc (OneOcc {}) = True
 isOneOcc _           = False
 
 zapFragileOcc :: OccInfo -> OccInfo
-zapFragileOcc (OneOcc {}) = NoOccInfo
-zapFragileOcc occ         = occ
+-- Keep only the most robust data: deadness, loop-breaker-hood
+zapFragileOcc (OneOcc {}) = noOccInfo
+zapFragileOcc occ         = zapOccTailCallInfo occ
 
 instance Outputable OccInfo where
   -- only used for debugging; never parsed.  KSW 1999-07
-  ppr NoOccInfo            = empty
-  ppr (IAmALoopBreaker ro) = text "LoopBreaker" <> if ro then char '!' else empty
+  ppr (ManyOccs tails)     = pprShortTailCallInfo tails
   ppr IAmDead              = text "Dead"
-  ppr (OneOcc inside_lam one_branch int_cxt)
-        = text "Once" <> pp_lam <> pp_br <> pp_args
+  ppr (IAmALoopBreaker rule_only tails)
+        = text "LoopBreaker" <> pp_ro <> pprShortTailCallInfo tails
+        where
+          pp_ro | rule_only = char '!'
+                | otherwise = empty
+  ppr (OneOcc inside_lam one_branch int_cxt tail_info)
+        = text "Once" <> pp_lam <> pp_br <> pp_args <> pp_tail
         where
           pp_lam | inside_lam = char 'L'
                  | otherwise  = empty
@@ -826,11 +999,46 @@ instance Outputable OccInfo where
                  | otherwise  = char '*'
           pp_args | int_cxt   = char '!'
                   | otherwise = empty
+          pp_tail             = pprShortTailCallInfo tail_info
+
+pprShortTailCallInfo :: TailCallInfo -> SDoc
+pprShortTailCallInfo (AlwaysTailCalled ar) = char 'T' <> brackets (int ar)
+pprShortTailCallInfo NoTailCallInfo        = empty
 
 {-
+Note [TailCallInfo]
+~~~~~~~~~~~~~~~~~~~
+The occurrence analyser determines what can be made into a join point, but it
+doesn't change the binder into a JoinId because then it would be inconsistent
+with the occurrences. Thus it's left to the simplifier (or to simpleOptExpr) to
+change the IdDetails.
+
+The AlwaysTailCalled marker actually means slightly more than simply that the
+function is always tail-called. See Note [Invariants on join points].
+
+This info is quite fragile and should not be relied upon unless the occurrence
+analyser has *just* run. Use 'Id.isJoinId_maybe' for the permanent state of
+the join-point-hood of a binder; a join id itself will not be marked
+AlwaysTailCalled.
+
+Note that there is a 'TailCallInfo' on a 'ManyOccs' value. One might expect that
+being tail-called would mean that the variable could only appear once per branch
+(thus getting a `OneOcc { occ_one_br = True }` occurrence info), but a join
+point can also be invoked from other join points, not just from case branches:
+
+  let j1 x = ...
+      j2 y = ... j1 z {- tail call -} ...
+  in case w of
+       A -> j1 v
+       B -> j2 u
+       C -> j2 q
+
+Here both 'j1' and 'j2' will get marked AlwaysTailCalled, but j1 will get
+ManyOccs and j2 will get `OneOcc { occ_one_br = True }`.
+
 ************************************************************************
 *                                                                      *
-                Default method specfication
+                Default method specification
 *                                                                      *
 ************************************************************************
 
@@ -935,8 +1143,21 @@ For OverLitVal
   HsIsString      "\x41nd" == "And"
 -}
 
-type SourceText = String -- Note [Literal source text],[Pragma source text]
+ -- Note [Literal source text],[Pragma source text]
+data SourceText = SourceText String
+                | NoSourceText -- ^ For when code is generated, e.g. TH,
+                               -- deriving. The pretty printer will then make
+                               -- its own representation of the item.
+                deriving (Data, Show, Eq )
 
+instance Outputable SourceText where
+  ppr (SourceText s) = text "SourceText" <+> text s
+  ppr NoSourceText   = text "NoSourceText"
+
+-- | Special combinator for showing string literals.
+pprWithSourceText :: SourceText -> SDoc -> SDoc
+pprWithSourceText NoSourceText     d = d
+pprWithSourceText (SourceText src) _ = text src
 
 {-
 ************************************************************************
@@ -980,7 +1201,7 @@ data RuleMatchInfo = ConLike                    -- See Note [CONLIKE pragma]
 data InlinePragma            -- Note [InlinePragma]
   = InlinePragma
       { inl_src    :: SourceText -- Note [Pragma source text]
-      , inl_inline :: InlineSpec
+      , inl_inline :: InlineSpec -- See Note [inl_inline and inl_act]
 
       , inl_sat    :: Maybe Arity    -- Just n <=> Inline only when applied to n
                                      --            explicit (non-type, non-dictionary) args
@@ -990,6 +1211,7 @@ data InlinePragma            -- Note [InlinePragma]
                                      --   the Unfolding, and don't look at inl_sat further
 
       , inl_act    :: Activation     -- Says during which phases inlining is allowed
+                                     -- See Note [inl_inline and inl_act]
 
       , inl_rule   :: RuleMatchInfo  -- Should the function be treated like a constructor?
     } deriving( Eq, Data )
@@ -1004,9 +1226,8 @@ data InlineSpec   -- What the user's INLINE pragma looked like
   deriving( Eq, Data, Show )
         -- Show needed for Lexer.x
 
-{-
-Note [InlinePragma]
-~~~~~~~~~~~~~~~~~~~
+{- Note [InlinePragma]
+~~~~~~~~~~~~~~~~~~~~~~
 This data type mirrors what you can write in an INLINE or NOINLINE pragma in
 the source program.
 
@@ -1021,6 +1242,23 @@ if an Id has defaultInlinePragma it means the user didn't specify anything.
 If inl_inline = Inline or Inlineable, then the Id should have an InlineRule unfolding.
 
 If you want to know where InlinePragmas take effect: Look in DsBinds.makeCorePair
+
+Note [inl_inline and inl_act]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* inl_inline says what the user wrote: did she say INLINE, NOINLINE,
+  INLINABLE, or nothing at all
+
+* inl_act says in what phases the unfolding is active or inactive
+  E.g  If you write INLINE[1]    then inl_act will be set to ActiveAfter 1
+       If you write NOINLINE[1]  then inl_act will be set to ActiveBefore 1
+       If you write NOINLINE[~1] then inl_act will be set to ActiveAfter 1
+  So note that inl_act does not say what pragma you wrote: it just
+  expresses its consequences
+
+* inl_act just says when the unfolding is active; it doesn't say what
+  to inline.  If you say INLINE f, then f's inl_act will be AlwaysActive,
+  but in addition f will get a "stable unfolding" with UnfoldingGuidance
+  that tells the inliner to be pretty eager about it.
 
 Note [CONLIKE pragma]
 ~~~~~~~~~~~~~~~~~~~~~
@@ -1073,7 +1311,7 @@ isEmptyInlineSpec _               = False
 
 defaultInlinePragma, alwaysInlinePragma, neverInlinePragma, dfunInlinePragma
   :: InlinePragma
-defaultInlinePragma = InlinePragma { inl_src = "{-# INLINE"
+defaultInlinePragma = InlinePragma { inl_src = SourceText "{-# INLINE"
                                    , inl_act = AlwaysActive
                                    , inl_rule = FunLike
                                    , inl_inline = EmptyInlineSpec
@@ -1131,8 +1369,8 @@ setInlinePragmaRuleMatchInfo :: InlinePragma -> RuleMatchInfo -> InlinePragma
 setInlinePragmaRuleMatchInfo prag info = prag { inl_rule = info }
 
 instance Outputable Activation where
-   ppr AlwaysActive       = brackets (text "ALWAYS")
-   ppr NeverActive        = brackets (text "NEVER")
+   ppr AlwaysActive       = empty
+   ppr NeverActive        = brackets (text "~")
    ppr (ActiveBefore _ n) = brackets (char '~' <> int n)
    ppr (ActiveAfter  _ n) = brackets (int n)
 
@@ -1147,10 +1385,21 @@ instance Outputable InlineSpec where
    ppr EmptyInlineSpec = empty
 
 instance Outputable InlinePragma where
-  ppr (InlinePragma { inl_inline = inline, inl_act = activation
-                    , inl_rule = info, inl_sat = mb_arity })
-    = ppr inline <> pp_act inline activation <+> pp_sat <+> pp_info
+  ppr = pprInline
+
+pprInline :: InlinePragma -> SDoc
+pprInline = pprInline' True
+
+pprInlineDebug :: InlinePragma -> SDoc
+pprInlineDebug = pprInline' False
+
+pprInline' :: Bool -> InlinePragma -> SDoc
+pprInline' emptyInline (InlinePragma { inl_inline = inline, inl_act = activation
+                                    , inl_rule = info, inl_sat = mb_arity })
+    = pp_inl inline <> pp_act inline activation <+> pp_sat <+> pp_info
     where
+      pp_inl x = if emptyInline then empty else ppr x
+
       pp_act Inline   AlwaysActive = empty
       pp_act NoInline NeverActive  = empty
       pp_act _        act          = ppr act
@@ -1212,6 +1461,30 @@ isEarlyActive AlwaysActive      = True
 isEarlyActive (ActiveBefore {}) = True
 isEarlyActive _                 = False
 
+-- | Integral Literal
+--
+-- Used (instead of Integer) to represent negative zegative zero which is
+-- required for NegativeLiterals extension to correctly parse `-0::Double`
+-- as negative zero. See also #13211.
+data IntegralLit
+  = IL { il_text :: SourceText
+       , il_neg :: Bool -- See Note [Negative zero]
+       , il_value :: Integer
+       }
+  deriving (Data, Show)
+
+mkIntegralLit :: Integral a => a -> IntegralLit
+mkIntegralLit i = IL { il_text = SourceText (show (fromIntegral i :: Int))
+                     , il_neg = i < 0
+                     , il_value = toInteger i }
+
+negateIntegralLit :: IntegralLit -> IntegralLit
+negateIntegralLit (IL text neg value)
+  = case text of
+      SourceText ('-':src) -> IL (SourceText src)       False    (negate value)
+      SourceText      src  -> IL (SourceText ('-':src)) True     (negate value)
+      NoSourceText         -> IL NoSourceText          (not neg) (negate value)
+
 -- | Fractional Literal
 --
 -- Used (instead of Rational) to represent exactly the floating point literal that we
@@ -1219,21 +1492,42 @@ isEarlyActive _                 = False
 -- the user wrote, which is important e.g. for floating point numbers that can't represented
 -- as Doubles (we used to via Double for pretty-printing). See also #2245.
 data FractionalLit
-  = FL { fl_text :: String         -- How the value was written in the source
+  = FL { fl_text :: SourceText     -- How the value was written in the source
+       , fl_neg :: Bool            -- See Note [Negative zero]
        , fl_value :: Rational      -- Numeric value of the literal
        }
   deriving (Data, Show)
   -- The Show instance is required for the derived Lexer.x:Token instance when DEBUG is on
 
-negateFractionalLit :: FractionalLit -> FractionalLit
-negateFractionalLit (FL { fl_text = '-':text, fl_value = value }) = FL { fl_text = text, fl_value = negate value }
-negateFractionalLit (FL { fl_text = text, fl_value = value }) = FL { fl_text = '-':text, fl_value = negate value }
+mkFractionalLit :: Real a => a -> FractionalLit
+mkFractionalLit r = FL { fl_text = SourceText (show (realToFrac r::Double))
+                       , fl_neg = r < 0
+                       , fl_value = toRational r }
 
-integralFractionalLit :: Integer -> FractionalLit
-integralFractionalLit i = FL { fl_text = show i, fl_value = fromInteger i }
+negateFractionalLit :: FractionalLit -> FractionalLit
+negateFractionalLit (FL text neg value)
+  = case text of
+      SourceText ('-':src) -> FL (SourceText src)     False value
+      SourceText      src  -> FL (SourceText ('-':src)) True  value
+      NoSourceText         -> FL NoSourceText (not neg) (negate value)
+
+integralFractionalLit :: Bool -> Integer -> FractionalLit
+integralFractionalLit neg i = FL { fl_text = SourceText (show i),
+                                   fl_neg = neg,
+                                   fl_value = fromInteger i }
 
 -- Comparison operations are needed when grouping literals
 -- for compiling pattern-matching (module MatchLit)
+
+instance Eq IntegralLit where
+  (==) = (==) `on` il_value
+
+instance Ord IntegralLit where
+  compare = compare `on` il_value
+
+instance Outputable IntegralLit where
+  ppr (IL (SourceText src) _ _) = text src
+  ppr (IL NoSourceText _ value) = text (show value)
 
 instance Eq FractionalLit where
   (==) = (==) `on` fl_value
@@ -1242,7 +1536,7 @@ instance Ord FractionalLit where
   compare = compare `on` fl_value
 
 instance Outputable FractionalLit where
-  ppr = text . fl_text
+  ppr f = pprWithSourceText (fl_text f) (rational (fl_value f))
 
 {-
 ************************************************************************
@@ -1312,3 +1606,8 @@ treatZeroAsInf n = Int n
 -- | Inject any integer into an 'IntWithInf'
 mkIntWithInf :: Int -> IntWithInf
 mkIntWithInf = Int
+
+data SpliceExplicitFlag
+          = ExplicitSplice | -- ^ <=> $(f x y)
+            ImplicitSplice   -- ^ <=> f x y,  i.e. a naked top level expression
+    deriving Data

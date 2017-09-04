@@ -25,11 +25,12 @@ config.run_ways           = ['normal', 'hpc']
 config.other_ways         = ['prof', 'normal_h',
                              'prof_hc_hb','prof_hb',
                              'prof_hd','prof_hy','prof_hr',
+                             'sanity',
                              'threaded1_ls', 'threaded2_hT', 'debug_numa',
                              'llvm', 'debugllvm',
                              'profllvm', 'profoptllvm', 'profthreadedllvm',
                              'debug',
-                             'ghci-ext',
+                             'ghci-ext', 'ghci-ext-prof',
                              'ext-interp']
 
 if (ghc_with_native_codegen == 1):
@@ -61,7 +62,7 @@ else:
 if (config.have_profiling and ghc_with_threaded_rts == 1):
     config.run_ways.append('profthreaded')
 
-if (ghc_with_llvm == 1):
+if (ghc_with_llvm == 1 and not config.unregisterised):
     config.compile_ways.append('optllvm')
     config.run_ways.append('optllvm')
 
@@ -80,6 +81,7 @@ config.way_flags = {
     'profasm'      : ['-O', '-prof', '-static', '-fprof-auto'],
     'profthreaded' : ['-O', '-prof', '-static', '-fprof-auto', '-threaded'],
     'ghci'         : ['--interactive', '-v0', '-ignore-dot-ghci', '-fno-ghci-history', '+RTS', '-I0.1', '-RTS'],
+    'sanity'       : ['-debug'],
     'threaded1'    : ['-threaded', '-debug'],
     'threaded1_ls' : ['-threaded', '-debug'],
     'threaded2'    : ['-O', '-threaded', '-eventlog'],
@@ -98,6 +100,7 @@ config.way_flags = {
     'profoptllvm'      : ['-O', '-prof', '-static', '-fprof-auto', '-fllvm'],
     'profthreadedllvm' : ['-O', '-prof', '-static', '-fprof-auto', '-threaded', '-fllvm'],
     'ghci-ext'         : ['--interactive', '-v0', '-ignore-dot-ghci', '-fno-ghci-history', '-fexternal-interpreter', '+RTS', '-I0.1', '-RTS'],
+    'ghci-ext-prof'    : ['--interactive', '-v0', '-ignore-dot-ghci', '-fno-ghci-history', '-fexternal-interpreter', '-prof', '+RTS', '-I0.1', '-RTS'],
     'ext-interp' : ['-fexternal-interpreter'],
    }
 
@@ -116,6 +119,7 @@ config.way_rts_flags = {
     'profasm'      : ['-hc', '-p'], # test heap profiling too
     'profthreaded' : ['-p'],
     'ghci'         : [],
+    'sanity'       : ['-DS'],
     'threaded1'    : [],
     'threaded1_ls' : ['-ls'],
     'threaded2'    : ['-N2 -ls'],
@@ -134,6 +138,7 @@ config.way_rts_flags = {
     'profoptllvm'      : ['-hc', '-p'],
     'profthreadedllvm' : ['-p'],
     'ghci-ext'         : [],
+    'ghci-ext-prof'    : [],
     'ext-interp'       : [],
    }
 
@@ -159,6 +164,12 @@ def get_compiler_info():
     s = getStdout([config.compiler, '+RTS', '--info']).decode('utf8')
     s = re.sub('[\r\n]', '', s)
     rtsInfoDict = dict(eval(s))
+
+    # external interpreter needs RTS linker support
+    # If the field is not present (GHC 8.0 and earlier), assume we don't
+    # have -fexternal-interpreter (though GHC 8.0 actually does)
+    # so we can still run most tests.
+    config.have_ext_interp = compilerInfoDict.get("target has RTS linker", "NO") == "YES"
 
     # See Note [Replacing backward slashes in config.libdir].
     config.libdir = compilerInfoDict['LibDir'].replace('\\', '/')
@@ -218,7 +229,7 @@ def get_compiler_info():
 # Arguably the above code for writing `:set args` should be smarter. This
 # is tricky to get right though, because in GHCI `:set args foo\bar` (no
 # double quotes) works perfectly fine, and is interpreted as the Haskell
-# string "foo\\bar". Therfore, simply escaping all backward slashes in
+# string "foo\\bar". Therefore, simply escaping all backward slashes in
 # opts.extra_run_opts before concatenating it with ':set args' is not right
 # either.
 #

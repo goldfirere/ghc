@@ -1,10 +1,10 @@
 
 ==================== Derived instances ====================
-Derived instances:
+Derived class instances:
   instance GHC.Generics.Generic (GenDerivOutput.List a) where
     GHC.Generics.from x
       = GHC.Generics.M1
-          (case x of {
+          (case x of
              GenDerivOutput.Nil
                -> GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1)
              GenDerivOutput.Cons g1 g2
@@ -12,19 +12,19 @@ Derived instances:
                     (GHC.Generics.M1
                        ((GHC.Generics.:*:)
                           (GHC.Generics.M1 (GHC.Generics.K1 g1))
-                          (GHC.Generics.M1 (GHC.Generics.K1 g2)))) })
+                          (GHC.Generics.M1 (GHC.Generics.K1 g2)))))
     GHC.Generics.to (GHC.Generics.M1 x)
-      = case x of {
-          GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1)
+      = case x of
+          (GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1))
             -> GenDerivOutput.Nil
-          GHC.Generics.R1 (GHC.Generics.M1 ((GHC.Generics.:*:) (GHC.Generics.M1 (GHC.Generics.K1 g1))
-                                                               (GHC.Generics.M1 (GHC.Generics.K1 g2))))
-            -> GenDerivOutput.Cons g1 g2 }
+          (GHC.Generics.R1 (GHC.Generics.M1 ((GHC.Generics.:*:) (GHC.Generics.M1 (GHC.Generics.K1 g1))
+                                                                (GHC.Generics.M1 (GHC.Generics.K1 g2)))))
+            -> GenDerivOutput.Cons g1 g2
   
   instance GHC.Generics.Generic1 GenDerivOutput.List where
     GHC.Generics.from1 x
       = GHC.Generics.M1
-          (case x of {
+          (case x of
              GenDerivOutput.Nil
                -> GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1)
              GenDerivOutput.Cons g1 g2
@@ -32,25 +32,28 @@ Derived instances:
                     (GHC.Generics.M1
                        ((GHC.Generics.:*:)
                           (GHC.Generics.M1 (GHC.Generics.Par1 g1))
-                          (GHC.Generics.M1 (GHC.Generics.Rec1 g2)))) })
+                          (GHC.Generics.M1 (GHC.Generics.Rec1 g2)))))
     GHC.Generics.to1 (GHC.Generics.M1 x)
-      = case x of {
-          GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1)
+      = case x of
+          (GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1))
             -> GenDerivOutput.Nil
-          GHC.Generics.R1 (GHC.Generics.M1 ((GHC.Generics.:*:) (GHC.Generics.M1 g1)
-                                                               (GHC.Generics.M1 g2)))
+          (GHC.Generics.R1 (GHC.Generics.M1 ((GHC.Generics.:*:) (GHC.Generics.M1 g1)
+                                                                (GHC.Generics.M1 g2))))
             -> GenDerivOutput.Cons
-                 (GHC.Generics.unPar1 g1) (GHC.Generics.unRec1 g2) }
+                 (GHC.Generics.unPar1 g1) (GHC.Generics.unRec1 g2)
   
   instance GHC.Base.Functor GenDerivOutput.List where
     GHC.Base.fmap f GenDerivOutput.Nil = GenDerivOutput.Nil
     GHC.Base.fmap f (GenDerivOutput.Cons a1 a2)
       = GenDerivOutput.Cons (f a1) (GHC.Base.fmap f a2)
+    (GHC.Base.<$) z GenDerivOutput.Nil = GenDerivOutput.Nil
+    (GHC.Base.<$) z (GenDerivOutput.Cons a1 a2)
+      = GenDerivOutput.Cons ((\ b1 -> z) a1) ((GHC.Base.<$) z a2)
   
   instance GHC.Generics.Generic (GenDerivOutput.Rose a) where
     GHC.Generics.from x
       = GHC.Generics.M1
-          (case x of {
+          (case x of
              GenDerivOutput.Empty
                -> GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1)
              GenDerivOutput.Rose g1 g2
@@ -58,19 +61,19 @@ Derived instances:
                     (GHC.Generics.M1
                        ((GHC.Generics.:*:)
                           (GHC.Generics.M1 (GHC.Generics.K1 g1))
-                          (GHC.Generics.M1 (GHC.Generics.K1 g2)))) })
+                          (GHC.Generics.M1 (GHC.Generics.K1 g2)))))
     GHC.Generics.to (GHC.Generics.M1 x)
-      = case x of {
-          GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1)
+      = case x of
+          (GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1))
             -> GenDerivOutput.Empty
-          GHC.Generics.R1 (GHC.Generics.M1 ((GHC.Generics.:*:) (GHC.Generics.M1 (GHC.Generics.K1 g1))
-                                                               (GHC.Generics.M1 (GHC.Generics.K1 g2))))
-            -> GenDerivOutput.Rose g1 g2 }
+          (GHC.Generics.R1 (GHC.Generics.M1 ((GHC.Generics.:*:) (GHC.Generics.M1 (GHC.Generics.K1 g1))
+                                                                (GHC.Generics.M1 (GHC.Generics.K1 g2)))))
+            -> GenDerivOutput.Rose g1 g2
   
   instance GHC.Generics.Generic1 GenDerivOutput.Rose where
     GHC.Generics.from1 x
       = GHC.Generics.M1
-          (case x of {
+          (case x of
              GenDerivOutput.Empty
                -> GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1)
              GenDerivOutput.Rose g1 g2
@@ -80,20 +83,20 @@ Derived instances:
                           (GHC.Generics.M1 (GHC.Generics.Par1 g1))
                           (GHC.Generics.M1
                              ((GHC.Base..)
-                                GHC.Generics.Comp1 (GHC.Base.fmap GHC.Generics.Rec1) g2)))) })
+                                GHC.Generics.Comp1 (GHC.Base.fmap GHC.Generics.Rec1) g2)))))
     GHC.Generics.to1 (GHC.Generics.M1 x)
-      = case x of {
-          GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1)
+      = case x of
+          (GHC.Generics.L1 (GHC.Generics.M1 GHC.Generics.U1))
             -> GenDerivOutput.Empty
-          GHC.Generics.R1 (GHC.Generics.M1 ((GHC.Generics.:*:) (GHC.Generics.M1 g1)
-                                                               (GHC.Generics.M1 g2)))
+          (GHC.Generics.R1 (GHC.Generics.M1 ((GHC.Generics.:*:) (GHC.Generics.M1 g1)
+                                                                (GHC.Generics.M1 g2))))
             -> GenDerivOutput.Rose
                  (GHC.Generics.unPar1 g1)
                  ((GHC.Base..)
-                    (GHC.Base.fmap GHC.Generics.unRec1) GHC.Generics.unComp1 g2) }
+                    (GHC.Base.fmap GHC.Generics.unRec1) GHC.Generics.unComp1 g2)
   
 
-GHC.Generics representation types:
+Derived type family instances:
   type GHC.Generics.Rep (GenDerivOutput.List a) = GHC.Generics.D1
                                                     ('GHC.Generics.MetaData
                                                        "List"
@@ -222,11 +225,5 @@ GHC.Generics representation types:
                                                                                          (GenDerivOutput.List
                                                                                           GHC.Generics.:.: GHC.Generics.Rec1
                                                                                                              GenDerivOutput.Rose)))
-
-
-
-==================== Filling in method body ====================
-GHC.Base.Functor [GenDerivOutput.List]
-  GHC.Base.<$ = GHC.Base.$dm<$ @GenDerivOutput.List
 
 

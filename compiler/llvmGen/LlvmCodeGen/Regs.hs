@@ -6,7 +6,7 @@
 
 module LlvmCodeGen.Regs (
         lmGlobalRegArg, lmGlobalRegVar, alwaysLive,
-        stgTBAA, baseN, stackN, heapN, rxN, otherN, tbaa, getTBAA
+        stgTBAA, baseN, stackN, heapN, rxN, topN, tbaa, getTBAA
     ) where
 
 #include "HsVersions.h"
@@ -97,26 +97,29 @@ alwaysLive = [BaseReg, Sp, Hp, SpLim, HpLim, node]
 -- | STG Type Based Alias Analysis hierarchy
 stgTBAA :: [(Unique, LMString, Maybe Unique)]
 stgTBAA
-  = [ (topN,   fsLit "top",   Nothing)
+  = [ (rootN,  fsLit "root",   Nothing)
+    , (topN,   fsLit "top",   Just rootN)
     , (stackN, fsLit "stack", Just topN)
     , (heapN,  fsLit "heap",  Just topN)
     , (rxN,    fsLit "rx",    Just heapN)
     , (baseN,  fsLit "base",  Just topN)
-    -- FIX: Not 100% sure about 'others' place. Might need to be under 'heap'.
-    -- OR I think the big thing is Sp is never aliased, so might want
-    -- to change the hieracy to have Sp on its own branch that is never
-    -- aliased (e.g never use top as a TBAA node).
-    , (otherN, fsLit "other", Just topN)
+    -- FIX: Not 100% sure if this hierarchy is complete.  I think the big thing
+    -- is Sp is never aliased, so might want to change the hierarchy to have Sp
+    -- on its own branch that is never aliased (e.g never use top as a TBAA
+    -- node).
     ]
 
 -- | Id values
-topN, stackN, heapN, rxN, baseN, otherN :: Unique
+-- The `rootN` node is the root (there can be more than one) of the TBAA
+-- hierarchy and as of LLVM 4.0 should *only* be referenced by other nodes. It
+-- should never occur in any LLVM instruction statement.
+rootN, topN, stackN, heapN, rxN, baseN :: Unique
+rootN  = getUnique (fsLit "LlvmCodeGen.Regs.rootN")
 topN   = getUnique (fsLit "LlvmCodeGen.Regs.topN")
 stackN = getUnique (fsLit "LlvmCodeGen.Regs.stackN")
 heapN  = getUnique (fsLit "LlvmCodeGen.Regs.heapN")
 rxN    = getUnique (fsLit "LlvmCodeGen.Regs.rxN")
 baseN  = getUnique (fsLit "LlvmCodeGen.Regs.baseN")
-otherN = getUnique (fsLit "LlvmCodeGen.Regs.otherN")
 
 -- | The TBAA metadata identifier
 tbaa :: LMString

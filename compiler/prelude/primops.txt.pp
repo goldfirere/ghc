@@ -200,7 +200,7 @@ primop   IntMulMayOfloOp  "mulIntMayOflo#"
    {Return non-zero if there is any possibility that the upper word of a
     signed integer multiply might contain useful information.  Return
     zero only if you are completely sure that no overflow can occur.
-    On a 32-bit platform, the recommmended implementation is to do a
+    On a 32-bit platform, the recommended implementation is to do a
     32 x 32 -> 64 signed multiply, and subtract result[63:32] from
     (result[31] >>signed 31).  If this is zero, meaning that the
     upper word is merely a sign extension of the lower one, no
@@ -531,6 +531,8 @@ primop   DoubleDivOp   "/##"   Dyadic
 
 primop   DoubleNegOp   "negateDouble#"  Monadic   Double# -> Double#
 
+primop   DoubleFabsOp  "fabsDouble#"    Monadic   Double# -> Double#
+
 primop   Double2IntOp   "double2Int#"          GenPrimOp  Double# -> Int#
    {Truncates a {\tt Double#} value to the nearest {\tt Int#}.
     Results are undefined if the truncation if truncation yields
@@ -656,6 +658,8 @@ primop   FloatDivOp   "divideFloat#"      Dyadic
    with can_fail = True
 
 primop   FloatNegOp   "negateFloat#"      Monadic    Float# -> Float#
+
+primop   FloatFabsOp  "fabsFloat#"        Monadic    Float# -> Float#
 
 primop   Float2IntOp   "float2Int#"      GenPrimOp  Float# -> Int#
    {Truncates a {\tt Float#} value to the nearest {\tt Int#}.
@@ -821,9 +825,10 @@ primop  CopyMutableArrayOp "copyMutableArray#" GenPrimOp
   {Given a source array, an offset into the source array, a
    destination array, an offset into the destination array, and a
    number of elements to copy, copy the elements from the source array
-   to the destination array. The source and destination arrays can
-   refer to the same array. Both arrays must fully contain the
-   specified ranges, but this is not checked.}
+   to the destination array. Both arrays must fully contain the
+   specified ranges, but this is not checked. In the case where
+   the source and destination are the same array the source and
+   destination regions may overlap.}
   with
   out_of_line      = True
   has_side_effects = True
@@ -986,7 +991,9 @@ primop  CopySmallMutableArrayOp "copySmallMutableArray#" GenPrimOp
    number of elements to copy, copy the elements from the source array
    to the destination array. The source and destination arrays can
    refer to the same array. Both arrays must fully contain the
-   specified ranges, but this is not checked.}
+   specified ranges, but this is not checked.
+   The regions are allowed to overlap, although this is only possible when the same 
+   array is provided as both the source and the destination. }
   with
   out_of_line      = True
   has_side_effects = True
@@ -1231,7 +1238,7 @@ primop  ReadByteArrayOp_WideChar "readWideCharArray#" GenPrimOp
 
 primop  ReadByteArrayOp_Int "readIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> State# s -> (# State# s, Int# #)
-   {Read intger; offset in words.}
+   {Read integer; offset in words.}
    with has_side_effects = True
         can_fail = True
 
@@ -1396,7 +1403,9 @@ primop  CopyByteArrayOp "copyByteArray#" GenPrimOp
 primop  CopyMutableByteArrayOp "copyMutableByteArray#" GenPrimOp
   MutableByteArray# s -> Int# -> MutableByteArray# s -> Int# -> Int# -> State# s -> State# s
   {Copy a range of the first MutableByteArray# to the specified region in the second MutableByteArray#.
-   Both arrays must fully contain the specified ranges, but this is not checked.}
+   Both arrays must fully contain the specified ranges, but this is not checked. The regions are
+   allowed to overlap, although this is only possible when the same array is provided
+   as both the source and the destination.}
   with
   has_side_effects = True
   code_size = { primOpCodeSizeForeignCall + 4 }
@@ -1440,7 +1449,8 @@ primop  CopyAddrToByteArrayOp "copyAddrToByteArray#" GenPrimOp
 
 primop  SetByteArrayOp "setByteArray#" GenPrimOp
   MutableByteArray# s -> Int# -> Int# -> Int# -> State# s -> State# s
-  {Set the range of the MutableByteArray# to the specified character.}
+  {{\tt setByteArray# ba off len c} sets the byte range {\tt [off, off+len]} of
+   the {\tt MutableByteArray#} to the byte {\tt c}.}
   with
   has_side_effects = True
   code_size = { primOpCodeSizeForeignCall + 4 }
@@ -1622,7 +1632,10 @@ primop  CopyMutableArrayArrayOp "copyMutableArrayArray#" GenPrimOp
   MutableArrayArray# s -> Int# -> MutableArrayArray# s -> Int# -> Int# -> State# s -> State# s
   {Copy a range of the first MutableArrayArray# to the specified region in the second
    MutableArrayArray#.
-   Both arrays must fully contain the specified ranges, but this is not checked.}
+   Both arrays must fully contain the specified ranges, but this is not checked.
+   The regions are allowed to overlap, although this is only possible when the same 
+   array is provided as both the source and the destination.
+   }
   with
   out_of_line      = True
   has_side_effects = True
@@ -1905,31 +1918,57 @@ primop  NewMutVarOp "newMutVar#" GenPrimOp
    out_of_line = True
    has_side_effects = True
 
+-- Note [Why MutVar# ops can't fail]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--
+-- We don't label readMutVar# or writeMutVar# as can_fail.
+-- This may seem a bit peculiar, because they surely *could*
+-- fail spectacularly if passed a pointer to unallocated memory.
+-- But MutVar#s are always correct by construction; we never
+-- test if a pointer is valid before using it with these operations.
+-- So we never have to worry about floating the pointer reference
+-- outside a validity test. At the moment, has_side_effects blocks
+-- up the relevant optimizations anyway, but we hope to draw finer
+-- distinctions soon, which should improve matters for readMutVar#
+-- at least.
+
 primop  ReadMutVarOp "readMutVar#" GenPrimOp
    MutVar# s a -> State# s -> (# State# s, a #)
    {Read contents of {\tt MutVar\#}. Result is not yet evaluated.}
    with
+   -- See Note [Why MutVar# ops can't fail]
    has_side_effects = True
-   can_fail         = True
 
 primop  WriteMutVarOp "writeMutVar#"  GenPrimOp
    MutVar# s a -> a -> State# s -> State# s
    {Write contents of {\tt MutVar\#}.}
    with
+   -- See Note [Why MutVar# ops can't fail]
    has_side_effects = True
    code_size = { primOpCodeSizeForeignCall } -- for the write barrier
-   can_fail         = True
 
 primop  SameMutVarOp "sameMutVar#" GenPrimOp
    MutVar# s a -> MutVar# s a -> Int#
 
--- not really the right type, but we don't know about pairs here.  The
--- correct type is
+-- Note [Why not an unboxed tuple in atomicModifyMutVar#?]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 --
---   MutVar# s a -> (a -> (a,b)) -> State# s -> (# State# s, b #)
+-- Looking at the type of atomicModifyMutVar#, one might wonder why
+-- it doesn't return an unboxed tuple. e.g.,
 --
+--   MutVar# s a -> (a -> (# a, b #)) -> State# s -> (# State# s, b #)
+--
+-- The reason is that atomicModifyMutVar# relies on laziness for its atomicity.
+-- Given a MutVar# containing x, atomicModifyMutVar# merely replaces the
+-- its contents with a thunk of the form (fst (f x)). This can be done using an
+-- atomic compare-and-swap as it is merely replacing a pointer.
+
 primop  AtomicModifyMutVarOp "atomicModifyMutVar#" GenPrimOp
    MutVar# s a -> (a -> b) -> State# s -> (# State# s, c #)
+   { Modify the contents of a {\tt MutVar\#}. Note that this isn't strictly
+     speaking the correct type for this function, it should really be
+     {\tt MutVar# s a -> (a -> (a,b)) -> State# s -> (# State# s, b #)}, however
+     we don't know about pairs here. }
    with
    out_of_line = True
    has_side_effects = True
@@ -1945,19 +1984,18 @@ primop  CasMutVarOp "casMutVar#" GenPrimOp
 section "Exceptions"
 ------------------------------------------------------------------------
 
-{- Note [Strictness for mask/unmask/catch]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider this example, which comes from GHC.IO.Handle.Internals:
-   wantReadableHandle3 f ma b st
-     = case ... of
-         DEFAULT -> case ma of MVar a -> ...
-         0#      -> maskAsynchExceptions# (\st -> case ma of MVar a -> ...)
-The outer case just decides whether to mask exceptions, but we don't want
-thereby to hide the strictness in 'ma'!  Hence the use of strictApply1Dmd.
-
-For catch, we must be extra careful; see
-Note [Exceptions and strictness] in Demand
--}
+-- Note [Strictness for mask/unmask/catch]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- Consider this example, which comes from GHC.IO.Handle.Internals:
+--    wantReadableHandle3 f ma b st
+--      = case ... of
+--          DEFAULT -> case ma of MVar a -> ...
+--          0#      -> maskAsynchExceptions# (\st -> case ma of MVar a -> ...)
+-- The outer case just decides whether to mask exceptions, but we don't want
+-- thereby to hide the strictness in 'ma'!  Hence the use of strictApply1Dmd.
+--
+-- For catch, catchSTM, and catchRetry, we must be extra careful; see
+-- Note [Exceptions and strictness] in Demand
 
 primop  CatchOp "catch#" GenPrimOp
           (State# RealWorld -> (# State# RealWorld, a #) )
@@ -1965,7 +2003,7 @@ primop  CatchOp "catch#" GenPrimOp
        -> State# RealWorld
        -> (# State# RealWorld, a #)
    with
-   strictness  = { \ _arity -> mkClosedStrictSig [ catchArgDmd
+   strictness  = { \ _arity -> mkClosedStrictSig [ lazyApply1Dmd
                                                  , lazyApply2Dmd
                                                  , topDmd] topRes }
                  -- See Note [Strictness for mask/unmask/catch]
@@ -1994,6 +2032,13 @@ primop  RaiseOp "raise#" GenPrimOp
 --     f x y | x>0       = raiseIO blah
 --           | y>0       = return 1
 --           | otherwise = return 2
+--
+-- TODO Check that the above notes on @f@ are valid. The function successfully
+-- produces an IO exception when compiled without optimization. If we analyze
+-- it as strict in @y@, won't we change that behavior under optimization?
+-- I thought the rule was that it was okay to replace one valid imprecise
+-- exception with another, but not to replace a precise exception with
+-- an imprecise one (dfeuer, 2017-03-05).
 
 primop  RaiseIOOp "raiseIO#" GenPrimOp
    a -> State# RealWorld -> (# State# RealWorld, b #)
@@ -2083,7 +2128,7 @@ primop  CatchSTMOp "catchSTM#" GenPrimOp
    -> (b -> State# RealWorld -> (# State# RealWorld, a #) )
    -> (State# RealWorld -> (# State# RealWorld, a #) )
    with
-   strictness  = { \ _arity -> mkClosedStrictSig [ catchArgDmd
+   strictness  = { \ _arity -> mkClosedStrictSig [ lazyApply1Dmd
                                                  , lazyApply2Dmd
                                                  , topDmd ] topRes }
                  -- See Note [Strictness for mask/unmask/catch]
@@ -2235,7 +2280,7 @@ primop  WaitWriteOp "waitWrite#" GenPrimOp
    has_side_effects = True
    out_of_line      = True
 
-#ifdef mingw32_TARGET_OS
+#if defined(mingw32_TARGET_OS)
 primop  AsyncReadOp "asyncRead#" GenPrimOp
    Int# -> Int# -> Int# -> Addr# -> State# RealWorld-> (# State# RealWorld, Int#, Int# #)
    {Asynchronously read bytes from specified file descriptor.}
@@ -2323,7 +2368,7 @@ primop  IsCurrentThreadBoundOp "isCurrentThreadBound#" GenPrimOp
    has_side_effects = True
 
 primop  NoDuplicateOp "noDuplicate#" GenPrimOp
-   State# RealWorld -> State# RealWorld
+   State# s -> State# s
    with
    out_of_line = True
    has_side_effects = True
@@ -2345,6 +2390,11 @@ primtype Weak# b
 primop  MkWeakOp "mkWeak#" GenPrimOp
    o -> b -> (State# RealWorld -> (# State# RealWorld, c #))
      -> State# RealWorld -> (# State# RealWorld, Weak# b #)
+   { {\tt mkWeak# k v finalizer s} creates a weak reference to value {\tt k},
+     with an associated reference to some value {\tt v}. If {\tt k} is still
+     alive then {\tt v} can be retrieved using {\tt deRefWeak#}. Note that
+     the type of {\tt k} must be represented by a pointer (i.e. of kind {\tt
+     TYPE 'LiftedRep} or {\tt TYPE 'UnliftedRep}). }
    with
    has_side_effects = True
    out_of_line      = True
@@ -2444,14 +2494,6 @@ primop  CompactNewOp "compactNew#" GenPrimOp
    has_side_effects = True
    out_of_line      = True
 
-primop  CompactAppendOp "compactAppend#" GenPrimOp
-   Compact# -> a -> Int# -> State# RealWorld -> (# State# RealWorld, a #)
-   { Append an object to a compact, return the new address in the Compact.
-     The third argument is 1 if sharing should be preserved, 0 otherwise. }
-   with
-   has_side_effects = True
-   out_of_line      = True
-
 primop  CompactResizeOp "compactResize#" GenPrimOp
    Compact# -> Word# -> State# RealWorld ->
    State# RealWorld
@@ -2515,6 +2557,34 @@ primop  CompactFixupPointersOp "compactFixupPointers#" GenPrimOp
    has_side_effects = True
    out_of_line      = True
 
+primop CompactAdd "compactAdd#" GenPrimOp
+   Compact# -> a -> State# RealWorld -> (# State# RealWorld, a #)
+   { Recursively add a closure and its transitive closure to a
+     {\texttt Compact\#}, evaluating any unevaluated components at the
+     same time.  Note: {\texttt compactAdd\#} is not thread-safe, so
+     only one thread may call {\texttt compactAdd\#} with a particular
+     {\texttt Compact#} at any given time.  The primop does not
+     enforce any mutual exclusion; the caller is expected to
+     arrange this. }
+   with
+   has_side_effects = True
+   out_of_line      = True
+
+primop CompactAddWithSharing "compactAddWithSharing#" GenPrimOp
+   Compact# -> a -> State# RealWorld -> (# State# RealWorld, a #)
+   { Like {\texttt compactAdd\#}, but retains sharing and cycles
+   during compaction. }
+   with
+   has_side_effects = True
+   out_of_line      = True
+
+primop CompactSize "compactSize#" GenPrimOp
+   Compact# -> State# RealWorld -> (# State# RealWorld, Word# #)
+   { Return the size (in bytes) of the total amount of data in the Compact# }
+   with
+   has_side_effects = True
+   out_of_line      = True
+
 ------------------------------------------------------------------------
 section "Unsafe pointer equality"
 --  (#1 Bad Guy: Alastair Reid :)
@@ -2522,6 +2592,41 @@ section "Unsafe pointer equality"
 
 primop  ReallyUnsafePtrEqualityOp "reallyUnsafePtrEquality#" GenPrimOp
    a -> a -> Int#
+   { Returns 1# if the given pointers are equal and 0# otherwise. }
+   with
+   can_fail   = True -- See Note [reallyUnsafePtrEquality#]
+
+
+-- Note [reallyUnsafePtrEquality#]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- 
+-- reallyUnsafePtrEquality# can't actually fail, per se, but we mark it can_fail
+-- anyway. Until 5a9a1738023a, GHC considered primops okay for speculation only
+-- when their arguments were known to be forced. This was unnecessarily
+-- conservative, but it prevented reallyUnsafePtrEquality# from floating out of
+-- places where its arguments were known to be forced. Unfortunately, GHC could
+-- sometimes lose track of whether those arguments were forced, leading to let/app
+-- invariant failures (see Trac 13027 and the discussion in Trac 11444). Now that
+-- ok_for_speculation skips over lifted arguments, we need to explicitly prevent
+-- reallyUnsafePtrEquality# from floating out. The reasons are closely related
+-- to those described in Note [dataToTag#], although the consequences are less
+-- severe. Imagine if we had
+-- 
+--     \x y . case x of x'
+--              DEFAULT ->
+--            case y of y'
+--              DEFAULT ->
+--               let eq = reallyUnsafePtrEquality# x' y'
+--               in ...
+-- 
+-- If the let floats out, we'll get
+-- 
+--     \x y . let eq = reallyUnsafePtrEquality# x y
+--            in case x of ...
+-- 
+-- The trouble is that pointer equality between thunks is very different
+-- from pointer equality between the values those thunks reduce to, and the latter
+-- is typically much more precise.
 
 ------------------------------------------------------------------------
 section "Parallelism"
@@ -2572,12 +2677,36 @@ section "Tag to enum stuff"
 primop  DataToTagOp "dataToTag#" GenPrimOp
    a -> Int#
    with
-   strictness  = { \ _arity -> mkClosedStrictSig [evalDmd] topRes }
-
-        -- dataToTag# must have an evaluated argument
+   can_fail   = True -- See Note [dataToTag#]
+   strictness = { \ _arity -> mkClosedStrictSig [evalDmd] topRes }
+                -- dataToTag# must have an evaluated argument
 
 primop  TagToEnumOp "tagToEnum#" GenPrimOp
    Int# -> a
+
+{- Note [dataToTag#]
+~~~~~~~~~~~~~~~~~~~~
+The dataToTag# primop should always be applied to an evaluated argument.
+The way to ensure this is to invoke it via the 'getTag' wrapper in GHC.Base:
+   getTag :: a -> Int#
+   getTag !x = dataToTag# x
+
+But now consider
+    \z. case x of y -> let v = dataToTag# y in ...
+
+To improve floating, the FloatOut pass (deliberately) does a
+binder-swap on the case, to give
+    \z. case x of y -> let v = dataToTag# x in ...
+
+Now FloatOut might float that v-binding outside the \z.  But that is
+bad because that might mean x gest evaluated much too early!  (CorePrep
+adds an eval to a dataToTag# call, to ensure that the argument really is
+evaluated; see CorePrep Note [dataToTag magic].)
+
+Solution: make DataToTag into a can_fail primop.  That will stop it floating
+(see Note [PrimOp can_fail and has_side_effects] in PrimOp).  It's a bit of
+a hack but never mind.
+-}
 
 ------------------------------------------------------------------------
 section "Bytecode operations"
@@ -2599,7 +2728,7 @@ primop   AddrToAnyOp "addrToAny#" GenPrimOp
 
 primop   AnyToAddrOp "anyToAddr#" GenPrimOp
    a -> State# RealWorld -> (# State# RealWorld, Addr# #)
-   { Retrive the address of any Haskell value. This is
+   { Retrieve the address of any Haskell value. This is
      essentially an {\texttt unsafeCoerce\#}, but if implemented as such
      the core lint pass complains and fails to compile.
      As a primop, it is opaque to core/stg, and only appears
@@ -2714,8 +2843,9 @@ pseudoop   "unsafeCoerce#"
 
          * Casting {\tt Any} back to the real type
 
-         * Casting an unboxed type to another unboxed type of the same size
-           (but not coercions between floating-point and integral types)
+         * Casting an unboxed type to another unboxed type of the same size.
+           (Casting between floating-point and integral types does not work.
+           See the {\tt GHC.Float} module for functions to do work.)
 
          * Casting between two types that have the same runtime representation.  One case is when
            the two types differ only in "phantom" type parameters, for example

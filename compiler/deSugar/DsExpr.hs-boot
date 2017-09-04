@@ -1,10 +1,10 @@
 module DsExpr where
-import HsSyn    ( HsExpr, LHsExpr, HsLocalBinds, SyntaxExpr )
-import Var      ( Id )
-import DsMonad  ( DsM )
-import CoreSyn  ( CoreExpr )
+import HsSyn       ( HsExpr, LHsExpr, LHsLocalBinds, SyntaxExpr )
+import DsMonad     ( DsM )
+import CoreSyn     ( CoreExpr )
+import HsExtension ( GhcTc)
 
-dsExpr  :: HsExpr  Id -> DsM CoreExpr
-dsLExpr :: LHsExpr Id -> DsM CoreExpr
-dsSyntaxExpr :: SyntaxExpr Id -> [CoreExpr] -> DsM CoreExpr
-dsLocalBinds :: HsLocalBinds Id -> CoreExpr -> DsM CoreExpr
+dsExpr  :: HsExpr GhcTc -> DsM CoreExpr
+dsLExpr, dsLExprNoLP :: LHsExpr GhcTc -> DsM CoreExpr
+dsSyntaxExpr :: SyntaxExpr GhcTc -> [CoreExpr] -> DsM CoreExpr
+dsLocalBinds :: LHsLocalBinds GhcTc -> CoreExpr -> DsM CoreExpr

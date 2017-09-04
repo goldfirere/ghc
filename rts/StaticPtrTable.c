@@ -16,7 +16,7 @@
 
 static HashTable * spt = NULL;
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
 static Mutex spt_lock;
 #endif
 
@@ -31,18 +31,24 @@ static int compareFingerprint(StgWord64 ptra[2], StgWord64 ptrb[2]) {
   return ptra[0] == ptrb[0] && ptra[1] == ptrb[1];
 }
 
-void hs_spt_insert(StgWord64 key[2],void *spe_closure) {
+void hs_spt_insert_stableptr(StgWord64 key[2], StgStablePtr *entry) {
   // hs_spt_insert is called from constructor functions, so
   // the SPT needs to be initialized here.
   if (spt == NULL) {
     spt = allocHashTable_( (HashFunction *)hashFingerprint
                          , (CompareFunction *)compareFingerprint
                          );
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     initMutex(&spt_lock);
 #endif
   }
 
+  ACQUIRE_LOCK(&spt_lock);
+  insertHashTable(spt, (StgWord)key, entry);
+  RELEASE_LOCK(&spt_lock);
+}
+
+void hs_spt_insert(StgWord64 key[2], void *spe_closure) {
   // Cannot remove this indirection yet because getStablePtr()
   // might return NULL, in which case hs_spt_lookup() returns NULL
   // instead of the actual closure pointer.
@@ -50,9 +56,7 @@ void hs_spt_insert(StgWord64 key[2],void *spe_closure) {
                                        , "hs_spt_insert: entry"
                                        );
   *entry = getStablePtr(spe_closure);
-  ACQUIRE_LOCK(&spt_lock);
-  insertHashTable(spt, (StgWord)key, entry);
-  RELEASE_LOCK(&spt_lock);
+  hs_spt_insert_stableptr(key, entry);
 }
 
 static void freeSptEntry(void* entry) {
@@ -100,7 +104,7 @@ void exitStaticPtrTable() {
   if (spt) {
     freeHashTable(spt, freeSptEntry);
     spt = NULL;
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     closeMutex(&spt_lock);
 #endif
   }

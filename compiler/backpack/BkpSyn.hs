@@ -18,7 +18,6 @@ module BkpSyn (
     ) where
 
 import HsSyn
-import RdrName
 import SrcLoc
 import Outputable
 import Module
@@ -61,14 +60,19 @@ type LHsUnit n = Located (HsUnit n)
 -- or an include.
 data HsDeclType = ModuleD | SignatureD
 data HsUnitDecl n
-    = DeclD      HsDeclType (Located ModuleName) (Maybe (Located (HsModule RdrName)))
+    = DeclD   HsDeclType (Located ModuleName) (Maybe (Located (HsModule GhcPs)))
     | IncludeD   (IncludeDecl n)
 type LHsUnitDecl n = Located (HsUnitDecl n)
 
 -- | An include of another unit
 data IncludeDecl n = IncludeDecl {
         idUnitId :: LHsUnitId n,
-        idModRenaming :: Maybe [ LRenaming ]
+        idModRenaming :: Maybe [ LRenaming ],
+        -- | Is this a @dependency signature@ include?  If so,
+        -- we don't compile this include when we instantiate this
+        -- unit (as there should not be any modules brought into
+        -- scope.)
+        idSignatureInclude :: Bool
     }
 
 -- | Rename a module from one name to another.  The identity renaming

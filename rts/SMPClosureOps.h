@@ -6,12 +6,11 @@
  *
  * -------------------------------------------------------------------------- */
 
-#ifndef RTS_STORAGE_SMPCLOSUREOPS_H
-#define RTS_STORAGE_SMPCLOSUREOPS_H
+#pragma once
 
 #include "BeginPrivate.h"
 
-#ifdef CMINUSMINUS
+#if defined(CMINUSMINUS)
 
 /* Lock closure, equivalent to ccall lockClosure but the condition is inlined.
  * Arguments are swapped for uniformity with unlockClosure. */
@@ -125,5 +124,3 @@ INLINE_HEADER void unlockTSO(StgTSO *tso)
 #endif /* CMINUSMINUS */
 
 #include "EndPrivate.h"
-
-#endif /* RTS_STORAGE_SMPCLOSUREOPS_H */

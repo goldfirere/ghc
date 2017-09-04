@@ -34,7 +34,7 @@ T10294a:
 frontend01:
 	$(RM) FrontendPlugin.hi FrontendPlugin.o frontend01 frontend01.hi frontend.o
 	"$(TEST_HC)" $(TEST_HC_OPTS) $(ghcPluginWayFlags) -Wall -package ghc -c FrontendPlugin.hs
-	"$(TEST_HC)" $(TEST_HC_OPTS) $(ghcPluginWayFlags) --frontend FrontendPlugin -ffrontend-opt foobar frontend01
+	"$(TEST_HC)" $(TEST_HC_OPTS) $(ghcPluginWayFlags) --frontend FrontendPlugin -ffrontend-opt foo -ffrontend-opt bar frontend01
 	./frontend01
 
 # -hide-all-plugin-packages + -package (this should not work!)
@@ -45,5 +45,5 @@ T11244:
 .PHONY: T12567a
 T12567a:
 	"$(TEST_HC)" $(TEST_HC_OPTS) $(ghcPluginWayFlags) --make T12567a.hs -package-db simple-plugin/pkg.T12567a/local.package.conf -hide-all-plugin-packages -plugin-package simple-plugin 1>&2
-	"$(TEST_HC)" $(TEST_HC_OPTS) $(ghcPluginWayFlags) --make -v T12567a.hs -package-db simple-plugin/pkg.T12567a/local.package.conf -hide-all-plugin-packages -plugin-package simple-plugin 2>&1 | grep "T12567a.hs, T12567a.o" 1>&2
+	"$(TEST_HC)" $(TEST_HC_OPTS) $(ghcPluginWayFlags) --make T12567a.hs -package-db simple-plugin/pkg.T12567a/local.package.conf -hide-all-plugin-packages -plugin-package simple-plugin 2>&1 | grep "T12567a.hs, T12567a.o" 1>&2
 	"$(TEST_HC)" $(TEST_HC_OPTS) $(ghcPluginWayFlags) --make T12567b.hs -package-db simple-plugin/pkg.T12567a/local.package.conf -hide-all-plugin-packages -plugin-package simple-plugin 1>&2

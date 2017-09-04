@@ -43,7 +43,7 @@
 StgIndStatic  *dyn_caf_list        = NULL;
 StgIndStatic  *debug_caf_list      = NULL;
 StgIndStatic  *revertible_caf_list = NULL;
-rtsBool       keepCAFs;
+bool           keepCAFs;
 
 W_ large_alloc_lim;    /* GC if n_large_blocks in any nursery
                         * reaches this. */
@@ -71,7 +71,7 @@ uint32_t n_nurseries;
  */
 volatile StgWord next_nursery[MAX_NUMA_NODES];
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
 /*
  * Storage manager mutex:  protects all the above state from
  * simultaneous access by two STG threads.
@@ -102,6 +102,8 @@ initGeneration (generation *gen, int g)
     gen->n_new_large_words = 0;
     gen->compact_objects = NULL;
     gen->n_compact_blocks = 0;
+    gen->compact_blocks_in_import = NULL;
+    gen->n_compact_blocks_in_import = 0;
     gen->scavenged_large_objects = NULL;
     gen->n_scavenged_large_blocks = 0;
     gen->live_compact_objects = NULL;
@@ -111,7 +113,7 @@ initGeneration (generation *gen, int g)
     gen->mark = 0;
     gen->compact = 0;
     gen->bitmap = NULL;
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     initSpinLock(&gen->sync);
 #endif
     gen->threads = END_TSO_QUEUE;
@@ -193,9 +195,9 @@ initStorage (void)
 
   exec_block = NULL;
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
   initSpinLock(&gc_alloc_block_sync);
-#ifdef PROF_SPIN
+#if defined(PROF_SPIN)
   whitehole_spin = 0;
 #endif
 #endif
@@ -286,7 +288,7 @@ exitStorage (void)
 }
 
 void
-freeStorage (rtsBool free_heap)
+freeStorage (bool free_heap)
 {
     stgFree(generations);
     if (free_heap) freeAllMBlocks();
@@ -379,7 +381,7 @@ lockCAF (StgRegTable *reg, StgIndStatic *caf)
 
     orig_info = caf->header.info;
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     const StgInfoTable *cur_info;
 
     if (orig_info == &stg_IND_STATIC_info ||
@@ -450,7 +452,7 @@ newCAF(StgRegTable *reg, StgIndStatic *caf)
                              regTableToCapability(reg), oldest_gen->no);
         }
 
-#ifdef DEBUG
+#if defined(DEBUG)
         // In the DEBUG rts, we keep track of live CAFs by chaining them
         // onto a list debug_caf_list.  This is so that we can tell if we
         // ever enter a GC'd CAF, and emit a suitable barf().
@@ -505,13 +507,13 @@ StgInd* newRetainedCAF (StgRegTable *reg, StgIndStatic *caf)
 
 // If we are using loadObj/unloadObj in the linker, then we want to
 //
-//  - retain all CAFs in statically linked code (keepCAFs == rtsTrue),
+//  - retain all CAFs in statically linked code (keepCAFs == true),
 //    because we might link a new object that uses any of these CAFs.
 //
 //  - GC CAFs in dynamically-linked code, so that we can detect when
 //    a dynamically-linked object is unloadable.
 //
-// So for this case, we set keepCAFs to rtsTrue, and link newCAF to newGCdCAF
+// So for this case, we set keepCAFs to true, and link newCAF to newGCdCAF
 // for dynamically-linked code.
 //
 StgInd* newGCdCAF (StgRegTable *reg, StgIndStatic *caf)
@@ -640,7 +642,7 @@ resetNurseries (void)
     }
     assignNurseriesToCapabilities(0, n_capabilities);
 
-#ifdef DEBUG
+#if defined(DEBUG)
     bdescr *bd;
     for (n = 0; n < n_nurseries; n++) {
         for (bd = nurseries[n].blocks; bd; bd = bd->link) {
@@ -741,7 +743,7 @@ resizeNurseries (W_ blocks)
     resizeNurseriesEach(blocks / n_nurseries);
 }
 
-rtsBool
+bool
 getNewNursery (Capability *cap)
 {
     StgWord i;
@@ -753,28 +755,28 @@ getNewNursery (Capability *cap)
         if (i < n_nurseries) {
             if (cas(&next_nursery[node], i, i+n_numa_nodes) == i) {
                 assignNurseryToCapability(cap, i);
-                return rtsTrue;
+                return true;
             }
         } else if (n_numa_nodes > 1) {
             // Try to find an unused nursery chunk on other nodes.  We'll get
             // remote memory, but the rationale is that avoiding GC is better
             // than avoiding remote memory access.
-            rtsBool lost = rtsFalse;
+            bool lost = false;
             for (n = 0; n < n_numa_nodes; n++) {
                 if (n == node) continue;
                 i = next_nursery[n];
                 if (i < n_nurseries) {
                     if (cas(&next_nursery[n], i, i+n_numa_nodes) == i) {
                         assignNurseryToCapability(cap, i);
-                        return rtsTrue;
+                        return true;
                     } else {
-                        lost = rtsTrue; /* lost a race */
+                        lost = true; /* lost a race */
                     }
                 }
             }
-            if (!lost) return rtsFalse;
+            if (!lost) return false;
         } else {
-            return rtsFalse;
+            return false;
         }
     }
 }
@@ -843,7 +845,7 @@ allocate (Capability *cap, W_ n)
             req_blocks >= HS_INT32_MAX)   // avoid overflow when
                                           // calling allocGroup() below
         {
-            heapOverflow();
+            reportHeapOverflow();
             // heapOverflow() doesn't exit (see #2592), but we aren't
             // in a position to do a clean shutdown here: we
             // either have to allocate the memory or exit now.
@@ -1244,7 +1246,7 @@ W_ gcThreadLiveBlocks (uint32_t i, uint32_t g)
  * blocks since all the data will be copied.
  */
 extern W_
-calcNeeded (rtsBool force_major, memcount *blocks_needed)
+calcNeeded (bool force_major, memcount *blocks_needed)
 {
     W_ needed = 0, blocks;
     uint32_t g, N;
@@ -1293,6 +1295,28 @@ calcNeeded (rtsBool force_major, memcount *blocks_needed)
     return N;
 }
 
+StgWord calcTotalLargeObjectsW (void)
+{
+    uint32_t g;
+    StgWord totalW = 0;
+
+    for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
+        totalW += generations[g].n_large_words;
+    }
+    return totalW;
+}
+
+StgWord calcTotalCompactW (void)
+{
+    uint32_t g;
+    StgWord totalW = 0;
+
+    for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
+        totalW += generations[g].n_compact_blocks * BLOCK_SIZE_W;
+    }
+    return totalW;
+}
+
 /* ----------------------------------------------------------------------------
    Executable memory
 
@@ -1314,8 +1338,22 @@ calcNeeded (rtsBool force_major, memcount *blocks_needed)
    ------------------------------------------------------------------------- */
 
 #if (defined(arm_HOST_ARCH) || defined(aarch64_HOST_ARCH)) && defined(ios_HOST_OS)
-void sys_icache_invalidate(void *start, size_t len);
+#include <libkern/OSCacheControl.h>
 #endif
+
+#if defined(__clang__)
+/* clang defines __clear_cache as a builtin on some platforms.
+ * For example on armv7-linux-androideabi. The type slightly
+ * differs from gcc.
+ */
+extern void __clear_cache(void * begin, void * end);
+#elif defined(__GNUC__)
+/* __clear_cache is a libgcc function.
+ * It existed before __builtin___clear_cache was introduced.
+ * See Trac #8562.
+ */
+extern void __clear_cache(char * begin, char * end);
+#endif /* __GNUC__ */
 
 /* On ARM and other platforms, we need to flush the cache after
    writing code into memory, so the processor reliably sees it. */
@@ -1327,12 +1365,27 @@ void flushExec (W_ len, AdjustorExecutable exec_addr)
   (void)exec_addr;
 #elif (defined(arm_HOST_ARCH) || defined(aarch64_HOST_ARCH)) && defined(ios_HOST_OS)
   /* On iOS we need to use the special 'sys_icache_invalidate' call. */
-  sys_icache_invalidate(exec_addr, ((unsigned char*)exec_addr)+len);
+  sys_icache_invalidate(exec_addr, len);
+#elif defined(__clang__)
+  unsigned char* begin = (unsigned char*)exec_addr;
+  unsigned char* end   = begin + len;
+# if __has_builtin(__builtin___clear_cache)
+  __builtin___clear_cache((void*)begin, (void*)end);
+# else
+  __clear_cache((void*)begin, (void*)end);
+# endif
 #elif defined(__GNUC__)
   /* For all other platforms, fall back to a libgcc builtin. */
   unsigned char* begin = (unsigned char*)exec_addr;
   unsigned char* end   = begin + len;
+  /* __builtin___clear_cache is supported since GNU C 4.3.6.
+   * We pick 4.4 to simplify condition a bit.
+   */
+# if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 4)
+  __builtin___clear_cache((void*)begin, (void*)end);
+# else
   __clear_cache((void*)begin, (void*)end);
+# endif
 #else
 #error Missing support to flush the instruction cache
 #endif
@@ -1442,7 +1495,7 @@ AdjustorWritable allocateExec (W_ bytes, AdjustorExecutable *exec_ret)
             exec_block->u.back = bd;
         }
         bd->u.back = NULL;
-        setExecutable(bd->start, bd->blocks * BLOCK_SIZE, rtsTrue);
+        setExecutable(bd->start, bd->blocks * BLOCK_SIZE, true);
         exec_block = bd;
     }
     *(exec_block->free) = n;  // store the size of this chunk
@@ -1479,7 +1532,7 @@ void freeExec (void *addr)
         if (bd != exec_block) {
             debugTrace(DEBUG_gc, "free exec block %p", bd->start);
             dbl_link_remove(bd, &exec_block);
-            setExecutable(bd->start, bd->blocks * BLOCK_SIZE, rtsFalse);
+            setExecutable(bd->start, bd->blocks * BLOCK_SIZE, false);
             freeGroup(bd);
         } else {
             bd->free = bd->start;
@@ -1491,7 +1544,7 @@ void freeExec (void *addr)
 
 #endif /* switch(HOST_OS) */
 
-#ifdef DEBUG
+#if defined(DEBUG)
 
 // handy function for use in gdb, because Bdescr() is inlined.
 extern bdescr *_bdescr (StgPtr p);

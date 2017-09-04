@@ -11,8 +11,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef SM_MARKWEAK_H
-#define SM_MARKWEAK_H
+#pragma once
 
 #include "BeginPrivate.h"
 
@@ -22,10 +21,8 @@ extern StgTSO *exception_threads;
 
 void    collectFreshWeakPtrs   ( void );
 void    initWeakForGC          ( void );
-rtsBool traverseWeakPtrList    ( void );
+bool    traverseWeakPtrList    ( void );
 void    markWeakPtrList        ( void );
 void    scavengeLiveWeak       ( StgWeak * );
 
 #include "EndPrivate.h"
-
-#endif /* SM_MARKWEAK_H */

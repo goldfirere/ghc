@@ -1,11 +1,10 @@
 {-# LANGUAGE CPP, NondecreasingIndentation, TupleSections, RecordWildCards #-}
 {-# OPTIONS_GHC -fno-cse #-}
+-- -fno-cse is needed for GLOBAL_VAR's to behave properly
+
 --
 --  (c) The University of Glasgow 2002-2006
 --
-
--- -fno-cse is needed for GLOBAL_VAR's to behave properly
-
 -- | The dynamic linker for GHCi.
 --
 -- This module deals with the top-level issues of dynamic linking,
@@ -16,10 +15,7 @@ module Linker ( getHValue, showLinkerState,
                 extendLinkEnv, deleteFromLinkEnv,
                 extendLoadedPkgs,
                 linkPackages,initDynLinker,linkModule,
-                linkCmdLineLibs,
-
-                -- Saving/restoring globals
-                PersistentLinkerState, saveLinkerGlobals, restoreLinkerGlobals
+                linkCmdLineLibs
         ) where
 
 #include "HsVersions.h"
@@ -51,6 +47,7 @@ import UniqDSet
 import FastString
 import Platform
 import SysTools
+import FileCleanup
 
 -- Standard libraries
 import Control.Monad
@@ -66,6 +63,7 @@ import System.Directory
 
 import Exception
 
+import Foreign (Ptr) -- needed for 2nd stage
 
 {- **********************************************************************
 
@@ -84,9 +82,22 @@ library to side-effect the PLS and for those changes to be reflected here.
 The PersistentLinkerState maps Names to actual closures (for
 interpreted code only), for use during linking.
 -}
-
+#if STAGE < 2
 GLOBAL_VAR_M(v_PersistentLinkerState, newMVar (panic "Dynamic linker not initialised"), MVar PersistentLinkerState)
 GLOBAL_VAR(v_InitLinkerDone, False, Bool) -- Set True when dynamic linker is initialised
+#else
+SHARED_GLOBAL_VAR_M( v_PersistentLinkerState
+                   , getOrSetLibHSghcPersistentLinkerState
+                   , "getOrSetLibHSghcPersistentLinkerState"
+                   , newMVar (panic "Dynamic linker not initialised")
+                   , MVar PersistentLinkerState)
+-- Set True when dynamic linker is initialised
+SHARED_GLOBAL_VAR( v_InitLinkerDone
+                 , getOrSetLibHSghcInitLinkerDone
+                 , "getOrSetLibHSghcInitLinkerDone"
+                 , False
+                 , Bool)
+#endif
 
 modifyPLS_ :: (PersistentLinkerState -> IO PersistentLinkerState) -> IO ()
 modifyPLS_ f = readIORef v_PersistentLinkerState >>= flip modifyMVar_ f
@@ -233,7 +244,8 @@ withExtendedLinkEnv new_env action
 showLinkerState :: DynFlags -> IO ()
 showLinkerState dflags
   = do pls <- readIORef v_PersistentLinkerState >>= readMVar
-       log_action dflags dflags NoReason SevDump noSrcSpan defaultDumpStyle
+       putLogMsg dflags NoReason SevDump noSrcSpan
+          (defaultDumpStyle dflags)
                  (vcat [text "----- Linker state -----",
                         text "Pkgs:" <+> ppr (pkgs_loaded pls),
                         text "Objs:" <+> ppr (objs_loaded pls),
@@ -301,7 +313,19 @@ linkCmdLineLibs' hsc_env pls =
                            , libraryPaths = lib_paths}) = hsc_dflags hsc_env
 
       -- (c) Link libraries from the command-line
-      let minus_ls = [ lib | Option ('-':'l':lib) <- cmdline_ld_inputs ]
+      let minus_ls_1 = [ lib | Option ('-':'l':lib) <- cmdline_ld_inputs ]
+
+      -- On Windows we want to add libpthread by default just as GCC would.
+      -- However because we don't know the actual name of pthread's dll we
+      -- need to defer this to the locateLib call so we can't initialize it
+      -- inside of the rts. Instead we do it here to be able to find the
+      -- import library for pthreads. See Trac #13210.
+      let platform = targetPlatform dflags
+          os       = platformOS platform
+          minus_ls = case os of
+                       OSMinGW32 -> "pthread" : minus_ls_1
+                       _         -> minus_ls_1
+
       libspecs <- mapM (locateLib hsc_env False lib_paths) minus_ls
 
       -- (d) Link .o files from the command-line
@@ -322,8 +346,10 @@ linkCmdLineLibs' hsc_env pls =
       if null cmdline_lib_specs then return pls
                                 else do
 
-      -- Add directories to library search paths
-      let all_paths = let paths = framework_paths
+      -- Add directories to library search paths, this only has an effect
+      -- on Windows. On Unix OSes this function is a NOP.
+      let all_paths = let paths = takeDirectory (fst $ sPgm_c $ settings dflags)
+                                : framework_paths
                                ++ lib_paths
                                ++ [ takeDirectory dll | DLLPath dll <- libspecs ]
                       in nub $ map normalise paths
@@ -372,7 +398,8 @@ classifyLdInput dflags f
   | isObjectFilename platform f = return (Just (Object f))
   | isDynLibFilename platform f = return (Just (DLLPath f))
   | otherwise          = do
-        log_action dflags dflags NoReason SevInfo noSrcSpan defaultUserStyle
+        putLogMsg dflags NoReason SevInfo noSrcSpan
+            (defaultUserStyle dflags)
             (text ("Warning: ignoring unrecognised input `" ++ f ++ "'"))
         return Nothing
     where platform = targetPlatform dflags
@@ -547,7 +574,7 @@ failNonStd dflags srcspan = dieWith dflags srcspan $
   text "Cannot load" <+> compWay <+>
      text "objects when GHC is built" <+> ghciWay $$
   text "To fix this, either:" $$
-  text "  (1) Use -fexternal-interprter, or" $$
+  text "  (1) Use -fexternal-interpreter, or" $$
   text "  (2) Build the program twice: once" <+>
                        ghciWay <> text ", and then" $$
   text "      with" <+> compWay <+>
@@ -695,6 +722,7 @@ getLinkDeps hsc_env hpt pls replace_osuf span mods
             adjust_ul _ (DotA fp) = panic ("adjust_ul DotA " ++ show fp)
             adjust_ul _ (DotDLL fp) = panic ("adjust_ul DotDLL " ++ show fp)
             adjust_ul _ l@(BCOs {}) = return l
+
 
 
 {- **********************************************************************
@@ -847,7 +875,8 @@ dynLoadObjs hsc_env pls objs = do
     let platform = targetPlatform dflags
     let minus_ls = [ lib | Option ('-':'l':lib) <- ldInputs dflags ]
     let minus_big_ls = [ lib | Option ('-':'L':lib) <- ldInputs dflags ]
-    (soFile, libPath , libName) <- newTempLibName dflags (soExt platform)
+    (soFile, libPath , libName) <-
+      newTempLibName dflags TFL_CurrentModule (soExt platform)
     let
         dflags2 = dflags {
                       -- We don't want the original ldInputs in
@@ -860,18 +889,23 @@ dynLoadObjs hsc_env pls objs = do
                         concatMap
                             (\(lp, l) ->
                                  [ Option ("-L" ++ lp)
-                                 , Option ("-Wl,-rpath")
-                                 , Option ("-Wl," ++ lp)
+                                 , Option "-Xlinker"
+                                 , Option "-rpath"
+                                 , Option "-Xlinker"
+                                 , Option lp
                                  , Option ("-l" ++  l)
                                  ])
                             (temp_sos pls)
                         ++ concatMap
                              (\lp ->
                                  [ Option ("-L" ++ lp)
-                                 , Option ("-Wl,-rpath")
-                                 , Option ("-Wl," ++ lp)
+                                 , Option "-Xlinker"
+                                 , Option "-rpath"
+                                 , Option "-Xlinker"
+                                 , Option lp
                                  ])
                              minus_big_ls
+                        -- See Note [-Xlinker -rpath vs -Wl,-rpath]
                         ++ map (\l -> Option ("-l" ++ l)) minus_ls,
                       -- Add -l options and -L options from dflags.
                       --
@@ -890,7 +924,9 @@ dynLoadObjs hsc_env pls objs = do
     -- Note: We are loading packages with local scope, so to see the
     -- symbols in this link we must link all loaded packages again.
     linkDynLib dflags2 objs (pkgs_loaded pls)
-    consIORef (filesToNotIntermediateClean dflags) soFile
+
+    -- if we got this far, extend the lifetime of the library file
+    changeTempFilesLifetime dflags TFL_GhcSession [soFile]
     m <- loadDLL hsc_env soFile
     case m of
         Nothing -> return pls { temp_sos = (libPath, libName) : temp_sos pls }
@@ -1046,13 +1082,13 @@ unload_wkr hsc_env keep_linkables pls = do
                    filter (not . null . linkableObjs) bcos_to_unload))) $
     purgeLookupSymbolCache hsc_env
 
-  let bcos_retained = map linkableModule remaining_bcos_loaded
+  let bcos_retained = mkModuleSet $ map linkableModule remaining_bcos_loaded
 
       -- Note that we want to remove all *local*
       -- (i.e. non-isExternal) names too (these are the
       -- temporary bindings from the command line).
       keep_name (n,_) = isExternalName n &&
-                        nameModule n `elem` bcos_retained
+                        nameModule n `elemModuleSet` bcos_retained
 
       itbl_env'     = filterNameEnv keep_name (itbl_env pls)
       closure_env'  = filterNameEnv keep_name (closure_env pls)
@@ -1325,13 +1361,17 @@ locateLib hsc_env is_hs dirs lib
 
      obj_file     = lib <.> "o"
      dyn_obj_file = lib <.> "dyn_o"
-     arch_file = "lib" ++ lib ++ lib_tag <.> "a"
+     arch_files = [ "lib" ++ lib ++ lib_tag <.> "a"
+                  , lib <.> "a" -- native code has no lib_tag
+                  ]
      lib_tag = if is_hs && loading_profiled_hs_libs then "_p" else ""
 
      loading_profiled_hs_libs = interpreterProfiled dflags
      loading_dynamic_hs_libs  = interpreterDynamic dflags
 
-     import_libs  = [lib <.> "lib", "lib" ++ lib <.> "lib", "lib" ++ lib <.> "dll.a"]
+     import_libs  = [ lib <.> "lib"           , "lib" ++ lib <.> "lib"
+                    , "lib" ++ lib <.> "dll.a", lib <.> "dll.a"
+                    ]
 
      hs_dyn_lib_name = lib ++ '-':programName dflags ++ projectVersion dflags
      hs_dyn_lib_file = mkHsSOName platform hs_dyn_lib_name
@@ -1344,12 +1384,13 @@ locateLib hsc_env is_hs dirs lib
 
      findObject    = liftM (fmap Object)  $ findFile dirs obj_file
      findDynObject = liftM (fmap Object)  $ findFile dirs dyn_obj_file
-     findArchive   = let local  = liftM (fmap Archive) $ findFile dirs arch_file
-                         linked = liftM (fmap Archive) $ searchForLibUsingGcc dflags arch_file dirs
-                     in liftM2 (<|>) local linked
+     findArchive   = let local  name = liftM (fmap Archive) $ findFile dirs name
+                         linked name = liftM (fmap Archive) $ searchForLibUsingGcc dflags name dirs
+                         check name = apply [local name, linked name]
+                     in  apply (map check arch_files)
      findHSDll     = liftM (fmap DLLPath) $ findFile dirs hs_dyn_lib_file
      findDll       = liftM (fmap DLLPath) $ findFile dirs dyn_lib_file
-     findSysDll    = fmap (fmap $ DLL . takeFileName) $ findSystemLibrary hsc_env so_name
+     findSysDll    = fmap (fmap $ DLL . dropExtension . takeFileName) $ findSystemLibrary hsc_env so_name
      tryGcc        = let short = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags so_name     dirs
                          full  = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags lib_so_name dirs
                      in liftM2 (<|>) short full
@@ -1376,7 +1417,7 @@ searchForLibUsingGcc :: DynFlags -> String -> [FilePath] -> IO (Maybe FilePath)
 searchForLibUsingGcc dflags so dirs = do
    -- GCC does not seem to extend the library search path (using -L) when using
    -- --print-file-name. So instead pass it a new base location.
-   str <- askCc dflags (map (FileOption "-B") dirs
+   str <- askLd dflags (map (FileOption "-B") dirs
                           ++ [Option "--print-file-name", Option so])
    let file = case lines str of
                 []  -> ""
@@ -1418,27 +1459,12 @@ loadFramework hsc_env extraPaths rootname
 maybePutStr :: DynFlags -> String -> IO ()
 maybePutStr dflags s
     = when (verbosity dflags > 1) $
-          do let act = log_action dflags
-             act dflags
-                 NoReason
-                 SevInteractive
-                 noSrcSpan
-                 defaultUserStyle
-                 (text s)
+          putLogMsg dflags
+              NoReason
+              SevInteractive
+              noSrcSpan
+              (defaultUserStyle dflags)
+              (text s)
 
 maybePutStrLn :: DynFlags -> String -> IO ()
 maybePutStrLn dflags s = maybePutStr dflags (s ++ "\n")
-
-{- **********************************************************************
-
-        Tunneling global variables into new instance of GHC library
-
-  ********************************************************************* -}
-
-saveLinkerGlobals :: IO (MVar PersistentLinkerState, Bool)
-saveLinkerGlobals = liftM2 (,) (readIORef v_PersistentLinkerState) (readIORef v_InitLinkerDone)
-
-restoreLinkerGlobals :: (MVar PersistentLinkerState, Bool) -> IO ()
-restoreLinkerGlobals (pls, ild) = do
-    writeIORef v_PersistentLinkerState pls
-    writeIORef v_InitLinkerDone ild

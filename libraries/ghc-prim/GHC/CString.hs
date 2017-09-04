@@ -34,9 +34,8 @@ import GHC.Prim
 -- stuff uses Strings in the representation, so to give representations for
 -- ghc-prim types we need unpackCString#
 
-{-
-Note [Inlining unpackCString#]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+{- Note [Inlining unpackCString#]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 There's really no point in ever inlining things like unpackCString# as the loop
 doesn't specialise in an interesting way and we can't deforest the list
 constructors (we'd want to use unpackFoldrCString# for this). Moreover, it's
@@ -57,10 +56,22 @@ to match unpackCString#,
  * stream fusion rules; e.g. in the `text` library,
        unstream (S.map safe (S.streamList (GHC.unpackCString# a)))
           = unpackCString# a
+
+Moreover, we want to make it CONLIKE, so that:
+
+* the rules in PrelRules will fire when the string is let-bound.
+  E.g. the eqString rule in PrelRules
+   eqString (unpackCString# (Lit s1)) (unpackCString# (Lit s2) = s1==s2
+
+* exprIsConApp_maybe will see the string when we have
+     let x = unpackCString# "foo"#
+     ...(case x of algs)...
+
+All of this goes for unpackCStringUtf8# too.
 -}
 
 unpackCString# :: Addr# -> [Char]
-{-# NOINLINE unpackCString# #-}
+{-# NOINLINE CONLIKE unpackCString# #-}
 unpackCString# addr
   = unpack 0#
   where
@@ -110,28 +121,32 @@ unpackFoldrCString# addr f z
 -- There's really no point in inlining this for the same reasons as
 -- unpackCString. See Note [Inlining unpackCString#] above for details.
 unpackCStringUtf8# :: Addr# -> [Char]
-{-# NOINLINE unpackCStringUtf8# #-}
+{-# NOINLINE CONLIKE unpackCStringUtf8# #-}
 unpackCStringUtf8# addr
   = unpack 0#
   where
+    -- We take care to strictly evaluate the character decoding as
+    -- indexCharOffAddr# is marked with the can_fail flag and
+    -- consequently GHC won't evaluate the expression unless it is absolutely
+    -- needed.
     unpack nh
       | isTrue# (ch `eqChar#` '\0'#  ) = []
       | isTrue# (ch `leChar#` '\x7F'#) = C# ch : unpack (nh +# 1#)
       | isTrue# (ch `leChar#` '\xDF'#) =
-          C# (chr# (((ord# ch                                  -# 0xC0#) `uncheckedIShiftL#`  6#) +#
-                     (ord# (indexCharOffAddr# addr (nh +# 1#)) -# 0x80#))) :
-          unpack (nh +# 2#)
+          let !c = C# (chr# (((ord# ch                                  -# 0xC0#) `uncheckedIShiftL#`  6#) +#
+                              (ord# (indexCharOffAddr# addr (nh +# 1#)) -# 0x80#)))
+          in c : unpack (nh +# 2#)
       | isTrue# (ch `leChar#` '\xEF'#) =
-          C# (chr# (((ord# ch                                  -# 0xE0#) `uncheckedIShiftL#` 12#) +#
-                    ((ord# (indexCharOffAddr# addr (nh +# 1#)) -# 0x80#) `uncheckedIShiftL#`  6#) +#
-                     (ord# (indexCharOffAddr# addr (nh +# 2#)) -# 0x80#))) :
-          unpack (nh +# 3#)
+          let !c = C# (chr# (((ord# ch                                  -# 0xE0#) `uncheckedIShiftL#` 12#) +#
+                             ((ord# (indexCharOffAddr# addr (nh +# 1#)) -# 0x80#) `uncheckedIShiftL#`  6#) +#
+                              (ord# (indexCharOffAddr# addr (nh +# 2#)) -# 0x80#)))
+          in c : unpack (nh +# 3#)
       | True                           =
-          C# (chr# (((ord# ch                                  -# 0xF0#) `uncheckedIShiftL#` 18#) +#
-                    ((ord# (indexCharOffAddr# addr (nh +# 1#)) -# 0x80#) `uncheckedIShiftL#` 12#) +#
-                    ((ord# (indexCharOffAddr# addr (nh +# 2#)) -# 0x80#) `uncheckedIShiftL#`  6#) +#
-                     (ord# (indexCharOffAddr# addr (nh +# 3#)) -# 0x80#))) :
-          unpack (nh +# 4#)
+          let !c = C# (chr# (((ord# ch                                  -# 0xF0#) `uncheckedIShiftL#` 18#) +#
+                             ((ord# (indexCharOffAddr# addr (nh +# 1#)) -# 0x80#) `uncheckedIShiftL#` 12#) +#
+                             ((ord# (indexCharOffAddr# addr (nh +# 2#)) -# 0x80#) `uncheckedIShiftL#`  6#) +#
+                              (ord# (indexCharOffAddr# addr (nh +# 3#)) -# 0x80#)))
+          in c : unpack (nh +# 4#)
       where
         !ch = indexCharOffAddr# addr nh
 

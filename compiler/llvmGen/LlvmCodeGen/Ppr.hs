@@ -21,7 +21,6 @@ import FastString
 import Outputable
 import Unique
 
-
 -- ----------------------------------------------------------------------------
 -- * Top level
 --

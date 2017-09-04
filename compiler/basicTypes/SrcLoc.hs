@@ -6,10 +6,7 @@
 {-# LANGUAGE DeriveFoldable     #-}
 {-# LANGUAGE DeriveTraversable  #-}
 {-# LANGUAGE FlexibleInstances  #-}
-{-# OPTIONS_GHC -fno-omit-interface-pragmas #-}
-   -- Workaround for Trac #5252 crashes the bootstrap compiler without -O
-   -- When the earliest compiler we want to boostrap with is
-   -- GHC 7.2, we can make RealSrcLoc properly abstract
+{-# LANGUAGE RecordWildCards    #-}
 
 -- | This module contains types that relate to the positions of things
 -- in source files, and allow tagging of those things with locations
@@ -81,6 +78,7 @@ module SrcLoc (
     ) where
 
 import Util
+import Json
 import Outputable
 import FastString
 
@@ -246,6 +244,18 @@ data SrcSpan =
   deriving (Eq, Ord, Show) -- Show is used by Lexer.x, because we
                            -- derive Show for Token
 
+instance ToJson SrcSpan where
+  json (UnhelpfulSpan {} ) = JSNull --JSObject [( "type", "unhelpful")]
+  json (RealSrcSpan rss)  = json rss
+
+instance ToJson RealSrcSpan where
+  json (RealSrcSpan'{..}) = JSObject [ ("file", JSString (unpackFS srcSpanFile))
+                                     , ("startLine", JSInt srcSpanSLine)
+                                     , ("startCol", JSInt srcSpanSCol)
+                                     , ("endLine", JSInt srcSpanELine)
+                                     , ("endCol", JSInt srcSpanECol)
+                                     ]
+
 instance NFData SrcSpan where
   rnf x = x `seq` ()
 
@@ -344,12 +354,13 @@ isOneLineSpan (UnhelpfulSpan _) = False
 -- that it covers at least as much source code. True where spans are equal.
 containsSpan :: RealSrcSpan -> RealSrcSpan -> Bool
 containsSpan s1 s2
-  = srcSpanFile s1 == srcSpanFile s2
-    && (srcSpanStartLine s1, srcSpanStartCol s1)
+  = (srcSpanStartLine s1, srcSpanStartCol s1)
        <= (srcSpanStartLine s2, srcSpanStartCol s2)
     && (srcSpanEndLine s1, srcSpanEndCol s1)
        >= (srcSpanEndLine s2, srcSpanEndCol s2)
-
+    && (srcSpanFile s1 == srcSpanFile s2)
+    -- We check file equality last because it is (presumably?) least
+    -- likely to fail.
 {-
 %************************************************************************
 %*                                                                      *
@@ -537,7 +548,7 @@ instance (Outputable l, Outputable e) => Outputable (GenLocated l e) where
                 -- GenLocated:
                 -- Print spans without the file name etc
                 -- ifPprDebug (braces (pprUserSpan False l))
-                ifPprDebug (braces (ppr l))
+                whenPprDebug (braces (ppr l))
              $$ ppr e
 
 {-

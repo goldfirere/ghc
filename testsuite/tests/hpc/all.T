@@ -1,6 +1,9 @@
-test('T10138', ignore_stdout, run_command,
+test('T10138', [extra_files(['.keepme.hpc.T10138/']),
+                ignore_stdout], run_command,
      # Using --hpcdir with an absolute path should work (exit code 0).
      ['{hpc} report T10138.keepme.tix --hpcdir="`pwd`/.keepme.hpc.T10138"'])
+
+test('T11798', normal, run_command, ['$MAKE -s --no-print-directory T11798'])
 
 # Run tests below only for the hpc way.
 #

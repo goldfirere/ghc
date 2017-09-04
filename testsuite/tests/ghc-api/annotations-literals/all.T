@@ -1,4 +1,2 @@
-test('literals', extra_clean(['LiteralsTest.o', 'LiteralsTest.hi']),
-                 run_command, ['$MAKE -s --no-print-directory literals'])
-test('parsed',   extra_clean(['LiteralsTest2.o', 'LiteralsTest2.hi']),
-                 run_command, ['$MAKE -s --no-print-directory parsed'])
+test('literals', [extra_files(['LiteralsTest.hs'])], run_command, ['$MAKE -s --no-print-directory literals'])
+test('parsed', [extra_files(['LiteralsTest2.hs'])], run_command, ['$MAKE -s --no-print-directory parsed'])

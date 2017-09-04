@@ -43,7 +43,7 @@ module Control.Applicative (
     Const(..), WrappedMonad(..), WrappedArrow(..), ZipList(..),
     -- * Utility functions
     (<$>), (<$), (<**>),
-    liftA, liftA2, liftA3,
+    liftA, liftA3,
     optional,
     ) where
 
@@ -59,7 +59,7 @@ import Data.Functor.Const (Const(..))
 
 import GHC.Base
 import GHC.Generics
-import GHC.List (repeat, zipWith)
+import GHC.List (repeat, zipWith, drop)
 import GHC.Read (Read)
 import GHC.Show (Show)
 
@@ -74,6 +74,7 @@ instance Monad m => Functor (WrappedMonad m) where
 instance Monad m => Applicative (WrappedMonad m) where
     pure = WrapMonad . pure
     WrapMonad f <*> WrapMonad v = WrapMonad (f `ap` v)
+    liftA2 f (WrapMonad x) (WrapMonad y) = WrapMonad (liftM2 f x y)
 
 -- | @since 2.01
 instance MonadPlus m => Alternative (WrappedMonad m) where
@@ -90,26 +91,40 @@ instance Arrow a => Functor (WrappedArrow a b) where
 -- | @since 2.01
 instance Arrow a => Applicative (WrappedArrow a b) where
     pure x = WrapArrow (arr (const x))
-    WrapArrow f <*> WrapArrow v = WrapArrow (f &&& v >>> arr (uncurry id))
+    liftA2 f (WrapArrow u) (WrapArrow v) =
+      WrapArrow (u &&& v >>> arr (uncurry f))
 
 -- | @since 2.01
 instance (ArrowZero a, ArrowPlus a) => Alternative (WrappedArrow a b) where
     empty = WrapArrow zeroArrow
     WrapArrow u <|> WrapArrow v = WrapArrow (u <+> v)
 
--- | Lists, but with an 'Applicative' functor based on zipping, so that
---
--- @f '<$>' 'ZipList' xs1 '<*>' ... '<*>' 'ZipList' xsn = 'ZipList' (zipWithn f xs1 ... xsn)@
---
+-- | Lists, but with an 'Applicative' functor based on zipping.
 newtype ZipList a = ZipList { getZipList :: [a] }
                   deriving ( Show, Eq, Ord, Read, Functor
                            , Foldable, Generic, Generic1)
--- See Data.Traversable for Traversabel instance due to import loops
+-- See Data.Traversable for Traversable instance due to import loops
 
--- | @since 2.01
+-- |
+-- > f '<$>' 'ZipList' xs1 '<*>' ... '<*>' 'ZipList' xsN
+-- >     = 'ZipList' (zipWithN f xs1 ... xsN)
+--
+-- where @zipWithN@ refers to the @zipWith@ function of the appropriate arity
+-- (@zipWith@, @zipWith3@, @zipWith4@, ...). For example:
+--
+-- > (\a b c -> stimes c [a, b]) <$> ZipList "abcd" <*> ZipList "567" <*> ZipList [1..]
+-- >     = ZipList (zipWith3 (\a b c -> stimes c [a, b]) "abcd" "567" [1..])
+-- >     = ZipList {getZipList = ["a5","b6b6","c7c7c7"]}
+--
+-- @since 2.01
 instance Applicative ZipList where
     pure x = ZipList (repeat x)
-    ZipList fs <*> ZipList xs = ZipList (zipWith id fs xs)
+    liftA2 f (ZipList xs) (ZipList ys) = ZipList (zipWith f xs ys)
+
+-- | @since 4.11.0.0
+instance Alternative ZipList where
+   empty = ZipList []
+   ZipList xs <|> ZipList ys = ZipList (xs ++ drop (length xs) ys)
 
 -- extra functions
 

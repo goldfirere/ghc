@@ -39,9 +39,10 @@ import PprBase
 import Cmm hiding (topInfoTable)
 import PprCmm()
 import CLabel
-import BlockId
+import Hoopl.Label
+import Hoopl.Collections
 
-import Unique           ( Uniquable(..), pprUnique )
+import Unique           ( Uniquable(..), pprUniqueAlways )
 import Outputable
 import Platform
 import FastString
@@ -76,7 +77,7 @@ pprNatCmmDecl proc@(CmmProc top_info lbl _ (ListGraph blocks)) =
       -- elimination, it might be the target of a goto.
       (if platformHasSubsectionsViaSymbols platform
        then
-       -- See Note [Subsections Via Symbols]
+       -- See Note [Subsections Via Symbols] in X86/Ppr.hs
                 text "\t.long "
             <+> ppr info_lbl
             <+> char '-'
@@ -87,7 +88,7 @@ dspSection :: Section
 dspSection = Section Text $
     panic "subsections-via-symbols doesn't combine with split-sections"
 
-pprBasicBlock :: BlockEnv CmmStatics -> NatBasicBlock Instr -> SDoc
+pprBasicBlock :: LabelMap CmmStatics -> NatBasicBlock Instr -> SDoc
 pprBasicBlock info_env (BasicBlock blockid instrs)
   = maybe_infotable $$
     pprLabel (mkAsmTempLabel (getUnique blockid)) $$
@@ -148,11 +149,11 @@ pprReg reg
  = case reg of
         RegVirtual vr
          -> case vr of
-                VirtualRegI   u -> text "%vI_"  <> pprUnique u
-                VirtualRegHi  u -> text "%vHi_" <> pprUnique u
-                VirtualRegF   u -> text "%vF_"  <> pprUnique u
-                VirtualRegD   u -> text "%vD_"  <> pprUnique u
-                VirtualRegSSE u -> text "%vSSE_" <> pprUnique u
+                VirtualRegI   u -> text "%vI_"   <> pprUniqueAlways u
+                VirtualRegHi  u -> text "%vHi_"  <> pprUniqueAlways u
+                VirtualRegF   u -> text "%vF_"   <> pprUniqueAlways u
+                VirtualRegD   u -> text "%vD_"   <> pprUniqueAlways u
+                VirtualRegSSE u -> text "%vSSE_" <> pprUniqueAlways u
 
         RegReal rr
          -> case rr of
@@ -339,6 +340,9 @@ pprAlignForSection seg =
                         -> sLit ".align 8"
       UninitialisedData -> sLit ".align 8"
       ReadOnlyData16    -> sLit ".align 16"
+      -- TODO: This is copied from the ReadOnlyData case, but it can likely be
+      -- made more efficient.
+      CString           -> sLit ".align 8"
       OtherSection _    -> panic "PprMach.pprSectionHeader: unknown section")
 
 -- | Pretty print a data item.
@@ -398,7 +402,7 @@ pprInstr (LD format addr reg)
                pprReg reg
             ]
 
--- 64 bit FP storees are expanded into individual instructions in CodeGen.Expand
+-- 64 bit FP stores are expanded into individual instructions in CodeGen.Expand
 pprInstr (ST FF64 reg _)
         | RegReal (RealRegSingle{}) <- reg
         = panic "SPARC.Ppr: not emitting potentially misaligned ST FF64 instr"

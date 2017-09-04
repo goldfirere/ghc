@@ -2,9 +2,7 @@
 
 -- The default iteration limit is a bit too low for the definitions
 -- in this module.
-#if __GLASGOW_HASKELL__ >= 800
 {-# OPTIONS_GHC -fmax-pmcheck-iterations=10000000 #-}
-#endif
 
 -----------------------------------------------------------------------------
 --
@@ -21,6 +19,7 @@
 module X86.CodeGen (
         cmmTopCodeGen,
         generateJumpTableForInstr,
+        extractUnwindPoints,
         InstrBlock
 )
 
@@ -37,7 +36,8 @@ import X86.Regs
 import X86.RegInfo
 import CodeGen.Platform
 import CPrim
-import Debug            ( DebugBlock(..) )
+import Debug            ( DebugBlock(..), UnwindPoint(..), UnwindTable
+                        , UnwindExpr(UwReg), toUnwindExpr )
 import Instruction
 import PIC
 import NCGMonad
@@ -53,7 +53,8 @@ import PprCmm           ()
 import CmmUtils
 import CmmSwitch
 import Cmm
-import Hoopl
+import Hoopl.Block
+import Hoopl.Graph
 import CLabel
 import CoreSyn          ( Tickish(..) )
 import SrcLoc           ( srcSpanFile, srcSpanStartLine, srcSpanStartCol )
@@ -66,12 +67,16 @@ import Unique
 import FastString
 import DynFlags
 import Util
+import UniqSupply       ( getUniqueM )
 
 import Control.Monad
 import Data.Bits
+import Data.Foldable (fold)
 import Data.Int
 import Data.Maybe
 import Data.Word
+
+import qualified Data.Map as M
 
 is32BitPlatform :: NatM Bool
 is32BitPlatform = do
@@ -134,12 +139,13 @@ basicBlockCodeGen block = do
   mid_instrs <- stmtsToInstrs stmts
   tail_instrs <- stmtToInstrs tail
   let instrs = loc_instrs `appOL` mid_instrs `appOL` tail_instrs
+  instrs' <- fold <$> traverse addSpUnwindings instrs
   -- code generation may introduce new basic block boundaries, which
   -- are indicated by the NEWBLOCK instruction.  We must split up the
   -- instruction stream into basic blocks again.  Also, we extract
   -- LDATAs here too.
   let
-        (top,other_blocks,statics) = foldrOL mkBlocks ([],[],[]) instrs
+        (top,other_blocks,statics) = foldrOL mkBlocks ([],[],[]) instrs'
 
         mkBlocks (NEWBLOCK id) (instrs,blocks,statics)
           = ([], BasicBlock id instrs : blocks, statics)
@@ -149,6 +155,18 @@ basicBlockCodeGen block = do
           = (instr:instrs, blocks, statics)
   return (BasicBlock id top : other_blocks, statics)
 
+-- | Convert 'DELTA' instructions into 'UNWIND' instructions to capture changes
+-- in the @sp@ register. See Note [What is this unwinding business?] in Debug
+-- for details.
+addSpUnwindings :: Instr -> NatM (OrdList Instr)
+addSpUnwindings instr@(DELTA d) = do
+    dflags <- getDynFlags
+    if debugLevel dflags >= 1
+        then do lbl <- mkAsmTempLabel <$> getUniqueM
+                let unwind = M.singleton MachSp (Just $ UwReg MachSp $ negate d)
+                return $ toOL [ instr, UNWIND lbl unwind ]
+        else return (unitOL instr)
+addSpUnwindings instr = return $ unitOL instr
 
 stmtsToInstrs :: [CmmNode e x] -> NatM InstrBlock
 stmtsToInstrs stmts
@@ -163,7 +181,15 @@ stmtToInstrs stmt = do
   case stmt of
     CmmComment s   -> return (unitOL (COMMENT s))
     CmmTick {}     -> return nilOL
-    CmmUnwind {}   -> return nilOL
+
+    CmmUnwind regs -> do
+      let to_unwind_entry :: (GlobalReg, Maybe CmmExpr) -> UnwindTable
+          to_unwind_entry (reg, expr) = M.singleton reg (fmap toUnwindExpr expr)
+      case foldMap to_unwind_entry regs of
+        tbl | M.null tbl -> return nilOL
+            | otherwise  -> do
+                lbl <- mkAsmTempLabel <$> getUniqueM
+                return $ unitOL $ UNWIND lbl tbl
 
     CmmAssign reg src
       | isFloatType ty         -> assignReg_FltCode format reg src
@@ -2016,20 +2042,29 @@ genCCall dflags is32Bit (PrimTarget (MO_Cmpxchg width)) [dst] [addr, old, new] =
 genCCall _ is32Bit target dest_regs args = do
   dflags <- getDynFlags
   let platform = targetPlatform dflags
+      sse2     = isSse2Enabled dflags
   case (target, dest_regs) of
     -- void return type prim op
     (PrimTarget op, []) ->
         outOfLineCmmOp op Nothing args
     -- we only cope with a single result for foreign calls
     (PrimTarget op, [r])
-      | not is32Bit -> outOfLineCmmOp op (Just r) args
+      | sse2 -> case op of
+          MO_F32_Fabs -> case args of
+            [x] -> sse2FabsCode W32 x
+            _ -> panic "genCCall: Wrong number of arguments for fabs"
+          MO_F64_Fabs -> case args of
+            [x] -> sse2FabsCode W64 x
+            _ -> panic "genCCall: Wrong number of arguments for fabs"
+
+          MO_F32_Sqrt -> actuallyInlineSSE2Op (\fmt r -> SQRT fmt (OpReg r)) FF32 args
+          MO_F64_Sqrt -> actuallyInlineSSE2Op (\fmt r -> SQRT fmt (OpReg r)) FF64 args
+          _other_op -> outOfLineCmmOp op (Just r) args
       | otherwise -> do
         l1 <- getNewLabelNat
         l2 <- getNewLabelNat
-        sse2 <- sse2Enabled
         if sse2
-          then
-            outOfLineCmmOp op (Just r) args
+          then outOfLineCmmOp op (Just r) args
           else case op of
               MO_F32_Sqrt -> actuallyInlineFloatOp GSQRT FF32 args
               MO_F64_Sqrt -> actuallyInlineFloatOp GSQRT FF64 args
@@ -2046,14 +2081,34 @@ genCCall _ is32Bit target dest_regs args = do
               _other_op   -> outOfLineCmmOp op (Just r) args
 
        where
-        actuallyInlineFloatOp instr format [x]
+        actuallyInlineFloatOp = actuallyInlineFloatOp' False
+        actuallyInlineSSE2Op = actuallyInlineFloatOp' True
+
+        actuallyInlineFloatOp' usesSSE instr format [x]
               = do res <- trivialUFCode format (instr format) x
                    any <- anyReg res
-                   return (any (getRegisterReg platform False (CmmLocal r)))
+                   return (any (getRegisterReg platform usesSSE (CmmLocal r)))
 
-        actuallyInlineFloatOp _ _ args
-              = panic $ "genCCall.actuallyInlineFloatOp: bad number of arguments! ("
+        actuallyInlineFloatOp' _ _ _ args
+              = panic $ "genCCall.actuallyInlineFloatOp': bad number of arguments! ("
                       ++ show (length args) ++ ")"
+
+        sse2FabsCode :: Width -> CmmExpr -> NatM InstrBlock
+        sse2FabsCode w x = do
+          let fmt = floatFormat w
+          x_code <- getAnyReg x
+          let
+            const | FF32 <- fmt = CmmInt 0x7fffffff W32
+                  | otherwise   = CmmInt 0x7fffffffffffffff W64
+          Amode amode amode_code <- memConstant (widthInBytes w) const
+          tmp <- getNewRegNat fmt
+          let
+            code dst = x_code dst `appOL` amode_code `appOL` toOL [
+                MOV fmt (OpAddr amode) (OpReg tmp),
+                AND fmt (OpReg tmp) (OpReg dst)
+                ]
+
+          return $ code (getRegisterReg platform True (CmmLocal r))
 
     (PrimTarget (MO_S_QuotRem  width), _) -> divOp1 platform True  width dest_regs args
     (PrimTarget (MO_U_QuotRem  width), _) -> divOp1 platform False width dest_regs args
@@ -2264,8 +2319,7 @@ genCCall32' dflags target dest_regs args = do
             ChildCode64 code r_lo <- iselExpr64 arg
             delta <- getDeltaNat
             setDeltaNat (delta - 8)
-            let
-                r_hi = getHiVRegFromLo r_lo
+            let r_hi = getHiVRegFromLo r_lo
             return (       code `appOL`
                            toOL [PUSH II32 (OpReg r_hi), DELTA (delta - 4),
                                  PUSH II32 (OpReg r_lo), DELTA (delta - 8),
@@ -2568,11 +2622,12 @@ outOfLineCmmOp mop res args
   where
         -- Assume we can call these functions directly, and that they're not in a dynamic library.
         -- TODO: Why is this ok? Under linux this code will be in libm.so
-        --       Is is because they're really implemented as a primitive instruction by the assembler??  -- BL 2009/12/31
+        --       Is it because they're really implemented as a primitive instruction by the assembler??  -- BL 2009/12/31
         lbl = mkForeignLabel fn Nothing ForeignLabelInThisPackage IsFunction
 
         fn = case mop of
               MO_F32_Sqrt  -> fsLit "sqrtf"
+              MO_F32_Fabs  -> fsLit "fabsf"
               MO_F32_Sin   -> fsLit "sinf"
               MO_F32_Cos   -> fsLit "cosf"
               MO_F32_Tan   -> fsLit "tanf"
@@ -2589,6 +2644,7 @@ outOfLineCmmOp mop res args
               MO_F32_Pwr   -> fsLit "powf"
 
               MO_F64_Sqrt  -> fsLit "sqrt"
+              MO_F64_Fabs  -> fsLit "fabs"
               MO_F64_Sin   -> fsLit "sin"
               MO_F64_Cos   -> fsLit "cos"
               MO_F64_Tan   -> fsLit "tan"
@@ -2640,7 +2696,7 @@ outOfLineCmmOp mop res args
 genSwitch :: DynFlags -> CmmExpr -> SwitchTargets -> NatM InstrBlock
 
 genSwitch dflags expr targets
-  | gopt Opt_PIC dflags
+  | positionIndependent dflags
   = do
         (reg,e_code) <- getNonClobberedReg (cmmOffset dflags expr offset)
            -- getNonClobberedReg because it needs to survive across t_code
@@ -2703,7 +2759,7 @@ createJumpTable :: DynFlags -> [Maybe BlockId] -> Section -> CLabel
                 -> GenCmmDecl (Alignment, CmmStatics) h g
 createJumpTable dflags ids section lbl
     = let jumpTable
-            | gopt Opt_PIC dflags =
+            | positionIndependent dflags =
                   let jumpTableEntryRel Nothing
                           = CmmStaticLit (CmmInt 0 (wordWidth dflags))
                       jumpTableEntryRel (Just blockid)
@@ -2712,6 +2768,10 @@ createJumpTable dflags ids section lbl
                   in map jumpTableEntryRel ids
             | otherwise = map (jumpTableEntry dflags) ids
       in CmmData section (1, Statics lbl jumpTable)
+
+extractUnwindPoints :: [Instr] -> [UnwindPoint]
+extractUnwindPoints instrs =
+    [ UnwindPoint lbl unwinds | UNWIND lbl unwinds <- instrs]
 
 -- -----------------------------------------------------------------------------
 -- 'condIntReg' and 'condFltReg': condition codes into registers
@@ -3020,8 +3080,16 @@ sse2NegCode w x = do
   x_code <- getAnyReg x
   -- This is how gcc does it, so it can't be that bad:
   let
-    const | FF32 <- fmt = CmmInt 0x80000000 W32
-          | otherwise   = CmmInt 0x8000000000000000 W64
+    const = case fmt of
+      FF32 -> CmmInt 0x80000000 W32
+      FF64 -> CmmInt 0x8000000000000000 W64
+      x@II8  -> wrongFmt x
+      x@II16 -> wrongFmt x
+      x@II32 -> wrongFmt x
+      x@II64 -> wrongFmt x
+      x@FF80 -> wrongFmt x
+      where
+        wrongFmt x = panic $ "sse2NegCode: " ++ show x
   Amode amode amode_code <- memConstant (widthInBytes w) const
   tmp <- getNewRegNat fmt
   let

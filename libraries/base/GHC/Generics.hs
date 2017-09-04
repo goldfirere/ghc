@@ -1,22 +1,23 @@
-{-# LANGUAGE CPP                    #-}
-{-# LANGUAGE DataKinds              #-}
-{-# LANGUAGE DeriveFunctor          #-}
-{-# LANGUAGE DeriveGeneric          #-}
-{-# LANGUAGE FlexibleContexts       #-}
-{-# LANGUAGE FlexibleInstances      #-}
-{-# LANGUAGE GADTs                  #-}
-{-# LANGUAGE KindSignatures         #-}
-{-# LANGUAGE MagicHash              #-}
-{-# LANGUAGE NoImplicitPrelude      #-}
-{-# LANGUAGE PolyKinds              #-}
-{-# LANGUAGE ScopedTypeVariables    #-}
-{-# LANGUAGE StandaloneDeriving     #-}
-{-# LANGUAGE Trustworthy            #-}
-{-# LANGUAGE TypeFamilies           #-}
-{-# LANGUAGE TypeInType             #-}
-{-# LANGUAGE TypeOperators          #-}
-{-# LANGUAGE TypeSynonymInstances   #-}
-{-# LANGUAGE UndecidableInstances   #-}
+{-# LANGUAGE CPP                        #-}
+{-# LANGUAGE DataKinds                  #-}
+{-# LANGUAGE DeriveFunctor              #-}
+{-# LANGUAGE DeriveGeneric              #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE KindSignatures             #-}
+{-# LANGUAGE MagicHash                  #-}
+{-# LANGUAGE NoImplicitPrelude          #-}
+{-# LANGUAGE PolyKinds                  #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE StandaloneDeriving         #-}
+{-# LANGUAGE Trustworthy                #-}
+{-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE TypeInType                 #-}
+{-# LANGUAGE TypeOperators              #-}
+{-# LANGUAGE TypeSynonymInstances       #-}
+{-# LANGUAGE UndecidableInstances       #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -76,7 +77,7 @@ module GHC.Generics  (
 --   type 'Rep' (Tree a) =
 --     'D1' ('MetaData \"Tree\" \"Main\" \"package-name\" 'False)
 --       ('C1' ('MetaCons \"Leaf\" 'PrefixI 'False)
---          ('S1' '(MetaSel 'Nothing
+--          ('S1' ('MetaSel 'Nothing
 --                          'NoSourceUnpackedness
 --                          'NoSourceStrictness
 --                          'DecidedLazy)
@@ -255,9 +256,9 @@ module GHC.Generics  (
 -- all the constructors and fields as needed. However, users /should not rely on
 -- a specific nesting strategy/ for ':+:' and ':*:' being used. The compiler is
 -- free to choose any nesting it prefers. (In practice, the current implementation
--- tries to produce a more or less balanced nesting, so that the traversal of the
--- structure of the datatype from the root to a particular component can be performed
--- in logarithmic rather than linear time.)
+-- tries to produce a more-or-less balanced nesting, so that the traversal of
+-- the structure of the datatype from the root to a particular component can be
+-- performed in logarithmic rather than linear time.)
 
 -- ** Defining datatype-generic functions
 --
@@ -349,6 +350,14 @@ module GHC.Generics  (
 --   encode' ('L1' x) = False : encode' x
 --   encode' ('R1' x) = True  : encode' x
 -- @
+--
+-- (Note that this encoding strategy may not be reliable across different
+-- versions of GHC. Recall that the compiler is free to choose any nesting
+-- of ':+:' it chooses, so if GHC chooses @(a ':+:' b) ':+:' c@, then the
+-- encoding for @a@ would be @[False, False]@, @b@ would be @[False, True]@,
+-- and @c@ would be @[True]@. However, if GHC chooses @a ':+:' (b ':+:' c)@,
+-- then the encoding for @a@ would be @[False]@, @b@ would be @[True, False]@,
+-- and @c@ would be @[True, True]@.)
 --
 -- In the case for ':*:', we append the encodings of the two subcomponents:
 --
@@ -730,10 +739,10 @@ import GHC.Types
 -- Needed for instances
 import GHC.Arr     ( Ix )
 import GHC.Base    ( Alternative(..), Applicative(..), Functor(..)
-                   , Monad(..), MonadPlus(..), String )
+                   , Monad(..), MonadPlus(..), String, coerce )
 import GHC.Classes ( Eq(..), Ord(..) )
 import GHC.Enum    ( Bounded, Enum )
-import GHC.Read    ( Read(..), lex, readParen )
+import GHC.Read    ( Read(..) )
 import GHC.Show    ( Show(..), showString )
 
 -- Needed for metadata
@@ -766,8 +775,7 @@ instance Ord (U1 p) where
   compare _ _ = EQ
 
 -- | @since 4.9.0.0
-instance Read (U1 p) where
-  readsPrec d = readParen (d > 10) (\r -> [(U1, s) | ("U1",s) <- lex r ])
+deriving instance Read (U1 p)
 
 -- | @since 4.9.0.0
 instance Show (U1 p) where
@@ -781,6 +789,7 @@ instance Functor U1 where
 instance Applicative U1 where
   pure _ = U1
   _ <*> _ = U1
+  liftA2 _ _ _ = U1
 
 -- | @since 4.9.0.0
 instance Alternative U1 where
@@ -800,8 +809,9 @@ newtype Par1 p = Par1 { unPar1 :: p }
 
 -- | @since 4.9.0.0
 instance Applicative Par1 where
-  pure a = Par1 a
-  Par1 f <*> Par1 x = Par1 (f x)
+  pure = Par1
+  (<*>) = coerce
+  liftA2 = coerce
 
 -- | @since 4.9.0.0
 instance Monad Par1 where
@@ -813,42 +823,33 @@ newtype Rec1 (f :: k -> *) (p :: k) = Rec1 { unRec1 :: f p }
   deriving (Eq, Ord, Read, Show, Functor, Generic, Generic1)
 
 -- | @since 4.9.0.0
-instance Applicative f => Applicative (Rec1 f) where
-  pure a = Rec1 (pure a)
-  Rec1 f <*> Rec1 x = Rec1 (f <*> x)
+deriving instance Applicative f => Applicative (Rec1 f)
 
 -- | @since 4.9.0.0
-instance Alternative f => Alternative (Rec1 f) where
-  empty = Rec1 empty
-  Rec1 l <|> Rec1 r = Rec1 (l <|> r)
+deriving instance Alternative f => Alternative (Rec1 f)
 
 -- | @since 4.9.0.0
 instance Monad f => Monad (Rec1 f) where
   Rec1 x >>= f = Rec1 (x >>= \a -> unRec1 (f a))
 
 -- | @since 4.9.0.0
-instance MonadPlus f => MonadPlus (Rec1 f)
+deriving instance MonadPlus f => MonadPlus (Rec1 f)
 
 -- | Constants, additional parameters and recursion of kind @*@
 newtype K1 (i :: *) c (p :: k) = K1 { unK1 :: c }
   deriving (Eq, Ord, Read, Show, Functor, Generic, Generic1)
 
 -- | @since 4.9.0.0
-instance Applicative f => Applicative (M1 i c f) where
-  pure a = M1 (pure a)
-  M1 f <*> M1 x = M1 (f <*> x)
+deriving instance Applicative f => Applicative (M1 i c f)
 
 -- | @since 4.9.0.0
-instance Alternative f => Alternative (M1 i c f) where
-  empty = M1 empty
-  M1 l <|> M1 r = M1 (l <|> r)
+deriving instance Alternative f => Alternative (M1 i c f)
 
 -- | @since 4.9.0.0
-instance Monad f => Monad (M1 i c f) where
-  M1 x >>= f = M1 (x >>= \a -> unM1 (f a))
+deriving instance Monad f => Monad (M1 i c f)
 
 -- | @since 4.9.0.0
-instance MonadPlus f => MonadPlus (M1 i c f)
+deriving instance MonadPlus f => MonadPlus (M1 i c f)
 
 -- | Meta-information (constructor names, etc.)
 newtype M1 (i :: *) (c :: Meta) (f :: k -> *) (p :: k) = M1 { unM1 :: f p }
@@ -868,6 +869,7 @@ data (:*:) (f :: k -> *) (g :: k -> *) (p :: k) = f p :*: g p
 instance (Applicative f, Applicative g) => Applicative (f :*: g) where
   pure a = pure a :*: pure a
   (f :*: g) <*> (x :*: y) = (f <*> x) :*: (g <*> y)
+  liftA2 f (a :*: b) (x :*: y) = liftA2 f a x :*: liftA2 f b y
 
 -- | @since 4.9.0.0
 instance (Alternative f, Alternative g) => Alternative (f :*: g) where
@@ -893,12 +895,14 @@ newtype (:.:) (f :: k2 -> *) (g :: k1 -> k2) (p :: k1) =
 -- | @since 4.9.0.0
 instance (Applicative f, Applicative g) => Applicative (f :.: g) where
   pure x = Comp1 (pure (pure x))
-  Comp1 f <*> Comp1 x = Comp1 (fmap (<*>) f <*> x)
+  Comp1 f <*> Comp1 x = Comp1 (liftA2 (<*>) f x)
+  liftA2 f (Comp1 x) (Comp1 y) = Comp1 (liftA2 (liftA2 f) x y)
 
 -- | @since 4.9.0.0
 instance (Alternative f, Applicative g) => Alternative (f :.: g) where
   empty = Comp1 empty
-  Comp1 x <|> Comp1 y = Comp1 (x <|> y)
+  (<|>) = coerce ((<|>) :: f (g a) -> f (g a) -> f (g a)) ::
+    forall a . (f :.: g) a -> (f :.: g) a -> (f :.: g) a
 
 -- | Constants of unlifted kinds
 --
@@ -1143,8 +1147,15 @@ instance (SingI mn, SingI su, SingI ss, SingI ds)
   selSourceStrictness   _ = fromSing (sing :: Sing ss)
   selDecidedStrictness  _ = fromSing (sing :: Sing ds)
 
--- | Representable types of kind *.
--- This class is derivable in GHC with the DeriveGeneric flag on.
+-- | Representable types of kind @*@.
+-- This class is derivable in GHC with the @DeriveGeneric@ flag on.
+--
+-- A 'Generic' instance must satisfy the following laws:
+--
+-- @
+-- 'from' . 'to' ≡ 'id'
+-- 'to' . 'from' ≡ 'id'
+-- @
 class Generic a where
   -- | Generic representation type
   type Rep a :: * -> *
@@ -1157,6 +1168,13 @@ class Generic a where
 -- | Representable types of kind @* -> *@ (or kind @k -> *@, when @PolyKinds@
 -- is enabled).
 -- This class is derivable in GHC with the @DeriveGeneric@ flag on.
+--
+-- A 'Generic1' instance must satisfy the following laws:
+--
+-- @
+-- 'from1' . 'to1' ≡ 'id'
+-- 'to1' . 'from1' ≡ 'id'
+-- @
 class Generic1 (f :: k -> *) where
   -- | Generic representation type
   type Rep1 f :: k -> *
@@ -1179,7 +1197,7 @@ class Generic1 (f :: k -> *) where
 -- * In @MetaCons n f s@, @n@ is the constructor's name, @f@ is its fixity,
 --   and @s@ is @'True@ if the constructor contains record selectors.
 --
--- * In @MetaSel mn su ss ds@, if the field is uses record syntax, then @mn@ is
+-- * In @MetaSel mn su ss ds@, if the field uses record syntax, then @mn@ is
 --   'Just' the record name. Otherwise, @mn@ is 'Nothing'. @su@ and @ss@ are
 --   the field's unpackedness and strictness annotations, and @ds@ is the
 --   strictness that GHC infers for the field.

@@ -25,7 +25,7 @@
 #include "MachDeps.h"
 #include "SMPClosureOps.h"
 
-#ifdef __PIC__
+#if defined(__PIC__)
 import pthread_mutex_lock;
 import pthread_mutex_unlock;
 #endif
@@ -36,7 +36,7 @@ import CLOSURE ghczmprim_GHCziTypes_False_closure;
 #if defined(USE_MINIINTERPRETER) || !defined(mingw32_HOST_OS)
 import CLOSURE sm_mutex;
 #endif
-#ifdef PROFILING
+#if defined(PROFILING)
 import CLOSURE CCS_MAIN;
 #endif
 
@@ -147,10 +147,11 @@ stg_isByteArrayPinnedzh ( gcptr ba )
 {
     W_ bd, flags;
     bd = Bdescr(ba);
-    // pinned byte arrays live in blocks with the BF_PINNED flag set.
+    // Pinned byte arrays live in blocks with the BF_PINNED flag set.
+    // We also consider BF_LARGE objects to be immovable. See #13894.
     // See the comment in Storage.c:allocatePinned.
     flags = TO_W_(bdescr_flags(bd));
-    return (flags & BF_PINNED != 0);
+    return (flags & (BF_PINNED | BF_LARGE) != 0);
 }
 
 stg_isMutableByteArrayPinnedzh ( gcptr mba )
@@ -528,6 +529,7 @@ stg_newMutVarzh ( gcptr init )
 stg_casMutVarzh ( gcptr mv, gcptr old, gcptr new )
  /* MutVar# s a -> a -> a -> State# s -> (# State#, Int#, Any a #) */
 {
+#if defined(THREADED_RTS)
     gcptr h;
 
     (h) = prim %cmpxchgW(mv + SIZEOF_StgHeader + OFFSET_StgMutVar_var, old, new);
@@ -539,6 +541,20 @@ stg_casMutVarzh ( gcptr mv, gcptr old, gcptr new )
         }
         return (0,new);
     }
+#else
+    gcptr prev_val;
+
+    prev_val = StgMutVar_var(mv);
+    if (prev_val != old) {
+        return (1,prev_val);
+    } else {
+        StgMutVar_var(mv) = new;
+        if (GET_INFO(mv) == stg_MUT_VAR_CLEAN_info) {
+            ccall dirty_MUT_VAR(BaseReg "ptr", mv "ptr");
+        }
+        return (0,new);
+    }
+#endif
 }
 
 stg_atomicModifyMutVarzh ( gcptr mv, gcptr f )
@@ -561,7 +577,7 @@ stg_atomicModifyMutVarzh ( gcptr mv, gcptr f )
          r = [stg_sel_1 z]   (max (HS + 1) MIN_UPD_SIZE)
     */
 
-#if MIN_UPD_SIZE > 1
+#if defined(MIN_UPD_SIZE) && MIN_UPD_SIZE > 1
 #define THUNK_1_SIZE (SIZEOF_StgThunkHeader + WDS(MIN_UPD_SIZE))
 #define TICK_ALLOC_THUNK_1() TICK_ALLOC_UP_THK(WDS(1),WDS(MIN_UPD_SIZE-1))
 #else
@@ -569,7 +585,7 @@ stg_atomicModifyMutVarzh ( gcptr mv, gcptr f )
 #define TICK_ALLOC_THUNK_1() TICK_ALLOC_UP_THK(WDS(1),0)
 #endif
 
-#if MIN_UPD_SIZE > 2
+#if defined(MIN_UPD_SIZE) && MIN_UPD_SIZE > 2
 #define THUNK_2_SIZE (SIZEOF_StgThunkHeader + WDS(MIN_UPD_SIZE))
 #define TICK_ALLOC_THUNK_2() TICK_ALLOC_UP_THK(WDS(2),WDS(MIN_UPD_SIZE-2))
 #else
@@ -605,7 +621,7 @@ stg_atomicModifyMutVarzh ( gcptr mv, gcptr f )
   retry:
     x = StgMutVar_var(mv);
     StgThunk_payload(z,1) = x;
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     (h) = prim %cmpxchgW(mv + SIZEOF_StgHeader + OFFSET_StgMutVar_var, x, y);
     if (h != x) { goto retry; }
 #else
@@ -714,7 +730,7 @@ stg_finalizzeWeakzh ( gcptr w )
     list = StgWeak_cfinalizers(w);
 
     // kill it
-#ifdef PROFILING
+#if defined(PROFILING)
     // @LDV profiling
     // A weak pointer is inherently used, so we do not need to call
     // LDV_recordDead_FILL_SLOP_DYNAMIC():
@@ -723,7 +739,7 @@ stg_finalizzeWeakzh ( gcptr w )
     //    LDV_recordDead((StgClosure *)w, sizeofW(StgWeak) - sizeofW(StgProfHeader));
     // Furthermore, when PROFILING is turned on, dead weak pointers are exactly as
     // large as weak pointers, so there is no need to fill the slop, either.
-    // See stg_DEAD_WEAK_info in StgMiscClosures.hc.
+    // See stg_DEAD_WEAK_info in StgMiscClosures.cmm.
 #endif
 
     //
@@ -1925,137 +1941,6 @@ stg_deRefStablePtrzh ( P_ sp )
 }
 
 /* -----------------------------------------------------------------------------
-   CompactNFData primitives
-
-   See Note [Compact Normal Forms]
-   -------------------------------------------------------------------------  */
-
-stg_compactNewzh ( W_ size )
-{
-    P_ str;
-
-    again: MAYBE_GC(again);
-
-    ("ptr" str) = ccall compactNew(MyCapability() "ptr", size);
-    return (str);
-}
-
-stg_compactAppendzh ( P_ str, P_ val , W_ share)
-{
-    P_ root;
-
-    again: MAYBE_GC(again);
-
-     ("ptr" root) = ccall compactAppend(MyCapability() "ptr", str "ptr", val "ptr", share);
-    return (root);
-}
-
-stg_compactResizzezh ( P_ str, W_ new_size )
-{
-    again: MAYBE_GC(again);
-
-    ccall compactResize(MyCapability() "ptr", str "ptr", new_size);
-    return ();
-}
-
-stg_compactContainszh ( P_ str, P_ val )
-{
-    W_ rval;
-
-    (rval) = ccall compactContains(str "ptr", val "ptr");
-    return (rval);
-}
-
-stg_compactContainsAnyzh ( P_ val )
-{
-    W_ rval;
-
-    (rval) = ccall compactContains(0 "ptr", val "ptr");
-    return (rval);
-}
-
-stg_compactGetFirstBlockzh ( P_ str )
-{
-    /* W_, not P_, because it is not a gc pointer */
-    W_ block;
-    W_ bd;
-    W_ size;
-
-    block = str - SIZEOF_StgCompactNFDataBlock::W_;
-    ASSERT (StgCompactNFDataBlock_owner(block) == str);
-
-    bd = Bdescr(str);
-    size = bdescr_free(bd) - bdescr_start(bd);
-    ASSERT (size <= TO_W_(bdescr_blocks(bd)) * BLOCK_SIZE);
-
-    return (block, size);
-}
-
-stg_compactGetNextBlockzh ( P_ str, W_ block )
-{
-    /* str is a pointer to the closure holding the Compact#
-       it is there primarily to keep everything reachable from
-       the GC: by having it on the stack of type P_, the GC will
-       see all the blocks as live (any pointer in the Compact#
-       keeps it alive), and will not collect the block
-       We don't run a GC inside this primop, but it could
-       happen right after, or we could be preempted.
-
-       str is also useful for debugging, as it can be casted
-       to a useful C struct from the gdb command line and all
-       blocks can be inspected
-    */
-    W_ bd;
-    W_ next_block;
-    W_ size;
-
-    next_block = StgCompactNFDataBlock_next(block);
-
-    if (next_block == 0::W_) {
-        return (0::W_, 0::W_);
-    }
-
-    ASSERT (StgCompactNFDataBlock_owner(next_block) == str ||
-            StgCompactNFDataBlock_owner(next_block) == NULL);
-
-    bd = Bdescr(next_block);
-    size = bdescr_free(bd) - bdescr_start(bd);
-    ASSERT (size <= TO_W_(bdescr_blocks(bd)) * BLOCK_SIZE);
-
-    return (next_block, size);
-}
-
-stg_compactAllocateBlockzh ( W_ size, W_ previous )
-{
-    W_ actual_block;
-
-    again: MAYBE_GC(again);
-
-    ("ptr" actual_block) = ccall compactAllocateBlock(MyCapability(),
-                                                      size,
-                                                      previous "ptr");
-
-    return (actual_block);
-}
-
-stg_compactFixupPointerszh ( W_ first_block, W_ root )
-{
-    W_ str;
-    P_ gcstr;
-    W_ ok;
-
-    str = first_block + SIZEOF_StgCompactNFDataBlock::W_;
-    (ok) = ccall compactFixupPointers (str "ptr", root "ptr");
-
-    // Now we can let the GC know about str, because it was linked
-    // into the generation list and the book-keeping pointers are
-    // guaranteed to be valid
-    // (this is true even if the fixup phase failed)
-    gcstr = str;
-    return (gcstr, ok);
-}
-
-/* -----------------------------------------------------------------------------
    Bytecode object primitives
    -------------------------------------------------------------------------  */
 
@@ -2099,7 +1984,7 @@ stg_mkApUpd0zh ( P_ bco )
     W_ ap;
 
     // This function is *only* used to wrap zero-arity BCOs in an
-    // updatable wrapper (see ByteCodeLink.lhs).  An AP thunk is always
+    // updatable wrapper (see ByteCodeLink.hs).  An AP thunk is always
     // saturated and always points directly to a FUN or BCO.
     ASSERT(%INFO_TYPE(%GET_STD_INFO(bco)) == HALF_W_(BCO) &&
            StgBCO_arity(bco) == HALF_W_(0));
@@ -2203,7 +2088,7 @@ write_nptrs:
 
 stg_waitReadzh ( W_ fd )
 {
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     ccall barf("waitRead# on threaded RTS") never returns;
 #else
 
@@ -2219,7 +2104,7 @@ stg_waitReadzh ( W_ fd )
 
 stg_waitWritezh ( W_ fd )
 {
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     ccall barf("waitWrite# on threaded RTS") never returns;
 #else
 
@@ -2237,21 +2122,21 @@ stg_waitWritezh ( W_ fd )
 STRING(stg_delayzh_malloc_str, "stg_delayzh")
 stg_delayzh ( W_ us_delay )
 {
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
     W_ ares;
     CInt reqID;
 #else
     W_ t, prev, target;
 #endif
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     ccall barf("delay# on threaded RTS") never returns;
 #else
 
     ASSERT(StgTSO_why_blocked(CurrentTSO) == NotBlocked::I16);
     StgTSO_why_blocked(CurrentTSO) = BlockedOnDelay::I16;
 
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 
     /* could probably allocate this on the heap instead */
     ("ptr" ares) = ccall stgMallocBytes(SIZEOF_StgAsyncIOResult,
@@ -2299,14 +2184,14 @@ while:
 }
 
 
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 STRING(stg_asyncReadzh_malloc_str, "stg_asyncReadzh")
 stg_asyncReadzh ( W_ fd, W_ is_sock, W_ len, W_ buf )
 {
     W_ ares;
     CInt reqID;
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     ccall barf("asyncRead# on threaded RTS") never returns;
 #else
 
@@ -2332,7 +2217,7 @@ stg_asyncWritezh ( W_ fd, W_ is_sock, W_ len, W_ buf )
     W_ ares;
     CInt reqID;
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     ccall barf("asyncWrite# on threaded RTS") never returns;
 #else
 
@@ -2358,7 +2243,7 @@ stg_asyncDoProczh ( W_ proc, W_ param )
     W_ ares;
     CInt reqID;
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     ccall barf("asyncDoProc# on threaded RTS") never returns;
 #else
 
@@ -2487,7 +2372,7 @@ stg_traceCcszh ( P_ obj, P_ ret )
 {
     W_ ccs;
 
-#ifdef PROFILING
+#if defined(PROFILING)
     ccs = StgHeader_ccs(UNTAG(obj));
     ccall fprintCCS_stderr(ccs "ptr");
 #endif
@@ -2499,7 +2384,7 @@ stg_getSparkzh ()
 {
     W_ spark;
 
-#ifndef THREADED_RTS
+#if !defined(THREADED_RTS)
     return (0,ghczmprim_GHCziTypes_False_closure);
 #else
     ("ptr" spark) = ccall findSpark(MyCapability() "ptr");
@@ -2513,7 +2398,7 @@ stg_getSparkzh ()
 
 stg_clearCCSzh (P_ arg)
 {
-#ifdef PROFILING
+#if defined(PROFILING)
     CCCS = CCS_MAIN;
 #endif
     jump stg_ap_v_fast(arg);
@@ -2522,7 +2407,7 @@ stg_clearCCSzh (P_ arg)
 stg_numSparkszh ()
 {
     W_ n;
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     (n) = ccall dequeElements(Capability_sparks(MyCapability()));
 #else
     n = 0;

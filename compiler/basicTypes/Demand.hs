@@ -124,10 +124,11 @@ mkJointDmds ss as = zipWithEqual "mkJointDmds" mkJointDmd ss as
 
 Note [Exceptions and strictness]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Exceptions need rather careful treatment, especially because of 'catch'.
-See Trac #10712.
+Exceptions need rather careful treatment, especially because of 'catch'
+('catch#'), 'catchSTM' ('catchSTM#'), and 'orElse' ('catchRetry#').
+See Trac #11555, #10712 and #13330, and for some more background, #11222.
 
-There are two main pieces.
+There are three main pieces.
 
 * The Termination type includes ThrowsExn, meaning "under the given
   demand this expression either diverges or throws an exception".
@@ -139,65 +140,113 @@ There are two main pieces.
   result of the argument.  If the ExnStr flag is ExnStr, we squash
   ThrowsExn to topRes.  (This is done in postProcessDmdResult.)
 
-Here is the kay example
+Here is the key example
 
-    catch# (\s -> throwIO exn s) blah
+    catchRetry# (\s -> retry# s) blah
 
-We analyse the argument (\s -> raiseIO# exn s) with demand
+We analyse the argument (\s -> retry# s) with demand
     Str ExnStr (SCall HeadStr)
 i.e. with the ExnStr flag set.
   - First we analyse the argument with the "clean-demand" (SCall
     HeadStr), getting a DmdResult of ThrowsExn from the saturated
-    application of raiseIO#.
+    application of retry#.
   - Then we apply the post-processing for the shell, squashing the
     ThrowsExn to topRes.
 
 This also applies uniformly to free variables.  Consider
 
-    let r = \st -> raiseIO# blah st
-    in catch# (\s -> ...(r s')..) handler st
+    let r = \st -> retry# st
+    in catchRetry# (\s -> ...(r s')..) handler st
 
-If we give the first argument of catch a strict signature, we'll get
-a demand 'C(S)' for 'r'; that is, 'r' is definitely called with one
-argument, which indeed it is.  But when we post-process the free-var
-demands on catch#'s argument (in postProcessDmdEnv), we'll give 'r'
-a demand of (Str ExnStr (SCall HeadStr)); and if we feed that into r's
-RHS (which would be reasonable) we'll squash the exception just as if
-we'd inlined 'r'.
+If we give the first argument of catch a strict signature, we'll get a demand
+'C(S)' for 'r'; that is, 'r' is definitely called with one argument, which
+indeed it is.  But when we post-process the free-var demands on catchRetry#'s
+argument (in postProcessDmdEnv), we'll give 'r' a demand of (Str ExnStr (SCall
+HeadStr)); and if we feed that into r's RHS (which would be reasonable) we'll
+squash the retry just as if we'd inlined 'r'.
+
+* We don't try to get clever about 'catch#' and 'catchSTM#' at the moment. We
+previously (#11222) tried to take advantage of the fact that 'catch#' calls its
+first argument eagerly. See especially commit
+9915b6564403a6d17651e9969e9ea5d7d7e78e7f. We analyzed that first argument with
+a strict demand, and then performed a post-processing step at the end to change
+ThrowsExn to TopRes.  The trouble, I believe, is that to use this approach
+correctly, we'd need somewhat different information about that argument.
+Diverges, ThrowsExn (i.e., diverges or throws an exception), and Dunno are the
+wrong split here.  In order to evaluate part of the argument speculatively,
+we'd need to know that it *does not throw an exception*. That is, that it
+either diverges or succeeds. But we don't currently have a way to talk about
+that. Abstractly and approximately,
+
+catch# m f s = case ORACLE m s of
+  DivergesOrSucceeds -> m s
+  Fails exc -> f exc s
+
+where the magical ORACLE determines whether or not (m s) throws an exception
+when run, and if so which one. If we want, we can safely consider (catch# m f s)
+strict in anything that both branches are strict in (by performing demand
+analysis for 'catch#' in the same way we do for case). We could also safely
+consider it strict in anything demanded by (m s) that is guaranteed not to
+throw an exception under that demand, but I don't know if we have the means
+to express that.
+
+My mind keeps turning to this model (not as an actual change to the type, but
+as a way to think about what's going on in the analysis):
+
+newtype IO a = IO {unIO :: State# s -> (# s, (# SomeException | a #) #)}
+instance Monad IO where
+  return a = IO $ \s -> (# s, (# | a #) #)
+  IO m >>= f = IO $ \s -> case m s of
+    (# s', (# e | #) #) -> (# s', e #)
+    (# s', (# | a #) #) -> unIO (f a) s
+raiseIO# e s = (# s, (# e | #) #)
+catch# m f s = case m s of
+  (# s', (# e | #) #) -> f e s'
+  res -> res
+
+Thinking about it this way seems likely to be productive for analyzing IO
+exception behavior, but imprecise exceptions and asynchronous exceptions remain
+quite slippery beasts. Can we incorporate them? I think we can. We can imagine
+applying 'seq#' to evaluate @m s@, determining whether it throws an imprecise
+or asynchronous exception or whether it succeeds or throws an IO exception.
+This confines the peculiarities to 'seq#', which is indeed rather essentially
+peculiar.
 -}
 
--- Vanilla strictness domain
+-- | Vanilla strictness domain
 data StrDmd
-  = HyperStr             -- Hyper-strict
-                         -- Bottom of the lattice
-                         -- Note [HyperStr and Use demands]
+  = HyperStr             -- ^ Hyper-strict (bottom of the lattice).
+                         -- See Note [HyperStr and Use demands]
 
-  | SCall StrDmd         -- Call demand
+  | SCall StrDmd         -- ^ Call demand
                          -- Used only for values of function type
 
-  | SProd [ArgStr]     -- Product
+  | SProd [ArgStr]       -- ^ Product
                          -- Used only for values of product type
                          -- Invariant: not all components are HyperStr (use HyperStr)
                          --            not all components are Lazy     (use HeadStr)
 
-  | HeadStr              -- Head-Strict
+  | HeadStr              -- ^ Head-Strict
                          -- A polymorphic demand: used for values of all types,
                          --                       including a type variable
 
   deriving ( Eq, Show )
 
+-- | Strictness of a function argument.
 type ArgStr = Str StrDmd
 
-data Str s = Lazy         -- Lazy
-                          -- Top of the lattice
-           | Str ExnStr s
+-- | Strictness demand.
+data Str s = Lazy         -- ^ Lazy (top of the lattice)
+           | Str ExnStr s -- ^ Strict
   deriving ( Eq, Show )
 
+-- | How are exceptions handled for strict demands?
 data ExnStr  -- See Note [Exceptions and strictness]
-  = VanStr   -- "Vanilla" case, ordinary strictness
+  = VanStr   -- ^ "Vanilla" case, ordinary strictness
 
-  | ExnStr   -- (Str ExnStr d) means be strict like 'd' but then degrade
-             --                the Termination info ThrowsExn to Dunno
+  | ExnStr   -- ^ @Str ExnStr d@ means be strict like @d@ but then degrade
+             -- the 'Termination' info 'ThrowsExn' to 'Dunno'.
+             -- e.g. the first argument of @catch@ has this strictness.
   deriving( Eq, Show )
 
 -- Well-formedness preserving constructors for the Strictness domain
@@ -253,7 +302,7 @@ lubStr (SCall _)  (SProd _)    = HeadStr
 lubStr (SProd sx) HyperStr     = SProd sx
 lubStr (SProd _)  HeadStr      = HeadStr
 lubStr (SProd s1) (SProd s2)
-    | length s1 == length s2   = mkSProd (zipWith lubArgStr s1 s2)
+    | s1 `equalLength` s2      = mkSProd (zipWith lubArgStr s1 s2)
     | otherwise                = HeadStr
 lubStr (SProd _) (SCall _)     = HeadStr
 lubStr HeadStr   _             = HeadStr
@@ -278,14 +327,14 @@ bothStr (SCall _)  (SProd _)   = HyperStr  -- Weird
 bothStr (SProd _)  HyperStr    = HyperStr
 bothStr (SProd s1) HeadStr     = SProd s1
 bothStr (SProd s1) (SProd s2)
-    | length s1 == length s2   = mkSProd (zipWith bothArgStr s1 s2)
+    | s1 `equalLength` s2      = mkSProd (zipWith bothArgStr s1 s2)
     | otherwise                = HyperStr  -- Weird
 bothStr (SProd _) (SCall _)    = HyperStr
 
 -- utility functions to deal with memory leaks
 seqStrDmd :: StrDmd -> ()
 seqStrDmd (SProd ds)   = seqStrDmdList ds
-seqStrDmd (SCall s)     = s `seq` ()
+seqStrDmd (SCall s)    = seqStrDmd s
 seqStrDmd _            = ()
 
 seqStrDmdList :: [ArgStr] -> ()
@@ -304,7 +353,9 @@ splitArgStrProdDmd n (Str _ s) = splitStrProdDmd n s
 splitStrProdDmd :: Int -> StrDmd -> Maybe [ArgStr]
 splitStrProdDmd n HyperStr   = Just (replicate n strBot)
 splitStrProdDmd n HeadStr    = Just (replicate n strTop)
-splitStrProdDmd n (SProd ds) = ASSERT( ds `lengthIs` n) Just ds
+splitStrProdDmd n (SProd ds) = WARN( not (ds `lengthIs` n),
+                                     text "splitStrProdDmd" $$ ppr n $$ ppr ds )
+                               Just ds
 splitStrProdDmd _ (SCall {}) = Nothing
       -- This can happen when the programmer uses unsafeCoerce,
       -- and we don't then want to crash the compiler (Trac #9208)
@@ -327,27 +378,28 @@ splitStrProdDmd _ (SCall {}) = Nothing
        Abs
 -}
 
--- Domain for genuine usage
+-- | Domain for genuine usage
 data UseDmd
-  = UCall Count UseDmd   -- Call demand for absence
+  = UCall Count UseDmd   -- ^ Call demand for absence.
                          -- Used only for values of function type
 
-  | UProd [ArgUse]     -- Product
+  | UProd [ArgUse]       -- ^ Product.
                          -- Used only for values of product type
                          -- See Note [Don't optimise UProd(Used) to Used]
-                         -- [Invariant] Not all components are Abs
-                         --             (in that case, use UHead)
+                         --
+                         -- Invariant: Not all components are Abs
+                         -- (in that case, use UHead)
 
-  | UHead                -- May be used; but its sub-components are
+  | UHead                -- ^ May be used but its sub-components are
                          -- definitely *not* used.  Roughly U(AAA)
-                         -- Eg the usage of x in x `seq` e
+                         -- e.g. the usage of @x@ in @x `seq` e@
                          -- A polymorphic demand: used for values of all types,
                          --                       including a type variable
                          -- Since (UCall _ Abs) is ill-typed, UHead doesn't
                          -- make sense for lambdas
 
-  | Used                 -- May be used; and its sub-components may be used
-                         -- Top of the lattice
+  | Used                 -- ^ May be used and its sub-components may be used.
+                         -- (top of the lattice)
   deriving ( Eq, Show )
 
 -- Extended usage demand for absence and counting
@@ -360,7 +412,7 @@ data Use u
   | Use Count u     -- May be used with some cardinality
   deriving ( Eq, Show )
 
--- Abstract counting of usages
+-- | Abstract counting of usages
 data Count = One | Many
   deriving ( Eq, Show )
 
@@ -410,7 +462,7 @@ lubUse (UCall c1 u1) (UCall c2 u2) = UCall (lubCount c1 c2) (lubUse u1 u2)
 lubUse (UCall _ _) _               = Used
 lubUse (UProd ux) UHead            = UProd ux
 lubUse (UProd ux1) (UProd ux2)
-     | length ux1 == length ux2    = UProd $ zipWith lubArgUse ux1 ux2
+     | ux1 `equalLength` ux2       = UProd $ zipWith lubArgUse ux1 ux2
      | otherwise                   = Used
 lubUse (UProd {}) (UCall {})       = Used
 -- lubUse (UProd {}) Used             = Used
@@ -440,7 +492,7 @@ bothUse (UCall _ u1) (UCall _ u2)   = UCall Many (u1 `lubUse` u2)
 bothUse (UCall {}) _                = Used
 bothUse (UProd ux) UHead            = UProd ux
 bothUse (UProd ux1) (UProd ux2)
-      | length ux1 == length ux2    = UProd $ zipWith bothArgUse ux1 ux2
+      | ux1 `equalLength` ux2       = UProd $ zipWith bothArgUse ux1 ux2
       | otherwise                   = Used
 bothUse (UProd {}) (UCall {})       = Used
 -- bothUse (UProd {}) Used             = Used  -- Note [Used should win]
@@ -586,7 +638,9 @@ seqArgUse _          = ()
 splitUseProdDmd :: Int -> UseDmd -> Maybe [ArgUse]
 splitUseProdDmd n Used        = Just (replicate n useTop)
 splitUseProdDmd n UHead       = Just (replicate n Abs)
-splitUseProdDmd n (UProd ds)  = ASSERT2( ds `lengthIs` n, text "splitUseProdDmd" $$ ppr n $$ ppr ds )
+splitUseProdDmd n (UProd ds)  = WARN( not (ds `lengthIs` n),
+                                      text "splitUseProdDmd" $$ ppr n
+                                                             $$ ppr ds )
                                 Just ds
 splitUseProdDmd _ (UCall _ _) = Nothing
       -- This can happen when the programmer uses unsafeCoerce,
@@ -704,7 +758,7 @@ lazyApply1Dmd, lazyApply2Dmd, strictApply1Dmd, catchArgDmd :: Demand
 strictApply1Dmd = JD { sd = Str VanStr (SCall HeadStr)
                      , ud = Use Many (UCall One Used) }
 
--- First argument of catch#:
+-- First argument of catchRetry# and catchSTM#:
 --    uses its arg once, applies it once
 --    and catches exceptions (the ExnStr) part
 catchArgDmd = JD { sd = Str ExnStr (SCall HeadStr)
@@ -855,7 +909,7 @@ be unleashed. See also [Aggregated demand for cardinality].
 Note [Replicating polymorphic demands]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Some demands can be considered as polymorphic. Generally, it is
-applicable to such beasts as tops, bottoms as well as Head-Used adn
+applicable to such beasts as tops, bottoms as well as Head-Used and
 Head-stricts demands. For instance,
 
 S ~ S(L, ..., L)
@@ -1108,7 +1162,7 @@ unboxed thing to f, and have it reboxed in the error cases....]
 
 However we *don't* want to do this when the argument is not actually
 taken apart in the function at all.  Otherwise we risk decomposing a
-masssive tuple which is barely used.  Example:
+massive tuple which is barely used.  Example:
 
         f :: ((Int,Int) -> String) -> (Int,Int) -> a
         f g pr = error (g pr)
@@ -1178,7 +1232,7 @@ diverge, and we do not anything being passed to b.
 
 Note [Asymmetry of 'both' for DmdType and DmdResult]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-'both' for DmdTypes is *assymetrical*, because there is only one
+'both' for DmdTypes is *asymmetrical*, because there is only one
 result!  For example, given (e1 e2), we get a DmdType dt1 for e1, use
 its arg demand to analyse e2 giving dt2, and then do (dt1 `bothType` dt2).
 Similarly with
@@ -1323,7 +1377,7 @@ splitDmdTy ty@(DmdType _ [] res_ty)       = (resTypeArgDmd res_ty, ty)
 -- what of this demand should we consider, given that the IO action can cleanly
 -- exit?
 -- * We have to kill all strictness demands (i.e. lub with a lazy demand)
--- * We can keep demand information (i.e. lub with an absent demand)
+-- * We can keep usage information (i.e. lub with an absent demand)
 -- * We have to kill definite divergence
 -- * We can keep CPR information.
 -- See Note [IO hack in the demand analyser] in DmdAnal
@@ -1351,7 +1405,7 @@ type DmdShell   -- Describes the "outer shell"
    = JointDmd (Str ()) (Use ())
 
 toCleanDmd :: Demand -> Type -> (DmdShell, CleanDemand)
--- Splicts a Demand into its "shell" and the inner "clean demand"
+-- Splits a Demand into its "shell" and the inner "clean demand"
 toCleanDmd (JD { sd = s, ud = u }) expr_ty
   = (JD { sd = ss, ud = us }, JD { sd = s', ud = u' })
     -- See Note [Analyzing with lazy demand and lambdas]
@@ -1391,8 +1445,11 @@ postProcessDmdResult _              res       = res
 postProcessDmdEnv :: DmdShell -> DmdEnv -> DmdEnv
 postProcessDmdEnv ds@(JD { sd = ss, ud = us }) env
   | Abs <- us       = emptyDmdEnv
-  | Str _ _   <- ss
-  , Use One _ <- us = env  -- Shell is a no-op
+    -- In this case (postProcessDmd ds) == id; avoid a redundant rebuild
+    -- of the environment. Be careful, bad things will happen if this doesn't
+    -- match postProcessDmd (see #13977).
+  | Str VanStr _ <- ss
+  , Use One _ <- us = env
   | otherwise       = mapVarEnv (postProcessDmd ds) env
   -- For the Absent case just discard all usage information
   -- We only processed the thing at all to analyse the body
@@ -1539,7 +1596,7 @@ Tricky point: make sure that we analyse in the 'virgin' pass. Consider
 In the virgin pass for 'f' we'll give 'f' a very strict (bottom) type.
 That might mean that we analyse the sub-expression containing the
 E = "...rec g..." stuff in a bottom demand.  Suppose we *didn't analyse*
-E, but just retuned botType.
+E, but just returned botType.
 
 Then in the *next* (non-virgin) iteration for 'f', we might analyse E
 in a weaker demand, and that will trigger doing a fixpoint iteration
@@ -1764,7 +1821,7 @@ something like: U(AAASAAAAA).  Then replace the 'S' by the demand 'd'.
 
 For single-method classes, which are represented by newtypes the signature
 of 'op' won't look like U(...), so the splitProdDmd_maybe will fail.
-That's fine: if we are doing strictness analysis we are also doing inling,
+That's fine: if we are doing strictness analysis we are also doing inlining,
 so we'll have inlined 'op' into a cast.  So we can bale out in a conservative
 way, returning nopDmdType.
 
@@ -1779,17 +1836,15 @@ it should not fall over.
 -}
 
 argsOneShots :: StrictSig -> Arity -> [[OneShotInfo]]
--- See Note [Computing one-shot info, and ProbOneShot]
+-- See Note [Computing one-shot info]
 argsOneShots (StrictSig (DmdType _ arg_ds _)) n_val_args
-  = go arg_ds
+  | unsaturated_call = []
+  | otherwise = go arg_ds
   where
     unsaturated_call = arg_ds `lengthExceeds` n_val_args
-    good_one_shot
-      | unsaturated_call = ProbOneShot
-      | otherwise        = OneShotLam
 
     go []               = []
-    go (arg_d : arg_ds) = argOneShots good_one_shot arg_d `cons` go arg_ds
+    go (arg_d : arg_ds) = argOneShots arg_d `cons` go arg_ds
 
     -- Avoid list tail like [ [], [], [] ]
     cons [] [] = []
@@ -1809,19 +1864,18 @@ saturatedByOneShots n (JD { ud = usg })
     go n (UCall One u) = go (n-1) u
     go _ _             = False
 
-argOneShots :: OneShotInfo     -- OneShotLam or ProbOneShot,
-            -> Demand          -- depending on saturation
+argOneShots :: Demand          -- depending on saturation
             -> [OneShotInfo]
-argOneShots one_shot_info (JD { ud = usg })
+argOneShots (JD { ud = usg })
   = case usg of
       Use _ arg_usg -> go arg_usg
       _             -> []
   where
-    go (UCall One  u) = one_shot_info : go u
+    go (UCall One  u) = OneShotLam : go u
     go (UCall Many u) = NoOneShotInfo : go u
     go _              = []
 
-{- Note [Computing one-shot info, and ProbOneShot]
+{- Note [Computing one-shot info]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Consider a call
     f (\pqr. e1) (\xyz. e2) e3
@@ -1831,20 +1885,6 @@ Then argsOneShots returns a [[OneShotInfo]] of
     [[OneShot,NoOneShotInfo,OneShot],  [OneShot]]
 The occurrence analyser propagates this one-shot infor to the
 binders \pqr and \xyz; see Note [Use one-shot information] in OccurAnal.
-
-But suppose f was not saturated, so the call looks like
-    f (\pqr. e1) (\xyz. e2)
-The in principle this partial application might be shared, and
-the (\prq.e1) abstraction might be called more than once.  So
-we can't mark them OneShot. But instead we return
-    [[ProbOneShot,NoOneShotInfo,ProbOneShot],  [ProbOneShot]]
-The occurrence analyser propagates this to the \pqr and \xyz
-binders.
-
-How is it used?  Well, it's quite likely that the partial application
-of f is not shared, so the float-out pass (in SetLevels.lvlLamBndrs)
-does not float MFEs out of a ProbOneShot lambda.  That currently is
-the only way that ProbOneShot is used.
 -}
 
 -- appIsBottom returns true if an application to n args

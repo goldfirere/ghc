@@ -101,15 +101,17 @@ import           Prelude             hiding (break, cycle, drop, dropWhile,
                                       unzip, zip, zipWith, (!!))
 import qualified Prelude
 
-import           Control.Applicative (Alternative, many)
-import           Control.Monad       (ap)
+import           Control.Applicative (Applicative (..), Alternative (many))
+import           Control.Monad       (ap, liftM2)
 import           Control.Monad.Fix
 import           Control.Monad.Zip   (MonadZip(..))
 import           Data.Data           (Data)
 import           Data.Foldable       hiding (length, toList)
 import qualified Data.Foldable       as Foldable
 import           Data.Function       (on)
+import           Data.Functor.Classes (Eq1(..), Ord1(..), Read1(..), Show1(..))
 import qualified Data.List           as List
+import           Data.Monoid         ((<>))
 import           Data.Ord            (comparing)
 import qualified GHC.Exts            as Exts (IsList(..))
 import           GHC.Generics        (Generic, Generic1)
@@ -121,6 +123,27 @@ infixr 5 :|, <|
 -- @since 4.9.0.0
 data NonEmpty a = a :| [a]
   deriving ( Eq, Ord, Show, Read, Data, Generic, Generic1 )
+
+-- | @since 4.10.0.0
+instance Eq1 NonEmpty where
+  liftEq eq (a :| as) (b :| bs) = eq a b && liftEq eq as bs
+
+-- | @since 4.10.0.0
+instance Ord1 NonEmpty where
+  liftCompare cmp (a :| as) (b :| bs) = cmp a b <> liftCompare cmp as bs
+
+-- | @since 4.10.0.0
+instance Read1 NonEmpty where
+  liftReadsPrec rdP rdL p s = readParen (p > 5) (\s' -> do
+    (a, s'') <- rdP 6 s'
+    (":|", s''') <- lex s''
+    (as, s'''') <- rdL s'''
+    return (a :| as, s'''')) s
+
+-- | @since 4.10.0.0
+instance Show1 NonEmpty where
+  liftShowsPrec shwP shwL p (a :| as) = showParen (p > 5) $
+    shwP 6 a . showString " :| " . shwL as
 
 -- | @since 4.9.0.0
 instance Exts.IsList (NonEmpty a) where
@@ -157,6 +180,8 @@ unfold :: (a -> (b, Maybe a)) -> a -> NonEmpty b
 unfold f a = case f a of
   (b, Nothing) -> b :| []
   (b, Just c)  -> b <| unfold f c
+{-# DEPRECATED unfold "Use unfoldr" #-}
+-- Deprecated in 8.2.1, remove in 8.4
 
 -- | 'nonEmpty' efficiently turns a normal list into a 'NonEmpty' stream,
 -- producing 'Nothing' if the input is empty.
@@ -187,6 +212,7 @@ instance Functor NonEmpty where
 instance Applicative NonEmpty where
   pure a = a :| []
   (<*>) = ap
+  liftA2 = liftM2
 
 -- | @since 4.9.0.0
 instance Monad NonEmpty where
@@ -196,7 +222,7 @@ instance Monad NonEmpty where
 
 -- | @since 4.9.0.0
 instance Traversable NonEmpty where
-  traverse f ~(a :| as) = (:|) <$> f a <*> traverse f as
+  traverse f ~(a :| as) = liftA2 (:|) (f a) (traverse f as)
 
 -- | @since 4.9.0.0
 instance Foldable NonEmpty where
@@ -205,6 +231,8 @@ instance Foldable NonEmpty where
   foldl1 f ~(a :| as) = foldl f a as
   foldMap f ~(a :| as) = f a `mappend` foldMap f as
   fold ~(m :| ms) = m `mappend` fold ms
+  length = length
+  toList = toList
 
 -- | Extract the first element of the stream.
 head :: NonEmpty a -> a
@@ -274,7 +302,7 @@ insert a = fromList . List.insert a . Foldable.toList
 
 -- | @'some1' x@ sequences @x@ one or more times.
 some1 :: Alternative f => f a -> f (NonEmpty a)
-some1 x = (:|) <$> x <*> many x
+some1 x = liftA2 (:|) x (many x)
 
 -- | 'scanl' is similar to 'foldl', but returns a stream of successive
 -- reduced values from the left:
@@ -449,6 +477,7 @@ isPrefixOf (y:ys) (x :| xs) = (y == x) && List.isPrefixOf ys xs
   | n == 0 = x
   | n > 0  = xs List.!! (n - 1)
   | otherwise = errorWithoutStackTrace "NonEmpty.!! negative argument"
+infixl 9 !!
 
 -- | The 'zip' function takes two streams and returns a stream of
 -- corresponding pairs.
@@ -466,7 +495,7 @@ unzip :: Functor f => f (a,b) -> (f a, f b)
 unzip xs = (fst <$> xs, snd <$> xs)
 
 -- | The 'nub' function removes duplicate elements from a list. In
--- particular, it keeps only the first occurence of each element.
+-- particular, it keeps only the first occurrence of each element.
 -- (The name 'nub' means \'essence\'.)
 -- It is a special case of 'nubBy', which allows the programmer to
 -- supply their own inequality test.
@@ -484,8 +513,8 @@ nubBy eq (a :| as) = a :| List.nubBy eq (List.filter (\b -> not (eq a b)) as)
 -- > transpose . transpose /= id
 transpose :: NonEmpty (NonEmpty a) -> NonEmpty (NonEmpty a)
 transpose = fmap fromList
-          . fromList . List.transpose . Foldable.toList
-          . fmap Foldable.toList
+          . fromList . List.transpose . toList
+          . fmap toList
 
 -- | 'sortBy' for 'NonEmpty', behaves the same as 'Data.List.sortBy'
 sortBy :: (a -> a -> Ordering) -> NonEmpty a -> NonEmpty a

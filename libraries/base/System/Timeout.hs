@@ -18,7 +18,7 @@
 
 module System.Timeout ( timeout ) where
 
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
 import Control.Monad
 import GHC.Event           (getSystemTimerManager,
                             registerTimeout, unregisterTimeout)
@@ -53,6 +53,12 @@ instance Exception Timeout where
 -- timeout interval means \"wait indefinitely\". When specifying long timeouts,
 -- be careful not to exceed @maxBound :: Int@.
 --
+-- >>> timeout 1000000 (threadDelay 1000 *> pure "finished on time")
+-- Just "finished on time"
+--
+-- >>> timeout 10000 (threadDelay 100000 *> pure "finished on time")
+-- Nothing
+--
 -- The design of this combinator was guided by the objective that @timeout n f@
 -- should behave exactly the same as @f@ as long as @f@ doesn't time out. This
 -- means that @f@ has the same 'myThreadId' it would have without the timeout
@@ -75,12 +81,11 @@ instance Exception Timeout where
 -- because the runtime system uses scheduling mechanisms like @select(2)@ to
 -- perform asynchronous I\/O, so it is possible to interrupt standard socket
 -- I\/O or file I\/O using this combinator.
-
 timeout :: Int -> IO a -> IO (Maybe a)
 timeout n f
     | n <  0    = fmap Just f
     | n == 0    = return Nothing
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
     | rtsSupportsBoundThreads = do
         -- In the threaded RTS, we use the Timer Manager to delay the
         -- (fairly expensive) 'forkIO' call until the timeout has expired.

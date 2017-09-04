@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE TypeOperators #-}
@@ -53,6 +54,7 @@ module Data.Traversable (
 -- It is convenient to use 'Const' here but this means we must
 -- define a few instances here which really belong in Control.Applicative
 import Control.Applicative ( Const(..), ZipList(..) )
+import Data.Coerce
 import Data.Either ( Either(..) )
 import Data.Foldable ( Foldable )
 import Data.Functor
@@ -157,25 +159,70 @@ class (Functor t, Foldable t) => Traversable t where
     -- from left to right, and collect the results. For a version that ignores
     -- the results see 'Data.Foldable.traverse_'.
     traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
+    {-# INLINE traverse #-}  -- See Note [Inline default methods]
     traverse f = sequenceA . fmap f
 
     -- | Evaluate each action in the structure from left to right, and
     -- and collect the results. For a version that ignores the results
     -- see 'Data.Foldable.sequenceA_'.
     sequenceA :: Applicative f => t (f a) -> f (t a)
+    {-# INLINE sequenceA #-}  -- See Note [Inline default methods]
     sequenceA = traverse id
 
     -- | Map each element of a structure to a monadic action, evaluate
     -- these actions from left to right, and collect the results. For
     -- a version that ignores the results see 'Data.Foldable.mapM_'.
     mapM :: Monad m => (a -> m b) -> t a -> m (t b)
+    {-# INLINE mapM #-}  -- See Note [Inline default methods]
     mapM = traverse
 
     -- | Evaluate each monadic action in the structure from left to
     -- right, and collect the results. For a version that ignores the
     -- results see 'Data.Foldable.sequence_'.
     sequence :: Monad m => t (m a) -> m (t a)
+    {-# INLINE sequence #-}  -- See Note [Inline default methods]
     sequence = sequenceA
+
+{- Note [Inline default methods]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider
+
+   class ... => Traversable t where
+       ...
+       mapM :: Monad m => (a -> m b) -> t a -> m (t b)
+       mapM = traverse   -- Default method
+
+   instance Traversable [] where
+       {-# INLINE traverse #-}
+       traverse = ...code for traverse on lists ...
+
+This gives rise to a list-instance of mapM looking like this
+
+  $fTraversable[]_$ctaverse = ...code for traverse on lists...
+       {-# INLINE $fTraversable[]_$ctaverse #-}
+  $fTraversable[]_$cmapM    = $fTraversable[]_$ctraverse
+
+Now the $ctraverse obediently inlines into the RHS of $cmapM, /but/
+that's all!  We get
+
+  $fTraversable[]_$cmapM = ...code for traverse on lists...
+
+with NO INLINE pragma!  This happens even though 'traverse' had an
+INLINE pragma because the author knew it should be inlined pretty
+vigorously.
+
+Indeed, it turned out that the rhs of $cmapM was just too big to
+inline, so all uses of mapM on lists used a terribly inefficient
+dictionary-passing style, because of its 'Monad m =>' type.  Disaster!
+
+Solution: add an INLINE pragma on the default method:
+
+   class ... => Traversable t where
+       ...
+       mapM :: Monad m => (a -> m b) -> t a -> m (t b)
+       {-# INLINE mapM #-}     -- VERY IMPORTANT!
+       mapM = traverse
+-}
 
 -- instances for Prelude types
 
@@ -188,7 +235,7 @@ instance Traversable Maybe where
 instance Traversable [] where
     {-# INLINE traverse #-} -- so that traverse can fuse
     traverse f = List.foldr cons_f (pure [])
-      where cons_f x ys = (:) <$> f x <*> ys
+      where cons_f x ys = liftA2 (:) (f x) ys
 
 -- | @since 4.7.0.0
 instance Traversable (Either a) where
@@ -303,11 +350,24 @@ mapAccumR f s t = runStateR (traverse (StateR . flip f) t) s
 --   instance, provided that 'traverse' is defined. (Using
 --   `fmapDefault` with a `Traversable` instance defined only by
 --   'sequenceA' will result in infinite recursion.)
-fmapDefault :: Traversable t => (a -> b) -> t a -> t b
+--
+-- @
+-- 'fmapDefault' f ≡ 'runIdentity' . 'traverse' ('Identity' . f)
+-- @
+fmapDefault :: forall t a b . Traversable t
+            => (a -> b) -> t a -> t b
 {-# INLINE fmapDefault #-}
-fmapDefault f = runIdentity . traverse (Identity . f)
+-- See Note [Function coercion] in Data.Functor.Utils.
+fmapDefault = coerce (traverse :: (a -> Identity b) -> t a -> Identity (t b))
 
 -- | This function may be used as a value for `Data.Foldable.foldMap`
 -- in a `Foldable` instance.
-foldMapDefault :: (Traversable t, Monoid m) => (a -> m) -> t a -> m
-foldMapDefault f = getConst . traverse (Const . f)
+--
+-- @
+-- 'foldMapDefault' f ≡ 'getConst' . 'traverse' ('Const' . f)
+-- @
+foldMapDefault :: forall t m a . (Traversable t, Monoid m)
+               => (a -> m) -> t a -> m
+{-# INLINE foldMapDefault #-}
+-- See Note [Function coercion] in Data.Functor.Utils.
+foldMapDefault = coerce (traverse :: (a -> Const m ()) -> t a -> Const m (t ()))

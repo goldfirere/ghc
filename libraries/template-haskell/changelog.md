@@ -1,6 +1,26 @@
 # Changelog for [`template-haskell` package](http://hackage.haskell.org/package/template-haskell)
 
-## next *TBA*
+## 2.13.0.0 *TBA*
+
+  * Bundled with GHC *TBA*
+
+  * Add support for overloaded labels. Introduces `labelE :: String -> ExpQ`.
+
+  * Add `KindQ`, `TyVarBndrQ`, and `FamilyResultSigQ` aliases to
+    `Language.Haskell.TH.Lib`.
+
+  * Add `Language.Haskell.TH.Lib.Internal` module, which exposes some
+    additional functionality that is used internally in GHC's integration
+    with Template Haskell. This is not a part of the public API, and as
+    such, there are no API guarantees for this module from version to version.
+
+  * `MonadIO` is now a superclass of `Quasi`, `qRunIO` has a default
+    implementation `qRunIO = liftIO`
+
+  * Add `MonadIO Q` instance
+
+## 2.12.0.0 *TBA*
+
   * Bundled with GHC *TBA*
 
   * Add support for pattern synonyms. This introduces one new constructor to
@@ -14,6 +34,24 @@
 
   * Add support for attaching deriving strategies to `deriving` statements
     (#10598)
+
+  * Add support for `COMPLETE` pragmas. (#13098)
+
+  * `unboxedTupleTypeName` and `unboxedTupleDataName` now work for unboxed
+    0-tuples and 1-tuples (#12977)
+
+  * `Language.Haskell.TH` now reexports all of `Language.Haskell.TH.Lib`.
+    (#12992). This causes `Language.Haskell.TH` to export more types and
+    functions that it did before:
+    - `TExp`, `BangQ`, and `FieldExpQ`
+    - `unboxedTupP`, `unboxedTupE` and `unboundVarE`
+    - `infixLD`, `infixRD`, and `infixND`
+    - `unboxedTupleT` and `wildCardT`
+    - `plainTV` and `kindedTV`
+    - `interruptible` and `funDep`
+    - `valueAnnotation`, `typeAnnotation`, and `moduleAnnotation`
+
+  * Add support for overloaded labels.
 
 ## 2.11.0.0  *May 2016*
 

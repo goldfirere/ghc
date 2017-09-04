@@ -49,11 +49,11 @@
   the scrutinee of the case, and we can inline it.
 -}
 
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, MultiWayIf #-}
 module SetLevels (
         setLevels,
 
-        Level(..), tOP_LEVEL,
+        Level(..), LevelType(..), tOP_LEVEL, isJoinCeilLvl, asJoinCeilLvl,
         LevelledBind, LevelledExpr, LevelledBndr,
         FloatSpec(..), floatSpecLevel,
 
@@ -64,26 +64,30 @@ module SetLevels (
 
 import CoreSyn
 import CoreMonad        ( FloatOutSwitches(..) )
-import CoreUtils        ( exprType
+import CoreUtils        ( exprType, exprIsHNF
                         , exprOkForSpeculation
-                        , exprIsBottom
-                        , collectStaticPtrSatArgs
+                        , exprIsTopLevelBindable
+                        , isExprLevPoly
+                        , collectMakeStaticArgs
                         )
 import CoreArity        ( exprBotStrictness_maybe )
 import CoreFVs          -- all of it
 import CoreSubst
 import MkCore           ( sortQuantVars )
+
 import Id
 import IdInfo
 import Var
 import VarSet
 import VarEnv
 import Literal          ( litIsTrivial )
-import Demand           ( StrictSig )
+import Demand           ( StrictSig, Demand, isStrictDmd, splitStrictSig, increaseStrictSigArity )
 import Name             ( getOccName, mkSystemVarName )
 import OccName          ( occNameString )
-import Type             ( isUnliftedType, Type, mkLamTypes )
-import BasicTypes       ( Arity, RecFlag(..) )
+import Type             ( Type, mkLamTypes, splitTyConApp_maybe )
+import BasicTypes       ( Arity, RecFlag(..), isRec )
+import DataCon          ( dataConOrigResTy )
+import TysWiredIn
 import UniqSupply
 import Util
 import Outputable
@@ -91,6 +95,7 @@ import FastString
 import UniqDFM
 import FV
 import Data.Maybe
+import MonadUtils       ( mapAccumLM )
 
 {-
 ************************************************************************
@@ -104,10 +109,12 @@ type LevelledExpr = TaggedExpr FloatSpec
 type LevelledBind = TaggedBind FloatSpec
 type LevelledBndr = TaggedBndr FloatSpec
 
-data Level = Level Int  -- Major level: number of enclosing value lambdas
-                   Int  -- Minor level: number of big-lambda and/or case
-                        -- expressions between here and the nearest
-                        -- enclosing value lambda
+data Level = Level Int  -- Level number of enclosing lambdas
+                   Int  -- Number of big-lambda and/or case expressions and/or
+                        -- context boundaries between
+                        -- here and the nearest enclosing lambda
+                   LevelType -- Binder or join ceiling?
+data LevelType = BndrLvl | JoinCeilLvl deriving (Eq)
 
 data FloatSpec
   = FloatMe Level       -- Float to just inside the binding
@@ -136,7 +143,7 @@ a_0 = let  b_? = ...  in
            x_1 = ... b ... in ...
 \end{verbatim}
 
-The main function @lvlExpr@ carries a ``context level'' (@ctxt_lvl@).
+The main function @lvlExpr@ carries a ``context level'' (@le_ctxt_lvl@).
 That's meant to be the level number of the enclosing binder in the
 final (floated) program.  If the level number of a sub-expression is
 less than that of the context, then it might be worth let-binding the
@@ -173,6 +180,25 @@ One particular case is that of workers: we don't want to float the
 call to the worker outside the wrapper, otherwise the worker might get
 inlined into the floated expression, and an importing module won't see
 the worker at all.
+
+Note [Join ceiling]
+~~~~~~~~~~~~~~~~~~~
+Join points can't float very far; too far, and they can't remain join points
+So, suppose we have:
+
+  f x = (joinrec j y = ... x ... in jump j x) + 1
+
+One may be tempted to float j out to the top of f's RHS, but then the jump
+would not be a tail call. Thus we keep track of a level called the *join
+ceiling* past which join points are not allowed to float.
+
+The troublesome thing is that, unlike most levels to which something might
+float, there is not necessarily an identifier to which the join ceiling is
+attached. Fortunately, if something is to be floated to a join ceiling, it must
+be dropped at the *nearest* join ceiling. Thus each level is marked as to
+whether it is a join ceiling, so that FloatOut can tell which binders are being
+floated to the nearest join ceiling and which to a particular binder (or set of
+binders).
 -}
 
 instance Outputable FloatSpec where
@@ -180,36 +206,44 @@ instance Outputable FloatSpec where
   ppr (StayPut l) = ppr l
 
 tOP_LEVEL :: Level
-tOP_LEVEL   = Level 0 0
+tOP_LEVEL   = Level 0 0 BndrLvl
 
 incMajorLvl :: Level -> Level
-incMajorLvl (Level major _) = Level (major + 1) 0
+incMajorLvl (Level major _ _) = Level (major + 1) 0 BndrLvl
 
 incMinorLvl :: Level -> Level
-incMinorLvl (Level major minor) = Level major (minor+1)
+incMinorLvl (Level major minor _) = Level major (minor+1) BndrLvl
+
+asJoinCeilLvl :: Level -> Level
+asJoinCeilLvl (Level major minor _) = Level major minor JoinCeilLvl
 
 maxLvl :: Level -> Level -> Level
-maxLvl l1@(Level maj1 min1) l2@(Level maj2 min2)
+maxLvl l1@(Level maj1 min1 _) l2@(Level maj2 min2 _)
   | (maj1 > maj2) || (maj1 == maj2 && min1 > min2) = l1
   | otherwise                                      = l2
 
 ltLvl :: Level -> Level -> Bool
-ltLvl (Level maj1 min1) (Level maj2 min2)
+ltLvl (Level maj1 min1 _) (Level maj2 min2 _)
   = (maj1 < maj2) || (maj1 == maj2 && min1 < min2)
 
 ltMajLvl :: Level -> Level -> Bool
     -- Tells if one level belongs to a difft *lambda* level to another
-ltMajLvl (Level maj1 _) (Level maj2 _) = maj1 < maj2
+ltMajLvl (Level maj1 _ _) (Level maj2 _ _) = maj1 < maj2
 
 isTopLvl :: Level -> Bool
-isTopLvl (Level 0 0) = True
-isTopLvl _           = False
+isTopLvl (Level 0 0 _) = True
+isTopLvl _             = False
+
+isJoinCeilLvl :: Level -> Bool
+isJoinCeilLvl (Level _ _ t) = t == JoinCeilLvl
 
 instance Outputable Level where
-  ppr (Level maj min) = hcat [ char '<', int maj, char ',', int min, char '>' ]
+  ppr (Level maj min typ)
+    = hcat [ char '<', int maj, char ',', int min, char '>'
+           , ppWhen (typ == JoinCeilLvl) (char 'C') ]
 
 instance Eq Level where
-  (Level maj1 min1) == (Level maj2 min2) = maj1 == maj2 && min1 == min2
+  (Level maj1 min1 _) == (Level maj2 min2 _) = maj1 == maj2 && min1 == min2
 
 {-
 ************************************************************************
@@ -238,15 +272,22 @@ setLevels float_lams binds us
 
 lvlTopBind :: LevelEnv -> Bind Id -> LvlM (LevelledBind, LevelEnv)
 lvlTopBind env (NonRec bndr rhs)
-  = do { rhs' <- lvlExpr env (freeVars rhs)
+  = do { rhs' <- lvl_top env NonRecursive bndr rhs
        ; let (env', [bndr']) = substAndLvlBndrs NonRecursive env tOP_LEVEL [bndr]
        ; return (NonRec bndr' rhs', env') }
 
 lvlTopBind env (Rec pairs)
-  = do let (bndrs,rhss) = unzip pairs
-           (env', bndrs') = substAndLvlBndrs Recursive env tOP_LEVEL bndrs
-       rhss' <- mapM (lvlExpr env' . freeVars) rhss
-       return (Rec (bndrs' `zip` rhss'), env')
+  = do { let (env', bndrs') = substAndLvlBndrs Recursive env tOP_LEVEL
+                                               (map fst pairs)
+       ; rhss' <- mapM (\(b,r) -> lvl_top env' Recursive b r) pairs
+       ; return (Rec (bndrs' `zip` rhss'), env') }
+
+lvl_top :: LevelEnv -> RecFlag -> Id -> CoreExpr -> LvlM LevelledExpr
+lvl_top env is_rec bndr rhs
+  = lvlRhs env is_rec
+           (isBottomingId bndr)
+           Nothing  -- Not a join point
+           (freeVars rhs)
 
 {-
 ************************************************************************
@@ -275,68 +316,37 @@ lvlExpr :: LevelEnv             -- Context
         -> LvlM LevelledExpr    -- Result expression
 
 {-
-The @ctxt_lvl@ is, roughly, the level of the innermost enclosing
+The @le_ctxt_lvl@ is, roughly, the level of the innermost enclosing
 binder.  Here's an example
 
         v = \x -> ...\y -> let r = case (..x..) of
                                         ..x..
                            in ..
 
-When looking at the rhs of @r@, @ctxt_lvl@ will be 1 because that's
+When looking at the rhs of @r@, @le_ctxt_lvl@ will be 1 because that's
 the level of @r@, even though it's inside a level-2 @\y@.  It's
-important that @ctxt_lvl@ is 1 and not 2 in @r@'s rhs, because we
+important that @le_ctxt_lvl@ is 1 and not 2 in @r@'s rhs, because we
 don't want @lvlExpr@ to turn the scrutinee of the @case@ into an MFE
 --- because it isn't a *maximal* free expression.
 
 If there were another lambda in @r@'s rhs, it would get level-2 as well.
 -}
 
-lvlExpr env (_, AnnType ty)     = return (Type (substTy (le_subst env) ty))
+lvlExpr env (_, AnnType ty)     = return (Type (CoreSubst.substTy (le_subst env) ty))
 lvlExpr env (_, AnnCoercion co) = return (Coercion (substCo (le_subst env) co))
 lvlExpr env (_, AnnVar v)       = return (lookupVar env v)
 lvlExpr _   (_, AnnLit lit)     = return (Lit lit)
 
 lvlExpr env (_, AnnCast expr (_, co)) = do
-    expr' <- lvlExpr env expr
+    expr' <- lvlNonTailExpr env expr
     return (Cast expr' (substCo (le_subst env) co))
 
 lvlExpr env (_, AnnTick tickish expr) = do
-    expr' <- lvlExpr env expr
-    return (Tick tickish expr')
+    expr' <- lvlNonTailExpr env expr
+    let tickish' = substTickish (le_subst env) tickish
+    return (Tick tickish' expr')
 
-lvlExpr env expr@(_, AnnApp _ _) = do
-    let
-      (fun, args) = collectAnnArgs expr
-    --
-    case fun of
-      (_, AnnVar f) | floatOverSat env   -- See Note [Floating over-saturated applications]
-                    , arity > 0
-                    , arity < n_val_args
-                    , Nothing <- isClassOpId_maybe f ->
-        do
-         let (lapp, rargs) = left (n_val_args - arity) expr []
-         rargs' <- mapM (lvlMFE False env) rargs
-         lapp' <- lvlMFE False env lapp
-         return (foldl App lapp' rargs')
-        where
-         n_val_args = count (isValArg . deAnnotate) args
-         arity = idArity f
-
-         -- separate out the PAP that we are floating from the extra
-         -- arguments, by traversing the spine until we have collected
-         -- (n_val_args - arity) value arguments.
-         left 0 e               rargs = (e, rargs)
-         left n (_, AnnApp f a) rargs
-            | isValArg (deAnnotate a) = left (n-1) f (a:rargs)
-            | otherwise               = left n     f (a:rargs)
-         left _ _ _                   = panic "SetLevels.lvlExpr.left"
-
-         -- No PAPs that we can float: just carry on with the
-         -- arguments and the function.
-      _otherwise -> do
-         args' <- mapM (lvlMFE False env) args
-         fun'  <- lvlExpr env fun
-         return (foldl App fun' args')
+lvlExpr env expr@(_, AnnApp _ _) = lvlApp env expr (collectAnnArgs expr)
 
 -- We don't split adjacent lambdas.  That is, given
 --      \x y -> (x+1,y)
@@ -346,7 +356,7 @@ lvlExpr env expr@(_, AnnApp _ _) = do
 -- lambdas makes them more expensive.
 
 lvlExpr env expr@(_, AnnLam {})
-  = do { new_body <- lvlMFE True new_env body
+  = do { new_body <- lvlNonTailMFE new_env True body
        ; return (mkLams new_bndrs new_body) }
   where
     (bndrs, body)        = collectAnnBndrs expr
@@ -368,8 +378,75 @@ lvlExpr env (_, AnnLet bind body)
        ; return (Let bind' body') }
 
 lvlExpr env (_, AnnCase scrut case_bndr ty alts)
-  = do { scrut' <- lvlMFE True env scrut
+  = do { scrut' <- lvlNonTailMFE env True scrut
        ; lvlCase env (freeVarsOf scrut) scrut' case_bndr ty alts }
+
+lvlNonTailExpr :: LevelEnv             -- Context
+               -> CoreExprWithFVs      -- Input expression
+               -> LvlM LevelledExpr    -- Result expression
+lvlNonTailExpr env expr
+  = lvlExpr (placeJoinCeiling env) expr
+
+-------------------------------------------
+lvlApp :: LevelEnv
+       -> CoreExprWithFVs
+       -> (CoreExprWithFVs, [CoreExprWithFVs]) -- Input application
+        -> LvlM LevelledExpr                   -- Result expression
+lvlApp env orig_expr ((_,AnnVar fn), args)
+  | floatOverSat env   -- See Note [Floating over-saturated applications]
+  , arity > 0
+  , arity < n_val_args
+  , Nothing <- isClassOpId_maybe fn
+  =  do { rargs' <- mapM (lvlNonTailMFE env False) rargs
+        ; lapp'  <- lvlNonTailMFE env False lapp
+        ; return (foldl App lapp' rargs') }
+
+  | otherwise
+  = do { (_, args') <- mapAccumLM lvl_arg stricts args
+            -- Take account of argument strictness; see
+            -- Note [Floating to the top]
+       ; return (foldl App (lookupVar env fn) args') }
+  where
+    n_val_args = count (isValArg . deAnnotate) args
+    arity      = idArity fn
+
+    stricts :: [Demand]   -- True for strict /value/ arguments
+    stricts = case splitStrictSig (idStrictness fn) of
+                (arg_ds, _) | arg_ds `lengthExceeds` n_val_args
+                            -> []
+                            | otherwise
+                            -> arg_ds
+
+    -- Separate out the PAP that we are floating from the extra
+    -- arguments, by traversing the spine until we have collected
+    -- (n_val_args - arity) value arguments.
+    (lapp, rargs) = left (n_val_args - arity) orig_expr []
+
+    left 0 e               rargs = (e, rargs)
+    left n (_, AnnApp f a) rargs
+       | isValArg (deAnnotate a) = left (n-1) f (a:rargs)
+       | otherwise               = left n     f (a:rargs)
+    left _ _ _                   = panic "SetLevels.lvlExpr.left"
+
+    is_val_arg :: CoreExprWithFVs -> Bool
+    is_val_arg (_, AnnType {}) = False
+    is_val_arg _               = True
+
+    lvl_arg :: [Demand] -> CoreExprWithFVs -> LvlM ([Demand], LevelledExpr)
+    lvl_arg strs arg | (str1 : strs') <- strs
+                     , is_val_arg arg
+                     = do { arg' <- lvlMFE env (isStrictDmd str1) arg
+                          ; return (strs', arg') }
+                     | otherwise
+                     = do { arg' <- lvlMFE env False arg
+                          ; return (strs, arg') }
+
+lvlApp env _ (fun, args)
+  =  -- No PAPs that we can float: just carry on with the
+     -- arguments and the function.
+     do { args' <- mapM (lvlNonTailMFE env False) args
+        ; fun'  <- lvlNonTailExpr env fun
+        ; return (foldl App fun' args') }
 
 -------------------------------------------
 lvlCase :: LevelEnv             -- Level of in-scope names/tyvars
@@ -380,7 +457,8 @@ lvlCase :: LevelEnv             -- Level of in-scope names/tyvars
         -> LvlM LevelledExpr    -- Result expression
 lvlCase env scrut_fvs scrut' case_bndr ty alts
   | [(con@(DataAlt {}), bs, body)] <- alts
-  , exprOkForSpeculation scrut'   -- See Note [Check the output scrutinee for okForSpec]
+  , exprOkForSpeculation (deTagExpr scrut')
+                                  -- See Note [Check the output scrutinee for okForSpec]
   , not (isTopLvl dest_lvl)       -- Can't have top-level cases
   , not (floatTopLvlOnly env)     -- Can float anywhere
   =     -- See Note [Floating cases]
@@ -388,22 +466,24 @@ lvlCase env scrut_fvs scrut' case_bndr ty alts
         -- Unlike lets we don't insist that it escapes a value lambda
     do { (env1, (case_bndr' : bs')) <- cloneCaseBndrs env dest_lvl (case_bndr : bs)
        ; let rhs_env = extendCaseBndrEnv env1 case_bndr scrut'
-       ; body' <- lvlMFE True rhs_env body
-       ; let alt' = (con, [TB b (StayPut dest_lvl) | b <- bs'], body')
-       ; return (Case scrut' (TB case_bndr' (FloatMe dest_lvl)) ty [alt']) }
+       ; body' <- lvlMFE rhs_env True body
+       ; let alt' = (con, map (stayPut dest_lvl) bs', body')
+       ; return (Case scrut' (TB case_bndr' (FloatMe dest_lvl)) ty' [alt']) }
 
   | otherwise     -- Stays put
   = do { let (alts_env1, [case_bndr']) = substAndLvlBndrs NonRecursive env incd_lvl [case_bndr]
              alts_env = extendCaseBndrEnv alts_env1 case_bndr scrut'
        ; alts' <- mapM (lvl_alt alts_env) alts
-       ; return (Case scrut' case_bndr' ty alts') }
+       ; return (Case scrut' case_bndr' ty' alts') }
   where
+    ty' = substTy (le_subst env) ty
+
     incd_lvl = incMinorLvl (le_ctxt_lvl env)
     dest_lvl = maxFvLevel (const True) env scrut_fvs
-            -- Don't abstact over type variables, hence const True
+            -- Don't abstract over type variables, hence const True
 
     lvl_alt alts_env (con, bs, rhs)
-      = do { rhs' <- lvlMFE True new_env rhs
+      = do { rhs' <- lvlMFE new_env True rhs
            ; return (con, bs', rhs') }
       where
         (new_env, bs') = substAndLvlBndrs NonRecursive alts_env incd_lvl bs
@@ -417,7 +497,7 @@ Consider this:
   f x vs = case x of { MkT y ->
              let f vs = ...(case y of I# w -> e)...f..
              in f vs
-Here we can float the (case y ...) out , because y is sure
+Here we can float the (case y ...) out, because y is sure
 to be evaluated, to give
   f x vs = case x of { MkT y ->
            caes y of I# w ->
@@ -445,98 +525,309 @@ Consider this:
   }
 Because of the binder-swap, the inner case will get substituted to
 (case x of ..).  So when testing whether the scrutinee is
-okForSpecuation we must be careful to test the *result* scrutinee ('x'
+okForSpeculation we must be careful to test the *result* scrutinee ('x'
 in this case), not the *input* one 'y'.  The latter *is* ok for
 speculation here, but the former is not -- and indeed we can't float
 the inner case out, at least not unless x is also evaluated at its
-binding site.
+binding site.  See Trac #5453.
 
 That's why we apply exprOkForSpeculation to scrut' and not to scrut.
 -}
 
-lvlMFE ::  Bool                 -- True <=> strict context [body of case or let]
-        -> LevelEnv             -- Level of in-scope names/tyvars
+lvlNonTailMFE :: LevelEnv             -- Level of in-scope names/tyvars
+              -> Bool                 -- True <=> strict context [body of case
+                                      --   or let]
+              -> CoreExprWithFVs      -- input expression
+              -> LvlM LevelledExpr    -- Result expression
+lvlNonTailMFE env strict_ctxt ann_expr
+  = lvlMFE (placeJoinCeiling env) strict_ctxt ann_expr
+
+lvlMFE ::  LevelEnv             -- Level of in-scope names/tyvars
+        -> Bool                 -- True <=> strict context [body of case or let]
         -> CoreExprWithFVs      -- input expression
         -> LvlM LevelledExpr    -- Result expression
 -- lvlMFE is just like lvlExpr, except that it might let-bind
 -- the expression, so that it can itself be floated.
 
-lvlMFE _ env (_, AnnType ty)
-  = return (Type (substTy (le_subst env) ty))
+lvlMFE env _ (_, AnnType ty)
+  = return (Type (CoreSubst.substTy (le_subst env) ty))
 
 -- No point in floating out an expression wrapped in a coercion or note
 -- If we do we'll transform  lvl = e |> co
 --                       to  lvl' = e; lvl = lvl' |> co
 -- and then inline lvl.  Better just to float out the payload.
-lvlMFE strict_ctxt env (_, AnnTick t e)
-  = do { e' <- lvlMFE strict_ctxt env e
+lvlMFE env strict_ctxt (_, AnnTick t e)
+  = do { e' <- lvlMFE env strict_ctxt e
        ; return (Tick t e') }
 
-lvlMFE strict_ctxt env (_, AnnCast e (_, co))
-  = do  { e' <- lvlMFE strict_ctxt env e
+lvlMFE env strict_ctxt (_, AnnCast e (_, co))
+  = do  { e' <- lvlMFE env strict_ctxt e
         ; return (Cast e' (substCo (le_subst env) co)) }
 
--- Note [Case MFEs]
-lvlMFE True env e@(_, AnnCase {})
-  = lvlExpr env e     -- Don't share cases
+lvlMFE env strict_ctxt e@(_, AnnCase {})
+  | strict_ctxt       -- Don't share cases in a strict context
+  = lvlExpr env e     -- See Note [Case MFEs]
 
-lvlMFE strict_ctxt env ann_expr
+lvlMFE env strict_ctxt ann_expr
   |  floatTopLvlOnly env && not (isTopLvl dest_lvl)
          -- Only floating to the top level is allowed.
-  || isUnliftedType (exprType expr)
-         -- Can't let-bind it; see Note [Unlifted MFEs]
-         -- This includes coercions, which we don't want to float anyway
-         -- NB: no need to substitute cos isUnliftedType doesn't change
-  || notWorthFloating ann_expr abs_vars
+  || anyDVarSet isJoinId fvs   -- If there is a free join, don't float
+                               -- See Note [Free join points]
+  || isExprLevPoly expr
+         -- We can't let-bind levity polymorphic expressions
+         -- See Note [Levity polymorphism invariants] in CoreSyn
+  || notWorthFloating expr abs_vars
   || not float_me
   =     -- Don't float it out
     lvlExpr env ann_expr
 
-  | otherwise   -- Float it out!
-  = do { expr' <- lvlFloatRhs abs_vars dest_lvl env ann_expr
-       ; var   <- newLvlVar expr' is_bot
-       ; return (Let (NonRec (TB var (FloatMe dest_lvl)) expr')
-                     (mkVarApps (Var var) abs_vars)) }
+  |  float_is_new_lam || exprIsTopLevelBindable expr expr_ty
+         -- No wrapping needed if the type is lifted, or is a literal string
+         -- or if we are wrapping it in one or more value lambdas
+  = do { expr1 <- lvlFloatRhs abs_vars dest_lvl rhs_env NonRecursive
+                              (isJust mb_bot_str)
+                              join_arity_maybe
+                              ann_expr
+                  -- Treat the expr just like a right-hand side
+       ; var <- newLvlVar expr1 join_arity_maybe is_mk_static
+       ; let var2 = annotateBotStr var float_n_lams mb_bot_str
+       ; return (Let (NonRec (TB var2 (FloatMe dest_lvl)) expr1)
+                     (mkVarApps (Var var2) abs_vars)) }
+
+  -- OK, so the float has an unlifted type (not top-level bindable)
+  --     and no new value lambdas (float_is_new_lam is False)
+  -- Try for the boxing strategy
+  -- See Note [Floating MFEs of unlifted type]
+  | escapes_value_lam
+  , not expr_ok_for_spec -- Boxing/unboxing isn't worth it for cheap expressions
+                         -- See Note [Test cheapness with exprOkForSpeculation]
+  , Just (tc, _) <- splitTyConApp_maybe expr_ty
+  , Just dc <- boxingDataCon_maybe tc
+  , let dc_res_ty = dataConOrigResTy dc  -- No free type variables
+        [bx_bndr, ubx_bndr] = mkTemplateLocals [dc_res_ty, expr_ty]
+  = do { expr1 <- lvlExpr rhs_env ann_expr
+       ; let l1r       = incMinorLvlFrom rhs_env
+             float_rhs = mkLams abs_vars_w_lvls $
+                         Case expr1 (stayPut l1r ubx_bndr) dc_res_ty
+                             [(DEFAULT, [], mkConApp dc [Var ubx_bndr])]
+
+       ; var <- newLvlVar float_rhs Nothing is_mk_static
+       ; let l1u      = incMinorLvlFrom env
+             use_expr = Case (mkVarApps (Var var) abs_vars)
+                             (stayPut l1u bx_bndr) expr_ty
+                             [(DataAlt dc, [stayPut l1u ubx_bndr], Var ubx_bndr)]
+       ; return (Let (NonRec (TB var (FloatMe dest_lvl)) float_rhs)
+                     use_expr) }
+
+  | otherwise          -- e.g. do not float unboxed tuples
+  = lvlExpr env ann_expr
+
   where
-    expr     = deAnnotate ann_expr
-    fvs      = freeVarsOf ann_expr
-    is_bot   = exprIsBottom expr      -- Note [Bottoming floats]
-    dest_lvl = destLevel env fvs (isFunction ann_expr) is_bot
-    abs_vars = abstractVars dest_lvl env fvs
+    expr         = deAnnotate ann_expr
+    expr_ty      = exprType expr
+    fvs          = freeVarsOf ann_expr
+    is_bot       = isBottomThunk mb_bot_str
+    is_function  = isFunction ann_expr
+    mb_bot_str   = exprBotStrictness_maybe expr
+                           -- See Note [Bottoming floats]
+                           -- esp Bottoming floats (2)
+    expr_ok_for_spec = exprOkForSpeculation expr
+    dest_lvl     = destLevel env fvs is_function is_bot False
+    abs_vars     = abstractVars dest_lvl env fvs
+
+    -- float_is_new_lam: the floated thing will be a new value lambda
+    -- replacing, say (g (x+4)) by (lvl x).  No work is saved, nor is
+    -- allocation saved.  The benefit is to get it to the top level
+    -- and hence out of the body of this function altogether, making
+    -- it smaller and more inlinable
+    float_is_new_lam = float_n_lams > 0
+    float_n_lams     = count isId abs_vars
+
+    (rhs_env, abs_vars_w_lvls) = lvlLamBndrs env dest_lvl abs_vars
+
+    join_arity_maybe = Nothing
+
+    is_mk_static = isJust (collectMakeStaticArgs expr)
+        -- Yuk: See Note [Grand plan for static forms] in main/StaticPtrTable
 
         -- A decision to float entails let-binding this thing, and we only do
         -- that if we'll escape a value lambda, or will go to the top level.
-    float_me = dest_lvl `ltMajLvl` (le_ctxt_lvl env)    -- Escapes a value lambda
-                -- OLD CODE: not (exprIsCheap expr) || isTopLvl dest_lvl
-                --           see Note [Escaping a value lambda]
+    float_me = saves_work || saves_alloc || is_mk_static
 
-            || (isTopLvl dest_lvl       -- Only float if we are going to the top level
-                && floatConsts env      --   and the floatConsts flag is on
-                && not strict_ctxt)     -- Don't float from a strict context
-          -- We are keen to float something to the top level, even if it does not
-          -- escape a lambda, because then it needs no allocation.  But it's controlled
-          -- by a flag, because doing this too early loses opportunities for RULES
-          -- which (needless to say) are important in some nofib programs
-          -- (gcd is an example).
-          --
-          -- Beware:
-          --    concat = /\ a -> foldr ..a.. (++) []
-          -- was getting turned into
-          --    lvl    = /\ a -> foldr ..a.. (++) []
-          --    concat = /\ a -> lvl a
-          -- which is pretty stupid.  Hence the strict_ctxt test
-          --
-          -- Also a strict contxt includes uboxed values, and they
-          -- can't be bound at top level
+    -- We can save work if we can move a redex outside a value lambda
+    -- But if float_is_new_lam is True, then the redex is wrapped in a
+    -- a new lambda, so no work is saved
+    saves_work = escapes_value_lam && not float_is_new_lam
 
-{-
-Note [Unlifted MFEs]
-~~~~~~~~~~~~~~~~~~~~
-We don't float unlifted MFEs, which potentially loses big opportunites.
-For example:
-        \x -> f (h y)
-where h :: Int -> Int# is expensive. We'd like to float the (h y) outside
-the \x, but we don't because it's unboxed.  Possible solution: box it.
+    escapes_value_lam = dest_lvl `ltMajLvl` (le_ctxt_lvl env)
+                  -- See Note [Escaping a value lambda]
+
+    -- See Note [Floating to the top]
+    saves_alloc =  isTopLvl dest_lvl
+                && floatConsts env
+                && (not strict_ctxt || is_bot || exprIsHNF expr)
+
+isBottomThunk :: Maybe (Arity, s) -> Bool
+-- See Note [Bottoming floats] (2)
+isBottomThunk (Just (0, _)) = True   -- Zero arity
+isBottomThunk _             = False
+
+{- Note [Floating to the top]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We are keen to float something to the top level, even if it does not
+escape a value lambda (and hence save work), for two reasons:
+
+  * Doing so makes the function smaller, by floating out
+    bottoming expressions, or integer or string literals.  That in
+    turn makes it easier to inline, with less duplication.
+
+  * (Minor) Doing so may turn a dynamic allocation (done by machine
+    instructions) into a static one. Minor because we are assuming
+    we are not escaping a value lambda.
+
+But do not so if:
+     - the context is a strict, and
+     - the expression is not a HNF, and
+     - the expression is not bottoming
+
+Exammples:
+
+* Bottoming
+      f x = case x of
+              0 -> error <big thing>
+              _ -> x+1
+  Here we want to float (error <big thing>) to top level, abstracting
+  over 'x', so as to make f's RHS smaller.
+
+* HNF
+      f = case y of
+            True  -> p:q
+            False -> blah
+  We may as well float the (p:q) so it becomes a static data structure.
+
+* Case scrutinee
+      f = case g True of ....
+  Don't float (g True) to top level; then we have the admin of a
+  top-level thunk to worry about, with zero gain.
+
+* Case alternative
+      h = case y of
+             True  -> g True
+             False -> False
+  Don't float (g True) to the top level
+
+* Arguments
+     t = f (g True)
+  If f is lazy, we /do/ float (g True) because then we can allocate
+  the thunk statically rather than dynamically.  But if f is strict
+  we don't (see the use of idStrictness in lvlApp).  It's not clear
+  if this test is worth the bother: it's only about CAFs!
+
+It's controlled by a flag (floatConsts), because doing this too
+early loses opportunities for RULES which (needless to say) are
+important in some nofib programs (gcd is an example).  [SPJ note:
+I think this is obselete; the flag seems always on.]
+
+Note [Floating join point bindings]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Mostly we only float a join point if it can /stay/ a join point.  But
+there is one exception: if it can go to the top level (Trac #13286).
+Consider
+  f x = joinrec j y n = <...j y' n'...>
+        in jump j x 0
+
+Here we may just as well produce
+  j y n = <....j y' n'...>
+  f x = j x 0
+
+and now there is a chance that 'f' will be inlined at its call sites.
+It shouldn't make a lot of difference, but thes tests
+  perf/should_run/MethSharing
+  simplCore/should_compile/spec-inline
+and one nofib program, all improve if you do float to top, because
+of the resulting inlining of f.  So ok, let's do it.
+
+Note [Free join points]
+~~~~~~~~~~~~~~~~~~~~~~~
+We never float a MFE that has a free join-point variable.  You mght think
+this can never occur.  After all, consider
+     join j x = ...
+     in ....(jump j x)....
+How might we ever want to float that (jump j x)?
+  * If it would escape a value lambda, thus
+        join j x = ... in (\y. ...(jump j x)... )
+    then 'j' isn't a valid join point in the first place.
+
+But consider
+     join j x = .... in
+     joinrec j2 y =  ...(jump j x)...(a+b)....
+
+Since j2 is recursive, it /is/ worth floating (a+b) out of the joinrec.
+But it is emphatically /not/ good to float the (jump j x) out:
+ (a) 'j' will stop being a join point
+ (b) In any case, jumping to 'j' must be an exit of the j2 loop, so no
+     work would be saved by floating it out of the \y.
+
+Even if we floated 'j' to top level, (b) would still hold.
+
+Bottom line: never float a MFE that has a free JoinId.
+
+Note [Floating MFEs of unlifted type]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Suppose we have
+   case f x of (r::Int#) -> blah
+we'd like to float (f x). But it's not trivial because it has type
+Int#, and we don't want to evaluate it too early.  But we can instead
+float a boxed version
+   y = case f x of r -> I# r
+and replace the original (f x) with
+   case (case y of I# r -> r) of r -> blah
+
+Being able to float unboxed expressions is sometimes important; see
+Trac #12603.  I'm not sure how /often/ it is important, but it's
+not hard to achieve.
+
+We only do it for a fixed collection of types for which we have a
+convenient boxing constructor (see boxingDataCon_maybe).  In
+particular we /don't/ do it for unboxed tuples; it's better to float
+the components of the tuple individually.
+
+I did experiment with a form of boxing that works for any type, namely
+wrapping in a function.  In our example
+
+   let y = case f x of r -> \v. f x
+   in case y void of r -> blah
+
+It works fine, but it's 50% slower (based on some crude benchmarking).
+I suppose we could do it for types not covered by boxingDataCon_maybe,
+but it's more code and I'll wait to see if anyone wants it.
+
+Note [Test cheapness with exprOkForSpeculation]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We don't want to float very cheap expressions by boxing and unboxing.
+But we use exprOkForSpeculation for the test, not exprIsCheap.
+Why?  Because it's important /not/ to transform
+     f (a /# 3)
+to
+     f (case bx of I# a -> a /# 3)
+and float bx = I# (a /# 3), because the application of f no
+longer obeys the let/app invariant.  But (a /# 3) is ok-for-spec
+due to a special hack that says division operators can't fail
+when the denominator is definitely non-zero.  And yet that
+same expression says False to exprIsCheap.  Simplest way to
+guarantee the let/app invariant is to use the same function!
+
+If an expression is okay for speculation, we could also float it out
+*without* boxing and unboxing, since evaluating it early is okay.
+However, it turned out to usually be better not to float such expressions,
+since they tend to be extremely cheap things like (x +# 1#). Even the
+cost of spilling the let-bound variable to the stack across a call may
+exceed the cost of recomputing such an expression. (And we can't float
+unlifted bindings to top-level.)
+
+We could try to do something smarter here, and float out expensive yet
+okay-for-speculation things, such as division by non-zero constants.
+But I suspect it's a narrow target.
 
 Note [Bottoming floats]
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -545,12 +836,38 @@ If we see
 we'd like to float the call to error, to get
         lvl = error "urk"
         f = \x. g lvl
-Furthermore, we want to float a bottoming expression even if it has free
-variables:
+
+But, as ever, we need to be careful:
+
+(1) We want to float a bottoming
+    expression even if it has free variables:
         f = \x. g (let v = h x in error ("urk" ++ v))
-Then we'd like to abstact over 'x' can float the whole arg of g:
+    Then we'd like to abstract over 'x' can float the whole arg of g:
         lvl = \x. let v = h x in error ("urk" ++ v)
         f = \x. g (lvl x)
+    To achieve this we pass is_bot to destLevel
+
+(2) We do not do this for lambdas that return
+    bottom.  Instead we treat the /body/ of such a function specially,
+    via point (1).  For example:
+        f = \x. ....(\y z. if x then error y else error z)....
+    ===>
+        lvl = \x z y. if b then error y else error z
+        f = \x. ...(\y z. lvl x z y)...
+    (There is no guarantee that we'll choose the perfect argument order.)
+
+(3) If we have a /binding/ that returns bottom, we want to float it to top
+    level, even if it has free vars (point (1)), and even it has lambdas.
+    Example:
+       ... let { v = \y. error (show x ++ show y) } in ...
+    We want to abstract over x and float the whole thing to top:
+       lvl = \xy. errror (show x ++ show y)
+       ...let {v = lvl x} in ...
+
+    Then of course we don't want to separately float the body (error ...)
+    as /another/ MFE, so we tell lvlFloatRhs not to do that, via the is_bot
+    argument.
+
 See Maessen's paper 1999 "Bottom extraction: factoring error handling out
 of functional programs" (unpublished I think).
 
@@ -589,16 +906,32 @@ Because in doing so we share a tiny bit of computation (the switch) but
 in exchange we build a thunk, which is bad.  This case reduces allocation
 by 7% in spectral/puzzle (a rather strange benchmark) and 1.2% in real/fem.
 Doesn't change any other allocation at all.
+
+We will make a separate decision for the scrutinee and alternatives.
+
+However this can have a knock-on effect for fusion: consider
+    \v -> foldr k z (case x of I# y -> build ..y..)
+Perhaps we can float the entire (case x of ...) out of the \v.  Then
+fusion will not happen, but we will get more sharing.  But if we don't
+float the case (as advocated here) we won't float the (build ...y..)
+either, so fusion will happen.  It can be a big effect, esp in some
+artificial benchmarks (e.g. integer, queens), but there is no perfect
+answer.
+
 -}
 
-annotateBotStr :: Id -> Maybe (Arity, StrictSig) -> Id
+annotateBotStr :: Id -> Arity -> Maybe (Arity, StrictSig) -> Id
 -- See Note [Bottoming floats] for why we want to add
 -- bottoming information right now
-annotateBotStr id Nothing            = id
-annotateBotStr id (Just (arity, sig)) = id `setIdArity` arity
-                                           `setIdStrictness` sig
+--
+-- n_extra are the number of extra value arguments added during floating
+annotateBotStr id n_extra mb_str
+  = case mb_str of
+      Nothing           -> id
+      Just (arity, sig) -> id `setIdArity`      (arity + n_extra)
+                              `setIdStrictness` (increaseStrictSigArity n_extra sig)
 
-notWorthFloating :: CoreExprWithFVs -> [Var] -> Bool
+notWorthFloating :: CoreExpr -> [Var] -> Bool
 -- Returns True if the expression would be replaced by
 -- something bigger than it is now.  For example:
 --   abs_vars = tvars only:  return True if e is trivial,
@@ -613,26 +946,26 @@ notWorthFloating :: CoreExprWithFVs -> [Var] -> Bool
 notWorthFloating e abs_vars
   = go e (count isId abs_vars)
   where
-    go (_, AnnVar {}) n    = n >= 0
-    go (_, AnnLit lit) n   = ASSERT( n==0 )
-                             litIsTrivial lit   -- Note [Floating literals]
-    go (_, AnnTick t e) n  = not (tickishIsCode t) && go e n
-    go (_, AnnCast e _)  n = go e n
-    go (_, AnnApp e arg) n
-       | (_, AnnType {}) <- arg = go e n
-       | (_, AnnCoercion {}) <- arg = go e n
-       | n==0                   = False
-       | is_triv arg            = go e (n-1)
-       | otherwise              = False
-    go _ _                      = False
+    go (Var {}) n    = n >= 0
+    go (Lit lit) n   = ASSERT( n==0 )
+                       litIsTrivial lit   -- Note [Floating literals]
+    go (Tick t e) n  = not (tickishIsCode t) && go e n
+    go (Cast e _)  n = go e n
+    go (App e arg) n
+       | Type {}     <- arg = go e n
+       | Coercion {} <- arg = go e n
+       | n==0               = False
+       | is_triv arg        = go e (n-1)
+       | otherwise          = False
+    go _ _                  = False
 
-    is_triv (_, AnnLit {})                = True        -- Treat all literals as trivial
-    is_triv (_, AnnVar {})                = True        -- (ie not worth floating)
-    is_triv (_, AnnCast e _)              = is_triv e
-    is_triv (_, AnnApp e (_, AnnType {})) = is_triv e
-    is_triv (_, AnnApp e (_, AnnCoercion {})) = is_triv e
-    is_triv (_, AnnTick t e)              = not (tickishIsCode t) && is_triv e
-    is_triv _                             = False
+    is_triv (Lit {})              = True        -- Treat all literals as trivial
+    is_triv (Var {})              = True        -- (ie not worth floating)
+    is_triv (Cast e _)            = is_triv e
+    is_triv (App e (Type {}))     = is_triv e
+    is_triv (App e (Coercion {})) = is_triv e
+    is_triv (Tick t e)            = not (tickishIsCode t) && is_triv e
+    is_triv _                     = False
 
 {-
 Note [Floating literals]
@@ -641,8 +974,8 @@ It's important to float Integer literals, so that they get shared,
 rather than being allocated every time round the loop.
 Hence the litIsTrivial.
 
-We'd *like* to share MachStr literal strings too, mainly so we could
-CSE them, but alas can't do so directly because they are unlifted.
+Ditto literal strings (MachStr), which we'd like to float to top
+level, which is now possible.
 
 
 Note [Escaping a value lambda]
@@ -651,9 +984,8 @@ We want to float even cheap expressions out of value lambdas,
 because that saves allocation.  Consider
         f = \x.  .. (\y.e) ...
 Then we'd like to avoid allocating the (\y.e) every time we call f,
-(assuming e does not mention x).
-
-An example where this really makes a difference is simplrun009.
+(assuming e does not mention x). An example where this really makes a
+difference is simplrun009.
 
 Another reason it's good is because it makes SpecContr fire on functions.
 Consider
@@ -661,31 +993,17 @@ Consider
 After floating we get
         lvl = \y.e
         f = \x. ....(f lvl)...
-and that is much easier for SpecConstr to generate a robust specialisation for.
+and that is much easier for SpecConstr to generate a robust
+specialisation for.
 
-The OLD CODE (given where this Note is referred to) prevents floating
-of the example above, so I just don't understand the old code.  I
-don't understand the old comment either (which appears below).  I
-measured the effect on nofib of changing OLD CODE to 'True', and got
-zeros everywhere, but a 4% win for 'puzzle'.  Very small 0.5% loss for
-'cse'; turns out to be because our arity analysis isn't good enough
-yet (mentioned in Simon-nofib-notes).
-
-OLD comment was:
-         Even if it escapes a value lambda, we only
-         float if it's not cheap (unless it'll get all the
-         way to the top).  I've seen cases where we
-         float dozens of tiny free expressions, which cost
-         more to allocate than to evaluate.
-         NB: exprIsCheap is also true of bottom expressions, which
-             is good; we don't want to share them
-
-        It's only Really Bad to float a cheap expression out of a
-        strict context, because that builds a thunk that otherwise
-        would never be built.  So another alternative would be to
-        add
-                || (strict_ctxt && not (exprIsBottom expr))
-        to the condition above. We should really try this out.
+However, if we are wrapping the thing in extra value lambdas (in
+abs_vars), then nothing is saved.  E.g.
+        f = \xyz. ...(e1[y],e2)....
+If we float
+        lvl = \y. (e1[y],e2)
+        f = \xyz. ...(lvl y)...
+we have saved nothing: one pair will still be allocated for each
+call of 'f'.  Hence the (not float_is_lam) in float_me.
 
 
 ************************************************************************
@@ -707,12 +1025,13 @@ lvlBind env (AnnNonRec bndr rhs)
   || isCoVar bndr   -- Difficult to fix up CoVar occurrences (see extendPolyLvlEnv)
                     -- so we will ignore this case for now
   || not (profitableFloat env dest_lvl)
-  || (isTopLvl dest_lvl && isUnliftedType (idType bndr))
-          -- We can't float an unlifted binding to top level, so we don't
-          -- float it at all.  It's a bit brutal, but unlifted bindings
-          -- aren't expensive either
+  || (isTopLvl dest_lvl && not (exprIsTopLevelBindable deann_rhs (idType bndr)))
+          -- We can't float an unlifted binding to top level (except
+          -- literal strings), so we don't float it at all.  It's a
+          -- bit brutal, but unlifted bindings aren't expensive either
+
   = -- No float
-    do { rhs' <- lvlExpr env rhs
+    do { rhs' <- lvlRhs env NonRecursive is_bot mb_join_arity rhs
        ; let  bind_lvl        = incMinorLvl (le_ctxt_lvl env)
               (env', [bndr']) = substAndLvlBndrs NonRecursive env bind_lvl [bndr]
        ; return (NonRec bndr' rhs', env') }
@@ -720,35 +1039,48 @@ lvlBind env (AnnNonRec bndr rhs)
   -- Otherwise we are going to float
   | null abs_vars
   = do {  -- No type abstraction; clone existing binder
-         rhs' <- lvlExpr (setCtxtLvl env dest_lvl) rhs
+         rhs' <- lvlFloatRhs [] dest_lvl env NonRecursive
+                             is_bot mb_join_arity rhs
        ; (env', [bndr']) <- cloneLetVars NonRecursive env dest_lvl [bndr]
-       ; return (NonRec (TB bndr' (FloatMe dest_lvl)) rhs', env') }
+       ; let bndr2 = annotateBotStr bndr' 0 mb_bot_str
+       ; return (NonRec (TB bndr2 (FloatMe dest_lvl)) rhs', env') }
 
   | otherwise
   = do {  -- Yes, type abstraction; create a new binder, extend substitution, etc
-         rhs' <- lvlFloatRhs abs_vars dest_lvl env rhs
+         rhs' <- lvlFloatRhs abs_vars dest_lvl env NonRecursive
+                             is_bot mb_join_arity rhs
        ; (env', [bndr']) <- newPolyBndrs dest_lvl env abs_vars [bndr]
-       ; return (NonRec (TB bndr' (FloatMe dest_lvl)) rhs', env') }
+       ; let bndr2 = annotateBotStr bndr' n_extra mb_bot_str
+       ; return (NonRec (TB bndr2 (FloatMe dest_lvl)) rhs', env') }
 
   where
     rhs_fvs    = freeVarsOf rhs
     bind_fvs   = rhs_fvs `unionDVarSet` dIdFreeVars bndr
     abs_vars   = abstractVars dest_lvl env bind_fvs
-    dest_lvl   = destLevel env bind_fvs (isFunction rhs) is_bot
-    is_bot     = exprIsBottom (deAnnotate rhs)
+    dest_lvl   = destLevel env bind_fvs (isFunction rhs) is_bot is_join
+
+    deann_rhs  = deAnnotate rhs
+    mb_bot_str = exprBotStrictness_maybe deann_rhs
+    is_bot     = isJust mb_bot_str
+        -- NB: not isBottomThunk!  See Note [Bottoming floats] point (3)
+
+    n_extra    = count isId abs_vars
+    mb_join_arity = isJoinId_maybe bndr
+    is_join       = isJust mb_join_arity
 
 lvlBind env (AnnRec pairs)
   |  floatTopLvlOnly env && not (isTopLvl dest_lvl)
          -- Only floating to the top level is allowed.
   || not (profitableFloat env dest_lvl)
-  = do { let bind_lvl = incMinorLvl (le_ctxt_lvl env)
+  = do { let bind_lvl       = incMinorLvl (le_ctxt_lvl env)
              (env', bndrs') = substAndLvlBndrs Recursive env bind_lvl bndrs
-       ; rhss' <- mapM (lvlExpr env') rhss
+             lvl_rhs (b,r)  = lvlRhs env' Recursive is_bot (isJoinId_maybe b) r
+       ; rhss' <- mapM lvl_rhs pairs
        ; return (Rec (bndrs' `zip` rhss'), env') }
 
   | null abs_vars
   = do { (new_env, new_bndrs) <- cloneLetVars Recursive env dest_lvl bndrs
-       ; new_rhss <- mapM (lvlExpr (setCtxtLvl new_env dest_lvl)) rhss
+       ; new_rhss <- mapM (do_rhs new_env) pairs
        ; return ( Rec ([TB b (FloatMe dest_lvl) | b <- new_bndrs] `zip` new_rhss)
                 , new_env) }
 
@@ -774,7 +1106,7 @@ lvlBind env (AnnRec pairs)
         (lam_bndrs, rhs_body)   = collectAnnBndrs rhs
         (body_env1, lam_bndrs1) = substBndrsSL NonRecursive rhs_env' lam_bndrs
         (body_env2, lam_bndrs2) = lvlLamBndrs body_env1 rhs_lvl lam_bndrs1
-    new_rhs_body <- lvlExpr body_env2 rhs_body
+    new_rhs_body <- lvlRhs body_env2 Recursive is_bot (get_join bndr) rhs_body
     (poly_env, [poly_bndr]) <- newPolyBndrs dest_lvl env abs_vars [bndr]
     return (Rec [(TB poly_bndr (FloatMe dest_lvl)
                  , mkLams abs_vars_w_lvls $
@@ -786,12 +1118,27 @@ lvlBind env (AnnRec pairs)
 
   | otherwise  -- Non-null abs_vars
   = do { (new_env, new_bndrs) <- newPolyBndrs dest_lvl env abs_vars bndrs
-       ; new_rhss <- mapM (lvlFloatRhs abs_vars dest_lvl new_env) rhss
+       ; new_rhss <- mapM (do_rhs new_env) pairs
        ; return ( Rec ([TB b (FloatMe dest_lvl) | b <- new_bndrs] `zip` new_rhss)
                 , new_env) }
 
   where
     (bndrs,rhss) = unzip pairs
+    is_join  = isJoinId (head bndrs)
+                -- bndrs is always non-empty and if one is a join they all are
+                -- Both are checked by Lint
+    is_fun   = all isFunction rhss
+    is_bot   = False  -- It's odd to have an unconditionally divergent
+                      -- function in a Rec, and we don't much care what
+                      -- happens to it.  False is simple!
+
+    do_rhs env (bndr,rhs) = lvlFloatRhs abs_vars dest_lvl env Recursive
+                                        is_bot (get_join bndr)
+                                        rhs
+
+    get_join bndr | need_zap  = Nothing
+                  | otherwise = isJoinId_maybe bndr
+    need_zap = dest_lvl `ltLvl` joinCeilingLevel env
 
         -- Finding the free vars of the binding group is annoying
     bind_fvs = ((unionDVarSets [ freeVarsOf rhs | (_, rhs) <- pairs])
@@ -801,7 +1148,7 @@ lvlBind env (AnnRec pairs)
                `delDVarSetList`
                 bndrs
 
-    dest_lvl = destLevel env bind_fvs (all isFunction rhss) False
+    dest_lvl = destLevel env bind_fvs is_fun is_bot is_join
     abs_vars = abstractVars dest_lvl env bind_fvs
 
 profitableFloat :: LevelEnv -> Level -> Bool
@@ -809,16 +1156,92 @@ profitableFloat env dest_lvl
   =  (dest_lvl `ltMajLvl` le_ctxt_lvl env)  -- Escapes a value lambda
   || isTopLvl dest_lvl                      -- Going all the way to top level
 
+
 ----------------------------------------------------
 -- Three help functions for the type-abstraction case
 
-lvlFloatRhs :: [OutVar] -> Level -> LevelEnv -> CoreExprWithFVs
-            -> UniqSM (Expr LevelledBndr)
-lvlFloatRhs abs_vars dest_lvl env rhs
-  = do { rhs' <- lvlExpr rhs_env rhs
-       ; return (mkLams abs_vars_w_lvls rhs') }
+lvlRhs :: LevelEnv
+       -> RecFlag
+       -> Bool               -- Is this a bottoming function
+       -> Maybe JoinArity
+       -> CoreExprWithFVs
+       -> LvlM LevelledExpr
+lvlRhs env rec_flag is_bot mb_join_arity expr
+  = lvlFloatRhs [] (le_ctxt_lvl env) env
+                rec_flag is_bot mb_join_arity expr
+
+lvlFloatRhs :: [OutVar] -> Level -> LevelEnv -> RecFlag
+            -> Bool   -- Binding is for a bottoming function
+            -> Maybe JoinArity
+            -> CoreExprWithFVs
+            -> LvlM (Expr LevelledBndr)
+-- Ignores the le_ctxt_lvl in env; treats dest_lvl as the baseline
+lvlFloatRhs abs_vars dest_lvl env rec is_bot mb_join_arity rhs
+  = do { body' <- if not is_bot  -- See Note [Floating from a RHS]
+                     && any isId bndrs
+                  then lvlMFE  body_env True body
+                  else lvlExpr body_env      body
+       ; return (mkLams bndrs' body') }
   where
-    (rhs_env, abs_vars_w_lvls) = lvlLamBndrs env dest_lvl abs_vars
+    (bndrs, body)     | Just join_arity <- mb_join_arity
+                      = collectNAnnBndrs join_arity rhs
+                      | otherwise
+                      = collectAnnBndrs rhs
+    (env1, bndrs1)    = substBndrsSL NonRecursive env bndrs
+    all_bndrs         = abs_vars ++ bndrs1
+    (body_env, bndrs') | Just _ <- mb_join_arity
+                      = lvlJoinBndrs env1 dest_lvl rec all_bndrs
+                      | otherwise
+                      = case lvlLamBndrs env1 dest_lvl all_bndrs of
+                          (env2, bndrs') -> (placeJoinCeiling env2, bndrs')
+        -- The important thing here is that we call lvlLamBndrs on
+        -- all these binders at once (abs_vars and bndrs), so they
+        -- all get the same major level.  Otherwise we create stupid
+        -- let-bindings inside, joyfully thinking they can float; but
+        -- in the end they don't because we never float bindings in
+        -- between lambdas
+
+{- Note [Floating from a RHS]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When float the RHS of a let-binding, we don't always want to apply
+lvlMFE to the body of a lambda, as we usually do, because the entire
+binding body is already going to the right place (dest_lvl).
+
+A particular example is the top level.  Consider
+   concat = /\ a -> foldr ..a.. (++) []
+We don't want to float the body of the lambda to get
+   lvl    = /\ a -> foldr ..a.. (++) []
+   concat = /\ a -> lvl a
+That would be stupid.
+
+Previously this was avoided in a much nastier way, by testing strict_ctxt
+in float_me in lvlMFE.  But that wasn't even right because it would fail
+to float out the error sub-expression in
+    f = \x. case x of
+              True  -> error ("blah" ++ show x)
+              False -> ...
+
+But we must be careful:
+
+* If we had
+    f = \x -> factorial 20
+  we /would/ want to float that (factorial 20) out!  Functions are treated
+  differently: see the use of isFunction in the calls to destLevel. If
+  there are only type lambdas, then destLevel will say "go to top, and
+  abstract over the free tyvars" and we don't want that here.
+
+* But if we had
+    f = \x -> error (...x....)
+  we would NOT want to float the bottoming expression out to give
+    lvl = \x -> error (...x...)
+    f = \x -> lvl x
+
+Conclusion: use lvlMFE if there are
+  * any value lambdas in the original function, and
+  * this is not a bottoming function (the is_bot argument)
+Use lvlExpr otherwise.  A little subtle, and I got it wrong at least twice
+(e.g. Trac #13369).
+-}
 
 {-
 ************************************************************************
@@ -858,33 +1281,57 @@ lvlLamBndrs env lvl bndrs
        -- probable one-shot lambda"
        -- See Note [Computing one-shot info] in Demand.hs
 
+lvlJoinBndrs :: LevelEnv -> Level -> RecFlag -> [OutVar]
+             -> (LevelEnv, [LevelledBndr])
+lvlJoinBndrs env lvl rec bndrs
+  = lvlBndrs env new_lvl bndrs
+  where
+    new_lvl | isRec rec = incMajorLvl lvl
+            | otherwise = incMinorLvl lvl
+      -- Non-recursive join points are one-shot; recursive ones are not
 
 lvlBndrs :: LevelEnv -> Level -> [CoreBndr] -> (LevelEnv, [LevelledBndr])
 -- The binders returned are exactly the same as the ones passed,
 -- apart from applying the substitution, but they are now paired
 -- with a (StayPut level)
 --
--- The returned envt has ctxt_lvl updated to the new_lvl
+-- The returned envt has le_ctxt_lvl updated to the new_lvl
 --
 -- All the new binders get the same level, because
 -- any floating binding is either going to float past
 -- all or none.  We never separate binders.
 lvlBndrs env@(LE { le_lvl_env = lvl_env }) new_lvl bndrs
   = ( env { le_ctxt_lvl = new_lvl
+          , le_join_ceil = new_lvl
           , le_lvl_env  = addLvls new_lvl lvl_env bndrs }
-    , lvld_bndrs)
-  where
-    lvld_bndrs    = [TB bndr (StayPut new_lvl) | bndr <- bndrs]
+    , map (stayPut new_lvl) bndrs)
+
+stayPut :: Level -> OutVar -> LevelledBndr
+stayPut new_lvl bndr = TB bndr (StayPut new_lvl)
 
   -- Destination level is the max Id level of the expression
   -- (We'll abstract the type variables, if any.)
 destLevel :: LevelEnv -> DVarSet
           -> Bool   -- True <=> is function
           -> Bool   -- True <=> is bottom
+          -> Bool   -- True <=> is a join point
           -> Level
-destLevel env fvs is_function is_bot
-  | is_bot = tOP_LEVEL  -- Send bottoming bindings to the top
-                        -- regardless; see Note [Bottoming floats]
+-- INVARIANT: if is_join=True then result >= join_ceiling
+destLevel env fvs is_function is_bot is_join
+  | isTopLvl max_fv_id_level  -- Float even joins if they get to top level
+                              -- See Note [Floating join point bindings]
+  = tOP_LEVEL
+
+  | is_join  -- Never float a join point past the join ceiling
+             -- See Note [Join points] in FloatOut
+  = if max_fv_id_level `ltLvl` join_ceiling
+    then join_ceiling
+    else max_fv_id_level
+
+  | is_bot              -- Send bottoming bindings to the top
+  = tOP_LEVEL           -- regardless; see Note [Bottoming floats]
+                        -- Esp Bottoming floats (1)
+
   | Just n_args <- floatLams env
   , n_args > 0  -- n=0 case handled uniformly by the 'otherwise' case
   , is_function
@@ -892,8 +1339,11 @@ destLevel env fvs is_function is_bot
   = tOP_LEVEL   -- Send functions to top level; see
                 -- the comments with isFunction
 
-  | otherwise = maxFvLevel isId env fvs  -- Max over Ids only; the tyvars
-                                         -- will be abstracted
+  | otherwise = max_fv_id_level
+  where
+    max_fv_id_level = maxFvLevel isId env fvs -- Max over Ids only; the tyvars
+                                              -- will be abstracted
+    join_ceiling = joinCeilingLevel env
 
 isFunction :: CoreExprWithFVs -> Bool
 -- The idea here is that we want to float *functions* to
@@ -912,7 +1362,7 @@ isFunction :: CoreExprWithFVs -> Bool
 -- constructors.  So the simple thing is just to look for lambdas
 isFunction (_, AnnLam b e) | isId b    = True
                            | otherwise = isFunction e
--- isFunction (_, AnnTick _ e)          = isFunction e  -- dubious
+-- isFunction (_, AnnTick _ e)         = isFunction e  -- dubious
 isFunction _                           = False
 
 countFreeIds :: DVarSet -> Int
@@ -931,46 +1381,57 @@ countFreeIds = nonDetFoldUDFM add 0
 ************************************************************************
 -}
 
-type InVar  = Var   -- Pre  cloning
-type InId   = Id    -- Pre  cloning
-type OutVar = Var   -- Post cloning
-type OutId  = Id    -- Post cloning
-
 data LevelEnv
   = LE { le_switches :: FloatOutSwitches
        , le_ctxt_lvl :: Level           -- The current level
        , le_lvl_env  :: VarEnv Level    -- Domain is *post-cloned* TyVars and Ids
+       , le_join_ceil:: Level           -- Highest level to which joins float
+                                        -- Invariant: always >= le_ctxt_lvl
+
+       -- See Note [le_subst and le_env]
        , le_subst    :: Subst           -- Domain is pre-cloned TyVars and Ids
                                         -- The Id -> CoreExpr in the Subst is ignored
                                         -- (since we want to substitute a LevelledExpr for
                                         -- an Id via le_env) but we do use the Co/TyVar substs
        , le_env      :: IdEnv ([OutVar], LevelledExpr)  -- Domain is pre-cloned Ids
     }
-        -- We clone let- and case-bound variables so that they are still
-        -- distinct when floated out; hence the le_subst/le_env.
-        -- (see point 3 of the module overview comment).
-        -- We also use these envs when making a variable polymorphic
-        -- because we want to float it out past a big lambda.
-        --
-        -- The le_subst and le_env always implement the same mapping, but the
-        -- le_subst maps to CoreExpr and the le_env to LevelledExpr
-        -- Since the range is always a variable or type application,
-        -- there is never any difference between the two, but sadly
-        -- the types differ.  The le_subst is used when substituting in
-        -- a variable's IdInfo; the le_env when we find a Var.
-        --
-        -- In addition the le_env records a list of tyvars free in the
-        -- type application, just so we don't have to call freeVars on
-        -- the type application repeatedly.
-        --
-        -- The domain of the both envs is *pre-cloned* Ids, though
-        --
-        -- The domain of the le_lvl_env is the *post-cloned* Ids
+
+{- Note [le_subst and le_env]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We clone let- and case-bound variables so that they are still distinct
+when floated out; hence the le_subst/le_env.  (see point 3 of the
+module overview comment).  We also use these envs when making a
+variable polymorphic because we want to float it out past a big
+lambda.
+
+The le_subst and le_env always implement the same mapping,
+     in_x :->  out_x a b
+where out_x is an OutVar, and a,b are its arguments (when
+we perform abstraction at the same time as floating).
+
+  le_subst maps to CoreExpr
+  le_env   maps to LevelledExpr
+
+Since the range is always a variable or application, there is never
+any difference between the two, but sadly the types differ.  The
+le_subst is used when substituting in a variable's IdInfo; the le_env
+when we find a Var.
+
+In addition the le_env records a [OutVar] of variables free in the
+OutExpr/LevelledExpr, just so we don't have to call freeVars
+repeatedly.  This list is always non-empty, and the first element is
+out_x
+
+The domain of the both envs is *pre-cloned* Ids, though
+
+The domain of the le_lvl_env is the *post-cloned* Ids
+-}
 
 initialEnv :: FloatOutSwitches -> LevelEnv
 initialEnv float_lams
   = LE { le_switches = float_lams
        , le_ctxt_lvl = tOP_LEVEL
+       , le_join_ceil = panic "initialEnv"
        , le_lvl_env = emptyVarEnv
        , le_subst = emptySubst
        , le_env = emptyVarEnv }
@@ -993,8 +1454,8 @@ floatOverSat le = floatOutOverSatApps (le_switches le)
 floatTopLvlOnly :: LevelEnv -> Bool
 floatTopLvlOnly le = floatToTopLevelOnly (le_switches le)
 
-setCtxtLvl :: LevelEnv -> Level -> LevelEnv
-setCtxtLvl env lvl = env { le_ctxt_lvl = lvl }
+incMinorLvlFrom :: LevelEnv -> Level
+incMinorLvlFrom env = incMinorLvl (le_ctxt_lvl env)
 
 -- extendCaseBndrEnv adds the mapping case-bndr->scrut-var if it can
 -- See Note [Binder-swap during float-out]
@@ -1007,6 +1468,13 @@ extendCaseBndrEnv le@(LE { le_subst = subst, le_env = id_env })
   = le { le_subst   = extendSubstWithVar subst case_bndr scrut_var
        , le_env     = add_id id_env (case_bndr, scrut_var) }
 extendCaseBndrEnv env _ _ = env
+
+-- See Note [Join ceiling]
+placeJoinCeiling :: LevelEnv -> LevelEnv
+placeJoinCeiling le@(LE { le_ctxt_lvl = lvl })
+  = le { le_ctxt_lvl = lvl', le_join_ceil = lvl' }
+  where
+    lvl' = asJoinCeilLvl (incMinorLvl lvl)
 
 maxFvLevel :: (Var -> Bool) -> LevelEnv -> DVarSet -> Level
 maxFvLevel max_me (LE { le_lvl_env = lvl_env, le_env = id_env }) var_set
@@ -1028,8 +1496,13 @@ lookupVar le v = case lookupVarEnv (le_env le) v of
                     Just (_, expr) -> expr
                     _              -> Var v
 
+-- Level to which join points are allowed to float (boundary of current tail
+-- context). See Note [Join ceiling]
+joinCeilingLevel :: LevelEnv -> Level
+joinCeilingLevel = le_join_ceil
+
 abstractVars :: Level -> LevelEnv -> DVarSet -> [OutVar]
-        -- Find the variables in fvs, free vars of the target expresion,
+        -- Find the variables in fvs, free vars of the target expression,
         -- whose level is greater than the destination level
         -- These are the ones we are going to abstract out
         --
@@ -1075,9 +1548,10 @@ type LvlM result = UniqSM result
 initLvl :: UniqSupply -> UniqSM a -> a
 initLvl = initUs_
 
-newPolyBndrs :: Level -> LevelEnv -> [OutVar] -> [InId] -> UniqSM (LevelEnv, [OutId])
+newPolyBndrs :: Level -> LevelEnv -> [OutVar] -> [InId]
+             -> LvlM (LevelEnv, [OutId])
 -- The envt is extended to bind the new bndrs to dest_lvl, but
--- the ctxt_lvl is unaffected
+-- the le_ctxt_lvl is unaffected
 newPolyBndrs dest_lvl
              env@(LE { le_lvl_env = lvl_env, le_subst = subst, le_env = id_env })
              abs_vars bndrs
@@ -1094,28 +1568,39 @@ newPolyBndrs dest_lvl
     add_id    env (v, v') = extendVarEnv env v ((v':abs_vars), mkVarApps (Var v') abs_vars)
 
     mk_poly_bndr bndr uniq = transferPolyIdInfo bndr abs_vars $         -- Note [transferPolyIdInfo] in Id.hs
+                             transfer_join_info bndr $
                              mkSysLocalOrCoVar (mkFastString str) uniq poly_ty
                            where
                              str     = "poly_" ++ occNameString (getOccName bndr)
-                             poly_ty = mkLamTypes abs_vars (substTy subst (idType bndr))
+                             poly_ty = mkLamTypes abs_vars (CoreSubst.substTy subst (idType bndr))
+
+    -- If we are floating a join point to top level, it stops being
+    -- a join point.  Otherwise it continues to be a join point,
+    -- but we may need to adjust its arity
+    dest_is_top = isTopLvl dest_lvl
+    transfer_join_info bndr new_bndr
+      | Just join_arity <- isJoinId_maybe bndr
+      , not dest_is_top
+      = new_bndr `asJoinId` join_arity + length abs_vars
+      | otherwise
+      = new_bndr
 
 newLvlVar :: LevelledExpr        -- The RHS of the new binding
-          -> Bool                -- Whether it is bottom
+          -> Maybe JoinArity     -- Its join arity, if it is a join point
+          -> Bool                -- True <=> the RHS looks like (makeStatic ...)
           -> LvlM Id
-newLvlVar lvld_rhs is_bot
+newLvlVar lvld_rhs join_arity_maybe is_mk_static
   = do { uniq <- getUniqueM
-       ; return (add_bot_info (mk_id uniq))
+       ; return (add_join_info (mk_id uniq rhs_ty))
        }
   where
-    add_bot_info var  -- We could call annotateBotStr always, but the is_bot
-                      -- flag just tells us when we don't need to do so
-       | is_bot    = annotateBotStr var (exprBotStrictness_maybe de_tagged_rhs)
-       | otherwise = var
+    add_join_info var = var `asJoinId_maybe` join_arity_maybe
     de_tagged_rhs = deTagExpr lvld_rhs
-    rhs_ty = exprType de_tagged_rhs
-    mk_id uniq
-      -- See Note [Grand plan for static forms] in SimplCore.
-      | isJust (collectStaticPtrSatArgs lvld_rhs)
+    rhs_ty        = exprType de_tagged_rhs
+
+    mk_id uniq rhs_ty
+      -- See Note [Grand plan for static forms] in StaticPtrTable.
+      | is_mk_static
       = mkExportedVanillaId (mkSystemVarName uniq (mkFastString "static_ptr"))
                             rhs_ty
       | otherwise
@@ -1126,42 +1611,47 @@ cloneCaseBndrs env@(LE { le_subst = subst, le_lvl_env = lvl_env, le_env = id_env
                new_lvl vs
   = do { us <- getUniqueSupplyM
        ; let (subst', vs') = cloneBndrs subst us vs
-             env' = env { le_ctxt_lvl = new_lvl
-                        , le_lvl_env  = addLvls new_lvl lvl_env vs'
-                        , le_subst    = subst'
-                        , le_env      = foldl add_id id_env (vs `zip` vs') }
+             env' = env { le_ctxt_lvl  = new_lvl
+                        , le_join_ceil = new_lvl
+                        , le_lvl_env   = addLvls new_lvl lvl_env vs'
+                        , le_subst     = subst'
+                        , le_env       = foldl add_id id_env (vs `zip` vs') }
 
        ; return (env', vs') }
 
-cloneLetVars :: RecFlag -> LevelEnv -> Level -> [Var] -> LvlM (LevelEnv, [Var])
+cloneLetVars :: RecFlag -> LevelEnv -> Level -> [InVar]
+             -> LvlM (LevelEnv, [OutVar])
 -- See Note [Need for cloning during float-out]
 -- Works for Ids bound by let(rec)
 -- The dest_lvl is attributed to the binders in the new env,
--- but cloneVars doesn't affect the ctxt_lvl of the incoming env
+-- but cloneVars doesn't affect the le_ctxt_lvl of the incoming env
 cloneLetVars is_rec
           env@(LE { le_subst = subst, le_lvl_env = lvl_env, le_env = id_env })
           dest_lvl vs
   = do { us <- getUniqueSupplyM
-       ; let (subst', vs1) = case is_rec of
-                               NonRecursive -> cloneBndrs      subst us vs
-                               Recursive    -> cloneRecIdBndrs subst us vs
-             vs2  = map zap_demand_info vs1  -- See Note [Zapping the demand info]
+       ; let vs1  = map zap vs
+                      -- See Note [Zapping the demand info]
+             (subst', vs2) = case is_rec of
+                               NonRecursive -> cloneBndrs      subst us vs1
+                               Recursive    -> cloneRecIdBndrs subst us vs1
              prs  = vs `zip` vs2
              env' = env { le_lvl_env = addLvls dest_lvl lvl_env vs2
                         , le_subst   = subst'
                         , le_env     = foldl add_id id_env prs }
 
        ; return (env', vs2) }
+  where
+    zap :: Var -> Var
+    zap v | isId v    = zap_join (zapIdDemandInfo v)
+          | otherwise = v
+
+    zap_join | isTopLvl dest_lvl = zapJoinId
+             | otherwise         = \v -> v
 
 add_id :: IdEnv ([Var], LevelledExpr) -> (Var, Var) -> IdEnv ([Var], LevelledExpr)
 add_id id_env (v, v1)
   | isTyVar v = delVarEnv    id_env v
   | otherwise = extendVarEnv id_env v ([v1], ASSERT(not (isCoVar v1)) Var v1)
-
-zap_demand_info :: Var -> Var
-zap_demand_info v
-  | isId v    = zapIdDemandInfo v
-  | otherwise = v
 
 {-
 Note [Zapping the demand info]
@@ -1172,4 +1662,7 @@ binding site.  Eg
    f :: Int -> Int
    f x = let v = 3*4 in v+x
 Here v is strict; but if we float v to top level, it isn't any more.
+
+Similarly, if we're floating a join point, it won't be one anymore, so we zap
+join point information as well.
 -}

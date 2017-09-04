@@ -16,18 +16,14 @@ import time
 import datetime
 import copy
 import glob
+import sys
 from math import ceil, trunc
 import collections
 import subprocess
 
 from testglobals import *
 from testutil import *
-from extra_files import extra_src_files
-
-try:
-    basestring
-except: # Python 3
-    basestring = (str,bytes)
+extra_src_files = {'T4198': ['exitminus1.c']} # TODO: See #12223
 
 if config.use_threads:
     import threading
@@ -38,6 +34,11 @@ if config.use_threads:
 
 global wantToStop
 wantToStop = False
+
+global pool_sema
+if config.use_threads:
+    pool_sema = threading.BoundedSemaphore(value=config.threads)
+
 def stopNow():
     global wantToStop
     wantToStop = True
@@ -83,6 +84,8 @@ def setTestOpts( f ):
 #      test('test001', expect_fail, compile, [''])
 #
 # to expect failure for this test.
+#
+# type TestOpt = (name :: String, opts :: Object) -> IO ()
 
 def normal( name, opts ):
     return;
@@ -323,7 +326,7 @@ def _stats_num_field( name, opts, field, expecteds ):
             if b:
                 opts.stats_range_fields[field] = (expected, dev)
                 return
-        framework_fail(name, 'numfield-no-expected', 'No expected value found for ' + field + ' in num_field check')
+        framework_warn(name, 'numfield-no-expected', 'No expected value found for ' + field + ' in num_field check')
 
     else:
         (expected, dev) = expecteds
@@ -346,7 +349,7 @@ def _compiler_stats_num_field( name, opts, field, expecteds ):
             opts.compiler_stats_range_fields[field] = (expected, dev)
             return
 
-    framework_fail(name, 'numfield-no-expected', 'No expected value found for ' + field + ' in num_field check')
+    framework_warn(name, 'numfield-no-expected', 'No expected value found for ' + field + ' in num_field check')
 
 # -----
 
@@ -492,6 +495,13 @@ def no_check_hp(name, opts):
 
 # ----
 
+def filter_stdout_lines( regex ):
+    """ Filter lines of stdout with the given regular expression """
+    import re
+    def f( name, opts ):
+        _normalise_fun(name, opts, lambda s: '\n'.join(re.findall(regex, s)))
+    return f
+
 def normalise_slashes( name, opts ):
     _normalise_fun(name, opts, normalise_slashes_)
 
@@ -509,6 +519,12 @@ def normalise_errmsg_fun( *fs ):
 
 def _normalise_errmsg_fun( name, opts, *fs ):
     opts.extra_errmsg_normaliser =  join_normalisers(opts.extra_errmsg_normaliser, fs)
+
+def normalise_whitespace_fun(f):
+    return lambda name, opts: _normalise_whitespace_fun(name, opts, f)
+
+def _normalise_whitespace_fun(name, opts, f):
+    opts.whitespace_normaliser = f
 
 def normalise_version_( *pkgs ):
     def normalise_version__( str ):
@@ -549,7 +565,8 @@ def join_normalisers(*a):
         Taken from http://stackoverflow.com/a/2158532/946226
         """
         for el in l:
-            if isinstance(el, collections.Iterable) and not isinstance(el, basestring):
+            if (isinstance(el, collections.Iterable)
+                and not isinstance(el, (bytes, str))):
                 for sub in flatten(el):
                     yield sub
             else:
@@ -601,27 +618,20 @@ parallelTests = []
 aloneTests = []
 allTestNames = set([])
 
-def runTest (opts, name, func, args):
-    ok = 0
-
+def runTest(watcher, opts, name, func, args):
     if config.use_threads:
-        t.thread_pool.acquire()
-        try:
-            while config.threads<(t.running_threads+1):
-                t.thread_pool.wait()
-            t.running_threads = t.running_threads+1
-            ok=1
-            t.thread_pool.release()
-            thread.start_new_thread(test_common_thread, (name, opts, func, args))
-        except:
-            if not ok:
-                t.thread_pool.release()
+        pool_sema.acquire()
+        t = threading.Thread(target=test_common_thread,
+                             name=name,
+                             args=(watcher, name, opts, func, args))
+        t.daemon = False
+        t.start()
     else:
-        test_common_work (name, opts, func, args)
+        test_common_work(watcher, name, opts, func, args)
 
 # name  :: String
-# setup :: TestOpts -> IO ()
-def test (name, setup, func, args):
+# setup :: [TestOpt] -> IO ()
+def test(name, setup, func, args):
     global aloneTests
     global parallelTests
     global allTestNames
@@ -636,7 +646,7 @@ def test (name, setup, func, args):
             return
         else:
             # Note [Mutating config.only]
-            # config.only is initiallly the set of tests requested by
+            # config.only is initially the set of tests requested by
             # the user (via 'make TEST='). We then remove all tests that
             # we've already seen (in .T files), so that we can later
             # report on any tests we couldn't find and error out.
@@ -649,7 +659,7 @@ def test (name, setup, func, args):
 
     executeSetups([thisdir_settings, setup], name, myTestOpts)
 
-    thisTest = lambda : runTest(myTestOpts, name, func, args)
+    thisTest = lambda watcher: runTest(watcher, myTestOpts, name, func, args)
     if myTestOpts.alone:
         aloneTests.append(thisTest)
     else:
@@ -657,16 +667,11 @@ def test (name, setup, func, args):
     allTestNames.add(name)
 
 if config.use_threads:
-    def test_common_thread(name, opts, func, args):
-        t.lock.acquire()
-        try:
-            test_common_work(name,opts,func,args)
-        finally:
-            t.lock.release()
-            t.thread_pool.acquire()
-            t.running_threads = t.running_threads - 1
-            t.thread_pool.notify()
-            t.thread_pool.release()
+    def test_common_thread(watcher, name, opts, func, args):
+            try:
+                test_common_work(watcher, name, opts, func, args)
+            finally:
+                pool_sema.release()
 
 def get_package_cache_timestamp():
     if config.package_conf_cache_file == '':
@@ -679,7 +684,7 @@ def get_package_cache_timestamp():
 
 do_not_copy = ('.hi', '.o', '.dyn_hi', '.dyn_o', '.out') # 12112
 
-def test_common_work (name, opts, func, args):
+def test_common_work(watcher, name, opts, func, args):
     try:
         t.total_tests += 1
         setLocalTestOpts(opts)
@@ -770,7 +775,10 @@ def test_common_work (name, opts, func, args):
         t.n_tests_skipped += len(set(all_ways) - set(do_ways))
 
         if config.cleanup and do_ways:
-            cleanup()
+            try:
+                cleanup()
+            except Exception as e:
+                framework_fail(name, 'runTest', 'Unhandled exception during cleanup: ' + str(e))
 
         package_conf_cache_file_end_timestamp = get_package_cache_timestamp();
 
@@ -779,6 +787,8 @@ def test_common_work (name, opts, func, args):
 
     except Exception as e:
         framework_fail(name, 'runTest', 'Unhandled exception: ' + str(e))
+    finally:
+        watcher.notify()
 
 def do_test(name, way, func, args, files):
     opts = getTestOpts()
@@ -831,32 +841,29 @@ def do_test(name, way, func, args, files):
                 with io.open(dst_makefile, 'w', encoding='utf8') as dst:
                     dst.write(makefile)
 
-    if config.use_threads:
-        t.lock.release()
-
     if opts.pre_cmd:
-        exit_code = runCmd('cd "{0}" && {1}'.format(opts.testdir, opts.pre_cmd))
+        exit_code = runCmd('cd "{0}" && {1}'.format(opts.testdir, override_options(opts.pre_cmd)),
+                           stderr = subprocess.STDOUT,
+                           print_output = config.verbose >= 3)
+
         if exit_code != 0:
             framework_fail(name, way, 'pre_cmd failed: {0}'.format(exit_code))
 
-    try:
-        result = func(*[name,way] + args)
-    finally:
-        if config.use_threads:
-            t.lock.acquire()
+    result = func(*[name,way] + args)
 
     if opts.expect not in ['pass', 'fail', 'missing-lib']:
         framework_fail(name, way, 'bad expected ' + opts.expect)
 
     try:
         passFail = result['passFail']
-    except:
+    except (KeyError, TypeError):
         passFail = 'No passFail found'
 
     directory = re.sub('^\\.[/\\\\]', '', opts.testdir)
 
     if passFail == 'pass':
         if _expect_pass(way):
+            t.expected_passes.append((directory, name, way))
             t.n_expected_passes += 1
         else:
             if_verbose(1, '*** unexpected pass for %s' % full_name)
@@ -879,6 +886,18 @@ def do_test(name, way, func, args, files):
     else:
         framework_fail(name, way, 'bad result ' + passFail)
 
+# Make is often invoked with -s, which means if it fails, we get
+# no feedback at all. This is annoying. So let's remove the option
+# if found and instead have the testsuite decide on what to do
+# with the output.
+def override_options(pre_cmd):
+    if config.verbose >= 5 and bool(re.match('\$make', pre_cmd, re.I)):
+        return pre_cmd.replace('-s'      , '') \
+                      .replace('--silent', '') \
+                      .replace('--quiet' , '')
+
+    return pre_cmd
+
 def framework_fail(name, way, reason):
     opts = getTestOpts()
     directory = re.sub('^\\.[/\\\\]', '', opts.testdir)
@@ -886,12 +905,19 @@ def framework_fail(name, way, reason):
     if_verbose(1, '*** framework failure for %s %s ' % (full_name, reason))
     t.framework_failures.append((directory, name, way, reason))
 
+def framework_warn(name, way, reason):
+    opts = getTestOpts()
+    directory = re.sub('^\\.[/\\\\]', '', opts.testdir)
+    full_name = name + '(' + way + ')'
+    if_verbose(1, '*** framework warning for %s %s ' % (full_name, reason))
+    t.framework_warnings.append((directory, name, way, reason))
+
 def badResult(result):
     try:
         if result['passFail'] == 'pass':
             return False
         return True
-    except:
+    except (KeyError, TypeError):
         return True
 
 def passed():
@@ -912,7 +938,7 @@ def failBecause(reason, tag=None):
 # run_command.
 
 def run_command( name, way, cmd ):
-    return simple_run( name, '', cmd, '' )
+    return simple_run( name, '', override_options(cmd), '' )
 
 # -----------------------------------------------------------------------------
 # GHCi tests
@@ -989,7 +1015,9 @@ def do_compile(name, way, should_fail, top_mod, extra_mods, extra_hc_opts, **kwa
                            join_normalisers(getTestOpts().extra_errmsg_normaliser,
                                             normalise_errmsg),
                            expected_stderr_file, actual_stderr_file,
-                           whitespace_normaliser=normalise_whitespace):
+                           whitespace_normaliser=getattr(getTestOpts(),
+                                                         "whitespace_normaliser",
+                                                         normalise_whitespace)):
         return failBecause('stderr mismatch')
 
     # no problems found, this test passed
@@ -1243,7 +1271,7 @@ def simple_run(name, way, prog, extra_run_opts):
     # check the exit code
     if exit_code != opts.exit_code:
         if config.verbose >= 1 and _expect_pass(way):
-            print('Wrong exit code (expected', opts.exit_code, ', actual', exit_code, ')')
+            print('Wrong exit code for ' + name + '(' + way + ')' + '(expected', opts.exit_code, ', actual', exit_code, ')')
             dump_stdout(name)
             dump_stderr(name)
         return failBecause('bad exit code')
@@ -1292,17 +1320,17 @@ def interpreter_run(name, way, extra_hc_opts, top_mod):
     with io.open(script, 'w', encoding='utf8') as f:
         # set the prog name and command-line args to match the compiled
         # environment.
-        f.write(u':set prog ' + name + u'\n')
-        f.write(u':set args ' + opts.extra_run_opts + u'\n')
+        f.write(':set prog ' + name + '\n')
+        f.write(':set args ' + opts.extra_run_opts + '\n')
         # Add marker lines to the stdout and stderr output files, so we
         # can separate GHCi's output from the program's.
-        f.write(u':! echo ' + delimiter)
-        f.write(u':! echo 1>&2 ' + delimiter)
+        f.write(':! echo ' + delimiter)
+        f.write(':! echo 1>&2 ' + delimiter)
         # Set stdout to be line-buffered to match the compiled environment.
-        f.write(u'System.IO.hSetBuffering System.IO.stdout System.IO.LineBuffering\n')
+        f.write('System.IO.hSetBuffering System.IO.stdout System.IO.LineBuffering\n')
         # wrapping in GHC.TopHandler.runIO ensures we get the same output
         # in the event of an exception as for the compiled program.
-        f.write(u'GHC.TopHandler.runIOFastExit Main.main Prelude.>> Prelude.return ()\n')
+        f.write('GHC.TopHandler.runIOFastExit Main.main Prelude.>> Prelude.return ()\n')
 
     stdin = in_testdir(opts.stdin if opts.stdin else add_suffix(name, 'stdin'))
     if os.path.exists(stdin):
@@ -1330,7 +1358,7 @@ def interpreter_run(name, way, extra_hc_opts, top_mod):
 
     # check the exit code
     if exit_code != getTestOpts().exit_code:
-        print('Wrong exit code (expected', getTestOpts().exit_code, ', actual', exit_code, ')')
+        print('Wrong exit code for ' + name + '(' + way + ') (expected', getTestOpts().exit_code, ', actual', exit_code, ')')
         dump_stdout(name)
         dump_stderr(name)
         return failBecause('bad exit code')
@@ -1346,21 +1374,18 @@ def interpreter_run(name, way, extra_hc_opts, top_mod):
 
 def split_file(in_fn, delimiter, out1_fn, out2_fn):
     # See Note [Universal newlines].
-    infile = io.open(in_fn, 'r', encoding='utf8', errors='replace', newline=None)
-    out1 = io.open(out1_fn, 'w', encoding='utf8', newline='')
-    out2 = io.open(out2_fn, 'w', encoding='utf8', newline='')
+    with io.open(in_fn, 'r', encoding='utf8', errors='replace', newline=None) as infile:
+        with io.open(out1_fn, 'w', encoding='utf8', newline='') as out1:
+            with io.open(out2_fn, 'w', encoding='utf8', newline='') as out2:
+                line = infile.readline()
+                while re.sub('^\s*','',line) != delimiter and line != '':
+                    out1.write(line)
+                    line = infile.readline()
 
-    line = infile.readline()
-    while (re.sub('^\s*','',line) != delimiter and line != ''):
-        out1.write(line)
-        line = infile.readline()
-    out1.close()
-
-    line = infile.readline()
-    while (line != ''):
-        out2.write(line)
-        line = infile.readline()
-    out2.close()
+                line = infile.readline()
+                while line != '':
+                    out2.write(line)
+                    line = infile.readline()
 
 # -----------------------------------------------------------------------------
 # Utils
@@ -1391,8 +1416,11 @@ def stdout_ok(name, way):
                           expected_stdout_file, actual_stdout_file)
 
 def dump_stdout( name ):
-   print('Stdout:')
-   print(open(in_testdir(name, 'run.stdout')).read())
+    with open(in_testdir(name, 'run.stdout')) as f:
+        str = f.read().strip()
+        if str:
+            print("Stdout (", name, "):")
+            print(str)
 
 def stderr_ok(name, way):
    actual_stderr_file = add_suffix(name, 'run.stderr')
@@ -1404,17 +1432,19 @@ def stderr_ok(name, way):
                           whitespace_normaliser=normalise_whitespace)
 
 def dump_stderr( name ):
-   print("Stderr:")
-   print(open(in_testdir(name, 'run.stderr')).read())
+    with open(in_testdir(name, 'run.stderr')) as f:
+        str = f.read().strip()
+        if str:
+            print("Stderr (", name, "):")
+            print(str)
 
 def read_no_crs(file):
     str = ''
     try:
         # See Note [Universal newlines].
-        h = io.open(file, 'r', encoding='utf8', errors='replace', newline=None)
-        str = h.read()
-        h.close
-    except:
+        with io.open(file, 'r', encoding='utf8', errors='replace', newline=None) as h:
+            str = h.read()
+    except Exception:
         # On Windows, if the program fails very early, it seems the
         # files stdout/stderr are redirected to may not get created
         pass
@@ -1422,9 +1452,8 @@ def read_no_crs(file):
 
 def write_file(file, str):
     # See Note [Universal newlines].
-    h = io.open(file, 'w', encoding='utf8', newline='')
-    h.write(str)
-    h.close
+    with io.open(file, 'w', encoding='utf8', newline='') as h:
+        h.write(str)
 
 # Note [Universal newlines]
 #
@@ -1538,14 +1567,16 @@ def compare_outputs(way, kind, normaliser, expected_file, actual_file,
 
         if config.verbose >= 1 and _expect_pass(way):
             # See Note [Output comparison].
-            r = os.system('diff -uw "{0}" "{1}"'.format(expected_normalised_path,
-                                                        actual_normalised_path))
+            r = runCmd('diff -uw "{0}" "{1}"'.format(expected_normalised_path,
+                                                        actual_normalised_path),
+                        print_output = 1)
 
             # If for some reason there were no non-whitespace differences,
             # then do a full diff
             if r == 0:
-                r = os.system('diff -u "{0}" "{1}"'.format(expected_normalised_path,
-                                                           actual_normalised_path))
+                r = runCmd('diff -u "{0}" "{1}"'.format(expected_normalised_path,
+                                                           actual_normalised_path),
+                           print_output = 1)
 
         if config.accept and (getTestOpts().expect == 'fail' or
                               way in getTestOpts().expect_fail_for):
@@ -1580,7 +1611,7 @@ def compare_outputs(way, kind, normaliser, expected_file, actual_file,
 
 def normalise_whitespace( str ):
     # Merge contiguous whitespace characters into a single space.
-    return u' '.join(w for w in str.split())
+    return ' '.join(w for w in str.split())
 
 callSite_re = re.compile(r', called at (.+):[\d]+:[\d]+ in [\w\-\.]+:')
 
@@ -1623,18 +1654,30 @@ def normalise_errmsg( str ):
     #    hacky solution is used in place of more sophisticated filename
     #    mangling
     str = re.sub('([^\\s])\\.exe', '\\1', str)
+
     # normalise slashes, minimise Windows/Unix filename differences
     str = re.sub('\\\\', '/', str)
+
     # The inplace ghc's are called ghc-stage[123] to avoid filename
     # collisions, so we need to normalise that to just "ghc"
     str = re.sub('ghc-stage[123]', 'ghc', str)
+
     # Error messages simetimes contain integer implementation package
     str = re.sub('integer-(gmp|simple)-[0-9.]+', 'integer-<IMPL>-<VERSION>', str)
+
     # Also filter out bullet characters.  This is because bullets are used to
     # separate error sections, and tests shouldn't be sensitive to how the
     # the division happens.
-    bullet = u'•'.encode('utf8') if isinstance(str, bytes) else u'•'
+    bullet = '•'.encode('utf8') if isinstance(str, bytes) else '•'
     str = str.replace(bullet, '')
+
+    # Windows only, this is a bug in hsc2hs but it is preventing
+    # stable output for the testsuite. See Trac #9775. For now we filter out this
+    # warning message to get clean output.
+    if config.msys:
+        str = re.sub('Failed to remove file (.*); error= (.*)$', '', str)
+        str = re.sub('DeleteFile "(.+)": permission denied \(Access is denied\.\)(.*)$', '', str)
+
     return str
 
 # normalise a .prof file, so that we can reasonably compare it against
@@ -1651,7 +1694,7 @@ def normalise_prof (str):
     # sometimes under MAIN.
     str = re.sub('[ \t]*main[ \t]+Main.*\n','',str)
 
-    # We have somthing like this:
+    # We have something like this:
     #
     # MAIN         MAIN  <built-in>                 53  0  0.0   0.2  0.0  100.0
     #  CAF         Main  <entire-module>           105  0  0.0   0.3  0.0   62.5
@@ -1724,7 +1767,7 @@ def normalise_asm( str ):
           out.append(instr[0] + ' ' + instr[1])
         else:
           out.append(instr[0])
-    out = u'\n'.join(out)
+    out = '\n'.join(out)
     return out
 
 def if_verbose( n, s ):
@@ -1734,11 +1777,12 @@ def if_verbose( n, s ):
 def if_verbose_dump( n, f ):
     if config.verbose >= n:
         try:
-            print(open(f).read())
-        except:
+            with io.open(f) as file:
+                print(file.read())
+        except Exception:
             print('')
 
-def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
+def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0, print_output=0):
     timeout_prog = strip_quotes(config.timeout_prog)
     timeout = str(int(ceil(config.timeout * timeout_multiplier)))
 
@@ -1746,34 +1790,53 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
     cmd = cmd.format(**config.__dict__)
     if_verbose(3, cmd + ('< ' + os.path.basename(stdin) if stdin else ''))
 
-    if stdin:
-        stdin = open(stdin, 'r')
-    if stdout:
-        stdout = open(stdout, 'w')
-    if stderr and stderr is not subprocess.STDOUT:
-        stderr = open(stderr, 'w')
+    # declare the buffers to a default
+    stdin_buffer  = None
 
-    # cmd is a complex command in Bourne-shell syntax
-    # e.g (cd . && 'C:/users/simonpj/HEAD/inplace/bin/ghc-stage2' ...etc)
-    # Hence it must ultimately be run by a Bourne shell. It's timeout's job
-    # to invoke the Bourne shell
-    r = subprocess.call([timeout_prog, timeout, cmd],
-                        stdin=stdin, stdout=stdout, stderr=stderr)
+    stdin_file = io.open(stdin, 'rb') if stdin else None
+    stdout_buffer = b''
+    stderr_buffer = b''
 
-    if stdin:
-        stdin.close()
-    if stdout:
-        stdout.close()
-    if stderr and stderr is not subprocess.STDOUT:
-        stderr.close()
+    hStdErr = subprocess.PIPE
+    if stderr is subprocess.STDOUT:
+        hStdErr = subprocess.STDOUT
 
-    if r == 98:
+    try:
+        # cmd is a complex command in Bourne-shell syntax
+        # e.g (cd . && 'C:/users/simonpj/HEAD/inplace/bin/ghc-stage2' ...etc)
+        # Hence it must ultimately be run by a Bourne shell. It's timeout's job
+        # to invoke the Bourne shell
+
+        r = subprocess.Popen([timeout_prog, timeout, cmd],
+                             stdin=stdin_file,
+                             stdout=subprocess.PIPE,
+                             stderr=hStdErr)
+
+        stdout_buffer, stderr_buffer = r.communicate()
+    finally:
+        if stdin_file:
+            stdin_file.close()
+        if config.verbose >= 1 and print_output >= 1:
+            if stdout_buffer:
+                sys.stdout.buffer.write(stdout_buffer)
+            if stderr_buffer:
+                sys.stderr.buffer.write(stderr_buffer)
+
+        if stdout:
+            with io.open(stdout, 'wb') as f:
+                f.write(stdout_buffer)
+        if stderr:
+            if stderr is not subprocess.STDOUT:
+                with io.open(stderr, 'wb') as f:
+                    f.write(stderr_buffer)
+
+    if r.returncode == 98:
         # The python timeout program uses 98 to signal that ^C was pressed
         stopNow()
-    if r == 99 and getTestOpts().exit_code != 99:
+    if r.returncode == 99 and getTestOpts().exit_code != 99:
         # Only print a message when timeout killed the process unexpectedly.
         if_verbose(1, 'Timeout happened...killed process "{0}"...\n'.format(cmd))
-    return r
+    return r.returncode
 
 # -----------------------------------------------------------------------------
 # checking if ghostscript is available for checking the output of hp2ps
@@ -1850,42 +1913,48 @@ def find_expected_file(name, suff):
 
     return basename
 
-# Windows seems to exhibit a strange behavior where processes' executables
-# remain locked even after the process itself has died.  When this happens
-# rmtree will fail with either Error 5 or Error 32. It takes some time for this
-# to resolve so we try several times to delete the directory, only eventually
-# failing if things seem really stuck. See #12554.
 if config.msys:
-    try:
-        from exceptions import WindowsError
-    except:
-        pass
     import stat
+    import time
     def cleanup():
+        testdir = getTestOpts().testdir
+        max_attempts = 5
+        retries = max_attempts
         def on_error(function, path, excinfo):
             # At least one test (T11489) removes the write bit from a file it
             # produces. Windows refuses to delete read-only files with a
             # permission error. Try setting the write bit and try again.
-            if excinfo[1].errno == 13:
-                os.chmod(path, stat.S_IWRITE)
-                os.unlink(path)
+            os.chmod(path, stat.S_IWRITE)
+            function(path)
 
-        testdir = getTestOpts().testdir
-        attempts = 0
-        max_attempts = 10
-        while attempts < max_attempts and os.path.exists(testdir):
+        # On Windows we have to retry the delete a couple of times.
+        # The reason for this is that a FileDelete command just marks a
+        # file for deletion. The file is really only removed when the last
+        # handle to the file is closed. Unfortunately there are a lot of
+        # system services that can have a file temporarily opened using a shared
+        # readonly lock, such as the built in AV and search indexer.
+        #
+        # We can't really guarantee that these are all off, so what we can do is
+        # whenever after a rmtree the folder still exists to try again and wait a bit.
+        #
+        # Based on what I've seen from the tests on CI server, is that this is relatively rare.
+        # So overall we won't be retrying a lot. If after a reasonable amount of time the folder is
+        # still locked then abort the current test by throwing an exception, this so it won't fail
+        # with an even more cryptic error.
+        #
+        # See Trac #13162
+        exception = None
+        while retries > 0 and os.path.exists(testdir):
+            time.sleep((max_attempts-retries)*6)
             try:
-                shutil.rmtree(testdir, ignore_errors=False, onerror=on_error)
-            except WindowsError as e:
-                #print('failed deleting %s: %s' % (testdir, e))
-                if e.winerror in [5, 32]:
-                    attempts += 1
-                    if attempts == max_attempts:
-                        raise e
-                    else:
-                        time.sleep(0.1)
-                else:
-                    raise e
+                shutil.rmtree(testdir, onerror=on_error, ignore_errors=False)
+            except Exception as e:
+                exception = e
+            retries -= 1
+
+        if retries == 0 and os.path.exists(testdir):
+            raise Exception("Unable to remove folder '%s': %s\nUnable to start current test."
+                            % (testdir, exception))
 else:
     def cleanup():
         testdir = getTestOpts().testdir
@@ -1941,6 +2010,8 @@ def summary(t, file, short=False):
                + '\n'
                + repr(len(t.framework_failures)).rjust(8)
                + ' caused framework failures\n'
+               + repr(len(t.framework_warnings)).rjust(8)
+               + ' caused framework warnings\n'
                + repr(len(t.unexpected_passes)).rjust(8)
                + ' unexpected passes\n'
                + repr(len(t.unexpected_failures)).rjust(8)
@@ -1965,6 +2036,10 @@ def summary(t, file, short=False):
         file.write('Framework failures:\n')
         printTestInfosSummary(file, t.framework_failures)
 
+    if t.framework_warnings:
+        file.write('Framework warnings:\n')
+        printTestInfosSummary(file, t.framework_warnings)
+
     if stopping():
         file.write('WARNING: Testsuite run was terminated early\n')
 
@@ -1974,7 +2049,7 @@ def printUnexpectedTests(file, testInfoss):
                        if not name.endswith('.T'))
     if unexpected:
         file.write('Unexpected results from:\n')
-        file.write('TEST="' + ' '.join(unexpected) + '"\n')
+        file.write('TEST="' + ' '.join(sorted(unexpected)) + '"\n')
         file.write('\n')
 
 def printTestInfosSummary(file, testInfos):
@@ -1985,7 +2060,7 @@ def printTestInfosSummary(file, testInfos):
     file.write('\n')
 
 def modify_lines(s, f):
-    s = u'\n'.join([f(l) for l in s.splitlines()])
+    s = '\n'.join([f(l) for l in s.splitlines()])
     if s and s[-1] != '\n':
         # Prevent '\ No newline at end of file' warnings when diffing.
         s += '\n'

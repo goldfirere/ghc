@@ -365,7 +365,7 @@ vectTypeEnv tycons vectTypeDecls vectClassDecls
         defDataCons
           | isAbstract = return ()
           | otherwise
-          = do { MASSERT(length (tyConDataCons origTyCon) == length (tyConDataCons vectTyCon))
+          = do { MASSERT(tyConDataCons origTyCon `equalLength` tyConDataCons vectTyCon)
                ; zipWithM_ defDataCon (tyConDataCons origTyCon) (tyConDataCons vectTyCon)
                }
 
@@ -448,7 +448,7 @@ vectDataConWorkers orig_tc vect_tc arr_tc
 
           raw_worker <- mkVectId orig_worker (exprType body)
           let vect_worker = raw_worker `setIdUnfolding`
-                              mkInlineUnfolding (Just arity) body
+                              mkInlineUnfoldingWithArity arity body
           defGlobalVar orig_worker vect_worker
           return (vect_worker, body)
       where

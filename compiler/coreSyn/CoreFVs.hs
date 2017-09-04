@@ -31,7 +31,7 @@ module CoreFVs (
         varTypeTyCoVars,
         varTypeTyCoFVs,
         idUnfoldingVars, idFreeVars, dIdFreeVars,
-        idRuleAndUnfoldingVars, idRuleAndUnfoldingVarsDSet,
+        bndrRuleAndUnfoldingVarsDSet,
         idFVs,
         idRuleVars, idRuleRhsVars, stableUnfoldingVars,
         ruleRhsFreeVars, ruleFreeVars, rulesFreeVars,
@@ -53,10 +53,9 @@ module CoreFVs (
         CoreBindWithFVs,        -- = AnnBind Id FVAnn
         CoreAltWithFVs,         -- = AnnAlt Id FVAnn
         freeVars,               -- CoreExpr -> CoreExprWithFVs
+        freeVarsBind,           -- CoreBind -> DVarSet -> (DVarSet, CoreBindWithFVs)
         freeVarsOf,             -- CoreExprWithFVs -> DIdSet
-        freeVarsOfType,         -- CoreExprWithFVs -> TyCoVarSet
-        freeVarsOfAnn, freeVarsOfTypeAnn,
-        exprTypeFV              -- CoreExprWithFVs -> Type
+        freeVarsOfAnn
     ) where
 
 #include "HsVersions.h"
@@ -65,8 +64,8 @@ import CoreSyn
 import Id
 import IdInfo
 import NameSet
-import UniqFM
-import Literal ( literalType )
+import UniqSet
+import Unique (Uniquable (..))
 import Name
 import VarSet
 import Var
@@ -76,7 +75,6 @@ import TyCon
 import CoAxiom
 import FamInstEnv
 import TysPrim( funTyConName )
-import Coercion
 import Maybes( orElse )
 import Util
 import BasicTypes( Activation )
@@ -105,7 +103,7 @@ exprFreeVars :: CoreExpr -> VarSet
 exprFreeVars = fvVarSet . exprFVs
 
 -- | Find all locally-defined free Ids or type variables in an expression
--- returning a composable FV computation. See Note [FV naming coventions] in FV
+-- returning a composable FV computation. See Note [FV naming conventions] in FV
 -- for why export it.
 exprFVs :: CoreExpr -> FV
 exprFVs = filterFV isLocalVar . expr_fvs
@@ -150,7 +148,7 @@ exprsFreeVars :: [CoreExpr] -> VarSet
 exprsFreeVars = fvVarSet . exprsFVs
 
 -- | Find all locally-defined free Ids or type variables in several expressions
--- returning a composable FV computation. See Note [FV naming coventions] in FV
+-- returning a composable FV computation. See Note [FV naming conventions] in FV
 -- for why export it.
 exprsFVs :: [CoreExpr] -> FV
 exprsFVs exprs = mapUnionFV exprFVs exprs
@@ -373,6 +371,7 @@ orphNamesOfCo (TyConAppCo _ tc cos) = unitNameSet (getName tc) `unionNameSet` or
 orphNamesOfCo (AppCo co1 co2)       = orphNamesOfCo co1 `unionNameSet` orphNamesOfCo co2
 orphNamesOfCo (ForAllCo _ kind_co co)
   = orphNamesOfCo kind_co `unionNameSet` orphNamesOfCo co
+orphNamesOfCo (FunCo _ co1 co2)     = orphNamesOfCo co1 `unionNameSet` orphNamesOfCo co2
 orphNamesOfCo (CoVarCo _)           = emptyNameSet
 orphNamesOfCo (AxiomInstCo con _ cos) = orphNamesOfCoCon con `unionNameSet` orphNamesOfCos cos
 orphNamesOfCo (UnivCo p _ t1 t2)    = orphNamesOfProv p `unionNameSet` orphNamesOfType t1 `unionNameSet` orphNamesOfType t2
@@ -474,7 +473,8 @@ idRuleRhsVars is_active id
                   , ru_rhs = rhs, ru_act = act })
       | is_active act
             -- See Note [Finding rule RHS free vars] in OccAnal.hs
-      = delFromUFM fvs fn        -- Note [Rule free var hack]
+      = delOneFromUniqSet_Directly fvs (getUnique fn)
+            -- Note [Rule free var hack]
       where
         fvs = fvVarSet $ filterFV isLocalVar $ addBndrs bndrs (expr_fvs rhs)
     get_fvs _ = noFVs
@@ -535,10 +535,7 @@ The free variable pass annotates every node in the expression with its
 NON-GLOBAL free variables and type variables.
 -}
 
-data FVAnn = FVAnn { fva_fvs    :: DVarSet   -- free in expression
-                   , fva_ty_fvs :: DVarSet   -- free only in expression's type
-                   , fva_ty     :: Type      -- expression's type
-                   }
+type FVAnn = DVarSet
 
 -- | Every node in a binding group annotated with its
 -- (non-global) free variables, both Ids and TyVars, and type.
@@ -554,23 +551,11 @@ type CoreAltWithFVs = AnnAlt Id FVAnn
 
 freeVarsOf :: CoreExprWithFVs -> DIdSet
 -- ^ Inverse function to 'freeVars'
-freeVarsOf (FVAnn { fva_fvs = fvs }, _) = fvs
-
--- | Extract the vars free in an annotated expression's type
-freeVarsOfType :: CoreExprWithFVs -> DTyCoVarSet
-freeVarsOfType (FVAnn { fva_ty_fvs = ty_fvs }, _) = ty_fvs
-
--- | Extract the type of an annotated expression. (This is cheap.)
-exprTypeFV :: CoreExprWithFVs -> Type
-exprTypeFV (FVAnn { fva_ty = ty }, _) = ty
+freeVarsOf (fvs, _) = fvs
 
 -- | Extract the vars reported in a FVAnn
 freeVarsOfAnn :: FVAnn -> DIdSet
-freeVarsOfAnn = fva_fvs
-
--- | Extract the type-level vars reported in a FVAnn
-freeVarsOfTypeAnn :: FVAnn -> DTyCoVarSet
-freeVarsOfTypeAnn = fva_ty_fvs
+freeVarsOfAnn fvs = fvs
 
 noFVs :: VarSet
 noFVs = emptyVarSet
@@ -590,10 +575,9 @@ delBindersFV bs fvs = foldr delBinderFV fvs bs
 delBinderFV :: Var -> DVarSet -> DVarSet
 -- This way round, so we can do it multiple times using foldr
 
--- (b `delBinderFV` s) removes the binder b from the free variable set s,
--- but *adds* to s
---
---      the free variables of b's type
+-- (b `delBinderFV` s)
+--   * removes the binder b from the free variable set s,
+--   * AND *adds* to s the free variables of b's type
 --
 -- This is really important for some lambdas:
 --      In (\x::a -> x) the only mention of "a" is in the binder.
@@ -642,22 +626,15 @@ idFVs :: Id -> FV
 -- Type variables, rule variables, and inline variables
 idFVs id = ASSERT( isId id)
            varTypeTyCoFVs id `unionFV`
-           idRuleAndUnfoldingFVs id
+           bndrRuleAndUnfoldingFVs id
 
-bndrRuleAndUnfoldingFVs :: Var -> FV
-bndrRuleAndUnfoldingFVs v | isTyVar v = emptyFV
-                          | otherwise = idRuleAndUnfoldingFVs v
+bndrRuleAndUnfoldingVarsDSet :: Id -> DVarSet
+bndrRuleAndUnfoldingVarsDSet id = fvDVarSet $ bndrRuleAndUnfoldingFVs id
 
-idRuleAndUnfoldingVars :: Id -> VarSet
-idRuleAndUnfoldingVars id = fvVarSet $ idRuleAndUnfoldingFVs id
-
-idRuleAndUnfoldingVarsDSet :: Id -> DVarSet
-idRuleAndUnfoldingVarsDSet id = fvDVarSet $ idRuleAndUnfoldingFVs id
-
-idRuleAndUnfoldingFVs :: Id -> FV
-idRuleAndUnfoldingFVs id = ASSERT( isId id)
-                           idRuleFVs id `unionFV` idUnfoldingFVs id
-
+bndrRuleAndUnfoldingFVs :: Id -> FV
+bndrRuleAndUnfoldingFVs id
+  | isId id   = idRuleFVs id `unionFV` idUnfoldingFVs id
+  | otherwise = emptyFV
 
 idRuleVars ::Id -> VarSet  -- Does *not* include CoreUnfolding vars
 idRuleVars id = fvVarSet $ idRuleFVs id
@@ -700,54 +677,62 @@ stableUnfoldingFVs unf
 ************************************************************************
 -}
 
+freeVarsBind :: CoreBind
+             -> DVarSet                     -- Free vars of scope of binding
+             -> (CoreBindWithFVs, DVarSet)  -- Return free vars of binding + scope
+freeVarsBind (NonRec binder rhs) body_fvs
+  = ( AnnNonRec binder rhs2
+    , freeVarsOf rhs2 `unionFVs` body_fvs2
+                      `unionFVs` bndrRuleAndUnfoldingVarsDSet binder )
+    where
+      rhs2      = freeVars rhs
+      body_fvs2 = binder `delBinderFV` body_fvs
+
+freeVarsBind (Rec binds) body_fvs
+  = ( AnnRec (binders `zip` rhss2)
+    , delBindersFV binders all_fvs )
+  where
+    (binders, rhss) = unzip binds
+    rhss2        = map freeVars rhss
+    rhs_body_fvs = foldr (unionFVs . freeVarsOf) body_fvs rhss2
+    binders_fvs  = fvDVarSet $ mapUnionFV bndrRuleAndUnfoldingFVs binders
+    all_fvs      = rhs_body_fvs `unionFVs` binders_fvs
+            -- The "delBinderFV" happens after adding the idSpecVars,
+            -- since the latter may add some of the binders as fvs
+
 freeVars :: CoreExpr -> CoreExprWithFVs
 -- ^ Annotate a 'CoreExpr' with its (non-global) free type and value variables at every tree node
 freeVars = go
   where
     go :: CoreExpr -> CoreExprWithFVs
     go (Var v)
-      = (FVAnn fvs ty_fvs (idType v), AnnVar v)
+      | isLocalVar v = (aFreeVar v `unionFVs` ty_fvs, AnnVar v)
+      | otherwise    = (emptyDVarSet,                 AnnVar v)
       where
-            -- ToDo: insert motivating example for why we *need*
-            -- to include the idSpecVars in the FV list.
-            --      Actually [June 98] I don't think it's necessary
-            -- fvs = fvs_v `unionVarSet` idSpecVars v
+        ty_fvs = dVarTypeTyCoVars v  -- Do we need this?
 
-        (fvs, ty_fvs)
-            | isLocalVar v = (aFreeVar v `unionFVs` ty_fvs, dVarTypeTyCoVars v)
-            | otherwise    = (emptyDVarSet, emptyDVarSet)
-
-    go (Lit lit) = (FVAnn emptyDVarSet emptyDVarSet (literalType lit), AnnLit lit)
+    go (Lit lit) = (emptyDVarSet, AnnLit lit)
     go (Lam b body)
-      = ( FVAnn { fva_fvs    = b_fvs `unionFVs` (b `delBinderFV` body_fvs)
-                , fva_ty_fvs = b_fvs `unionFVs` (b `delBinderFV` body_ty_fvs)
-                , fva_ty     = mkFunTy b_ty body_ty }
+      = ( b_fvs `unionFVs` (b `delBinderFV` body_fvs)
         , AnnLam b body' )
       where
-        body'@(FVAnn { fva_fvs = body_fvs, fva_ty_fvs = body_ty_fvs
-                     , fva_ty = body_ty }, _) = go body
+        body'@(body_fvs, _) = go body
         b_ty  = idType b
         b_fvs = tyCoVarsOfTypeDSet b_ty
 
     go (App fun arg)
-      = ( FVAnn { fva_fvs    = freeVarsOf fun' `unionFVs` freeVarsOf arg'
-                , fva_ty_fvs = tyCoVarsOfTypeDSet res_ty
-                , fva_ty     = res_ty }
+      = ( freeVarsOf fun' `unionFVs` freeVarsOf arg'
         , AnnApp fun' arg' )
       where
         fun'   = go fun
-        fun_ty = exprTypeFV fun'
         arg'   = go arg
-        res_ty = applyTypeToArg fun_ty arg
 
     go (Case scrut bndr ty alts)
-      = ( FVAnn { fva_fvs = (bndr `delBinderFV` alts_fvs)
-                            `unionFVs` freeVarsOf scrut2
-                            `unionFVs` tyCoVarsOfTypeDSet ty
-                           -- don't need to look at (idType bndr)
-                           -- b/c that's redundant with scrut
-                , fva_ty_fvs = tyCoVarsOfTypeDSet ty
-                , fva_ty     = ty }
+      = ( (bndr `delBinderFV` alts_fvs)
+           `unionFVs` freeVarsOf scrut2
+           `unionFVs` tyCoVarsOfTypeDSet ty
+          -- don't need to look at (idType bndr)
+          -- b/c that's redundant with scrut
         , AnnCase scrut2 bndr ty alts2 )
       where
         scrut2 = go scrut
@@ -760,69 +745,26 @@ freeVars = go
                               where
                                  rhs2 = go rhs
 
-    go (Let (NonRec binder rhs) body)
-      = ( FVAnn { fva_fvs    = freeVarsOf rhs2
-                               `unionFVs` body_fvs
-                               `unionFVs` fvDVarSet
-                                            (bndrRuleAndUnfoldingFVs binder)
-                               -- Remember any rules; cf rhs_fvs above
-                , fva_ty_fvs = freeVarsOfType body2
-                , fva_ty     = exprTypeFV body2 }
-        , AnnLet (AnnNonRec binder rhs2) body2 )
+    go (Let bind body)
+      = (bind_fvs, AnnLet bind2 body2)
       where
-        rhs2     = go rhs
-        body2    = go body
-        body_fvs = binder `delBinderFV` freeVarsOf body2
-
-    go (Let (Rec binds) body)
-      = ( FVAnn { fva_fvs    = delBindersFV binders all_fvs
-                , fva_ty_fvs = freeVarsOfType body2
-                , fva_ty     = exprTypeFV body2 }
-        , AnnLet (AnnRec (binders `zip` rhss2)) body2 )
-      where
-        (binders, rhss) = unzip binds
-
-        rhss2        = map go rhss
-        rhs_body_fvs = foldr (unionFVs . freeVarsOf) body_fvs rhss2
-        binders_fvs  = fvDVarSet $ mapUnionFV idRuleAndUnfoldingFVs binders
-        all_fvs      = rhs_body_fvs `unionFVs` binders_fvs
-            -- The "delBinderFV" happens after adding the idSpecVars,
-            -- since the latter may add some of the binders as fvs
-
-        body2    = go body
-        body_fvs = freeVarsOf body2
+        (bind2, bind_fvs) = freeVarsBind bind (freeVarsOf body2)
+        body2             = go body
 
     go (Cast expr co)
-      = ( FVAnn (freeVarsOf expr2 `unionFVs` cfvs) (tyCoVarsOfTypeDSet to_ty) to_ty
-        , AnnCast expr2 (c_ann, co) )
+      = ( freeVarsOf expr2 `unionFVs` cfvs
+        , AnnCast expr2 (cfvs, co) )
       where
         expr2 = go expr
         cfvs  = tyCoVarsOfCoDSet co
-        c_ann = FVAnn cfvs (tyCoVarsOfTypeDSet co_ki) co_ki
-        co_ki = coercionType co
-        Just (_, to_ty) = splitCoercionType_maybe co_ki
-
 
     go (Tick tickish expr)
-      = ( FVAnn { fva_fvs    = tickishFVs tickish `unionFVs` freeVarsOf expr2
-                , fva_ty_fvs = freeVarsOfType expr2
-                , fva_ty     = exprTypeFV expr2 }
+      = ( tickishFVs tickish `unionFVs` freeVarsOf expr2
         , AnnTick tickish expr2 )
       where
         expr2 = go expr
         tickishFVs (Breakpoint _ ids) = mkDVarSet ids
         tickishFVs _                  = emptyDVarSet
 
-    go (Type ty) = ( FVAnn (tyCoVarsOfTypeDSet ty)
-                           (tyCoVarsOfTypeDSet ki)
-                           ki
-                   , AnnType ty)
-      where
-        ki = typeKind ty
-
-    go (Coercion co) = ( FVAnn (tyCoVarsOfCoDSet co)
-                               (tyCoVarsOfTypeDSet ki)
-                               ki
-                       , AnnCoercion co)
-      where
-        ki = coercionType co
+    go (Type ty)     = (tyCoVarsOfTypeDSet ty, AnnType ty)
+    go (Coercion co) = (tyCoVarsOfCoDSet co, AnnCoercion co)

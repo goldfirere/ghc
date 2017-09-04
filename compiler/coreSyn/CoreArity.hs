@@ -10,8 +10,10 @@
 
 -- | Arity and eta expansion
 module CoreArity (
-        manifestArity, exprArity, typeArity, exprBotStrictness_maybe,
-        exprEtaExpandArity, findRhsArity, CheapFun, etaExpand
+        manifestArity, joinRhsArity, exprArity, typeArity,
+        exprEtaExpandArity, findRhsArity, CheapFun, etaExpand,
+        etaExpandToJoinPoint, etaExpandToJoinPointRule,
+        exprBotStrictness_maybe
     ) where
 
 #include "HsVersions.h"
@@ -75,6 +77,14 @@ manifestArity (Lam v e) | isId v        = 1 + manifestArity e
 manifestArity (Tick t e) | not (tickishIsCode t) =  manifestArity e
 manifestArity (Cast e _)                = manifestArity e
 manifestArity _                         = 0
+
+joinRhsArity :: CoreExpr -> JoinArity
+-- Join points are supposed to have manifestly-visible
+-- lambdas at the top: no ticks, no casts, nothing
+-- Moreover, type lambdas count in JoinArity
+joinRhsArity (Lam _ e) = 1 + joinRhsArity e
+joinRhsArity _         = 0
+
 
 ---------------
 exprArity :: CoreExpr -> Arity
@@ -307,7 +317,7 @@ do so; it improves some programs significantly, and increasing convergence
 isn't a bad thing.  Hence the ABot/ATop in ArityType.
 
 So these two transformations aren't always the Right Thing, and we
-have several tickets reporting unexpected bahaviour resulting from
+have several tickets reporting unexpected behaviour resulting from
 this transformation.  So we try to limit it as much as possible:
 
  (1) Do NOT move a lambda outside a known-bottom case expression
@@ -474,6 +484,10 @@ data ArityType = ATop [OneShotInfo] | ABot Arity
      -- There is always an explicit lambda
      -- to justify the [OneShot], or the Arity
 
+instance Outputable ArityType where
+  ppr (ATop os) = text "ATop" <> parens (ppr (length os))
+  ppr (ABot n)  = text "ABot" <> parens (ppr n)
+
 vanillaArityType :: ArityType
 vanillaArityType = ATop []      -- Totally uninformative
 
@@ -498,70 +512,69 @@ getBotArity _        = Nothing
 mk_cheap_fn :: DynFlags -> CheapAppFun -> CheapFun
 mk_cheap_fn dflags cheap_app
   | not (gopt Opt_DictsCheap dflags)
-  = \e _     -> exprIsCheap' cheap_app e
+  = \e _     -> exprIsCheapX cheap_app e
   | otherwise
-  = \e mb_ty -> exprIsCheap' cheap_app e
+  = \e mb_ty -> exprIsCheapX cheap_app e
              || case mb_ty of
                   Nothing -> False
                   Just ty -> isDictLikeTy ty
 
 
 ----------------------
-findRhsArity :: DynFlags -> Id -> CoreExpr -> Arity -> Arity
+findRhsArity :: DynFlags -> Id -> CoreExpr -> Arity -> (Arity, Bool)
 -- This implements the fixpoint loop for arity analysis
 -- See Note [Arity analysis]
+-- If findRhsArity e = (n, is_bot) then
+--  (a) any application of e to <n arguments will not do much work,
+--      so it is safe to expand e  ==>  (\x1..xn. e x1 .. xn)
+--  (b) if is_bot=True, then e applied to n args is guaranteed bottom
 findRhsArity dflags bndr rhs old_arity
-  = go (rhsEtaExpandArity dflags init_cheap_app rhs)
+  = go (get_arity init_cheap_app)
        -- We always call exprEtaExpandArity once, but usually
        -- that produces a result equal to old_arity, and then
        -- we stop right away (since arities should not decrease)
        -- Result: the common case is that there is just one iteration
   where
+    is_lam = has_lam rhs
+
+    has_lam (Tick _ e) = has_lam e
+    has_lam (Lam b e)  = isId b || has_lam e
+    has_lam _          = False
+
     init_cheap_app :: CheapAppFun
     init_cheap_app fn n_val_args
       | fn == bndr = True   -- On the first pass, this binder gets infinite arity
       | otherwise  = isCheapApp fn n_val_args
 
-    go :: Arity -> Arity
-    go cur_arity
-      | cur_arity <= old_arity = cur_arity
-      | new_arity == cur_arity = cur_arity
+    go :: (Arity, Bool) -> (Arity, Bool)
+    go cur_info@(cur_arity, _)
+      | cur_arity <= old_arity = cur_info
+      | new_arity == cur_arity = cur_info
       | otherwise = ASSERT( new_arity < cur_arity )
-#ifdef DEBUG
+#if defined(DEBUG)
                     pprTrace "Exciting arity"
                        (vcat [ ppr bndr <+> ppr cur_arity <+> ppr new_arity
-                                                    , ppr rhs])
+                             , ppr rhs])
 #endif
-                    go new_arity
+                    go new_info
       where
-        new_arity = rhsEtaExpandArity dflags cheap_app rhs
+        new_info@(new_arity, _) = get_arity cheap_app
 
         cheap_app :: CheapAppFun
         cheap_app fn n_val_args
           | fn == bndr = n_val_args < cur_arity
           | otherwise  = isCheapApp fn n_val_args
 
--- ^ The Arity returned is the number of value args the
--- expression can be applied to without doing much work
-rhsEtaExpandArity :: DynFlags -> CheapAppFun -> CoreExpr -> Arity
--- exprEtaExpandArity is used when eta expanding
---      e  ==>  \xy -> e x y
-rhsEtaExpandArity dflags cheap_app e
-  = case (arityType env e) of
-      ATop (os:oss)
-        | isOneShotInfo os || has_lam e -> 1 + length oss
-                                   -- Don't expand PAPs/thunks
-                                   -- Note [Eta expanding thunks]
-        | otherwise       -> 0
-      ATop []             -> 0
-      ABot n              -> n
-  where
-    env = AE { ae_cheap_fn = mk_cheap_fn dflags cheap_app
-             , ae_ped_bot  = gopt Opt_PedanticBottoms dflags }
-
-    has_lam (Tick _ e) = has_lam e
-    has_lam (Lam b e)  = isId b || has_lam e
-    has_lam _          = False
+    get_arity :: CheapAppFun -> (Arity, Bool)
+    get_arity cheap_app
+      = case (arityType env rhs) of
+          ABot n -> (n, True)
+          ATop (os:oss) | isOneShotInfo os || is_lam
+                  -> (1 + length oss, False)    -- Don't expand PAPs/thunks
+          ATop _  -> (0,              False)    -- Note [Eta expanding thunks]
+       where
+         env = AE { ae_cheap_fn = mk_cheap_fn dflags cheap_app
+                  , ae_ped_bot  = gopt Opt_PedanticBottoms dflags }
 
 {-
 Note [Arity analysis]
@@ -654,8 +667,7 @@ arityApp (ATop [])     _     = ATop []
 arityApp (ATop (_:as)) cheap = floatIn cheap (ATop as)
 
 andArityType :: ArityType -> ArityType -> ArityType   -- Used for branches of a 'case'
-andArityType (ABot n1) (ABot n2)
-  = ABot (n1 `min` n2)
+andArityType (ABot n1) (ABot n2)  = ABot (n1 `max` n2) -- Note [ABot branches: use max]
 andArityType (ATop as)  (ABot _)  = ATop as
 andArityType (ABot _)   (ATop bs) = ATop bs
 andArityType (ATop as)  (ATop bs) = ATop (as `combine` bs)
@@ -664,7 +676,15 @@ andArityType (ATop as)  (ATop bs) = ATop (as `combine` bs)
     combine []     bs     = takeWhile isOneShotInfo bs
     combine as     []     = takeWhile isOneShotInfo as
 
-{-
+{- Note [ABot branches: use max]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider   case x of
+             True  -> \x.  error "urk"
+             False -> \xy. error "urk2"
+
+Remember: ABot n means "if you apply to n args, it'll definitely diverge".
+So we need (ABot 2) for the whole thing, the /max/ of the ABot arities.
+
 Note [Combining case branches]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Consider
@@ -818,6 +838,33 @@ simplification but it's not too hard.  The alernative, of relying on
 a subsequent clean-up phase of the Simplifier to de-crapify the result,
 means you can't really use it in CorePrep, which is painful.
 
+Note [Eta expansion for join points]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The no-crap rule is very tiresome to guarantee when
+we have join points. Consider eta-expanding
+   let j :: Int -> Int -> Bool
+       j x = e
+   in b
+
+The simple way is
+  \(y::Int). (let j x = e in b) y
+
+The no-crap way is
+  \(y::Int). let j' :: Int -> Bool
+                 j' x = e y
+             in b[j'/j] y
+where I have written to stress that j's type has
+changed.  Note that (of course!) we have to push the application
+inside the RHS of the join as well as into the body.  AND if j
+has an unfolding we have to push it into there too.  AND j might
+be recursive...
+
+So for now I'm abandonig the no-crap rule in this case. I think
+that for the use in CorePrep it really doesn't matter; and if
+it does, then CoreToStg.myCollectArgs will fall over.
+
+(Moreover, I think that casts can make the no-crap rule fail too.)
+
 Note [Eta expansion and SCCs]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Note that SCCs are not treated specially by etaExpand.  If we have
@@ -891,11 +938,11 @@ etaExpand n orig_expr
           sexpr = foldl App expr'' args
           retick expr = foldr mkTick expr ticks
 
-                                -- Wrapper    Unwrapper
+                                -- Abstraction    Application
 --------------
-data EtaInfo = EtaVar Var       -- /\a. [],   [] a
-                                -- \x.  [],   [] x
-             | EtaCo Coercion   -- [] |> co,  [] |> (sym co)
+data EtaInfo = EtaVar Var       -- /\a. []        [] a
+                                -- \x.  []        [] x
+             | EtaCo Coercion   -- [] |> sym co   [] |> co
 
 instance Outputable EtaInfo where
    ppr (EtaVar v) = text "EtaVar" <+> ppr v
@@ -930,25 +977,30 @@ etaInfoApp subst (Cast e co1) eis
     co' = CoreSubst.substCo subst co1
 
 etaInfoApp subst (Case e b ty alts) eis
-  = Case (subst_expr subst e) b1 (mk_alts_ty (CoreSubst.substTy subst ty) eis) alts'
+  = Case (subst_expr subst e) b1 ty' alts'
   where
     (subst1, b1) = substBndr subst b
     alts' = map subst_alt alts
+    ty'   = etaInfoAppTy (CoreSubst.substTy subst ty) eis
     subst_alt (con, bs, rhs) = (con, bs', etaInfoApp subst2 rhs eis)
               where
                  (subst2,bs') = substBndrs subst1 bs
 
-    mk_alts_ty ty []               = ty
-    mk_alts_ty ty (EtaVar v : eis) = mk_alts_ty (applyTypeToArg ty (varToCoreExpr v)) eis
-    mk_alts_ty _  (EtaCo co : eis) = mk_alts_ty (pSnd (coercionKind co)) eis
-
 etaInfoApp subst (Let b e) eis
+  | not (isJoinBind b)
+    -- See Note [Eta expansion for join points]
   = Let b' (etaInfoApp subst' e eis)
   where
-    (subst', b') = subst_bind subst b
+    (subst', b') = substBindSC subst b
 
 etaInfoApp subst (Tick t e) eis
   = Tick (substTickish subst t) (etaInfoApp subst e eis)
+
+etaInfoApp subst expr _
+  | (Var fun, _) <- collectArgs expr
+  , Var fun' <- lookupIdSubst (text "etaInfoApp" <+> ppr fun) subst fun
+  , isJoinId fun'
+  = subst_expr subst expr
 
 etaInfoApp subst e eis
   = go (subst_expr subst e) eis
@@ -956,6 +1008,15 @@ etaInfoApp subst e eis
     go e []                  = e
     go e (EtaVar v    : eis) = go (App e (varToCoreExpr v)) eis
     go e (EtaCo co    : eis) = go (Cast e co) eis
+
+
+--------------
+etaInfoAppTy :: Type -> [EtaInfo] -> Type
+-- If                    e :: ty
+-- then   etaInfoApp e eis :: etaInfoApp ty eis
+etaInfoAppTy ty []               = ty
+etaInfoAppTy ty (EtaVar v : eis) = etaInfoAppTy (applyTypeToArg ty (varToCoreExpr v)) eis
+etaInfoAppTy _  (EtaCo co : eis) = etaInfoAppTy (pSnd (coercionKind co)) eis
 
 --------------
 mkEtaWW :: Arity -> CoreExpr -> InScopeSet -> Type
@@ -980,6 +1041,10 @@ mkEtaWW orig_n orig_expr in_scope orig_ty
        = go n subst' ty' (EtaVar tv' : eis)
 
        | Just (arg_ty, res_ty) <- splitFunTy_maybe ty
+       , not (isTypeLevPoly arg_ty)
+          -- See Note [Levity polymorphism invariants] in CoreSyn
+          -- See also test case typecheck/should_run/EtaExpandLevPoly
+
        , let (subst', eta_id') = freshEtaId n subst arg_ty
            -- Avoid free vars of the original expression
        = go (n-1) subst' res_ty (EtaVar eta_id' : eis)
@@ -991,10 +1056,11 @@ mkEtaWW orig_n orig_expr in_scope orig_ty
                 --      eta_expand 1 e T
                 -- We want to get
                 --      coerce T (\x::[T] -> (coerce ([T]->Int) e) x)
-         go n subst ty' (EtaCo co : eis)
+         go n subst ty' (pushCoercion co eis)
 
        | otherwise       -- We have an expression of arity > 0,
-                         -- but its type isn't a function.
+                         -- but its type isn't a function, or a binder
+                         -- is levity-polymorphic
        = WARN( True, (ppr orig_n <+> ppr orig_ty) $$ ppr orig_expr )
          (getTCvInScope subst, reverse eis)
         -- This *can* legitmately happen:
@@ -1004,15 +1070,67 @@ mkEtaWW orig_n orig_expr in_scope orig_ty
         -- with an explicit lambda having a non-function type
 
 
+
 --------------
--- Avoiding unnecessary substitution; use short-cutting versions
+-- Don't use short-cutting substitution - we may be changing the types of join
+-- points, so applying the in-scope set is necessary
+-- TODO Check if we actually *are* changing any join points' types
 
 subst_expr :: Subst -> CoreExpr -> CoreExpr
-subst_expr = substExprSC (text "CoreArity:substExpr")
+subst_expr = substExpr (text "CoreArity:substExpr")
 
-subst_bind :: Subst -> CoreBind -> (Subst, CoreBind)
-subst_bind = substBindSC
 
+--------------
+
+-- | Split an expression into the given number of binders and a body,
+-- eta-expanding if necessary. Counts value *and* type binders.
+etaExpandToJoinPoint :: JoinArity -> CoreExpr -> ([CoreBndr], CoreExpr)
+etaExpandToJoinPoint join_arity expr
+  = go join_arity [] expr
+  where
+    go 0 rev_bs e         = (reverse rev_bs, e)
+    go n rev_bs (Lam b e) = go (n-1) (b : rev_bs) e
+    go n rev_bs e         = case etaBodyForJoinPoint n e of
+                              (bs, e') -> (reverse rev_bs ++ bs, e')
+
+etaExpandToJoinPointRule :: JoinArity -> CoreRule -> CoreRule
+etaExpandToJoinPointRule _ rule@(BuiltinRule {})
+  = WARN(True, (sep [text "Can't eta-expand built-in rule:", ppr rule]))
+      -- How did a local binding get a built-in rule anyway? Probably a plugin.
+    rule
+etaExpandToJoinPointRule join_arity rule@(Rule { ru_bndrs = bndrs, ru_rhs = rhs
+                                               , ru_args  = args })
+  | need_args == 0
+  = rule
+  | need_args < 0
+  = pprPanic "etaExpandToJoinPointRule" (ppr join_arity $$ ppr rule)
+  | otherwise
+  = rule { ru_bndrs = bndrs ++ new_bndrs, ru_args = args ++ new_args
+         , ru_rhs = new_rhs }
+  where
+    need_args = join_arity - length args
+    (new_bndrs, new_rhs) = etaBodyForJoinPoint need_args rhs
+    new_args = varsToCoreExprs new_bndrs
+
+-- Adds as many binders as asked for; assumes expr is not a lambda
+etaBodyForJoinPoint :: Int -> CoreExpr -> ([CoreBndr], CoreExpr)
+etaBodyForJoinPoint need_args body
+  = go need_args (exprType body) (init_subst body) [] body
+  where
+    go 0 _  _     rev_bs e
+      = (reverse rev_bs, e)
+    go n ty subst rev_bs e
+      | Just (tv, res_ty) <- splitForAllTy_maybe ty
+      , let (subst', tv') = Type.substTyVarBndr subst tv
+      = go (n-1) res_ty subst' (tv' : rev_bs) (e `App` Type (mkTyVarTy tv'))
+      | Just (arg_ty, res_ty) <- splitFunTy_maybe ty
+      , let (subst', b) = freshEtaId n subst arg_ty
+      = go (n-1) res_ty subst' (b : rev_bs) (e `App` Var b)
+      | otherwise
+      = pprPanic "etaBodyForJoinPoint" $ int need_args $$
+                                         ppr body $$ ppr (exprType body)
+
+    init_subst e = mkEmptyTCvSubst (mkInScopeSet (exprFreeVars e))
 
 --------------
 freshEtaId :: Int -> TCvSubst -> Type -> (TCvSubst, Id)

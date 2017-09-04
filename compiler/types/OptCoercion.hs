@@ -4,14 +4,13 @@
 
 -- The default iteration limit is a bit too low for the definitions
 -- in this module.
-#if __GLASGOW_HASKELL__ >= 800
 {-# OPTIONS_GHC -fmax-pmcheck-iterations=10000000 #-}
-#endif
 
 module OptCoercion ( optCoercion, checkAxInstCo ) where
 
 #include "HsVersions.h"
 
+import DynFlags
 import TyCoRep
 import Coercion
 import Type hiding( substTyVarBndr, substTy )
@@ -20,7 +19,6 @@ import TyCon
 import CoAxiom
 import VarSet
 import VarEnv
-import StaticFlags      ( opt_NoOptCoercion )
 import Outputable
 import FamInstEnv ( flattenTys )
 import Pair
@@ -87,7 +85,7 @@ optCoercion :: TCvSubst -> Coercion -> NormalCo
 -- ^ optCoercion applies a substitution to a coercion,
 --   *and* optimises it to reduce its size
 optCoercion env co
-  | opt_NoOptCoercion = substCo env co
+  | hasNoOptCoercion unsafeGlobalDynFlags = substCo env co
   | debugIsOn
   = let out_co = opt_co1 lc False co
         (Pair in_ty1  in_ty2,  in_role)  = coercionKindRole co
@@ -207,17 +205,37 @@ opt_co4 env sym rep r (ForAllCo tv k_co co)
                             opt_co4_wrap env' sym rep r co
      -- Use the "mk" functions to check for nested Refls
 
+opt_co4 env sym rep r (FunCo _r co1 co2)
+  = ASSERT( r == _r )
+    if rep
+    then mkFunCo Representational co1' co2'
+    else mkFunCo r co1' co2'
+  where
+    co1' = opt_co4_wrap env sym rep r co1
+    co2' = opt_co4_wrap env sym rep r co2
+
 opt_co4 env sym rep r (CoVarCo cv)
   | Just co <- lookupCoVar (lcTCvSubst env) cv
   = opt_co4_wrap (zapLiftingContext env) sym rep r co
 
-  | Just cv1 <- lookupInScope (lcInScopeSet env) cv
-  = ASSERT( isCoVar cv1 ) wrapRole rep r $ wrapSym sym (CoVarCo cv1)
-                -- cv1 might have a substituted kind!
+  | ty1 `eqType` ty2   -- See Note [Optimise CoVarCo to Refl]
+  = Refl (chooseRole rep r) ty1
 
-  | otherwise = WARN( True, text "opt_co: not in scope:" <+> ppr cv $$ ppr env)
-                ASSERT( isCoVar cv )
-                wrapRole rep r $ wrapSym sym (CoVarCo cv)
+  | otherwise
+  = ASSERT( isCoVar cv1 )
+    wrapRole rep r $ wrapSym sym $
+    CoVarCo cv1
+
+  where
+    Pair ty1 ty2 = coVarTypes cv1
+
+    cv1 = case lookupInScope (lcInScopeSet env) cv of
+             Just cv1 -> cv1
+             Nothing  -> WARN( True, text "opt_co: not in scope:"
+                                     <+> ppr cv $$ ppr env)
+                         cv
+          -- cv1 might have a substituted kind!
+
 
 opt_co4 env sym rep r (AxiomInstCo con ind cos)
     -- Do *not* push sym inside top-level axioms
@@ -301,7 +319,7 @@ opt_co4 env sym rep r (CoherenceCo co1 co2)
            else opt_trans in_scope (mkCoherenceCo col1' co2') cor1'
 
   | otherwise
-  = wrapSym sym $ CoherenceCo (opt_co4_wrap env False rep r co1) co2'
+  = wrapSym sym $ mkCoherenceCo (opt_co4_wrap env False rep r co1) co2'
   where co1' = opt_co4_wrap env sym   rep   r       co1
         co2' = opt_co4_wrap env False False Nominal co2
         in_scope = lcInScopeSet env
@@ -326,6 +344,15 @@ opt_co4 env sym rep r (AxiomRuleCo co cs)
     wrapSym sym $
     AxiomRuleCo co (zipWith (opt_co2 env False) (coaxrAsmpRoles co) cs)
 
+{- Note [Optimise CoVarCo to Refl]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+If we have (c :: t~t) we can optimise it to Refl. That increases the
+chances of floating the Refl upwards; e.g. Maybe c --> Refl (Maybe t)
+
+We do so here in optCoercion, not in mkCoVarCo; see Note [mkCoVarCo]
+in Coercion.
+-}
+
 -------------
 -- | Optimize a phantom coercion. The input coercion may not necessarily
 -- be a phantom, but the output sure will be.
@@ -334,6 +361,20 @@ opt_phantom env sym co
   = opt_univ env sym (PhantomProv (mkKindCo co)) Phantom ty1 ty2
   where
     Pair ty1 ty2 = coercionKind co
+
+{- Note [Differing kinds]
+   ~~~~~~~~~~~~~~~~~~~~~~
+The two types may not have the same kind (although that would be very unusual).
+But even if they have the same kind, and the same type constructor, the number
+of arguments in a `CoTyConApp` can differ. Consider
+
+  Any :: forall k. k
+
+  Any * Int                      :: *
+  Any (*->*) Maybe Int  :: *
+
+Hence the need to compare argument lengths; see Trac #13658
+ -}
 
 opt_univ :: LiftingContext -> SymFlag -> UnivCoProvenance -> Role
          -> Type -> Type -> Coercion
@@ -349,6 +390,7 @@ opt_univ env sym prov role oty1 oty2
   | Just (tc1, tys1) <- splitTyConApp_maybe oty1
   , Just (tc2, tys2) <- splitTyConApp_maybe oty2
   , tc1 == tc2
+  , equalLength tys1 tys2 -- see Note [Differing kinds]
       -- NB: prov must not be the two interesting ones (ProofIrrel & Phantom);
       -- Phantom is already taken care of, and ProofIrrel doesn't relate tyconapps
   = let roles    = tyConRolesX role tc1
@@ -526,6 +568,11 @@ opt_trans_rule is in_co1@(TyConAppCo r1 tc1 cos1) in_co2@(TyConAppCo r2 tc2 cos2
     fireTransRule "PushTyConApp" in_co1 in_co2 $
     mkTyConAppCo r1 tc1 (opt_transList is cos1 cos2)
 
+opt_trans_rule is in_co1@(FunCo r1 co1a co1b) in_co2@(FunCo r2 co2a co2b)
+  = ASSERT( r1 == r2 )   -- Just like the TyConAppCo/TyConAppCo case
+    fireTransRule "PushFun" in_co1 in_co2 $
+    mkFunCo r1 (opt_trans is co1a co2a) (opt_trans is co1b co2b)
+
 opt_trans_rule is in_co1@(AppCo co1a co1b) in_co2@(AppCo co2a co2b)
   = fireTransRule "TrPushApp" in_co1 in_co2 $
     mkAppCo (opt_trans is co1a co2a)
@@ -534,13 +581,13 @@ opt_trans_rule is in_co1@(AppCo co1a co1b) in_co2@(AppCo co2a co2b)
 -- Eta rules
 opt_trans_rule is co1@(TyConAppCo r tc cos1) co2
   | Just cos2 <- etaTyConAppCo_maybe tc co2
-  = ASSERT( length cos1 == length cos2 )
+  = ASSERT( cos1 `equalLength` cos2 )
     fireTransRule "EtaCompL" co1 co2 $
     mkTyConAppCo r tc (opt_transList is cos1 cos2)
 
 opt_trans_rule is co1 co2@(TyConAppCo r tc cos2)
   | Just cos1 <- etaTyConAppCo_maybe tc co1
-  = ASSERT( length cos1 == length cos2 )
+  = ASSERT( cos1 `equalLength` cos2 )
     fireTransRule "EtaCompR" co1 co2 $
     mkTyConAppCo r tc (opt_transList is cos1 cos2)
 
@@ -745,7 +792,7 @@ checkAxInstCo _ = Nothing
 
 -----------
 wrapSym :: SymFlag -> Coercion -> Coercion
-wrapSym sym co | sym       = SymCo co
+wrapSym sym co | sym       = mkSymCo co
                | otherwise = co
 
 -- | Conditionally set a role to be representational
@@ -885,7 +932,7 @@ etaTyConAppCo_maybe tc co
   , isInjectiveTyCon tc r  -- See Note [NthCo and newtypes] in TyCoRep
   , let n = length tys1
   = ASSERT( tc == tc1 )
-    ASSERT( n == length tys2 )
+    ASSERT( tys2 `lengthIs` n )
     Just (decomposeCo n co)
     -- NB: n might be <> tyConArity tc
     -- e.g.   data family T a :: * -> *

@@ -1,5 +1,2 @@
-test('typecheck.prog002',
-     [when(fast(), skip),
-      extra_clean(['A.hi', 'A.o', 'B.hi', 'B.o'])],
-     multimod_compile,
-     ['B', '-v0'])
+test('typecheck.prog002', [extra_files(['A.hs', 'B.hs']),
+                           when(fast(), skip)], multimod_compile, ['B', '-v0'])

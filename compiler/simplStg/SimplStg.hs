@@ -14,9 +14,10 @@ import StgSyn
 
 import CostCentre       ( CollectedCCs )
 import SCCfinal         ( stgMassageForProfiling )
-import StgLint          ( lintStgBindings )
+import StgLint          ( lintStgTopBindings )
 import StgStats         ( showStgStats )
 import UnariseStg       ( unarise )
+import StgCse           ( stgCse )
 
 import DynFlags
 import Module           ( Module )
@@ -28,8 +29,8 @@ import Control.Monad
 
 stg2stg :: DynFlags                  -- includes spec of what stg-to-stg passes to do
         -> Module                    -- module name (profiling only)
-        -> [StgBinding]              -- input...
-        -> IO ( [StgBinding]         -- output program...
+        -> [StgTopBinding]           -- input...
+        -> IO ( [StgTopBinding]      -- output program...
               , CollectedCCs)        -- cost centre information (declared and used)
 
 stg2stg dflags module_name binds
@@ -37,7 +38,8 @@ stg2stg dflags module_name binds
         ; us <- mkSplitUniqSupply 'g'
 
         ; when (dopt Opt_D_verbose_stg2stg dflags)
-               (log_action dflags dflags NoReason SevDump noSrcSpan defaultDumpStyle (text "VERBOSE STG-TO-STG:"))
+               (putLogMsg dflags NoReason SevDump noSrcSpan
+                  (defaultDumpStyle dflags) (text "VERBOSE STG-TO-STG:"))
 
         ; (binds', us', ccs) <- end_pass us "Stg2Stg" ([],[],[]) binds
 
@@ -47,44 +49,50 @@ stg2stg dflags module_name binds
                 <- foldM do_stg_pass (binds', us0, ccs) (getStgToDo dflags)
 
         ; dumpIfSet_dyn dflags Opt_D_dump_stg "Pre unarise:"
-                        (pprStgBindings processed_binds)
+                        (pprStgTopBindings processed_binds)
 
-        ; let un_binds = unarise us1 processed_binds
+        ; let un_binds = stg_linter True "Unarise"
+                         $ unarise us1 processed_binds
 
         ; dumpIfSet_dyn dflags Opt_D_dump_stg "STG syntax:"
-                        (pprStgBindings un_binds)
+                        (pprStgTopBindings un_binds)
 
         ; return (un_binds, cost_centres)
    }
 
   where
-    stg_linter = if gopt Opt_DoStgLinting dflags
-                 then lintStgBindings
-                 else ( \ _whodunnit binds -> binds )
+    stg_linter unarised
+      | gopt Opt_DoStgLinting dflags = lintStgTopBindings unarised
+      | otherwise                    = \ _whodunnit binds -> binds
 
     -------------------------------------------
     do_stg_pass (binds, us, ccs) to_do
-      = let
-            (us1, us2) = splitUniqSupply us
-        in
-        case to_do of
+      = case to_do of
           D_stg_stats ->
              trace (showStgStats binds)
-             end_pass us2 "StgStats" ccs binds
+             end_pass us "StgStats" ccs binds
 
           StgDoMassageForProfiling ->
              {-# SCC "ProfMassage" #-}
              let
+                 (us1, us2) = splitUniqSupply us
                  (collected_CCs, binds3)
                    = stgMassageForProfiling dflags module_name us1 binds
              in
              end_pass us2 "ProfMassage" collected_CCs binds3
 
+          StgCSE ->
+             {-# SCC "StgCse" #-}
+             let
+                 binds' = stgCse binds
+             in
+             end_pass us "StgCse" ccs binds'
+
     end_pass us2 what ccs binds2
       = do -- report verbosely, if required
            dumpIfSet_dyn dflags Opt_D_verbose_stg2stg what
               (vcat (map ppr binds2))
-           let linted_binds = stg_linter what binds2
+           let linted_binds = stg_linter False what binds2
            return (linted_binds, us2, ccs)
             -- return: processed binds
             --         UniqueSupply for the next guy to use
@@ -96,19 +104,15 @@ stg2stg dflags module_name binds
 
 -- | Optional Stg-to-Stg passes.
 data StgToDo
-  = StgDoMassageForProfiling  -- should be (next to) last
+  = StgCSE
+  | StgDoMassageForProfiling  -- should be (next to) last
   | D_stg_stats
 
 -- | Which optional Stg-to-Stg passes to run. Depends on flags, ways etc.
 getStgToDo :: DynFlags -> [StgToDo]
 getStgToDo dflags
-  = todo2
+  = [ StgCSE                   | gopt Opt_StgCSE dflags] ++
+    [ StgDoMassageForProfiling | WayProf `elem` ways dflags] ++
+    [ D_stg_stats              | stg_stats ]
   where
         stg_stats = gopt Opt_StgStats dflags
-
-        todo1 = if stg_stats then [D_stg_stats] else []
-
-        todo2 | WayProf `elem` ways dflags
-              = StgDoMassageForProfiling : todo1
-              | otherwise
-              = todo1

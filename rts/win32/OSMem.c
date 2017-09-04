@@ -74,7 +74,7 @@ allocNew(uint32_t n) {
         rec=0;
         if (GetLastError() == ERROR_NOT_ENOUGH_MEMORY) {
 
-            errorBelch("Out of memory");
+            errorBelch("Out of memory\n");
             stg_exit(EXIT_HEAPOVERFLOW);
         } else {
             sysErrorBelch(
@@ -428,7 +428,7 @@ StgWord64 getPhysicalMemorySize (void)
     return physMemSize;
 }
 
-void setExecutable (void *p, W_ len, rtsBool exec)
+void setExecutable (void *p, W_ len, bool exec)
 {
     DWORD dwOldProtect = 0;
     if (VirtualProtect (p, len,
@@ -441,7 +441,7 @@ void setExecutable (void *p, W_ len, rtsBool exec)
     }
 }
 
-#ifdef USE_LARGE_ADDRESS_SPACE
+#if defined(USE_LARGE_ADDRESS_SPACE)
 
 static void* heap_base = NULL;
 
@@ -499,7 +499,7 @@ void osReleaseHeapMemory (void)
 
 #endif
 
-rtsBool osNumaAvailable(void)
+bool osNumaAvailable(void)
 {
     return osNumaNodes() > 1;
 }
@@ -518,9 +518,9 @@ uint32_t osNumaNodes(void)
     return numNumaNodes;
 }
 
-StgWord osNumaMask(void)
+uint64_t osNumaMask(void)
 {
-    StgWord numaMask;
+    uint64_t numaMask;
     if (!GetNumaNodeProcessorMask(0, &numaMask))
     {
         return 1;
@@ -561,7 +561,7 @@ void osBindMBlocksToNode(
                 }
                 else {
                     sysErrorBelch(
-                        "osBindMBlocksToNode: VirtualAllocExNuma MEM_RESERVE %llu bytes "
+                        "osBindMBlocksToNode: VirtualAllocExNuma MEM_RESERVE %" FMT_Word " bytes "
                         "at address %p bytes failed",
                                         size, addr);
                 }

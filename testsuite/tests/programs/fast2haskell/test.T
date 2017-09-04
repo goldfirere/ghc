@@ -1,8 +1,4 @@
 
-test('fast2haskell',
-     [when(fast(), skip),
-      extra_clean(['Main.hi',         'Main.o',
-                   'Fast2haskell.hi', 'Fast2haskell.o'])],
-     multimod_compile_and_run,
+test('fast2haskell', [extra_files(['Fast2haskell.hs', 'Main.hs']),
+                      when(fast(), skip)], multimod_compile_and_run,
      ['Main', ''])
-

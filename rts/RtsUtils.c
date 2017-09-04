@@ -15,22 +15,22 @@
 #include "Schedule.h"
 #include "RtsFlags.h"
 
-#ifdef HAVE_TIME_H
+#if defined(HAVE_TIME_H)
 #include <time.h>
 #endif
 
 /* HACK: On Mac OS X 10.4 (at least), time.h doesn't declare ctime_r with
  *       _POSIX_C_SOURCE. If this is the case, we declare it ourselves.
  */
-#if HAVE_CTIME_R && !HAVE_DECL_CTIME_R
+#if defined(HAVE_CTIME_R) && !HAVE_DECL_CTIME_R
 extern char *ctime_r(const time_t *, char *);
 #endif
 
-#ifdef HAVE_FCNTL_H
+#if defined(HAVE_FCNTL_H)
 #include <fcntl.h>
 #endif
 
-#ifdef HAVE_GETTIMEOFDAY
+#if defined(HAVE_GETTIMEOFDAY)
 #include <sys/time.h>
 #endif
 
@@ -39,7 +39,7 @@ extern char *ctime_r(const time_t *, char *);
 #include <stdarg.h>
 #include <stdio.h>
 
-#ifdef HAVE_SIGNAL_H
+#if defined(HAVE_SIGNAL_H)
 #include <signal.h>
 #endif
 
@@ -76,7 +76,7 @@ stgMallocBytes (size_t n, char *msg)
       if (n == 0) return NULL;
 
       /* don't fflush(stdout); WORKAROUND bug in Linux glibc */
-      rtsConfig.mallocFailHook((W_) n, msg); /*msg*/
+      rtsConfig.mallocFailHook((W_) n, msg);
       stg_exit(EXIT_INTERNAL_ERROR);
     }
     IF_DEBUG(sanity, memset(space, 0xbb, n));
@@ -90,7 +90,7 @@ stgReallocBytes (void *p, size_t n, char *msg)
 
     if ((space = realloc(p, n)) == NULL) {
       /* don't fflush(stdout); WORKAROUND bug in Linux glibc */
-      rtsConfig.mallocFailHook((W_) n, msg); /*msg*/
+      rtsConfig.mallocFailHook((W_) n, msg);
       stg_exit(EXIT_INTERNAL_ERROR);
     }
     return space;
@@ -103,7 +103,7 @@ stgCallocBytes (size_t n, size_t m, char *msg)
 
     if ((space = calloc(n, m)) == NULL) {
       /* don't fflush(stdout); WORKAROUND bug in Linux glibc */
-      rtsConfig.mallocFailHook((W_) n*m, msg); /*msg*/
+      rtsConfig.mallocFailHook((W_) n*m, msg);
       stg_exit(EXIT_INTERNAL_ERROR);
     }
     return space;
@@ -131,13 +131,11 @@ stgFree(void* p)
 }
 
 /* -----------------------------------------------------------------------------
-   Stack overflow
-
-   Not sure if this belongs here.
+   Stack/heap overflow
    -------------------------------------------------------------------------- */
 
 void
-stackOverflow(StgTSO* tso)
+reportStackOverflow(StgTSO* tso)
 {
     rtsConfig.stackOverflowHook(tso->tot_stack_size * sizeof(W_));
 
@@ -147,16 +145,11 @@ stackOverflow(StgTSO* tso)
 }
 
 void
-heapOverflow(void)
+reportHeapOverflow(void)
 {
-    if (!heap_overflow)
-    {
-        /* don't fflush(stdout); WORKAROUND bug in Linux glibc */
-        rtsConfig.outOfHeapHook(0/*unknown request size*/,
-                                (W_)RtsFlags.GcFlags.maxHeapSize * BLOCK_SIZE);
-
-        heap_overflow = rtsTrue;
-    }
+    /* don't fflush(stdout); WORKAROUND bug in Linux glibc */
+    rtsConfig.outOfHeapHook(0/*unknown request size*/,
+                            (W_)RtsFlags.GcFlags.maxHeapSize * BLOCK_SIZE);
 }
 
 /* -----------------------------------------------------------------------------
@@ -171,7 +164,7 @@ time_str(void)
 
     if (now == 0) {
         time(&now);
-#if HAVE_CTIME_R
+#if defined(HAVE_CTIME_R)
         ctime_r(&now, nowstr);
 #else
         strcpy(nowstr, ctime(&now));
@@ -187,7 +180,7 @@ time_str(void)
    -------------------------------------------------------------------------- */
 
 char *
-showStgWord64(StgWord64 x, char *s, rtsBool with_commas)
+showStgWord64(StgWord64 x, char *s, bool with_commas)
 {
     if (with_commas) {
         if (x < (StgWord64)1e3)
@@ -260,7 +253,7 @@ showStgWord64(StgWord64 x, char *s, rtsBool with_commas)
 
 
 // Can be used as a breakpoint to set on every heap check failure.
-#ifdef DEBUG
+#if defined(DEBUG)
 void
 heapCheckFail( void )
 {
@@ -320,7 +313,7 @@ void printRtsInfo(void) {
 // profiled or not.  GHCi uses it (see #2197).
 int rts_isProfiled(void)
 {
-#ifdef PROFILING
+#if defined(PROFILING)
     return 1;
 #else
     return 0;
@@ -331,7 +324,7 @@ int rts_isProfiled(void)
 // dynamically-linked or not.
 int rts_isDynamic(void)
 {
-#ifdef DYNAMIC
+#if defined(DYNAMIC)
     return 1;
 #else
     return 0;
@@ -341,7 +334,7 @@ int rts_isDynamic(void)
 // Used for detecting a non-empty FPU stack on x86 (see #4914)
 void checkFPUStack(void)
 {
-#ifdef i386_HOST_ARCH
+#if defined(i386_HOST_ARCH)
     static unsigned char buf[108];
     asm("FSAVE %0":"=m" (buf));
 
@@ -351,4 +344,3 @@ void checkFPUStack(void)
     }
 #endif
 }
-

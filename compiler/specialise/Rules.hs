@@ -31,11 +31,12 @@ module Rules (
 import CoreSyn          -- All of it
 import Module           ( Module, ModuleSet, elemModuleSet )
 import CoreSubst
-import OccurAnal        ( occurAnalyseExpr )
+import CoreOpt          ( exprIsLambda_maybe )
 import CoreFVs          ( exprFreeVars, exprsFreeVars, bindFreeVars
                         , rulesFreeVarsDSet, exprsOrphNames, exprFreeVarsList )
 import CoreUtils        ( exprType, eqExpr, mkTick, mkTicks,
-                          stripTicksTopT, stripTicksTopE )
+                          stripTicksTopT, stripTicksTopE,
+                          isJoinBind )
 import PprCore          ( pprRules )
 import Type             ( Type, substTy, mkTCvSubst )
 import TcType           ( tcSplitTyConApp_maybe )
@@ -53,7 +54,6 @@ import NameEnv
 import UniqFM
 import Unify            ( ruleMatchTyKiX )
 import BasicTypes       ( Activation, CompilerPhase, isActive, pprRuleName )
-import StaticFlags      ( opt_PprStyle_Debug )
 import DynFlags         ( DynFlags )
 import Outputable
 import FastString
@@ -172,7 +172,7 @@ mkRule :: Module -> Bool -> Bool -> RuleName -> Activation
 mkRule this_mod is_auto is_local name act fn bndrs args rhs
   = Rule { ru_name = name, ru_fn = fn, ru_act = act,
            ru_bndrs = bndrs, ru_args = args,
-           ru_rhs = occurAnalyseExpr rhs,
+           ru_rhs = rhs,
            ru_rough = roughTopNames args,
            ru_origin = this_mod,
            ru_orphan = orph,
@@ -254,16 +254,16 @@ functions (lambdas) except by name, so in this case it seems like
 a good idea to treat 'M.k' as a roughTopName of the call.
 -}
 
-pprRulesForUser :: [CoreRule] -> SDoc
+pprRulesForUser :: DynFlags -> [CoreRule] -> SDoc
 -- (a) tidy the rules
 -- (b) sort them into order based on the rule name
 -- (c) suppress uniques (unless -dppr-debug is on)
 -- This combination makes the output stable so we can use in testing
 -- It's here rather than in PprCore because it calls tidyRules
-pprRulesForUser rules
-  = withPprStyle defaultUserStyle $
+pprRulesForUser dflags rules
+  = withPprStyle (defaultUserStyle dflags) $
     pprRules $
-    sortBy (comparing ru_name) $
+    sortBy (comparing ruleName) $
     tidyRules emptyTidyEnv rules
 
 {-
@@ -419,14 +419,14 @@ findBest target (rule1,ans1) ((rule2,ans2):prs)
   | rule1 `isMoreSpecific` rule2 = findBest target (rule1,ans1) prs
   | rule2 `isMoreSpecific` rule1 = findBest target (rule2,ans2) prs
   | debugIsOn = let pp_rule rule
-                        | opt_PprStyle_Debug = ppr rule
-                        | otherwise          = doubleQuotes (ftext (ru_name rule))
+                      = ifPprDebug (ppr rule)
+                                   (doubleQuotes (ftext (ruleName rule)))
                 in pprTrace "Rules.findBest: rule overlap (Rule 1 wins)"
-                         (vcat [if opt_PprStyle_Debug then
-                                   text "Expression to match:" <+> ppr fn <+> sep (map ppr args)
-                                else empty,
-                                text "Rule 1:" <+> pp_rule rule1,
-                                text "Rule 2:" <+> pp_rule rule2]) $
+                         (vcat [ whenPprDebug $
+                                 text "Expression to match:" <+> ppr fn
+                                 <+> sep (map ppr args)
+                               , text "Rule 1:" <+> pp_rule rule1
+                               , text "Rule 2:" <+> pp_rule rule2]) $
                 findBest target (rule1,ans1) prs
   | otherwise = findBest target (rule1,ans1) prs
   where
@@ -507,8 +507,7 @@ matchRule dflags rule_env _is_active fn args _rough_args
 -- Built-in rules can't be switched off, it seems
   = case match_fn dflags rule_env fn args of
         Nothing   -> Nothing
-        Just expr -> Just (occurAnalyseExpr expr)
-        -- We could do this when putting things into the rulebase, I guess
+        Just expr -> Just expr
 
 matchRule _ in_scope is_active _ args rough_args
           (Rule { ru_name = rule_name, ru_act = act, ru_rough = tpl_tops
@@ -521,8 +520,7 @@ matchRule _ in_scope is_active _ args rough_args
         Just (bind_wrapper, tpl_vals) -> Just (bind_wrapper $
                                                rule_fn `mkApps` tpl_vals)
   where
-    rule_fn = occurAnalyseExpr (mkLams tpl_vars rhs)
-        -- We could do this when putting things into the rulebase, I guess
+    rule_fn = mkLams tpl_vars rhs
 
 ---------------------------------------
 matchN  :: InScopeEnv
@@ -556,12 +554,16 @@ matchN (in_scope, id_unf) rule_name tmpl_vars tmpl_es target_es
         | isId tmpl_var
         = case lookupVarEnv id_subst tmpl_var of
              Just e -> (rs, e)
-             _      -> unbound tmpl_var
+             Nothing | Just refl_co <- isReflCoVar_maybe tmpl_var
+                     , let co_expr = Coercion refl_co
+                     -> (rs { rs_id_subst = extendVarEnv id_subst tmpl_var co_expr }, co_expr)
+                     | otherwise
+                     -> unbound tmpl_var
         | otherwise
         = case lookupVarEnv tv_subst tmpl_var of
              Just ty -> (rs, Type ty)
              Nothing -> (rs { rs_tv_subst = extendVarEnv tv_subst tmpl_var fake_ty }, Type fake_ty)
-             -- See Note [Unbound template type variables]
+                        -- See Note [Unbound RULE binders]
         where
           fake_ty = anyTypeOfKind kind
           cv_subst = to_co_env id_subst
@@ -585,10 +587,14 @@ matchN (in_scope, id_unf) rule_name tmpl_vars tmpl_es target_es
                        , text "LHS args:" <+> ppr tmpl_es
                        , text "Actual args:" <+> ppr target_es ]
 
-{- Note [Unbound template type variables]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Type synonyms with phantom args can give rise to unbound template type
-variables.  Consider this (Trac #10689, simplCore/should_compile/T10689):
+{- Note [Unbound RULE binders]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+It can be the case that the binder in a rule is not actually
+bound on the LHS:
+
+* Type variables.  Type synonyms with phantom args can give rise to
+  unbound template type variables.  Consider this (Trac #10689,
+  simplCore/should_compile/T10689):
 
     type Foo a b = b
 
@@ -598,12 +604,31 @@ variables.  Consider this (Trac #10689, simplCore/should_compile/T10689):
     {-# RULES "foo" forall (x :: Foo a Char). f x = True #-}
     finkle = f 'c'
 
-The rule looks like
-   foall (a::*) (d::Eq Char) (x :: Foo a Char).
+  The rule looks like
+    forall (a::*) (d::Eq Char) (x :: Foo a Char).
          f (Foo a Char) d x = True
 
-Matching the rule won't bind 'a', and legitimately so.  We fudge by
-pretending that 'a' is bound to (Any :: *).
+  Matching the rule won't bind 'a', and legitimately so.  We fudge by
+  pretending that 'a' is bound to (Any :: *).
+
+* Coercion variables.  On the LHS of a RULE for a local binder
+  we might have
+    RULE forall (c :: a~b). f (x |> c) = e
+  Now, if that binding is inlined, so that a=b=Int, we'd get
+    RULE forall (c :: Int~Int). f (x |> c) = e
+  and now when we simplify the LHS (Simplify.simplRule) we
+  optCoercion will turn that 'c' into Refl:
+    RULE forall (c :: Int~Int). f (x |> <Int>) = e
+  and then perhaps drop it altogether.  Now 'c' is unbound.
+
+  It's tricky to be sure this never happens, so instead I
+  say it's OK to have an unbound coercion binder in a RULE
+  provided its type is (c :: t~t).  Then, when the RULE
+  fires we can substitute <t> for c.
+
+  This actually happened (in a RULE for a local function)
+  in Trac #13410, and also in test T10602.
+
 
 Note [Template binders]
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -703,7 +728,7 @@ match _ _ e@Tick{} _
 -- Consider matching
 --      \x->f      against    \f->f
 -- When we meet the lambdas we must remember to rename f to f' in the
--- second expresion.  The RnEnv2 does that.
+-- second expression.  The RnEnv2 does that.
 --
 -- Consider matching
 --      forall a. \b->b    against   \a->3
@@ -728,7 +753,8 @@ match renv subst e1 (Var v2)      -- Note [Expanding variables]
 
 match renv subst e1 (Let bind e2)
   | -- pprTrace "match:Let" (vcat [ppr bind, ppr $ okToFloat (rv_lcl renv) (bindFreeVars bind)]) $
-    okToFloat (rv_lcl renv) (bindFreeVars bind)        -- See Note [Matching lets]
+    not (isJoinBind bind) -- can't float join point out of argument position
+  , okToFloat (rv_lcl renv) (bindFreeVars bind) -- See Note [Matching lets]
   = match (renv { rv_fltR = flt_subst' })
           (subst { rs_binds = rs_binds subst . Let bind'
                  , rs_bndrs = extendVarSetList (rs_bndrs subst) new_bndrs })
@@ -808,9 +834,15 @@ match_co renv subst co1 co2
         |  tc1 == tc2
         -> match_cos renv subst cos1 cos2
       _ -> Nothing
+match_co renv subst co1 co2
+  | Just (arg1, res1) <- splitFunCo_maybe co1
+  = case splitFunCo_maybe co2 of
+      Just (arg2, res2)
+        -> match_cos renv subst [arg1, res1] [arg2, res2]
+      _ -> Nothing
 match_co _ _ _co1 _co2
     -- Currently just deals with CoVarCo, TyConAppCo and Refl
-#ifdef DEBUG
+#if defined(DEBUG)
   = pprTrace "match_co: needs more cases" (ppr _co1 $$ ppr _co2) Nothing
 #else
   = Nothing
@@ -859,7 +891,7 @@ match_alts _ _ _ _
 ------------------------------------------
 okToFloat :: RnEnv2 -> VarSet -> Bool
 okToFloat rn_env bind_fvs
-  = varSetAll not_captured bind_fvs
+  = allVarSet not_captured bind_fvs
   where
     not_captured fv = not (inRnEnvR rn_env fv)
 

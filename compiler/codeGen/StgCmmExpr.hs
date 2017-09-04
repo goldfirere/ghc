@@ -39,8 +39,8 @@ import ForeignCall
 import Id
 import PrimOp
 import TyCon
-import Type
-import RepType          ( isVoidTy, countConRepArgs )
+import Type             ( isUnliftedType )
+import RepType          ( isVoidTy, countConRepArgs, primRepSlot )
 import CostCentre       ( CostCentreStack, currentCCS )
 import Maybes
 import Util
@@ -49,6 +49,7 @@ import Outputable
 
 import Control.Monad (unless,void)
 import Control.Arrow (first)
+import Data.Function ( on )
 
 import Prelude hiding ((<*>))
 
@@ -303,6 +304,7 @@ cgCase (StgOpApp (StgPrimOp op) args _) bndr (AlgAlt tycon) alts
 
        ; (mb_deflt, branches) <- cgAlgAltRhss (NoGcInAlts,AssignedDirectly)
                                               (NonVoid bndr) alts
+                                 -- See Note [GC for conditionals]
        ; emitSwitch tag_expr branches mb_deflt 0 (tyConFamilySize tycon - 1)
        ; return AssignedDirectly
        }
@@ -402,14 +404,23 @@ cgCase (StgApp v []) bndr alt_type@(PrimAlt _) alts
   = -- assignment suffices for unlifted types
     do { dflags <- getDynFlags
        ; unless reps_compatible $
-           panic "cgCase: reps do not match, perhaps a dodgy unsafeCoerce?"
+           pprPanic "cgCase: reps do not match, perhaps a dodgy unsafeCoerce?"
+                    (pp_bndr v $$ pp_bndr bndr)
        ; v_info <- getCgIdInfo v
        ; emitAssign (CmmLocal (idToReg dflags (NonVoid bndr)))
                     (idInfoToAmode v_info)
        ; bindArgToReg (NonVoid bndr)
        ; cgAlts (NoGcInAlts,AssignedDirectly) (NonVoid bndr) alt_type alts }
   where
-    reps_compatible = idPrimRep v == idPrimRep bndr
+    reps_compatible = ((==) `on` (primRepSlot . idPrimRep)) v bndr
+      -- Must compare SlotTys, not proper PrimReps, because with unboxed sums,
+      -- the types of the binders are generated from slotPrimRep and might not
+      -- match. Test case:
+      --   swap :: (# Int | Int #) -> (# Int | Int #)
+      --   swap (# x | #) = (# | x #)
+      --   swap (# | y #) = (# y | #)
+
+    pp_bndr id = ppr id <+> dcolon <+> ppr (idType id) <+> parens (ppr (idPrimRep id))
 
 {- Note [Dodgy unsafeCoerce 2, #3132]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -427,7 +438,7 @@ cgCase scrut@(StgApp v []) _ (PrimAlt _) _
        ; withSequel (AssignTo [idToReg dflags (NonVoid v)] False) (cgExpr scrut)
        ; restoreCurrentCostCentre mb_cc
        ; emitComment $ mkFastString "should be unreachable code"
-       ; l <- newLabelC
+       ; l <- newBlockId
        ; emitLabel l
        ; emit (mkBranch l)  -- an infinite loop
        ; return AssignedDirectly
@@ -459,7 +470,8 @@ cgCase scrut bndr alt_type alts
        ; let ret_bndrs = chooseReturnBndrs bndr alt_type alts
              alt_regs  = map (idToReg dflags) ret_bndrs
        ; simple_scrut <- isSimpleScrut scrut alt_type
-       ; let do_gc  | not simple_scrut = True
+       ; let do_gc  | is_cmp_op scrut  = False  -- See Note [GC for conditionals]
+                    | not simple_scrut = True
                     | isSingleton alts = False
                     | up_hp_usg > 0    = False
                     | otherwise        = True
@@ -474,11 +486,29 @@ cgCase scrut bndr alt_type alts
        ; _ <- bindArgsToRegs ret_bndrs
        ; cgAlts (gc_plan,ret_kind) (NonVoid bndr) alt_type alts
        }
+  where
+    is_cmp_op (StgOpApp (StgPrimOp op) _ _) = isComparisonPrimOp op
+    is_cmp_op _                             = False
 
+{- Note [GC for conditionals]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+For boolean conditionals it seems that we have always done NoGcInAlts.
+That is, we have always done the GC check before the conditional.
+This is enshrined in the special case for
+   case tagToEnum# (a>b) of ...
+See Note [case on bool]
 
-{-
+It's odd, and it's flagrantly inconsistent with the rules described
+Note [Compiling case expressions].  However, after eliminating the
+tagToEnum# (Trac #13397) we will have:
+   case (a>b) of ...
+Rather than make it behave quite differently, I am testing for a
+comparison operator here in in the general case as well.
+
+ToDo: figure out what the Right Rule should be.
+
 Note [scrut sequel]
-
+~~~~~~~~~~~~~~~~~~~
 The job of the scrutinee is to assign its value(s) to alt_regs.
 Additionally, if we plan to do a heap-check in the alternatives (see
 Note [Compiling case expressions]), then we *must* retreat Hp to
@@ -532,7 +562,7 @@ chooseReturnBndrs bndr (PrimAlt _) _alts
   = assertNonVoidIds [bndr]
 
 chooseReturnBndrs _bndr (MultiValAlt n) [(_, ids, _)]
-  = ASSERT2(n == length ids, ppr n $$ ppr ids $$ ppr _bndr)
+  = ASSERT2(ids `lengthIs` n, ppr n $$ ppr ids $$ ppr _bndr)
     assertNonVoidIds ids     -- 'bndr' is not assigned!
 
 chooseReturnBndrs bndr (AlgAlt _) _alts
@@ -683,7 +713,7 @@ cgConApp con stg_args
                                      -- con args are always non-void,
                                      -- see Note [Post-unarisation invariants] in UnariseStg
                 -- The first "con" says that the name bound to this
-                -- closure is is "con", which is a bit of a fudge, but
+                -- closure is "con", which is a bit of a fudge, but
                 -- it only affects profiling (hence the False)
 
         ; emit =<< fcode_init
@@ -691,7 +721,6 @@ cgConApp con stg_args
         ; emitReturn [idInfoToAmode idinfo] }
 
 cgIdApp :: Id -> [StgArg] -> FCode ReturnKind
-cgIdApp fun_id [] | isVoidTy (idType fun_id) = emitReturn []
 cgIdApp fun_id args = do
     dflags         <- getDynFlags
     fun_info       <- getCgIdInfo fun_id
@@ -709,9 +738,11 @@ cgIdApp fun_id args = do
         v_args      = length $ filter (isVoidTy . stgArgType) args
         node_points dflags = nodeMustPointToIt dflags lf_info
     case getCallMethod dflags fun_name cg_fun_id lf_info n_args v_args (cg_loc fun_info) self_loop_info of
-
             -- A value in WHNF, so we can just return it.
-        ReturnIt -> emitReturn [fun] -- ToDo: does ReturnIt guarantee tagged?
+        ReturnIt
+          | isVoidTy (idType fun_id) -> emitReturn []
+          | otherwise                -> emitReturn [fun]
+          -- ToDo: does ReturnIt guarantee tagged?
 
         EnterIt -> ASSERT( null args )  -- Discarding arguments
                    emitEnter fun
@@ -872,7 +903,7 @@ emitEnter fun = do
       -- The generated code will be something like this:
       --
       --    R1 = fun  -- copyout
-      --    if (fun & 7 != 0) goto Lcall else goto Lret
+      --    if (fun & 7 != 0) goto Lret else goto Lcall
       --  Lcall:
       --    call [fun] returns to Lret
       --  Lret:
@@ -891,9 +922,9 @@ emitEnter fun = do
       -- code in the enclosing case expression.
       --
       AssignTo res_regs _ -> do
-       { lret <- newLabelC
+       { lret <- newBlockId
        ; let (off, _, copyin) = copyInOflow dflags NativeReturn (Young lret) res_regs []
-       ; lcall <- newLabelC
+       ; lcall <- newBlockId
        ; updfr_off <- getUpdFrameOff
        ; let area = Young lret
        ; let (outArgs, regs, copyout) = copyOutOflow dflags NativeNodeCall Call area

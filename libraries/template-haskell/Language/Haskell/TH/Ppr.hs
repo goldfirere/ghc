@@ -85,7 +85,7 @@ pprPatSynSig nm ty
 -- | Pretty prints a pattern synonym's type; follows the usual
 -- conventions to print a pattern synonym type compactly, yet
 -- unambiguously. See the note on 'PatSynType' and the section on
--- pattern synonyms in the GHC users guide for more information.
+-- pattern synonyms in the GHC user's guide for more information.
 pprPatSynType :: PatSynType -> Doc
 pprPatSynType ty@(ForallT uniTys reqs ty'@(ForallT exTys provs ty''))
   | null exTys,  null provs = ppr (ForallT uniTys reqs ty'')
@@ -143,6 +143,7 @@ pprExp i (InfixE (Just e1) op (Just e2))
 pprExp _ (InfixE me1 op me2) = parens $ pprMaybeExp noPrec me1
                                     <+> pprInfixExp op
                                     <+> pprMaybeExp noPrec me2
+pprExp i (LamE [] e) = pprExp i e -- #13856
 pprExp i (LamE ps e) = parensIf (i > noPrec) $ char '\\' <> hsep (map (pprPat appPrec) ps)
                                            <+> text "->" <+> ppr e
 pprExp i (LamCaseE ms) = parensIf (i > noPrec)
@@ -150,7 +151,7 @@ pprExp i (LamCaseE ms) = parensIf (i > noPrec)
 pprExp _ (TupE es) = parens (commaSep es)
 pprExp _ (UnboxedTupE es) = hashParens (commaSep es)
 pprExp _ (UnboxedSumE e alt arity) = unboxedSumBars (ppr e) alt arity
--- Nesting in Cond is to avoid potential problems in do statments
+-- Nesting in Cond is to avoid potential problems in do statements
 pprExp i (CondE guard true false)
  = parensIf (i > noPrec) $ sep [text "if"   <+> ppr guard,
                        nest 1 $ text "then" <+> ppr true,
@@ -198,6 +199,7 @@ pprExp _ (RecUpdE e fs) = pprExp appPrec e <> braces (pprFields fs)
 pprExp i (StaticE e) = parensIf (i >= appPrec) $
                          text "static"<+> pprExp appPrec e
 pprExp _ (UnboundVarE v) = pprName' Applied v
+pprExp _ (LabelE s) = text "#" <> text s
 
 pprFields :: [(Name,Exp)] -> Doc
 pprFields = sep . punctuate comma . map (\(s,e) -> ppr s <+> equals <+> ppr e)
@@ -380,9 +382,9 @@ ppr_dec _ (PatSynSigD name ty)
 ppr_deriv_strategy :: DerivStrategy -> Doc
 ppr_deriv_strategy ds = text $
   case ds of
-    Stock    -> "stock"
-    Anyclass -> "anyclass"
-    Newtype  -> "newtype"
+    StockStrategy    -> "stock"
+    AnyclassStrategy -> "anyclass"
+    NewtypeStrategy  -> "newtype"
 
 ppr_overlap :: Overlap -> Doc
 ppr_overlap o = text $
@@ -397,7 +399,7 @@ ppr_data :: Doc -> Cxt -> Name -> Doc -> Maybe Kind -> [Con] -> [DerivClause]
 ppr_data maybeInst ctxt t argsDoc ksig cs decs
   = sep [text "data" <+> maybeInst
             <+> pprCxt ctxt
-            <+> ppr t <+> argsDoc <+> ksigDoc <+> maybeWhere,
+            <+> pprName' Applied t <+> argsDoc <+> ksigDoc <+> maybeWhere,
          nest nestDepth (sep (pref $ map ppr cs)),
          if null decs
            then empty
@@ -527,6 +529,9 @@ instance Ppr Pragma where
             target1 (ValueAnnotation v) = ppr v
     ppr (LineP line file)
        = text "{-# LINE" <+> int line <+> text (show file) <+> text "#-}"
+    ppr (CompleteP cls mty)
+       = text "{-# COMPLETE" <+> (fsep $ punctuate comma $ map ppr cls)
+                <+> maybe empty (\ty -> dcolon <+> ppr ty) mty
 
 ------------------------------
 instance Ppr Inline where
@@ -674,8 +679,9 @@ pprStrictType = pprBangType
 
 ------------------------------
 pprParendType :: Type -> Doc
-pprParendType (VarT v)            = ppr v
-pprParendType (ConT c)            = ppr c
+pprParendType (VarT v)            = pprName' Applied v
+-- `Applied` is used here instead of `ppr` because of infix names (#13887)
+pprParendType (ConT c)            = pprName' Applied c
 pprParendType (TupleT 0)          = text "()"
 pprParendType (TupleT n)          = parens (hcat (replicate (n-1) comma))
 pprParendType (UnboxedTupleT n)   = hashParens $ hcat $ replicate (n-1) comma
@@ -683,11 +689,11 @@ pprParendType (UnboxedSumT arity) = hashParens $ hcat $ replicate (arity-1) bar
 pprParendType ArrowT              = parens (text "->")
 pprParendType ListT               = text "[]"
 pprParendType (LitT l)            = pprTyLit l
-pprParendType (PromotedT c)       = text "'" <> ppr c
+pprParendType (PromotedT c)       = text "'" <> pprName' Applied c
 pprParendType (PromotedTupleT 0)  = text "'()"
 pprParendType (PromotedTupleT n)  = quoteParens (hcat (replicate (n-1) comma))
 pprParendType PromotedNilT        = text "'[]"
-pprParendType PromotedConsT       = text "(':)"
+pprParendType PromotedConsT       = text "'(:)"
 pprParendType StarT               = char '*'
 pprParendType ConstraintT         = text "Constraint"
 pprParendType (SigT ty k)         = parens (ppr ty <+> text "::" <+> ppr k)
@@ -749,9 +755,10 @@ instance Ppr TyLit where
   ppr = pprTyLit
 
 ------------------------------
+-- TODO: print arg-flags properly here
 instance Ppr TyVarBndr where
-    ppr (PlainTV nm)    = ppr nm
-    ppr (KindedTV nm k) = parens (ppr nm <+> dcolon <+> ppr k)
+    ppr (PlainTV nm _arg_flag)    = ppr nm
+    ppr (KindedTV nm k _arg_flag) = parens (ppr nm <+> dcolon <+> ppr k)
 
 instance Ppr Role where
     ppr NominalR          = text "nominal"

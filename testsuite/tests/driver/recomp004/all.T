@@ -1,5 +1,1 @@
-test('recomp004',
-     extra_clean(['MainX', 'MainX.exe', 'MainX.hi', 'MainX.o', 'MainX.hs',
-                  'c.o', 'c.c']),
-     run_command,
-     ['$MAKE -s --no-print-directory recomp004'])
+test('recomp004', [extra_files(['Main.hs', 'c.h', 'c1.c', 'c2.c'])], run_command, ['$MAKE -s --no-print-directory recomp004'])

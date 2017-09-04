@@ -2,8 +2,6 @@ TOP=../../..
 include $(TOP)/mk/boilerplate.mk
 include $(TOP)/mk/test.mk
 
-LOCAL_GHC_PKG = '$(GHC_PKG)' --no-user-package-db -f $(LOCAL_PKGCONF)
-
 # Test 1: ghci -Ldir -lfoo
 #   with dir/libfoo.a
 
@@ -40,11 +38,7 @@ ghcilink002 :
 
 .PHONY: ghcilink003
 ghcilink003 :
-ifeq "$(WINDOWS)" "YES"
-	echo ":q" | "$(TEST_HC)" $(TEST_HC_OPTS_INTERACTIVE) -lstdc++-6
-else
 	echo ":q" | "$(TEST_HC)" $(TEST_HC_OPTS_INTERACTIVE) -lstdc++
-endif
 
 # Test 4: 
 #   package P

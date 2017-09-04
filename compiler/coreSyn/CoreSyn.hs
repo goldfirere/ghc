@@ -3,7 +3,8 @@
 (c) The GRASP/AQUA Project, Glasgow University, 1992-1998
 -}
 
-{-# LANGUAGE CPP, DeriveDataTypeable, DeriveFunctor #-}
+{-# LANGUAGE CPP, DeriveDataTypeable, FlexibleContexts #-}
+{-# LANGUAGE NamedFieldPuns #-}
 
 -- | CoreSyn holds all the main data types for use by for the Glasgow Haskell Compiler midsection
 module CoreSyn (
@@ -13,9 +14,15 @@ module CoreSyn (
         CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
         TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..), deTagExpr,
 
+        -- * In/Out type synonyms
+        InId, InBind, InExpr, InAlt, InArg, InType, InKind,
+               InBndr, InVar, InCoercion, InTyVar, InCoVar,
+        OutId, OutBind, OutExpr, OutAlt, OutArg, OutType, OutKind,
+               OutBndr, OutVar, OutCoercion, OutTyVar, OutCoVar,
+
         -- ** 'Expr' construction
-        mkLets, mkLams,
-        mkApps, mkTyApps, mkCoApps, mkVarApps,
+        mkLet, mkLets, mkLetNonRec, mkLetRec, mkLams,
+        mkApps, mkTyApps, mkCoApps, mkVarApps, mkTyArg,
 
         mkIntLit, mkIntLitInt,
         mkWordLit, mkWordLitWord,
@@ -32,6 +39,7 @@ module CoreSyn (
         -- ** Simple 'Expr' access functions and predicates
         bindersOf, bindersOfBinds, rhssOfBind, rhssOfAlts,
         collectBinders, collectTyBinders, collectTyAndValBinders,
+        collectNBinders,
         collectArgs, collectArgsTicks, flattenBinds,
 
         exprToType, exprToCoercion_maybe,
@@ -40,6 +48,7 @@ module CoreSyn (
         isValArg, isTypeArg, isTyCoArg, valArgCount, valBndrCount,
         isRuntimeArg, isRuntimeVar,
 
+        -- * Tick-related functions
         tickishCounts, tickishScoped, tickishScopesLike, tickishFloatable,
         tickishCanSplit, mkNoCount, mkNoScope,
         tickishIsCode, tickishPlace,
@@ -57,8 +66,7 @@ module CoreSyn (
         maybeUnfoldingTemplate, otherCons,
         isValueUnfolding, isEvaldUnfolding, isCheapUnfolding,
         isExpandableUnfolding, isConLikeUnfolding, isCompulsoryUnfolding,
-        isStableUnfolding, hasStableCoreUnfolding_maybe,
-        isClosedUnfolding, hasSomeUnfolding,
+        isStableUnfolding, isFragileUnfolding, hasSomeUnfolding,
         isBootUnfolding,
         canUnfold, neverUnfoldGuidance, isStableSource,
 
@@ -69,7 +77,8 @@ module CoreSyn (
         collectAnnArgs, collectAnnArgsTicks,
 
         -- ** Operations on annotations
-        deAnnotate, deAnnotate', deAnnAlt, collectAnnBndrs,
+        deAnnotate, deAnnotate', deAnnAlt,
+        collectAnnBndrs, collectNAnnBndrs,
 
         -- * Orphanhood
         IsOrphan(..), isOrphan, notOrphan, chooseOrphanAnchor,
@@ -81,7 +90,7 @@ module CoreSyn (
 
         -- ** Operations on 'CoreRule's
         ruleArity, ruleName, ruleIdName, ruleActivation,
-        setRuleIdName,
+        setRuleIdName, ruleModule,
         isBuiltinRule, isLocalRule, isAutoRule,
 
         -- * Core vectorisation declarations data type
@@ -106,7 +115,7 @@ import BasicTypes
 import DynFlags
 import Outputable
 import Util
-import UniqFM
+import UniqSet
 import SrcLoc     ( RealSrcSpan, containsSpan )
 import Binary
 
@@ -128,7 +137,7 @@ These data types are the heart of the compiler
 -}
 
 -- | This is the data type that represents GHCs core intermediate language. Currently
--- GHC uses System FC <http://research.microsoft.com/~simonpj/papers/ext-f/> for this purpose,
+-- GHC uses System FC <https://www.microsoft.com/en-us/research/publication/system-f-with-type-equality-coercions/> for this purpose,
 -- which is closely related to the simpler and better known System F <http://en.wikipedia.org/wiki/System_F>.
 --
 -- We get from Haskell source to this Core language in a number of stages:
@@ -169,10 +178,11 @@ These data types are the heart of the compiler
 -- *  Primitive literals
 --
 -- *  Applications: note that the argument may be a 'Type'.
---
---    See "CoreSyn#let_app_invariant" for another invariant
+--    See Note [CoreSyn let/app invariant]
+--    See Note [Levity polymorphism invariants]
 --
 -- *  Lambda abstraction
+--    See Note [Levity polymorphism invariants]
 --
 -- *  Recursive and non recursive @let@s. Operationally
 --    this corresponds to allocating a thunk for the things
@@ -183,9 +193,12 @@ These data types are the heart of the compiler
 --
 --    The right hand sides of all top-level and recursive @let@s
 --    /must/ be of lifted type (see "Type#type_classification" for
---    the meaning of /lifted/ vs. /unlifted/).
+--    the meaning of /lifted/ vs. /unlifted/). There is one exception
+--    to this rule, top-level @let@s are allowed to bind primitive
+--    string literals, see Note [CoreSyn top-level string literals].
 --
 --    See Note [CoreSyn let/app invariant]
+--    See Note [Levity polymorphism invariants]
 --
 --    #type_let#
 --    We allow a /non-recursive/ let to bind a type variable, thus:
@@ -199,7 +212,7 @@ These data types are the heart of the compiler
 --    in a Let expression, rather than at top level.  We may want to revist
 --    this choice.
 --
--- *  Case split. Operationally this corresponds to evaluating
+-- *  Case expression. Operationally this corresponds to evaluating
 --    the scrutinee (expression examined) to weak head normal form
 --    and then examining at most one level of resulting constructor (i.e. you
 --    cannot do nested pattern matching directly with this).
@@ -261,7 +274,7 @@ data Expr b
   | App   (Expr b) (Arg b)
   | Lam   b (Expr b)
   | Let   (Bind b) (Expr b)
-  | Case  (Expr b) b Type [Alt b]       -- See #case_invariant#
+  | Case  (Expr b) b Type [Alt b]       -- See #case_invariants#
   | Cast  (Expr b) Coercion
   | Tick  (Tickish Id) (Expr b)
   | Type  Type
@@ -294,6 +307,20 @@ data AltCon
 
   | DEFAULT           -- ^ Trivial alternative: @case e of { _ -> ... }@
    deriving (Eq, Data)
+
+-- This instance is a bit shady. It can only be used to compare AltCons for
+-- a single type constructor. Fortunately, it seems quite unlikely that we'll
+-- ever need to compare AltCons for different type constructors.
+instance Ord AltCon where
+  compare (DataAlt con1) (DataAlt con2) =
+    ASSERT( dataConTyCon con1 == dataConTyCon con2 )
+    compare (dataConTag con1) (dataConTag con2)
+  compare (DataAlt _) _ = LT
+  compare _ (DataAlt _) = GT
+  compare (LitAlt l1) (LitAlt l2) = compare l1 l2
+  compare (LitAlt _) DEFAULT = LT
+  compare DEFAULT DEFAULT = EQ
+  compare DEFAULT _ = GT
 
 -- | Binding, used for top level bindings in a module and local bindings in a @let@.
 
@@ -352,13 +379,59 @@ Note [CoreSyn letrec invariant]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 See #letrec_invariant#
 
+Note [CoreSyn top-level string literals]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+As an exception to the usual rule that top-level binders must be lifted,
+we allow binding primitive string literals (of type Addr#) of type Addr# at the
+top level. This allows us to share string literals earlier in the pipeline and
+crucially allows other optimizations in the Core2Core pipeline to fire.
+Consider,
+
+  f n = let a::Addr# = "foo"#
+        in \x -> blah
+
+In order to be able to inline `f`, we would like to float `a` to the top.
+Another option would be to inline `a`, but that would lead to duplicating string
+literals, which we want to avoid. See Trac #8472.
+
+The solution is simply to allow top-level unlifted binders. We can't allow
+arbitrary unlifted expression at the top-level though, unlifted binders cannot
+be thunks, so we just allow string literals.
+
+It is important to note that top-level primitive string literals cannot be
+wrapped in Ticks, as is otherwise done with lifted bindings. CoreToStg expects
+to see just a plain (Lit (MachStr ...)) expression on the RHS of primitive
+string bindings; anything else and things break. CoreLint checks this invariant.
+
+Also see Note [Compilation plan for top-level string literals].
+
+Note [Compilation plan for top-level string literals]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Here is a summary on how top-level string literals are handled by various
+parts of the compilation pipeline.
+
+* In the source language, there is no way to bind a primitive string literal
+  at the top leve.
+
+* In Core, we have a special rule that permits top-level Addr# bindings. See
+  Note [CoreSyn top-level string literals]. Core-to-core passes may introduce
+  new top-level string literals.
+
+* In STG, top-level string literals are explicitly represented in the syntax
+  tree.
+
+* A top-level string literal may end up exported from a module. In this case,
+  in the object file, the content of the exported literal is given a label with
+  the _bytes suffix.
+
 Note [CoreSyn let/app invariant]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 The let/app invariant
      the right hand side of a non-recursive 'Let', and
      the argument of an 'App',
     /may/ be of unlifted type, but only if
-    the expression is ok-for-speculation.
+    the expression is ok-for-speculation
+    or the 'Let' is for a join point.
 
 This means that the let can be floated around
 without difficulty. For example, this is OK:
@@ -375,11 +448,32 @@ In this situation you should use @case@ rather than a @let@. The function
 alternatively use 'MkCore.mkCoreLet' rather than this constructor directly,
 which will generate a @case@ if necessary
 
-Th let/app invariant is initially enforced by DsUtils.mkCoreLet and mkCoreApp
+The let/app invariant is initially enforced by mkCoreLet and mkCoreApp in
+coreSyn/MkCore.
 
 Note [CoreSyn case invariants]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 See #case_invariants#
+
+Note [Levity polymorphism invariants]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The levity-polymorphism invariants are these (as per "Levity Polymorphism",
+PLDI '17):
+
+* The type of a term-binder must not be levity-polymorphic,
+  unless it is a let(rec)-bound join point
+     (see Note [Invariants on join points])
+
+* The type of the argument of an App must not be levity-polymorphic.
+
+A type (t::TYPE r) is "levity polymorphic" if 'r' has any free variables.
+
+For example
+  \(r::RuntimeRep). \(a::TYPE r). \(x::a). e
+is illegal because x's type has kind (TYPE r), which has 'r' free.
+
+See Note [Levity polymorphism checking] in DsMonad to see where these
+invariants are established for user-written code.
 
 Note [CoreSyn let goal]
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -443,8 +537,231 @@ this exhaustive list can be empty!
   conversion; remember STG is un-typed, so there is no need for
   the empty case to do the type conversion.
 
+Note [Join points]
+~~~~~~~~~~~~~~~~~~
+In Core, a *join point* is a specially tagged function whose only occurrences
+are saturated tail calls. A tail call can appear in these places:
+
+  1. In the branches (not the scrutinee) of a case
+  2. Underneath a let (value or join point)
+  3. Inside another join point
+
+We write a join-point declaration as
+  join j @a @b x y = e1 in e2,
+like a let binding but with "join" instead (or "join rec" for "let rec"). Note
+that we put the parameters before the = rather than using lambdas; this is
+because it's relevant how many parameters the join point takes *as a join
+point.* This number is called the *join arity,* distinct from arity because it
+counts types as well as values. Note that a join point may return a lambda! So
+  join j x = x + 1
+is different from
+  join j = \x -> x + 1
+The former has join arity 1, while the latter has join arity 0.
+
+The identifier for a join point is called a join id or a *label.* An invocation
+is called a *jump.* We write a jump using the jump keyword:
+
+  jump j 3
+
+The words *label* and *jump* are evocative of assembly code (or Cmm) for a
+reason: join points are indeed compiled as labeled blocks, and jumps become
+actual jumps (plus argument passing and stack adjustment). There is no closure
+allocated and only a fraction of the function-call overhead. Hence we would
+like as many functions as possible to become join points (see OccurAnal) and
+the type rules for join points ensure we preserve the properties that make them
+efficient.
+
+In the actual AST, a join point is indicated by the IdDetails of the binder: a
+local value binding gets 'VanillaId' but a join point gets a 'JoinId' with its
+join arity.
+
+For more details, see the paper:
+
+  Luke Maurer, Paul Downen, Zena Ariola, and Simon Peyton Jones. "Compiling
+  without continuations." Submitted to PLDI'17.
+
+  https://www.microsoft.com/en-us/research/publication/compiling-without-continuations/
+
+Note [Invariants on join points]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Join points must follow these invariants:
+
+  1. All occurrences must be tail calls. Each of these tail calls must pass the
+     same number of arguments, counting both types and values; we call this the
+     "join arity" (to distinguish from regular arity, which only counts values).
+
+  2. For join arity n, the right-hand side must begin with at least n lambdas.
+     No ticks, no casts, just lambdas!  C.f. CoreUtils.joinRhsArity.
+
+  2a. Moreover, this same constraint applies to any unfolding of the binder.
+     Reason: if we want to push a continuation into the RHS we must push it
+     into the unfolding as well.
+
+  3. If the binding is recursive, then all other bindings in the recursive group
+     must also be join points.
+
+  4. The binding's type must not be polymorphic in its return type (as defined
+     in Note [The polymorphism rule of join points]).
+
+However, join points have simpler invariants in other ways
+
+  5. A join point can have an unboxed type without the RHS being
+     ok-for-speculation (i.e. drop the let/app invariant)
+     e.g.  let j :: Int# = factorial x in ...
+
+  6. A join point can have a levity-polymorphic RHS
+     e.g.  let j :: r :: TYPE l = fail void# in ...
+     This happened in an intermediate program Trac #13394
+
+Examples:
+
+  join j1  x = 1 + x in jump j (jump j x)  -- Fails 1: non-tail call
+  join j1' x = 1 + x in if even a
+                          then jump j1 a
+                          else jump j1 a b -- Fails 1: inconsistent calls
+  join j2  x = flip (+) x in j2 1 2        -- Fails 2: not enough lambdas
+  join j2' x = \y -> x + y in j3 1         -- Passes: extra lams ok
+  join j @a (x :: a) = x                   -- Fails 4: polymorphic in ret type
+
+Invariant 1 applies to left-hand sides of rewrite rules, so a rule for a join
+point must have an exact call as its LHS.
+
+Strictly speaking, invariant 3 is redundant, since a call from inside a lazy
+binding isn't a tail call. Since a let-bound value can't invoke a free join
+point, then, they can't be mutually recursive. (A Core binding group *can*
+include spurious extra bindings if the occurrence analyser hasn't run, so
+invariant 3 does still need to be checked.) For the rigorous definition of
+"tail call", see Section 3 of the paper (Note [Join points]).
+
+Invariant 4 is subtle; see Note [The polymorphism rule of join points].
+
+Core Lint will check these invariants, anticipating that any binder whose
+OccInfo is marked AlwaysTailCalled will become a join point as soon as the
+simplifier (or simpleOptPgm) runs.
+
+Note [The type of a join point]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A join point has the same type it would have as a function. That is, if it takes
+an Int and a Bool and its body produces a String, its type is `Int -> Bool ->
+String`. Natural as this may seem, it can be awkward. A join point shouldn't be
+thought to "return" in the same sense a function does---a jump is one-way. This
+is crucial for understanding how case-of-case interacts with join points:
+
+  case (join
+          j :: Int -> Bool -> String
+          j x y = ...
+        in
+          jump j z w) of
+    "" -> True
+    _  -> False
+
+The simplifier will pull the case into the join point (see Note [Case-of-case
+and join points] in Simplify):
+
+  join
+    j :: Int -> Bool -> Bool -- changed!
+    j x y = case ... of "" -> True
+                        _  -> False
+  in
+    jump j z w
+
+The body of the join point now returns a Bool, so the label `j` has to have its
+type updated accordingly. Inconvenient though this may be, it has the advantage
+that 'CoreUtils.exprType' can still return a type for any expression, including
+a jump.
+
+This differs from the paper (see Note [Invariants on join points]). In the
+paper, we instead give j the type `Int -> Bool -> forall a. a`. Then each jump
+carries the "return type" as a parameter, exactly the way other non-returning
+functions like `error` work:
+
+  case (join
+          j :: Int -> Bool -> forall a. a
+          j x y = ...
+        in
+          jump j z w @String) of
+    "" -> True
+    _  -> False
+
+Now we can move the case inward and we only have to change the jump:
+
+  join
+    j :: Int -> Bool -> forall a. a
+    j x y = case ... of "" -> True
+                        _  -> False
+  in
+    jump j z w @Bool
+
+(Core Lint would still check that the body of the join point has the right type;
+that type would simply not be reflected in the join id.)
+
+Note [The polymorphism rule of join points]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Invariant 4 of Note [Invariants on join points] forbids a join point to be
+polymorphic in its return type. That is, if its type is
+
+  forall a1 ... ak. t1 -> ... -> tn -> r
+
+where its join arity is k+n, none of the type parameters ai may occur free in r.
+The most direct explanation is that given
+
+  join j @a1 ... @ak x1 ... xn = e1 in e2
+
+our typing rules require `e1` and `e2` to have the same type. Therefore the type
+of `e1`---the return type of the join point---must be the same as the type of
+e2. Since the type variables aren't bound in `e2`, its type can't include them,
+and thus neither can the type of `e1`.
+
+There's a deeper explanation in terms of the sequent calculus in Section 5.3 of
+a previous paper:
+
+  Paul Downen, Luke Maurer, Zena Ariola, and Simon Peyton Jones. "Sequent
+  calculus as a compiler intermediate language." ICFP'16.
+
+  https://www.microsoft.com/en-us/research/wp-content/uploads/2016/04/sequent-calculus-icfp16.pdf
+
+The quick version: Consider the CPS term (the paper uses the sequent calculus,
+but we can translate readily):
+
+  \k -> join j @a1 ... @ak x1 ... xn = e1 k in e2 k
+
+Since `j` is a join point, it doesn't bind a continuation variable but reuses
+the variable `k` from the context. But the parameters `ai` are not in `k`'s
+scope, and `k`'s type determines the return type of `j`; thus the `ai`s don't
+appear in the return type of `j`. (Also, since `e1` and `e2` are passed the same
+continuation, they must have the same type; hence the direct explanation above.)
 
 ************************************************************************
+*                                                                      *
+            In/Out type synonyms
+*                                                                      *
+********************************************************************* -}
+
+{- Many passes apply a substitution, and it's very handy to have type
+   synonyms to remind us whether or not the substitution has been applied -}
+
+-- Pre-cloning or substitution
+type InBndr     = CoreBndr
+type InType     = Type
+type InKind     = Kind
+type InBind     = CoreBind
+type InExpr     = CoreExpr
+type InAlt      = CoreAlt
+type InArg      = CoreArg
+type InCoercion = Coercion
+
+-- Post-cloning or substitution
+type OutBndr     = CoreBndr
+type OutType     = Type
+type OutKind     = Kind
+type OutCoercion = Coercion
+type OutBind     = CoreBind
+type OutExpr     = CoreExpr
+type OutAlt      = CoreAlt
+type OutArg      = CoreArg
+
+
+{- *********************************************************************
 *                                                                      *
               Ticks
 *                                                                      *
@@ -504,7 +821,7 @@ data Tickish id =
   -- valid. Note that it is still undesirable though, as this reduces
   -- their usefulness for debugging and profiling. Therefore we will
   -- generally try only to make use of this property where it is
-  -- neccessary to enable optimizations.
+  -- necessary to enable optimizations.
   | SourceNote
     { sourceSpan :: RealSrcSpan -- ^ Source covered
     , sourceName :: String      -- ^ Name for source location
@@ -712,7 +1029,8 @@ tickishPlace SourceNote{}  = PlaceNonLam
 -- making the second tick redundant.
 tickishContains :: Eq b => Tickish b -> Tickish b -> Bool
 tickishContains (SourceNote sp1 n1) (SourceNote sp2 n2)
-  = n1 == n2 && containsSpan sp1 sp2
+  = containsSpan sp1 sp2 && n1 == n2
+    -- compare the String last
 tickishContains t1 t2
   = t1 == t2
 
@@ -748,7 +1066,7 @@ chooseOrphanAnchor :: NameSet -> IsOrphan
 -- Something (rule, instance) is relate to all the Names in this
 -- list. Choose one of them to be an "anchor" for the orphan.  We make
 -- the choice deterministic to avoid gratuitious changes in the ABI
--- hash (Trac #4012).  Specficially, use lexicographic comparison of
+-- hash (Trac #4012).  Specifically, use lexicographic comparison of
 -- OccName rather than comparing Uniques
 --
 -- NB: 'minimum' use Ord, and (Ord OccName) works lexicographically
@@ -757,7 +1075,7 @@ chooseOrphanAnchor local_names
   | isEmptyNameSet local_names = IsOrphan
   | otherwise                  = NotOrphan (minimum occs)
   where
-    occs = map nameOccName $ nonDetEltsUFM local_names
+    occs = map nameOccName $ nonDetEltsUniqSet local_names
     -- It's OK to use nonDetEltsUFM here, see comments above
 
 instance Binary IsOrphan where
@@ -795,7 +1113,7 @@ has two major consequences
       instance Eq T where ....
    The instance (Eq T) is incorprated as part of T's fingerprint.
 
-   In constrast, orphans are all fingerprinted together in the
+   In contrast, orphans are all fingerprinted together in the
    mi_orph_hash field of the ModIface.
 
    See MkIface.addFingerprints.
@@ -870,7 +1188,7 @@ data CoreRule
         -- Locality
         ru_auto :: Bool,   -- ^ @True@  <=> this rule is auto-generated
                            --               (notably by Specialise or SpecConstr)
-                           --   @False@ <=> generated at the users behest
+                           --   @False@ <=> generated at the user's behest
                            -- See Note [Trimming auto-rules] in TidyPgm
                            -- for the sole purpose of this field.
 
@@ -930,6 +1248,10 @@ ruleArity (Rule {ru_args = args})      = length args
 ruleName :: CoreRule -> RuleName
 ruleName = ru_name
 
+ruleModule :: CoreRule -> Maybe Module
+ruleModule Rule { ru_origin } = Just ru_origin
+ruleModule BuiltinRule {} = Nothing
+
 ruleActivation :: CoreRule -> Activation
 ruleActivation (BuiltinRule { })       = AlwaysActive
 ruleActivation (Rule { ru_act = act }) = act
@@ -980,8 +1302,8 @@ data Unfolding
 
   | BootUnfolding      -- ^ We have no information about the unfolding, because
                        -- this 'Id' came from an @hi-boot@ file.
-                       -- See Note [Inlining and hs-boot files] for what
-                       -- this is used for.
+                       -- See Note [Inlining and hs-boot files] in ToIface
+                       -- for what this is used for.
 
   | OtherCon [AltCon]  -- ^ It ain't one of these constructors.
                        -- @OtherCon xs@ also indicates that something has been evaluated
@@ -1061,7 +1383,7 @@ data UnfoldingSource
                        -- to the current RHS during compilation as with
                        -- InlineRhs.
                        --
-                       -- See Note [InlineRules]
+                       -- See Note [InlineStable]
 
   | InlineCompulsory   -- Something that *has* no binding, so you *must* inline it
                        -- Only a few primop-like things have this property
@@ -1076,7 +1398,7 @@ data UnfoldingGuidance
                 -- Used (a) for small *and* cheap unfoldings
                 --      (b) for INLINE functions
                 -- See Note [INLINE for small functions] in CoreUnfold
-      ug_arity    :: Arity,             -- Number of value arguments expected
+      ug_arity    :: Arity,     -- Number of value arguments expected
 
       ug_unsat_ok  :: Bool,     -- True <=> ok to inline even if unsaturated
       ug_boring_ok :: Bool      -- True <=> ok to inline even if the context is boring
@@ -1241,18 +1563,6 @@ expandUnfolding_maybe :: Unfolding -> Maybe CoreExpr
 expandUnfolding_maybe (CoreUnfolding { uf_expandable = True, uf_tmpl = rhs }) = Just rhs
 expandUnfolding_maybe _                                                       = Nothing
 
-hasStableCoreUnfolding_maybe :: Unfolding -> Maybe Bool
--- Just True  <=> has stable inlining, very keen to inline (eg. INLINE pragma)
--- Just False <=> has stable inlining, open to inlining it (eg. INLINABLE pragma)
--- Nothing    <=> not stable, or cannot inline it anyway
-hasStableCoreUnfolding_maybe (CoreUnfolding { uf_src = src, uf_guidance = guide })
-   | isStableSource src
-   = case guide of
-       UnfWhen {}       -> Just True
-       UnfIfGoodArgs {} -> Just False
-       UnfNever         -> Nothing
-hasStableCoreUnfolding_maybe _ = Nothing
-
 isCompulsoryUnfolding :: Unfolding -> Bool
 isCompulsoryUnfolding (CoreUnfolding { uf_src = InlineCompulsory }) = True
 isCompulsoryUnfolding _                                             = False
@@ -1263,11 +1573,6 @@ isStableUnfolding :: Unfolding -> Bool
 isStableUnfolding (CoreUnfolding { uf_src = src }) = isStableSource src
 isStableUnfolding (DFunUnfolding {})               = True
 isStableUnfolding _                                = False
-
-isClosedUnfolding :: Unfolding -> Bool          -- No free variables
-isClosedUnfolding (CoreUnfolding {}) = False
-isClosedUnfolding (DFunUnfolding {}) = False
-isClosedUnfolding _                  = True
 
 -- | Only returns False if there is no unfolding information available at all
 hasSomeUnfolding :: Unfolding -> Bool
@@ -1283,12 +1588,34 @@ neverUnfoldGuidance :: UnfoldingGuidance -> Bool
 neverUnfoldGuidance UnfNever = True
 neverUnfoldGuidance _        = False
 
+isFragileUnfolding :: Unfolding -> Bool
+-- An unfolding is fragile if it mentions free variables or
+-- is otherwise subject to change.  A robust one can be kept.
+-- See Note [Fragile unfoldings]
+isFragileUnfolding (CoreUnfolding {}) = True
+isFragileUnfolding (DFunUnfolding {}) = True
+isFragileUnfolding _                  = False
+  -- NoUnfolding, BootUnfolding, OtherCon are all non-fragile
+
 canUnfold :: Unfolding -> Bool
 canUnfold (CoreUnfolding { uf_guidance = g }) = not (neverUnfoldGuidance g)
 canUnfold _                                   = False
 
-{-
-Note [InlineRules]
+{- Note [Fragile unfoldings]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+An unfolding is "fragile" if it mentions free variables (and hence would
+need substitution) or might be affected by optimisation.  The non-fragile
+ones are
+
+   NoUnfolding, BootUnfolding
+
+   OtherCon {}    If we know this binder (say a lambda binder) will be
+                  bound to an evaluated thing, we want to retain that
+                  info in simpleOptExpr; see Trac #13077.
+
+We consider even a StableUnfolding as fragile, because it needs substitution.
+
+Note [InlineStable]
 ~~~~~~~~~~~~~~~~~
 When you say
       {-# INLINE f #-}
@@ -1325,7 +1652,7 @@ In unfoldings and rules, we guarantee that the template is occ-analysed,
 so that the occurrence info on the binders is correct.  This is important,
 because the Simplifier does not re-analyse the template when using it. If
 the occurrence info is wrong
-  - We may get more simpifier iterations than necessary, because
+  - We may get more simplifier iterations than necessary, because
     once-occ info isn't there
   - More seriously, we may get an infinite loop if there's a Rec
     without a loop breaker marked
@@ -1356,6 +1683,8 @@ ltAlt a1 a2 = (a1 `cmpAlt` a2) == LT
 
 cmpAltCon :: AltCon -> AltCon -> Ordering
 -- ^ Compares 'AltCon's within a single list of alternatives
+-- DEFAULT comes out smallest, so that sorting by AltCon
+-- puts alternatives in the order required by #case_invariants#
 cmpAltCon DEFAULT      DEFAULT     = EQ
 cmpAltCon DEFAULT      _           = LT
 
@@ -1431,11 +1760,6 @@ type TaggedAlt  t = Alt  (TaggedBndr t)
 instance Outputable b => Outputable (TaggedBndr b) where
   ppr (TB b l) = char '<' <> ppr b <> comma <> ppr l <> char '>'
 
-instance Outputable b => OutputableBndr (TaggedBndr b) where
-  pprBndr _ b = ppr b   -- Simple
-  pprInfixOcc  b = ppr b
-  pprPrefixOcc b = ppr b
-
 deTagExpr :: TaggedExpr t -> CoreExpr
 deTagExpr (Var v)                   = Var v
 deTagExpr (Lit l)                   = Lit l
@@ -1481,17 +1805,17 @@ mkCoApps  f args = foldl (\ e a -> App e (Coercion a)) f args
 mkVarApps f vars = foldl (\ e a -> App e (varToCoreExpr a)) f vars
 mkConApp con args = mkApps (Var (dataConWorkId con)) args
 
-mkTyApps  f args = foldl (\ e a -> App e (typeOrCoercion a)) f args
-  where
-    typeOrCoercion ty
-      | Just co <- isCoercionTy_maybe ty = Coercion co
-      | otherwise                        = Type ty
+mkTyApps  f args = foldl (\ e a -> App e (mkTyArg a)) f args
 
 mkConApp2 :: DataCon -> [Type] -> [Var] -> Expr b
 mkConApp2 con tys arg_ids = Var (dataConWorkId con)
                             `mkApps` map Type tys
                             `mkApps` map varToCoreExpr arg_ids
 
+mkTyArg :: Type -> Expr b
+mkTyArg ty
+  | Just co <- isCoercionTy_maybe ty = Coercion co
+  | otherwise                        = Type ty
 
 -- | Create a machine integer literal expression of type @Int#@ from an @Integer@.
 -- If you want an expression of type @Int@ use 'MkCore.mkIntExpr'
@@ -1558,8 +1882,23 @@ mkLets        :: [Bind b] -> Expr b -> Expr b
 mkLams        :: [b] -> Expr b -> Expr b
 
 mkLams binders body = foldr Lam body binders
-mkLets binds body   = foldr Let body binds
+mkLets binds body   = foldr mkLet body binds
 
+mkLet :: Bind b -> Expr b -> Expr b
+-- The desugarer sometimes generates an empty Rec group
+-- which Lint rejects, so we kill it off right away
+mkLet (Rec []) body = body
+mkLet bind     body = Let bind body
+
+-- | @mkLetNonRec bndr rhs body@ wraps @body@ in a @let@ binding @bndr@.
+mkLetNonRec :: b -> Expr b -> Expr b -> Expr b
+mkLetNonRec b rhs body = Let (NonRec b rhs) body
+
+-- | @mkLetRec binds body@ wraps @body@ in a @let rec@ with the given set of
+-- @binds@ if binds is non-empty.
+mkLetRec :: [(b, Expr b)] -> Expr b -> Expr b
+mkLetRec [] body = body
+mkLetRec bs body = Let (Rec bs) body
 
 -- | Create a binding group where a type variable is bound to a type. Per "CoreSyn#type_let",
 -- this can only be used to bind something in a non-recursive @let@ expression
@@ -1647,6 +1986,9 @@ collectBinders         :: Expr b   -> ([b],     Expr b)
 collectTyBinders       :: CoreExpr -> ([TyVar], CoreExpr)
 collectValBinders      :: CoreExpr -> ([Id],    CoreExpr)
 collectTyAndValBinders :: CoreExpr -> ([TyVar], [Id], CoreExpr)
+-- | Strip off exactly N leading lambdas (type or value). Good for use with
+-- join points.
+collectNBinders        :: Int -> Expr b -> ([b], Expr b)
 
 collectBinders expr
   = go [] expr
@@ -1671,6 +2013,13 @@ collectTyAndValBinders expr
   where
     (tvs, body1) = collectTyBinders expr
     (ids, body)  = collectValBinders body1
+
+collectNBinders orig_n orig_expr
+  = go orig_n [] orig_expr
+  where
+    go 0 bs expr      = (reverse bs, expr)
+    go n bs (Lam b e) = go (n-1) (b:bs) e
+    go _ _  _         = pprPanic "collectNBinders" $ int orig_n
 
 -- | Takes a nested application expression and returns the the function
 -- being applied and the arguments to which it is applied
@@ -1826,3 +2175,12 @@ collectAnnBndrs e
   where
     collect bs (_, AnnLam b body) = collect (b:bs) body
     collect bs body               = (reverse bs, body)
+
+-- | As 'collectNBinders' but for 'AnnExpr' rather than 'Expr'
+collectNAnnBndrs :: Int -> AnnExpr bndr annot -> ([bndr], AnnExpr bndr annot)
+collectNAnnBndrs orig_n e
+  = collect orig_n [] e
+  where
+    collect 0 bs body               = (reverse bs, body)
+    collect n bs (_, AnnLam b body) = collect (n-1) (b:bs) body
+    collect _ _  _                  = pprPanic "collectNBinders" $ int orig_n

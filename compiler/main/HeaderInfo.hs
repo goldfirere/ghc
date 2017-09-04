@@ -18,7 +18,6 @@ module HeaderInfo ( getImports
 
 #include "HsVersions.h"
 
-import RdrName
 import HscTypes
 import Parser           ( parseHeader )
 import Lexer
@@ -63,7 +62,9 @@ getImports :: DynFlags
 getImports dflags buf filename source_filename = do
   let loc  = mkRealSrcLoc (mkFastString filename) 1 1
   case unP parseHeader (mkPState dflags buf loc) of
-    PFailed span err -> parseError dflags span err
+    PFailed _ span err -> do
+        -- assuming we're not logging warnings here as per below
+      parseError dflags span err
     POk pst rdr_module -> do
       let _ms@(_warns, errs) = getMessages pst dflags
       -- don't log warnings: they'll be reported when we parse the file
@@ -74,8 +75,10 @@ getImports dflags buf filename source_filename = do
         then throwIO $ mkSrcErr errs
         else
           case rdr_module of
-            L _ (HsModule mb_mod _ imps _ _ _) ->
+            L _ hsmod ->
               let
+                mb_mod = hsmodName hsmod
+                imps = hsmodImports hsmod
                 main_loc = srcLocSpan (mkSrcLoc (mkFastString source_filename) 1 1)
                 mod = mb_mod `orElse` L main_loc mAIN_NAME
                 (src_idecls, ord_idecls) = partition (ideclSource.unLoc) imps
@@ -95,9 +98,9 @@ getImports dflags buf filename source_filename = do
 
 mkPrelImports :: ModuleName
               -> SrcSpan    -- Attribute the "import Prelude" to this location
-              -> Bool -> [LImportDecl RdrName]
-              -> [LImportDecl RdrName]
--- Consruct the implicit declaration "import Prelude" (or not)
+              -> Bool -> [LImportDecl GhcPs]
+              -> [LImportDecl GhcPs]
+-- Construct the implicit declaration "import Prelude" (or not)
 --
 -- NB: opt_NoImplicitPrelude is slightly different to import Prelude ();
 -- because the former doesn't even look at Prelude.hi for instance
@@ -115,9 +118,9 @@ mkPrelImports this_mod loc implicit_prelude import_decls
                           <- import_decls
                       , unLoc mod == pRELUDE_NAME ]
 
-      preludeImportDecl :: LImportDecl RdrName
+      preludeImportDecl :: LImportDecl GhcPs
       preludeImportDecl
-        = L loc $ ImportDecl { ideclSourceSrc = Nothing,
+        = L loc $ ImportDecl { ideclSourceSrc = NoSourceText,
                                ideclName      = L loc pRELUDE_NAME,
                                ideclPkgQual   = Nothing,
                                ideclSource    = False,

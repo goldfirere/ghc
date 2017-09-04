@@ -7,12 +7,11 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef RETAINERSET_H
-#define RETAINERSET_H
+#pragma once
 
 #include <stdio.h>
 
-#ifdef PROFILING
+#if defined(PROFILING)
 
 #include "BeginPrivate.h"
 
@@ -42,16 +41,16 @@
 #define RETAINER_SCHEME_CCS
 // #define RETAINER_SCHEME_CC
 
-#ifdef RETAINER_SCHEME_INFO
+#if defined(RETAINER_SCHEME_INFO)
 struct _StgInfoTable;
 typedef struct _StgInfoTable *retainer;
 #endif
 
-#ifdef RETAINER_SCHEME_CCS
+#if defined(RETAINER_SCHEME_CCS)
 typedef CostCentreStack *retainer;
 #endif
 
-#ifdef RETAINER_SCHEME_CC
+#if defined(RETAINER_SCHEME_CC)
 typedef CostCentre *retainer;
 #endif
 
@@ -68,7 +67,7 @@ typedef struct _RetainerSet {
   struct _RetainerSet *link;    // link to the next retainer set in the bucket
   int id;   // unique id of this retainer set (used when printing)
             // Its absolute value is interpreted as its true id; if id is
-            // negative, it indicates that this retainer set has had a postive
+            // negative, it indicates that this retainer set has had a positive
             // cost after some retainer profiling.
   retainer element[0];          // elements of this retainer set
   // do not put anything below here!
@@ -84,7 +83,7 @@ typedef struct _RetainerSet {
     that in the first approach, we do not free the memory allocated for
     retainer sets; we just invalidate all retainer sets.
  */
-#ifdef DEBUG_RETAINER
+#if defined(DEBUG_RETAINER)
 // In thise case, FIRST_APPROACH must be turned on because the memory pool
 // for retainer sets is freed each time.
 #define FIRST_APPROACH
@@ -107,7 +106,7 @@ RetainerSet *singleton(retainer r);
 
 extern RetainerSet rs_MANY;
 
-// Checks if a given retainer is a memeber of the retainer set.
+// Checks if a given retainer is a member of the retainer set.
 //
 // Note & (maybe) Todo:
 //   This function needs to be declared as an inline function, so it is declared
@@ -116,9 +115,9 @@ extern RetainerSet rs_MANY;
 //   it is not easy either to write it as a macro (due to my lack of C
 //   programming experience). Sungwoo
 //
-// rtsBool isMember(retainer, retainerSet *);
+// bool isMember(retainer, retainerSet *);
 /*
-  Returns rtsTrue if r is a member of *rs.
+  Returns true if r is a member of *rs.
   Invariants:
     rs is not NULL.
   Note:
@@ -129,19 +128,19 @@ extern RetainerSet rs_MANY;
  */
 
 #define BINARY_SEARCH_THRESHOLD   8
-INLINE_HEADER rtsBool
+INLINE_HEADER bool
 isMember(retainer r, RetainerSet *rs)
 {
   int i, left, right;       // must be int, not uint32_t (because -1 can appear)
   retainer ri;
 
-  if (rs == &rs_MANY) { return rtsTrue; }
+  if (rs == &rs_MANY) { return true; }
 
   if (rs->num < BINARY_SEARCH_THRESHOLD) {
     for (i = 0; i < (int)rs->num; i++) {
       ri = rs->element[i];
-      if (r == ri) return rtsTrue;
-      else if (r < ri) return rtsFalse;
+      if (r == ri) return true;
+      else if (r < ri) return false;
     }
   } else {
     left = 0;
@@ -149,18 +148,18 @@ isMember(retainer r, RetainerSet *rs)
     while (left <= right) {
       i = (left + right) / 2;
       ri = rs->element[i];
-      if (r == ri) return rtsTrue;
+      if (r == ri) return true;
       else if (r < ri) right = i - 1;
       else left = i + 1;
     }
   }
-  return rtsFalse;
+  return false;
 }
 
 // Finds or creates a retainer set augmented with a new retainer.
 RetainerSet *addElement(retainer, RetainerSet *);
 
-#ifdef SECOND_APPROACH
+#if defined(SECOND_APPROACH)
 // Prints a single retainer set.
 void printRetainerSetShort(FILE *, RetainerSet *, uint32_t);
 #endif
@@ -169,7 +168,7 @@ void printRetainerSetShort(FILE *, RetainerSet *, uint32_t);
 // store the sum of all costs and the number of all retainer sets.
 void outputRetainerSet(FILE *, uint32_t *, uint32_t *);
 
-#ifdef SECOND_APPROACH
+#if defined(SECOND_APPROACH)
 // Print all retainer sets at the exit of the program.
 void outputAllRetainerSet(FILE *);
 #endif
@@ -194,4 +193,3 @@ void outputAllRetainerSet(FILE *);
 #include "EndPrivate.h"
 
 #endif /* PROFILING */
-#endif /* RETAINERSET_H */

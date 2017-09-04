@@ -106,7 +106,6 @@ loadRegOffs = vcat . map (uncurry assign_stk_to_reg)
 saveRegOffs :: [(Reg,Int)] -> Doc
 saveRegOffs = vcat . map (uncurry assign_reg_to_stk)
 
--- a bit like assignRegs in CgRetConv.lhs
 assignRegs
         :: RegStatus            -- are we registerised?
         -> Int                  -- Sp of first arg
@@ -258,7 +257,7 @@ stackCheck regstatus args args_in_regs fun_info_label (prof_sp, norm_sp) =
           char '}'
        | otherwise = empty
   in
-  vcat [ text "#ifdef PROFILING",
+  vcat [ text "#if defined(PROFILING)",
          cmp_sp prof_sp,
          text "#else",
          cmp_sp norm_sp,
@@ -332,7 +331,7 @@ genMkPAP regstatus macro jump live ticker disamb
 
                 -- for a PAP, we have to arrange that the stack contains a
                 -- return address in the event that stg_PAP_entry fails its
-                -- heap check.  See stg_PAP_entry in Apply.hc for details.
+                -- heap check.  See stg_PAP_entry in Apply.cmm for details.
              if is_pap
                 then text "R2 = " <> mkApplyInfoName this_call_args <> semi
 
@@ -393,7 +392,7 @@ genMkPAP regstatus macro jump live ticker disamb
 
         shuffle_extra_args = (doc, (shuffle_prof_stack, shuffle_norm_stack))
           where
-           doc = vcat [ text "#ifdef PROFILING",
+           doc = vcat [ text "#if defined(PROFILING)",
                         shuffle_prof_doc,
                         text "#else",
                         shuffle_norm_doc,
@@ -524,7 +523,7 @@ enterFastPath regstatus no_load_regs args_in_regs args
     = enterFastPathHelper tag regstatus no_load_regs args_in_regs args
 enterFastPath _ _ _ _ = empty
 
--- Copied from Constants.lhs & CgUtils.hs, i'd rather have this imported:
+-- Copied from Constants.hs & CgUtils.hs, i'd rather have this imported:
 -- (arity,tag)
 tAG_BITS = (TAG_BITS :: Int)
 tAG_BITS_MAX = ((1 `shiftL` tAG_BITS) :: Int)
@@ -903,7 +902,7 @@ genStackApply regstatus args =
 -- These code fragments are used to save registers on the stack at a heap
 -- check failure in the entry code for a function.  We also have to save R1
 -- and the return address (stg_gc_fun_info) on the stack.  See stg_gc_fun_gen
--- in HeapStackCheck.hc for more details.
+-- in HeapStackCheck.cmm for more details.
 
 mkStackSaveEntryLabel :: [ArgRep] -> Doc
 mkStackSaveEntryLabel args = text "stg_stk_save_" <> text (concatMap showArg args)
@@ -925,7 +924,8 @@ genStackSave regstatus args =
                 ]
 
    std_frame_size = 3 -- the std bits of the frame. See StgRetFun in Closures.h,
-                      -- and the comment on stg_fun_gc_gen in HeapStackCheck.hc.
+                      -- and the comment on stg_fun_gc_gen
+                      -- in HeapStackCheck.cmm.
    (reg_locs, leftovers, sp_offset) = assignRegs regstatus std_frame_size args
 
    -- number of words of arguments on the stack.
@@ -994,7 +994,7 @@ applyTypes = [
 --
 --  NOTE: other places to change if you change stackApplyTypes:
 --       - includes/rts/storage/FunTypes.h
---       - compiler/codeGen/CgCallConv.lhs: stdPattern
+--       - compiler/codeGen/StgCmmLayout.hs: stdPattern
 stackApplyTypes = [
         [],
         [N],

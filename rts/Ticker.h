@@ -6,8 +6,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef TICKER_H
-#define TICKER_H
+#pragma once
 
 #include "BeginPrivate.h"
 
@@ -16,8 +15,6 @@ typedef void (*TickProc)(int);
 void initTicker  (Time interval, TickProc handle_tick);
 void startTicker (void);
 void stopTicker  (void);
-void exitTicker  (rtsBool wait);
+void exitTicker  (bool wait);
 
 #include "EndPrivate.h"
-
-#endif /* TICKER_H */

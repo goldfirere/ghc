@@ -32,36 +32,41 @@ A single fixed-width event emitted during program start-up describing the sample
    * ``Word8``: Profile ID
    * ``Word64``: Sampling period in nanoseconds
    * ``Word32``: Sample break-down type. One of,
+
       * ``SAMPLE_TYPE_COST_CENTER`` (output from ``-hc``)
       * ``SAMPLE_TYPE_CLOSURE_DESCR`` (output from ``-hd``)
       * ``SAMPLE_TYPE_RETAINER`` (output from ``-hr``)
       * ``SAMPLE_TYPE_MODULE`` (output from ``-hm``)
       * ``SAMPLE_TYPE_TYPE_DESCR`` (output from ``-hy``)
       * ``SAMPLE_TYPE_BIOGRAPHY`` (output from ``-hb``)
-   * ``String``: Cost centre filter
-   * ``String``: Closure description filter
-   * ``String``: Retainer filter
-   * ``String``: Module filter
-   * ``String``: Type description filter
 
-Cost center definitions
+   * ``String``: Module filter
+   * ``String``: Closure description filter
+   * ``String``: Type description filter
+   * ``String``: Cost centre filter
+   * ``String``: Cost centre stack filter
+   * ``String``: Retainer filter
+   * ``String``: Biography filter
+
+Cost centre definitions
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-A variable-length packet produced once for each cost center,
+A variable-length packet produced once for each cost centre,
 
  * ``EVENT_HEAP_PROF_COST_CENTRE``
-   * ``Word32``: cost center number
+   * ``Word32``: cost centre number
    * ``String``: label
    * ``String``: module
    * ``String``: source location
    * ``Word8``: flags
-     * bit 0: is the cost-center a CAF?
+
+     * bit 0: is the cost-centre a CAF?
 
 
 Sample event types
 ~~~~~~~~~~~~~~~~~~
 
-A sample (consisting of a list of break-down classes, e.g. cost centers, and
+A sample (consisting of a list of break-down classes, e.g. cost centres, and
 heap residency sizes), is to be encoded in the body of one or more events.
 
 We mark the beginning of a new sample with an ``EVENT_HEAP_PROF_SAMPLE_BEGIN``
@@ -76,18 +81,17 @@ in length a single sample may need to be split among multiple
 determined by the break-down type.
 
 
-Cost-center break-down
+Cost-centre break-down
 ^^^^^^^^^^^^^^^^^^^^^^
 
 A variable-length packet encoding a heap profile sample broken down by,
- * cost-center (``-hc``)
- * retainer (``-hr``)
+ * cost-centre (``-hc``)
 
- * ``EVENT_HEAP_PROF_SAMPLE``
+ * ``EVENT_HEAP_PROF_SAMPLE_COST_CENTRE``
    * ``Word8``: Profile ID
    * ``Word64``: heap residency in bytes
    * ``Word8``: stack depth
-   * ``Word32[]``: cost center stack starting with inner-most (cost center numbers)
+   * ``Word32[]``: cost centre stack starting with inner-most (cost centre numbers)
 
 
 String break-down
@@ -98,22 +102,7 @@ A variable-length event encoding a heap sample broken down by,
  * closure description (``-hd``)
  * module (``-hm``)
 
- * ``EVENT_HEAP_PROF_SAMPLE``
+ * ``EVENT_HEAP_PROF_SAMPLE_STRING``
    * ``Word8``: Profile ID
-   * The event shall contain packed pairs of,
-     * ``String``: type description
-     * ``Word64``: heap residency in bytes
-
-
-Biography break-down
-^^^^^^^^^^^^^^^^^^^^
-
-A fixed-length event encoding a biography heap sample.
-
- * ``EVENT_HEAP_PROF_SAMPLE``
-   * ``Word8``: Profile ID
-   * ``Word64``: Void
-   * ``Word64``: Lag
-   * ``Word64``: Use
-   * ``Word64``: Inherent use
-   * ``Word64``: Drag
+   * ``Word64``: heap residency in bytes
+   * ``String``: type or closure description, or module name

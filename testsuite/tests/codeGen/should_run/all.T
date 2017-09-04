@@ -70,8 +70,7 @@ test('cgrun063', normal, compile_and_run, [''])
 test('cgrun064', normal, compile_and_run, [''])
 test('cgrun065', normal, compile_and_run, [''])
 test('cgrun066', normal, compile_and_run, [''])
-test('cgrun067', extra_clean(['Cgrun067A.hi', 'Cgrun067A.o']),
-     compile_and_run, [''])
+test('cgrun067', [extra_files(['Cgrun067A.hs'])], compile_and_run, [''])
 test('cgrun068', reqlib('random'), compile_and_run, [''])
 test('cgrun069', omit_ways(['ghci']), multi_compile_and_run,
                  ['cgrun069', [('cgrun069_cmm.cmm', '')], ''])
@@ -135,8 +134,11 @@ test('cgrun074', normal, compile_and_run, [''])
 test('CmmSwitchTest32', unless(wordsize(32), skip), compile_and_run, [''])
 test('CmmSwitchTest64', unless(wordsize(64), skip), compile_and_run, [''])
 # Skipping WAY=ghci, because it is not broken.
-test('T10245', [omit_ways(['ghci']), expect_broken(10246)], compile_and_run, [''])
-test('T10246', expect_broken(10246), compile_and_run, [''])
+test('T10245', normal, compile_and_run, [''])
+test('T10246', normal, compile_and_run, [''])
+test('T9533', normal, compile_and_run, [''])
+test('T9533b', normal, compile_and_run, [''])
+test('T9533c', normal, compile_and_run, [''])
 test('T10414', [only_ways(['threaded2']), extra_ways(['threaded2']), req_smp],
      compile_and_run, ['-feager-blackholing'])
 test('T10521', normal, compile_and_run, [''])
@@ -146,4 +148,13 @@ test('PopCnt', omit_ways(['ghci']), multi_compile_and_run,
                  ['PopCnt', [('PopCnt_cmm.cmm', '')], ''])
 test('T12059', normal, compile_and_run, [''])
 test('T12433', normal, compile_and_run, [''])
+test('T12622', expect_broken_for(13481, ['ghci']), multimod_compile_and_run, ['T12622', '-O'])
 test('T12757', normal, compile_and_run, [''])
+test('T12855', normal, compile_and_run, [''])
+test('T9577', [ unless(arch('x86_64') or arch('i386'),skip),
+                when(opsys('darwin'), expect_broken(12937)),
+                when(opsys('mingw32'), expect_broken(12965)),
+                only_ways(['normal']) ], compile_and_run, [''])
+
+test('T13425', normal, compile_and_run, ['-O'])
+test('castFloatWord', normal, compile_and_run, ['-dcmm-lint'])

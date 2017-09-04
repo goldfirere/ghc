@@ -49,10 +49,15 @@ Although not recommended, the deprecated :ghc-flag:`-fglasgow-exts` flag enables
 a large swath of the extensions supported by GHC at once.
 
 .. ghc-flag:: -fglasgow-exts
+    :shortdesc: Deprecated. Enable most language extensions;
+        see :ref:`options-language` for exactly which ones.
+    :type: dynamic
+    :reverse: -fno-glasgow-exts
+    :category:
 
     The flag ``-fglasgow-exts`` is equivalent to enabling the following extensions:
 
-    .. include:: what_glasgow_exts_does.gen.rst
+    .. include:: what_glasgow_exts_does.rst
 
     Enabling these options is the *only* effect of ``-fglasgow-exts``. We are trying
     to move away from this portmanteau flag, and towards enabling features
@@ -73,7 +78,7 @@ case. And if it isn't, we'd like to know about it.
 
 All these primitive data types and operations are exported by the
 library ``GHC.Prim``, for which there is
-:ghc-prim-ref:`detailed online documentation <GHC-Prim.html>`. (This
+:ghc-prim-ref:`detailed online documentation <GHC.Prim.>`. (This
 documentation is generated from the file ``compiler/prelude/primops.txt.pp``.)
 
 If you want to mention any of the primitive data types or operations in
@@ -146,7 +151,7 @@ specifies their runtime representation. For example, the type ``Int#`` has
 kind ``TYPE 'IntRep`` and ``Double#`` has kind ``TYPE 'DoubleRep``. These
 kinds say that the runtime representation of an ``Int#`` is a machine integer,
 and the runtime representation of a ``Double#`` is a machine double-precision
-floating point. In constrast, the kind ``*`` is actually just a synonym
+floating point. In contrast, the kind ``*`` is actually just a synonym
 for ``TYPE 'PtrRepLifted``. More details of the ``TYPE`` mechanisms appear in
 the `section on runtime representation polymorphism <#runtime-rep>`__.
 
@@ -175,8 +180,9 @@ There are some restrictions on the use of primitive types:
    binding.
 
 -  You may bind unboxed variables in a (non-recursive, non-top-level)
-   pattern binding, but you must make any such pattern-match strict. For
-   example, rather than:
+   pattern binding, but you must make any such pattern-match strict.
+   (Failing to do so emits a warning :ghc-flag:`-Wunbanged-strict-patterns`.)
+   For example, rather than:
 
    ::
 
@@ -200,6 +206,12 @@ Unboxed tuples
 --------------
 
 .. ghc-flag:: -XUnboxedTuples
+    :shortdesc: Enable :ref:`unboxed tuples <unboxed-tuples>`.
+    :type: dynamic
+    :reverse: -XNoUnboxedTuples
+    :category:
+
+    :since: 6.8.1
 
     Enable the use of unboxed tuple syntax.
 
@@ -226,10 +238,6 @@ In particular, the ``IO`` and ``ST`` monads use unboxed tuples to avoid
 unnecessary allocation during sequences of operations.
 
 There are some restrictions on the use of unboxed tuples:
-
--  Values of unboxed tuple types are subject to the same restrictions as
-   other unboxed types; i.e. they may not be stored in polymorphic data
-   structures or passed to polymorphic functions.
 
 -  The typical use of unboxed tuples is simply to return multiple
    values, binding those multiple results with a ``case`` expression,
@@ -265,6 +273,12 @@ Unboxed sums
 ------------
 
 .. ghc-flag:: -XUnboxedSums
+    :shortdesc: Enable :ref: `unboxed sums <unboxed-sums>`.
+    :type: dynamic
+    :reverse: -XNoUnboxedSums
+    :category:
+
+    :since: 8.2.1
 
     Enable the use of unboxed sum syntax.
 
@@ -347,6 +361,12 @@ Unicode syntax
 --------------
 
 .. ghc-flag:: -XUnicodeSyntax
+    :shortdesc: Enable :ref:`unicode syntax <unicode-syntax>`.
+    :type: dynamic
+    :reverse: -XNoUnicodeSyntax
+    :category:
+
+    :since: 6.8.1
 
     Enable the use of Unicode characters in place of their equivalent ASCII
     sequences.
@@ -394,6 +414,12 @@ The magic hash
 --------------
 
 .. ghc-flag:: -XMagicHash
+    :shortdesc: Allow ``#`` as a :ref:`postfix modifier on identifiers <magic-hash>`.
+    :type: dynamic
+    :reverse: -XNoMagicHash
+    :category:
+
+    :since: 6.8.1
 
     Enable the use of the hash character (``#``) as an identifier suffix.
 
@@ -436,6 +462,10 @@ Negative literals
 -----------------
 
 .. ghc-flag:: -XNegativeLiterals
+    :shortdesc: Enable support for :ref:`negative literals <negative-literals>`.
+    :type: dynamic
+    :reverse: -XNoNegativeLiterals
+    :category:
 
     :since: 7.8.1
 
@@ -457,6 +487,10 @@ Fractional looking integer literals
 -----------------------------------
 
 .. ghc-flag:: -XNumDecimals
+    :shortdesc: Enable support for 'fractional' integer literals.
+    :type: dynamic
+    :reverse: -XNoNumDecimals
+    :category:
 
     :since: 7.8.1
 
@@ -475,6 +509,10 @@ Binary integer literals
 -----------------------
 
 .. ghc-flag:: -XBinaryLiterals
+    :shortdesc: Enable support for :ref:`binary literals <binary-literals>`.
+    :type: dynamic
+    :reverse: -XNoBinaryLiterals
+    :category:
 
     :since: 7.10.1
 
@@ -495,6 +533,11 @@ Pattern guards
 --------------
 
 .. ghc-flag:: -XNoPatternGuards
+    :shortdesc: Disable :ref:`pattern guards <pattern-guards>`.
+        Implied by :ghc-flag:`-XHaskell98`.
+    :type: dynamic
+    :reverse: -XPatternGuards
+    :category:
 
     :implied by: :ghc-flag:`-XHaskell98`
     :since: 6.8.1
@@ -508,6 +551,12 @@ View patterns
 -------------
 
 .. ghc-flag:: -XViewPatterns
+    :shortdesc: Enable :ref:`view patterns <view-patterns>`.
+    :type: dynamic
+    :reverse: -XNoViewPatterns
+    :category:
+
+    :since: 6.10.1
 
     Allow use of view pattern syntax.
 
@@ -646,9 +695,14 @@ n+k patterns
 ------------
 
 .. ghc-flag:: -XNPlusKPatterns
+    :shortdesc: Enable support for ``n+k`` patterns.
+        Implied by :ghc-flag:`-XHaskell98`.
+    :type: dynamic
+    :reverse: -XNoNPlusKPatterns
+    :category:
 
     :implied by: :ghc-flag:`-XHaskell98`
-    :since: 6.12
+    :since: 6.12.1
 
     Enable use of ``n+k`` patterns.
 
@@ -658,6 +712,12 @@ The recursive do-notation
 -------------------------
 
 .. ghc-flag:: -XRecursiveDo
+    :shortdesc: Enable :ref:`recursive do (mdo) notation <recursive-do-notation>`.
+    :type: dynamic
+    :reverse: -XNoRecursiveDo
+    :category:
+
+    :since: 6.8.1
 
     Allow the use of recursive ``do`` notation.
 
@@ -870,6 +930,10 @@ Applicative do-notation
    single: do-notation; Applicative
 
 .. ghc-flag:: -XApplicativeDo
+    :shortdesc: Enable :ref:`Applicative do-notation desugaring <applicative-do>`
+    :type: dynamic
+    :reverse: -XNoApplicativeDo
+    :category:
 
     :since: 8.0.1
 
@@ -931,6 +995,7 @@ is as follows. If the do-expression has the following form: ::
     do p1 <- E1; ...; pn <- En; return E
 
 where none of the variables defined by ``p1...pn`` are mentioned in ``E1...En``,
+and ``p1...pn`` are all variables or lazy patterns,
 then the expression will only require ``Applicative``. Otherwise, the expression
 will require ``Monad``. The block may return a pure expression ``E`` depending
 upon the results ``p1...pn`` with either ``return`` or ``pure``.
@@ -959,6 +1024,10 @@ cases it might miss an opportunity.  There is an algorithm that finds
 the optimal solution, provided as an option:
 
 .. ghc-flag:: -foptimal-applicative-do
+    :shortdesc: Use a slower but better algorithm for ApplicativeDo
+    :type: dynamic
+    :reverse: -fno-optimal-applicative-do
+    :category: optimization
 
     :since: 8.0.1
 
@@ -968,6 +1037,82 @@ the optimal solution, provided as an option:
     expensive: ``O(n^3)``, so this option can lead to long compile
     times when there are very large ``do`` expressions (over 100
     statements).  The default ``ApplicativeDo`` algorithm is ``O(n^2)``.
+
+
+.. _applicative-do-strict:
+
+Strict patterns
+~~~~~~~~~~~~~~~
+
+
+A strict pattern match in a bind statement prevents
+``ApplicativeDo`` from transforming that statement to use
+``Applicative``.  This is because the transformation would change the
+semantics by making the expression lazier.
+
+For example, this code will require a ``Monad`` constraint::
+
+    > :t \m -> do { (x:xs) <- m; return x }
+    \m -> do { (x:xs) <- m; return x } :: Monad m => m [b] -> m b
+
+but making the pattern match lazy allows it to have a ``Functor`` constraint::
+
+    > :t \m -> do { ~(x:xs) <- m; return x }
+    \m -> do { ~(x:xs) <- m; return x } :: Functor f => f [b] -> f b
+
+A "strict pattern match" is any pattern match that can fail.  For
+example, ``()``, ``(x:xs)``, ``!z``, and ``C x`` are strict patterns,
+but ``x`` and ``~(1,2)`` are not.  For the purposes of
+``ApplicativeDo``, a pattern match against a ``newtype`` constructor
+is considered strict.
+
+When there's a strict pattern match in a sequence of statements,
+``ApplicativeDo`` places a ``>>=`` between that statement and the one
+that follows it.  The sequence may be transformed to use ``<*>``
+elsewhere, but the strict pattern match and the following statement
+will always be connected with ``>>=``, to retain the same strictness
+semantics as the standard do-notation.  If you don't want this, simply
+put a ``~`` on the pattern match to make it lazy.
+
+.. _applicative-do-existential:
+
+Existential patterns and GADTs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When the pattern in a statement matches a constructor with
+existential type variables and/or constraints, the transformation that
+``ApplicativeDo`` performs may mean that the pattern does not scope
+over the statements that follow it.  This is because the rearrangement
+happens before the expression is typechecked.  For example, this
+program does not typecheck::
+
+    {-# LANGUAGE RankNTypes, GADTs, ApplicativeDo #-}
+
+    data T where A :: forall a . Eq a => a -> T
+
+    test = do
+      A x <- undefined
+      _ <- return 'a'
+      _ <- return 'b'
+      return (x == x)
+
+The reason is that the ``Eq`` constraint that would be brought into
+scope from the pattern match ``A x`` is not available when
+typechecking the expression ``x == x``, because ``ApplicativeDo`` has
+rearranged the expression to look like this::
+
+    test =
+      (\x _ -> x == x)
+        <$> do A x <- undefined; _ <- return 'a'; return x
+        <*> return 'b'
+
+(Note that the ``return 'a'`` and ``return 'b'`` statements are needed
+to make ``ApplicativeDo`` apply despite the restriction noted in
+:ref:`applicative-do-strict`, because ``A x`` is a strict pattern match.)
+
+Turning off ``ApplicativeDo`` lets the program typecheck.  This is
+something to bear in mind when using ``ApplicativeDo`` in combination
+with :ref:`existential-quantification` or :ref:`gadt`.
 
 .. _applicative-do-pitfall:
 
@@ -1019,6 +1164,14 @@ Parallel List Comprehensions
    single: parallel list comprehensions
 
 .. ghc-flag:: -XParallelListComp
+    :shortdesc: Enable :ref:`parallel list comprehensions
+        <parallel-list-comprehensions>`.
+        Implied by :ghc-flag:`-XParallelArrays`.
+    :type: dynamic
+    :reverse: -XNoParallelListComp
+    :category:
+
+    :since: 6.8.1
 
     Allow parallel list comprehension syntax.
 
@@ -1068,6 +1221,13 @@ Generalised (SQL-like) List Comprehensions
    single: SQL
 
 .. ghc-flag:: -XTransformListComp
+    :shortdesc: Enable :ref:`generalised list comprehensions
+        <generalised-list-comprehensions>`.
+    :type: dynamic
+    :reverse: -XNoTransformListComp
+    :category:
+
+    :since: 6.10.1
 
     Allow use of generalised list (SQL-like) comprehension syntax. This
     introduces the ``group``, ``by``, and ``using`` keywords.
@@ -1076,7 +1236,7 @@ Generalised list comprehensions are a further enhancement to the list
 comprehension syntactic sugar to allow operations such as sorting and
 grouping which are familiar from SQL. They are fully described in the
 paper `Comprehensive comprehensions: comprehensions with "order by" and
-"group by" <http://research.microsoft.com/~simonpj/papers/list-comp>`__,
+"group by" <https://www.microsoft.com/en-us/research/wp-content/uploads/2007/09/list-comp.pdf>`__,
 except that the syntax we use differs slightly from the paper.
 
 The extension is enabled with the flag :ghc-flag:`-XTransformListComp`.
@@ -1206,8 +1366,12 @@ Monad comprehensions
    single: monad comprehensions
 
 .. ghc-flag:: -XMonadComprehensions
+    :shortdesc: Enable :ref:`monad comprehensions <monad-comprehensions>`.
+    :type: dynamic
+    :reverse: -XNoMonadComprehensions
+    :category:
 
-    :since: 7.2
+    :since: 7.2.1
 
     Enable list comprehension syntax for arbitrary monads.
 
@@ -1268,7 +1432,7 @@ Monad comprehensions support:
 
    Parallel statements are translated using the ``mzip`` function, which
    requires a ``MonadZip`` instance defined in
-   :base-ref:`Control.Monad.Zip <Control-Monad-Zip.html>`:
+   :base-ref:`Control.Monad.Zip.`:
 
    ::
 
@@ -1368,6 +1532,10 @@ New monadic failure desugaring mechanism
 ----------------------------------------
 
 .. ghc-flag:: -XMonadFailDesugaring
+    :shortdesc: Enable :ref:`monadfail desugaring <monadfail-desugaring>`.
+    :type: dynamic
+    :reverse: -XNoMonadFailDesugaring
+    :category:
 
     :since: 8.0.1
 
@@ -1390,6 +1558,13 @@ Rebindable syntax and the implicit Prelude import
 -------------------------------------------------
 
 .. ghc-flag:: -XNoImplicitPrelude
+    :shortdesc: Don't implicitly ``import Prelude``.
+        Implied by :ghc-flag:`-XRebindableSyntax`.
+    :type: dynamic
+    :reverse: -XImplicitPrelude
+    :category:
+
+    :since: 6.8.1
 
     Don't import ``Prelude`` by default.
 
@@ -1400,6 +1575,11 @@ don't call it ``Prelude``; the Haskell module namespace is flat, and you
 must not conflict with any Prelude module.)
 
 .. ghc-flag:: -XRebindableSyntax
+    :shortdesc: Employ :ref:`rebindable syntax <rebindable-syntax>`.
+        Implies :ghc-flag:`-XNoImplicitPrelude`.
+    :type: dynamic
+    :reverse: -XNoRebindableSyntax
+    :category:
 
     :implies: :ghc-flag:`-XNoImplicitPrelude`
     :since: 7.0.1
@@ -1442,6 +1622,13 @@ not the Prelude versions:
    in scope. But unlike the other constructs, the types of these
    functions must match the Prelude types very closely. Details are in
    flux; if you want to use this, ask!
+
+-  List notation, such as ``[x,y]`` or ``[m..n]`` can also be treated
+   via rebindable syntax if you use `-XOverloadedLists`;
+   see :ref:`overloaded-lists`.
+
+-  An overloaded label "``#foo``" means "``fromLabel @"foo"``", rather than
+   "``GHC.OverloadedLabels.fromLabel @"foo"``" (see :ref:`overloaded-labels`).
 
 :ghc-flag:`-XRebindableSyntax` implies :ghc-flag:`-XNoImplicitPrelude`.
 
@@ -1493,6 +1680,12 @@ Postfix operators
 -----------------
 
 .. ghc-flag:: -XPostfixOperators
+    :shortdesc: Enable :ref:`postfix operators <postfix-operators>`.
+    :type: dynamic
+    :reverse: -XNoPostfixOperators
+    :category:
+
+    :since: 7.10.1
 
     Allow the use of post-fix operators
 
@@ -1525,12 +1718,16 @@ Tuple sections
 --------------
 
 .. ghc-flag:: -XTupleSections
+    :shortdesc: Enable :ref:`tuple sections <tuple-sections>`.
+    :type: dynamic
+    :reverse: -XNoTupleSections
+    :category:
 
     :since: 6.12
 
     Allow the use of tuple section syntax
 
-The :ghc-flag:`-XTupleSections` flag enables Python-style partially applied
+The :ghc-flag:`-XTupleSections` flag enables partially applied
 tuple constructors. For example, the following program ::
 
       (, True)
@@ -1566,6 +1763,10 @@ Lambda-case
 -----------
 
 .. ghc-flag:: -XLambdaCase
+    :shortdesc: Enable :ref:`lambda-case expressions <lambda-case>`.
+    :type: dynamic
+    :reverse: -XNoLambdaCase
+    :category:
 
     :since: 7.6.1
 
@@ -1592,6 +1793,10 @@ Empty case alternatives
 -----------------------
 
 .. ghc-flag:: -XEmptyCase
+    :shortdesc: Allow :ref:`empty case alternatives <empty-case>`.
+    :type: dynamic
+    :reverse: -XNoEmptyCase
+    :category:
 
     :since: 7.8.1
 
@@ -1620,8 +1825,8 @@ example, consider these two candidate definitions of ``absurd``:
 
 ::
 
-    data a :==: b where
-      Refl :: a :==: a
+    data a :~: b where
+      Refl :: a :~: a
 
     absurd :: True :~: False -> a
     absurd x = error "absurd"    -- (A)
@@ -1629,10 +1834,9 @@ example, consider these two candidate definitions of ``absurd``:
 
 We much prefer (B). Why? Because GHC can figure out that
 ``(True :~: False)`` is an empty type. So (B) has no partiality and GHC
-should be able to compile with :ghc-flag:`-Wincomplete-patterns`. (Though
-the pattern match checking is not yet clever enough to do that.) On the
-other hand (A) looks dangerous, and GHC doesn't check to make sure that,
-in fact, the function can never get called.
+is able to compile with :ghc-flag:`-Wincomplete-patterns` and
+:ghc-flag:`-Werror`. On the other hand (A) looks dangerous, and GHC doesn't
+check to make sure that, in fact, the function can never get called.
 
 .. _multi-way-if:
 
@@ -1640,6 +1844,10 @@ Multi-way if-expressions
 ------------------------
 
 .. ghc-flag:: -XMultiWayIf
+    :shortdesc: Enable :ref:`multi-way if-expressions <multi-way-if>`.
+    :type: dynamic
+    :reverse: -XNoMultiWayIf
+    :category:
 
     :since: 7.6.1
 
@@ -1756,6 +1964,12 @@ Package-qualified imports
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XPackageImports
+    :shortdesc: Enable :ref:`package-qualified imports <package-imports>`.
+    :type: dynamic
+    :reverse: -XNoPackageImports
+    :category:
+
+    :since: 6.10.1
 
     Allow the use of package-qualified ``import`` syntax.
 
@@ -1787,11 +2001,32 @@ Safe imports
 ~~~~~~~~~~~~
 
 .. ghc-flag:: -XSafe
-              -XTrustworthy
-              -XUnsafe
+    :shortdesc: Enable the :ref:`Safe Haskell <safe-haskell>` Safe mode.
+    :type: dynamic
+    :category:
     :noindex:
 
-    :since: 7.2
+    :since: 7.2.1
+
+    Declare the Safe Haskell state of the current module.
+
+.. ghc-flag:: -XTrustworthy
+    :shortdesc: Enable the :ref:`Safe Haskell <safe-haskell>` Trustworthy mode.
+    :type: dynamic
+    :category:
+    :noindex:
+
+    :since: 7.2.1
+
+    Declare the Safe Haskell state of the current module.
+
+.. ghc-flag:: -XUnsafe
+    :shortdesc: Enable :ref:`Safe Haskell <safe-haskell>` Unsafe mode.
+    :type: dynamic
+    :category:
+    :noindex:
+
+    :since: 7.4.1
 
     Declare the Safe Haskell state of the current module.
 
@@ -1812,6 +2047,12 @@ Explicit namespaces in import/export
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XExplicitNamespaces
+    :shortdesc: Enable using the keyword ``type`` to specify the namespace of
+        entries in imports and exports (:ref:`explicit-namespaces`).
+        Implied by :ghc-flag:`-XTypeOperators` and :ghc-flag:`-XTypeFamilies`.
+    :type: dynamic
+    :reverse: -XNoExplicitNamespaces
+    :category:
 
     :since: 7.6.1
 
@@ -1947,6 +2188,12 @@ Data types with no constructors
 -------------------------------
 
 .. ghc-flag:: -XEmptyDataDecls
+    :shortdesc: Allow definition of empty ``data`` types.
+    :type: dynamic
+    :reverse: -XNoEmptyDataDecls
+    :category:
+
+    :since: 6.8.1
 
     Allow definition of empty ``data`` types.
 
@@ -1969,6 +2216,10 @@ Data type contexts
 ------------------
 
 .. ghc-flag:: -XDatatypeContexts
+    :shortdesc: Allow contexts on ``data`` types.
+    :type: dynamic
+    :reverse: -XNoEmptyDataDecls
+    :category:
 
     :since: 7.0.1
 
@@ -2041,8 +2292,14 @@ Type operators
 --------------
 
 .. ghc-flag:: -XTypeOperators
+    :shortdesc: Enable :ref:`type operators <type-operators>`.
+        Implies :ghc-flag:`-XExplicitNamespaces`.
+    :type: dynamic
+    :reverse: -XNoTypeOperators
+    :category:
 
     :implies: :ghc-flag:`-XExplicitNamespaces`
+    :since: 6.8.1
 
     Allow the use and definition of types with operator names.
 
@@ -2092,8 +2349,13 @@ Liberalised type synonyms
 -------------------------
 
 .. ghc-flag:: -XLiberalTypeSynonyms
+    :shortdesc: Enable :ref:`liberalised type synonyms <type-synonyms>`.
+    :type: dynamic
+    :reverse: -XNoLiberalTypeSynonyms
+    :category:
 
     :implies: :ghc-flag:`-XExplicitForAll`
+    :since: 6.8.1
 
     Relax many of the Haskell 98 rules on type synonym definitions.
 
@@ -2144,10 +2406,10 @@ much more liberal about type synonyms than Haskell 98.
          foo :: forall x. x -> [x]
 
 GHC currently does kind checking before expanding synonyms (though even
-that could be changed)..
+that could be changed).
 
 After expanding type synonyms, GHC does validity checking on types,
-looking for the following mal-formedness which isn't detected simply by
+looking for the following malformedness which isn't detected simply by
 kind checking:
 
 -  Type constructor applied to a type involving for-alls (if
@@ -2170,8 +2432,13 @@ Existentially quantified data constructors
 ------------------------------------------
 
 .. ghc-flag:: -XExistentialQuantification
+    :shortdesc: Enable :ref:`liberalised type synonyms <type-synonyms>`.
+    :type: dynamic
+    :reverse: -XNoLiberalTypeSynonyms
+    :category:
 
     :implies: :ghc-flag:`-XExplicitForAll`
+    :since: 6.8.1
 
     Allow existentially quantified type variables in types.
 
@@ -2426,8 +2693,12 @@ Declaring data types with explicit constructor signatures
 ---------------------------------------------------------
 
 .. ghc-flag:: -XGADTSyntax
+    :shortdesc: Enable :ref:`generalised algebraic data type syntax <gadt-style>`.
+    :type: dynamic
+    :reverse: -XNoGADTSyntax
+    :category:
 
-    :since: 7.2
+    :since: 7.2.1
 
     Allow the use of GADT syntax in data type definitions (but not GADTs
     themselves; for this see :ghc-flag:`-XGADTs`)
@@ -2678,8 +2949,14 @@ Generalised Algebraic Data Types (GADTs)
 ----------------------------------------
 
 .. ghc-flag:: -XGADTs
+    :shortdesc: Enable :ref:`generalised algebraic data types <gadt>`.
+        Implies :ghc-flag:`-XGADTSyntax` and :ghc-flag:`-XMonoLocalBinds`.
+    :type: dynamic
+    :reverse: -XNoGADTs
+    :category:
 
     :implies: :ghc-flag:`-XMonoLocalBinds`, :ghc-flag:`-XGADTSyntax`
+    :since: 6.8.1
 
     Allow use of Generalised Algebraic Data Types (GADTs).
 
@@ -2803,7 +3080,7 @@ also sets :ghc-flag:`-XGADTSyntax` and :ghc-flag:`-XMonoLocalBinds`.
    binding site. The easiest way to ensure that a variable a rigid type
    is to give it a type signature. For more precise details see `Simple
    unification-based type inference for
-   GADTs <http://research.microsoft.com/%7Esimonpj/papers/gadt>`__. The
+   GADTs <http://research.microsoft.com/%7Esimonpj/papers/gadt/>`__. The
    criteria implemented by GHC are given in the Appendix.
 
 .. _record-system-extensions:
@@ -2817,6 +3094,11 @@ Traditional record syntax
 -------------------------
 
 .. ghc-flag:: -XNoTraditionalRecordSyntax
+    :shortdesc: Disable support for traditional record syntax
+        (as supported by Haskell 98) ``C {f = x}``
+    :type: dynamic
+    :reverse: -XTraditionalRecordSyntax
+    :category:
 
     :since: 7.4.1
 
@@ -2831,6 +3113,15 @@ Record field disambiguation
 ---------------------------
 
 .. ghc-flag:: -XDisambiguateRecordFields
+    :shortdesc: Enable :ref:`record field disambiguation <disambiguate-fields>`.
+        Implied by :ghc-flag:`-XRecordWildCards`.
+    :type: dynamic
+    :reverse: -XNoDisambiguateRecordFields
+    :category:
+
+    :since: 6.8.1
+
+    :since: 6.8.1
 
     Allow the compiler to automatically choose between identically-named
     record selectors based on type (if the choice is unambiguous).
@@ -2902,6 +3193,10 @@ Duplicate record fields
 -----------------------
 
 .. ghc-flag:: -XDuplicateRecordFields
+    :shortdesc: Allow definition of record types with identically-named fields.
+    :type: dynamic
+    :reverse: -XNoDuplicateRecordFields
+    :category:
 
     :implies: :ghc-flag:`-XDisambiguateRecordFields`
     :since: 8.0.1
@@ -3036,6 +3331,12 @@ Record puns
 -----------
 
 .. ghc-flag:: -XNamedFieldPuns
+    :shortdesc: Enable :ref:`record puns <record-puns>`.
+    :type: dynamic
+    :reverse: -XNoNamedFieldPuns
+    :category:
+
+    :since: 6.10.1
 
     Allow use of record puns.
 
@@ -3097,8 +3398,14 @@ Record wildcards
 ----------------
 
 .. ghc-flag:: -XRecordWildCards
+    :shortdesc: Enable :ref:`record wildcards <record-wildcards>`.
+        Implies :ghc-flag:`-XDisambiguateRecordFields`.
+    :type: dynamic
+    :reverse: -XNoRecordWildCards
+    :category:
 
     :implies: :ghc-flag:`-XDisambiguateRecordFields`.
+    :since: 6.8.1
 
     Allow the use of wildcards in record construction and pattern matching.
 
@@ -3186,6 +3493,183 @@ More details:
        g = MkT { .. }           -- Illegal (b)
        h (MkT { .. }) = True    -- Illegal (b)
 
+
+.. _record-field-selector-polymorphism:
+
+Record field selector polymorphism
+----------------------------------
+
+The module :base-ref:`GHC.Records.` defines the following: ::
+
+  class HasField (x :: k) r a | x r -> a where
+    getField :: r -> a
+
+A ``HasField x r a`` constraint represents the fact that ``x`` is a
+field of type ``a`` belonging to a record type ``r``.  The
+``getField`` method gives the record selector function.
+
+This allows definitions that are polymorphic over record types with a specified
+field.  For example, the following works with any record type that has a field
+``name :: String``: ::
+
+  foo :: HasField "name" r String => r -> String
+  foo r = reverse (getField @"name" r)
+
+``HasField`` is a magic built-in typeclass (similar to ``Coercible``, for
+example).  It is given special treatment by the constraint solver (see
+:ref:`solving-hasfield-constraints`).  Users may define their own instances of
+``HasField`` also (see :ref:`virtual-record-fields`).
+
+.. _solving-hasfield-constraints:
+
+Solving HasField constraints
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If the constraint solver encounters a constraint ``HasField x r a``
+where ``r`` is a concrete datatype with a field ``x`` in scope, it
+will automatically solve the constraint using the field selector as
+the dictionary, unifying ``a`` with the type of the field if
+necessary.  This happens irrespective of which extensions are enabled.
+
+For example, if the following datatype is in scope ::
+
+  data Person = Person { name :: String }
+
+the end result is rather like having an instance ::
+
+  instance HasField "name" Person String where
+    getField = name
+
+except that this instance is not actually generated anywhere, rather
+the constraint is solved directly by the constraint solver.
+
+A field must be in scope for the corresponding ``HasField`` constraint
+to be solved.  This retains the existing representation hiding
+mechanism, whereby a module may choose not to export a field,
+preventing client modules from accessing or updating it directly.
+
+Solving ``HasField`` constraints depends on the field selector functions that
+are generated for each datatype definition:
+
+-  If a record field does not have a selector function because its type would allow
+   an existential variable to escape, the corresponding ``HasField`` constraint
+   will not be solved.  For example, ::
+
+     {-# LANGUAGE ExistentialQuantification #-}
+     data Exists t = forall x . MkExists { unExists :: t x }
+
+   does not give rise to a selector ``unExists :: Exists t -> t x`` and we will not
+   solve ``HasField "unExists" (Exists t) a`` automatically.
+
+-  If a record field has a polymorphic type (and hence the selector function is
+   higher-rank), the corresponding ``HasField`` constraint will not be solved,
+   because doing so would violate the functional dependency on ``HasField`` and/or
+   require impredicativity.  For example, ::
+
+     {-# LANGUAGE RankNTypes #-}
+     data Higher = MkHigher { unHigher :: forall t . t -> t }
+
+   gives rise to a selector ``unHigher :: Higher -> (forall t . t -> t)`` but does
+   not lead to solution of the constraint ``HasField "unHigher" Higher a``.
+
+-  A record GADT may have a restricted type for a selector function, which may lead
+   to additional unification when solving ``HasField`` constraints.  For example, ::
+
+     {-# LANGUAGE GADTs #-}
+     data Gadt t where
+       MkGadt :: { unGadt :: Maybe v } -> Gadt [v]
+
+   gives rise to a selector ``unGadt :: Gadt [v] -> Maybe v``, so the solver will reduce
+   the constraint ``HasField "unGadt" (Gadt t) b`` by unifying ``t ~ [v]`` and
+   ``b ~ Maybe v`` for some fresh metavariable ``v``, rather as if we had an instance ::
+
+     instance (t ~ [v], b ~ Maybe v) => HasField "unGadt" (Gadt t) b
+
+-  If a record type has an old-fashioned datatype context, the ``HasField``
+   constraint will be reduced to solving the constraints from the context.
+   For example, ::
+
+     {-# LANGUAGE DatatypeContexts #-}
+     data Eq a => Silly a = MkSilly { unSilly :: a }
+
+   gives rise to a selector ``unSilly :: Eq a => Silly a -> a``, so
+   the solver will reduce the constraint ``HasField "unSilly" (Silly a) b`` to
+   ``Eq a`` (and unify ``a`` with ``b``), rather as if we had an instance ::
+
+     instance (Eq a, a ~ b) => HasField "unSilly" (Silly a) b
+
+.. _virtual-record-fields:
+
+Virtual record fields
+~~~~~~~~~~~~~~~~~~~~~
+
+Users may define their own instances of ``HasField``, provided they do
+not conflict with the built-in constraint solving behaviour.  This
+allows "virtual" record fields to be defined for datatypes that do not
+otherwise have them.
+
+For example, this instance would make the ``name`` field of ``Person``
+accessible using ``#fullname`` as well: ::
+
+  instance HasField "fullname" Person String where
+    getField = name
+
+More substantially, an anonymous records library could provide
+``HasField`` instances for its anonymous records, and thus be
+compatible with the polymorphic record selectors introduced by this
+proposal.  For example, something like this makes it possible to use
+``getField`` to access ``Record`` values with the appropriate
+string in the type-level list of fields: ::
+
+  data Record (xs :: [(k, Type)]) where
+    Nil  :: Record '[]
+    Cons :: Proxy x -> a -> Record xs -> Record ('(x, a) ': xs)
+
+  instance HasField x (Record ('(x, a) ': xs)) a where
+    getField (Cons _ v _) = v
+  instance HasField x (Record xs) a => HasField x (Record ('(y, b) ': xs)) a where
+    getField (Cons _ _ r) = getField @x r
+
+  r :: Record '[ '("name", String) ]
+  r = Cons Proxy "R" Nil)
+
+  x = getField @"name" r
+
+Since representations such as this can support field labels with kinds other
+than ``Symbol``, the ``HasField`` class is poly-kinded (even though the built-in
+constraint solving works only at kind ``Symbol``).  In particular, this allows
+users to declare scoped field labels such as in the following example: ::
+
+  data PersonFields = Name
+
+  s :: Record '[ '(Name, String) ]
+  s = Cons Proxy "S" Nil
+
+  y = getField @Name s
+
+In order to avoid conflicting with the built-in constraint solving,
+the following user-defined ``HasField`` instances are prohibited (in
+addition to the usual rules, such as the prohibition on type
+families appearing in instance heads):
+
+-  ``HasField _ r _`` where ``r`` is a variable;
+
+-  ``HasField _ (T ...) _`` if ``T`` is a data family (because it
+   might have fields introduced later, using data instance declarations);
+
+-  ``HasField x (T ...) _`` if ``x`` is a variable and ``T`` has any
+   fields at all (but this instance is permitted if ``T`` has no fields);
+
+-  ``HasField "foo" (T ...) _`` if ``T`` has a field ``foo`` (but this
+   instance is permitted if it does not).
+
+If a field has a higher-rank or existential type, the corresponding ``HasField``
+constraint will not be solved automatically (as described above), but in the
+interests of simplicity we do not permit users to define their own instances
+either.  If a field is not in scope, the corresponding instance is still
+prohibited, to avoid conflicts in downstream modules.
+
+
 .. _deriving:
 
 Extensions to the "deriving" mechanism
@@ -3228,6 +3712,12 @@ Stand-alone deriving declarations
 ---------------------------------
 
 .. ghc-flag:: -XStandaloneDeriving
+    :shortdesc: Enable :ref:`standalone deriving <stand-alone-deriving>`.
+    :type: dynamic
+    :reverse: -XNoStandaloneDeriving
+    :category:
+
+    :since: 6.8.1
 
     Allow the use of stand-alone ``deriving`` declarations.
 
@@ -3329,28 +3819,46 @@ Deriving instances of extra classes (``Data``, etc.)
 ----------------------------------------------------
 
 .. ghc-flag:: -XDeriveGeneric
+    :shortdesc: Enable :ref:`deriving for the Generic class <deriving-typeable>`.
+    :type: dynamic
+    :reverse: -XNoDeriveGeneric
+    :category:
 
-    :since: 7.2
+    :since: 7.2.1
 
     Allow automatic deriving of instances for the ``Generic`` typeclass.
 
 .. ghc-flag:: -XDeriveFunctor
+    :shortdesc: Enable :ref:`deriving for the Functor class <deriving-extra>`.
+        Implied by :ghc-flag:`-XDeriveTraversable`.
+    :type: dynamic
+    :reverse: -XNoDeriveFunctor
+    :category:
 
-    :since: 6.12
+    :since: 7.10.1
 
     Allow automatic deriving of instances for the ``Functor`` typeclass.
 
 .. ghc-flag:: -XDeriveFoldable
+    :shortdesc: Enable :ref:`deriving for the Foldable class <deriving-extra>`.
+        Implied by :ghc-flag:`-XDeriveTraversable`.
+    :type: dynamic
+    :reverse: -XNoDeriveFoldable
+    :category:
 
-    :since: 6.12
+    :since: 7.10.1
 
     Allow automatic deriving of instances for the ``Foldable`` typeclass.
 
 .. ghc-flag:: -XDeriveTraversable
-
-    :since: 6.12
+    :shortdesc: Enable :ref:`deriving for the Traversable class <deriving-extra>`.
+        Implies :ghc-flag:`-XDeriveFunctor` and :ghc-flag:`-XDeriveFoldable`.
+    :type: dynamic
+    :reverse: -XNoDeriveTraversable
+    :category:
 
     :implies: :ghc-flag:`-XDeriveFoldable`, :ghc-flag:`-XDeriveFunctor`
+    :since: 7.10.1
 
     Allow automatic deriving of instances for the ``Traversable`` typeclass.
 
@@ -3373,8 +3881,7 @@ automatically derived:
    ``Functor``, defined in ``GHC.Base``. See :ref:`deriving-functor`.
 
 -  With :ghc-flag:`-XDeriveDataTypeable`, you can derive instances of the class
-   ``Data``, defined in ``Data.Data``. See :ref:`deriving-typeable` for
-   deriving ``Typeable``.
+   ``Data``, defined in ``Data.Data``. See :ref:`deriving-data`.
 
 -  With :ghc-flag:`-XDeriveFoldable`, you can derive instances of the class
    ``Foldable``, defined in ``Data.Foldable``. See
@@ -3559,6 +4066,29 @@ fail to compile:
 
    would not compile successfully due to the way in which ``b`` is constrained.
 
+When the last type parameter has a phantom role (see :ref:`roles`), the derived
+``Functor`` instance will not be produced using the usual algorithm. Instead,
+the entire value will be coerced. ::
+
+    data Phantom a = Z | S (Phantom a) deriving Functor
+
+will produce the following instance: ::
+
+    instance Functor Phantom where
+      fmap _ = coerce
+
+When a type has no constructors, the derived ``Functor`` instance will
+simply force the (bottom) value of the argument using
+:ghc-flag:`-XEmptyCase`. ::
+
+    data V a deriving Functor
+    type role V nominal
+
+will produce
+
+    instance Functor V where
+      fmap _ z = case z of
+
 .. _deriving-foldable:
 
 Deriving ``Foldable`` instances
@@ -3576,28 +4106,76 @@ would generate the following instance::
       foldr f z (Ex a1 a2 a3 a4) = f a1 (foldr f z a3)
       foldMap f (Ex a1 a2 a3 a4) = mappend (f a1) (foldMap f a3)
 
-The algorithm for :ghc-flag:`-XDeriveFoldable` is adapted from the :ghc-flag:`-XDeriveFunctor`
-algorithm, but it generates definitions for ``foldMap`` and ``foldr`` instead
-of ``fmap``. In addition, :ghc-flag:`-XDeriveFoldable` filters out all
-constructor arguments on the RHS expression whose types do not mention the last
-type parameter, since those arguments do not need to be folded over.
+The algorithm for :ghc-flag:`-XDeriveFoldable` is adapted from the
+:ghc-flag:`-XDeriveFunctor` algorithm, but it generates definitions for
+``foldMap``, ``foldr``, and ``null`` instead of ``fmap``. In addition,
+:ghc-flag:`-XDeriveFoldable` filters out all constructor arguments on the RHS
+expression whose types do not mention the last type parameter, since those
+arguments do not need to be folded over.
 
-Here are the differences between the generated code in each extension:
+When the type parameter has a phantom role (see :ref:`roles`),
+:ghc-flag:`-XDeriveFoldable` derives a trivial instance. For example, this
+declaration: ::
 
-#. When a bare type variable ``a`` is encountered, :ghc-flag:`-XDeriveFunctor` would
-   generate ``f a`` for an ``fmap`` definition. :ghc-flag:`-XDeriveFoldable` would
-   generate ``f a z`` for ``foldr``, and ``f a`` for ``foldMap``.
+    data Phantom a = Z | S (Phantom a)
+
+will generate the following instance. ::
+
+    instance Foldable Phantom where
+      foldMap _ _ = mempty
+
+Similarly, when the type has no constructors, :ghc-flag:`-XDeriveFoldable` will
+derive a trivial instance: ::
+
+    data V a deriving Foldable
+    type role V nominal
+
+will generate the following. ::
+
+    instance Foldable V where
+      foldMap _ _ = mempty
+
+Here are the differences between the generated code for ``Functor`` and
+``Foldable``:
+
+#. When a bare type variable ``a`` is encountered, :ghc-flag:`-XDeriveFunctor`
+would generate ``f a`` for an ``fmap`` definition. :ghc-flag:`-XDeriveFoldable`
+would generate ``f a z`` for ``foldr``, ``f a`` for ``foldMap``, and ``False``
+for ``null``.
 
 #. When a type that is not syntactically equivalent to ``a``, but which does
    contain ``a``, is encountered, :ghc-flag:`-XDeriveFunctor` recursively calls
    ``fmap`` on it. Similarly, :ghc-flag:`-XDeriveFoldable` would recursively call
-   ``foldr`` and ``foldMap``.
+   ``foldr`` and ``foldMap``. Depending on the context, ``null`` may recursively
+   call ``null`` or ``all null``. For example, given ::
+
+       data F a = F (P a)
+       data G a = G (P (a, Int))
+       data H a = H (P (Q a))
+
+   ``Foldable`` deriving will produce ::
+
+       null (F x) = null x
+       null (G x) = null x
+       null (H x) = all null x
 
 #. :ghc-flag:`-XDeriveFunctor` puts everything back together again at the end by
    invoking the constructor. :ghc-flag:`-XDeriveFoldable`, however, builds up a value
    of some type. For ``foldr``, this is accomplished by chaining applications
    of ``f`` and recursive ``foldr`` calls on the state value ``z``. For
-   ``foldMap``, this happens by combining all values with ``mappend``.
+   ``foldMap``, this happens by combining all values with ``mappend``. For ``null``,
+   the values are usually combined with ``&&``. However, if any of the values is
+   known to be ``False``, all the rest will be dropped. For example, ::
+
+       data SnocList a = Nil | Snoc (SnocList a) a
+
+   will not produce ::
+
+       null (Snoc xs _) = null xs && False
+
+   (which would walk the whole list), but rather ::
+
+       null (Snoc _ _) = False
 
 There are some other differences regarding what data types can have derived
 ``Foldable`` instances:
@@ -3665,7 +4243,31 @@ The algorithm for :ghc-flag:`-XDeriveTraversable` is adapted from the
 instead of ``fmap``. In addition, :ghc-flag:`-XDeriveTraversable` filters out
 all constructor arguments on the RHS expression whose types do not mention the
 last type parameter, since those arguments do not produce any effects in a
-traversal. Here are the differences between the generated code in each
+traversal.
+
+When the type parameter has a phantom role (see :ref:`roles`),
+:ghc-flag:`-XDeriveTraversable` coerces its argument. For example, this
+declaration::
+
+    data Phantom a = Z | S (Phantom a) deriving Traversable
+
+will generate the following instance::
+
+    instance Traversable Phantom where
+      traverse _ z = pure (coerce z)
+
+When the type has no constructors, :ghc-flag:`-XDeriveTraversable` will
+derive the laziest instance it can. ::
+
+    data V a deriving Traversable
+    type role V nominal
+
+will generate the following, using :ghc-flag:`-XEmptyCase`: ::
+
+    instance Traversable V where
+      traverse _ z = pure (case z of)
+
+Here are the differences between the generated code in each
 extension:
 
 #. When a bare type variable ``a`` is encountered, both :ghc-flag:`-XDeriveFunctor` and
@@ -3689,14 +4291,26 @@ For a full specification of the algorithms used in :ghc-flag:`-XDeriveFunctor`,
 :ghc-flag:`-XDeriveFoldable`, and :ghc-flag:`-XDeriveTraversable`, see
 :ghc-wiki:`this wiki page <Commentary/Compiler/DeriveFunctor>`.
 
+.. _deriving-data:
+
+Deriving ``Data`` instances
+-------------------------------
+
+.. ghc-flag:: -XDeriveDataTypeable
+    :shortdesc: Enable ``deriving`` for the :ref:`Data class
+        <deriving-typeable>`. Implied by :ghc-flag:`-XAutoDeriveTypeable`.
+    :type: dynamic
+    :reverse: -XNoDeriveDataTypeable
+    :category:
+
+    :since: 6.8.1
+
+    Enable automatic deriving of instances for the ``Data`` typeclass
+
 .. _deriving-typeable:
 
 Deriving ``Typeable`` instances
 -------------------------------
-
-.. ghc-flag:: -XDeriveDataTypeable
-
-    Enable automatic deriving of instances for the ``Typeable`` typeclass
 
 The class ``Typeable`` is very special:
 
@@ -3707,8 +4321,9 @@ The class ``Typeable`` is very special:
    ensures that the programmer cannot subvert the type system by writing
    bogus instances.
 
--  Derived instances of ``Typeable`` are ignored, and may be reported as
-   an error in a later version of the compiler.
+-  Derived instances of ``Typeable`` may be declared if the
+   :ghc-flag:`-XDeriveDataTypeable` extension is enabled, but they are ignored,
+   and they may be reported as an error in a later version of the compiler.
 
 -  The rules for solving \`Typeable\` constraints are as follows:
 
@@ -3741,8 +4356,12 @@ Deriving ``Lift`` instances
 ---------------------------
 
 .. ghc-flag:: -XDeriveLift
+    :shortdesc: Enable :ref:`deriving for the Lift class <deriving-lift>`
+    :type: dynamic
+    :reverse: -XNoDeriveLift
+    :category:
 
-    :since: 8.0.1
+    :since: 7.2.1
 
     Enable automatic deriving of instances for the ``Lift`` typeclass for
     Template Haskell.
@@ -3822,6 +4441,12 @@ Generalised derived instances for newtypes
 
 .. ghc-flag:: -XGeneralisedNewtypeDeriving
               -XGeneralizedNewtypeDeriving
+    :shortdesc: Enable :ref:`newtype deriving <newtype-deriving>`.
+    :type: dynamic
+    :reverse: -XNoGeneralizedNewtypeDeriving
+    :category:
+
+    :since: 6.8.1
 
     Enable GHC's cunning generalised deriving mechanism for ``newtype``\s
 
@@ -3868,7 +4493,7 @@ generates ::
 
       instance Num Dollars
 
-One can think of this instance being implementated with the same code as the
+One can think of this instance being implemented with the same code as the
 ``Num Int`` instance, but with ``Dollars`` and ``getDollars`` added wherever
 necessary in order to make it typecheck. (In practice, GHC uses a somewhat
 different approach to code generation. See the :ref:`precise-gnd-specification`
@@ -3963,9 +4588,18 @@ where
    missing last argument to ``C`` is not used at a nominal role in any
    of the ``C``'s methods. (See :ref:`roles`.)
 
+- ``C`` is allowed to have associated type families, provided they meet the
+  requirements laid out in the section on :ref:`GND and associated types
+  <gnd-and-associated-types>`.
+
 Then the derived instance declaration is of the form ::
 
       instance C t1..tj t => C t1..tj (T v1...vk)
+
+Note that if ``C`` does not contain any class methods, the instance context
+is wholly unnecessary, and as such GHC will instead generate: ::
+
+      instance C t1..tj (T v1..vk)
 
 As an example which does *not* work, consider ::
 
@@ -3998,12 +4632,143 @@ applies (section 4.3.3. of the Haskell Report). (For the standard
 classes ``Eq``, ``Ord``, ``Ix``, and ``Bounded`` it is immaterial
 whether the stock method is used or the one described here.)
 
+.. _gnd-and-associated-types:
+
+Associated type families
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+:ghc-flag:`-XGeneralizedNewtypeDeriving` also works for some type classes with
+associated type families. Here is an example: ::
+
+      class HasRing a where
+        type Ring a
+
+      newtype L1Norm a = L1Norm a
+        deriving HasRing
+
+The derived ``HasRing`` instance would look like ::
+
+      instance HasRing (L1Norm a) where
+        type Ring (L1Norm a) = Ring a
+
+To be precise, if the class being derived is of the form ::
+
+      class C c_1 c_2 ... c_m where
+        type T1 t1_1 t1_2 ... t1_n
+        ...
+        type Tk tk_1 tk_2 ... tk_p
+
+and the newtype is of the form ::
+
+      newtype N n_1 n_2 ... n_q = MkN <rep-type>
+
+then you can derive a ``C c_1 c_2 ... c_(m-1)`` instance for
+``N n_1 n_2 ... n_q``, provided that:
+
+- The type parameter ``c_m`` occurs once in each of the type variables of
+  ``T1`` through ``Tk``. Imagine a class where this condition didn't hold.
+  For example: ::
+
+      class Bad a b where
+        type B a
+
+      instance Bad Int a where
+        type B Int = Char
+
+      newtype Foo a = Foo a
+        deriving (Bad Int)
+
+  For the derived ``Bad Int`` instance, GHC would need to generate something
+  like this: ::
+
+      instance Bad Int (Foo a) where
+        type B Int = B ???
+
+  Now we're stuck, since we have no way to refer to ``a`` on the right-hand
+  side of the ``B`` family instance, so this instance doesn't really make sense
+  in a :ghc-flag:`-XGeneralizedNewtypeDeriving` setting.
+
+- ``C`` does not have any associated data families (only type families). To
+  see why data families are forbidden, imagine the following scenario: ::
+
+      class Ex a where
+        data D a
+
+      instance Ex Int where
+        data D Int = DInt Bool
+
+      newtype Age = MkAge Int deriving Ex
+
+  For the derived ``Ex`` instance, GHC would need to generate something like
+  this: ::
+
+      instance Ex Age where
+        data D Age = ???
+
+  But it is not clear what GHC would fill in for ``???``, as each data family
+  instance must generate fresh data constructors.
+
+If both of these conditions are met, GHC will generate this instance: ::
+
+      instance C c_1 c_2 ... c_(m-1) <rep-type> =>
+               C c_1 c_2 ... c_(m-1) (N n_1 n_2 ... n_q) where
+        type T1 t1_1 t1_2 ... (N n_1 n_2 ... n_q) ... t1_n
+           = T1 t1_1 t1_2 ... <rep-type>          ... t1_n
+        ...
+        type Tk tk_1 tk_2 ... (N n_1 n_2 ... n_q) ... tk_p
+           = Tk tk_1 tk_2 ... <rep-type>          ... tk_p
+
+Again, if ``C`` contains no class methods, the instance context will be
+redundant, so GHC will instead generate
+``instance C c_1 c_2 ... c_(m-1) (N n_1 n_2 ... n_q)``.
+
+Beware that in some cases, you may need to enable the
+:ghc-flag:`-XUndecidableInstances` extension in order to use this feature.
+Here's a pathological case that illustrates why this might happen: ::
+
+      class C a where
+        type T a
+
+      newtype Loop = MkLoop Loop
+        deriving C
+
+This will generate the derived instance: ::
+
+      instance C Loop where
+        type T Loop = T Loop
+
+Here, it is evident that attempting to use the type ``T Loop`` will throw the
+typechecker into an infinite loop, as its definition recurses endlessly. In
+other cases, you might need to enable :ghc-flag:`-XUndecidableInstances` even
+if the generated code won't put the typechecker into a loop. For example: ::
+
+      instance C Int where
+        type C Int = Int
+
+      newtype MyInt = MyInt Int
+        deriving C
+
+This will generate the derived instance: ::
+
+      instance C MyInt where
+        type T MyInt = T Int
+
+Although typechecking ``T MyInt`` will terminate, GHC's termination checker
+isn't sophisticated enough to determine this, so you'll need to enable
+:ghc-flag:`-XUndecidableInstances` in order to use this derived instance. If
+you do go down this route, make sure you can convince yourself that all of
+the type family instances you're deriving will eventually terminate if used!
+
 .. _derive-any-class:
 
 Deriving any other class
 ------------------------
 
 .. ghc-flag:: -XDeriveAnyClass
+    :shortdesc: Enable :ref:`deriving for any class <derive-any-class>`.
+    :type: dynamic
+    :reverse: -XNoDeriveAnyClass
+    :category:
 
     :since: 7.10.1
 
@@ -4048,29 +4813,71 @@ Note the following details
   class on a newtype, and :ghc-flag:`-XGeneralizedNewtypeDeriving` is also on,
   :ghc-flag:`-XDeriveAnyClass` takes precedence.
 
-- :ghc-flag:`-XDeriveAnyClass` is allowed only when the last argument of the class
-  has kind ``*`` or ``(* -> *)``.  So this is not allowed: ::
+- The instance context is determined by the type signatures of the derived
+  class's methods. For instance, if the class is: ::
 
-    data T a b = MkT a b deriving( Bifunctor )
+    class Foo a where
+      bar :: a -> String
+      default bar :: Show a => a -> String
+      bar = show
 
-  because the last argument of ``Bifunctor :: (* -> * -> *) -> Constraint``
-  has the wrong kind.
+      baz :: a -> a -> Bool
+      default baz :: Ord a => a -> a -> Bool
+      baz x y = compare x y == EQ
 
-- The instance context will be generated according to the same rules
-  used when deriving ``Eq`` (if the kind of the type is ``*``), or
-  the rules for ``Functor`` (if the kind of the type is ``(* -> *)``).
-  For example ::
+  And you attempt to derive it using :ghc-flag:`-XDeriveAnyClass`: ::
 
-    instance C a => C (a,b) where ...
+    instance Eq   a => Eq   (Option a) where ...
+    instance Ord  a => Ord  (Option a) where ...
+    instance Show a => Show (Option a) where ...
 
-    data T a b = MkT a (a,b) deriving( C )
+    data Option a = None | Some a deriving Foo
 
-  The ``deriving`` clause will generate ::
+  Then the derived ``Foo`` instance will be: ::
 
-    instance C a => C (T a b) where {}
+    instance (Show a, Ord a) => Foo (Option a)
 
-  The constraints `C a` and `C (a,b)` are generated from the data
-  constructor arguments, but the latter simplifies to `C a`.
+  Since the default type signatures for ``bar`` and ``baz`` require ``Show a``
+  and ``Ord a`` constraints, respectively.
+
+  Constraints on the non-default type signatures can play a role in inferring
+  the instance context as well. For example, if you have this class: ::
+
+    class HigherEq f where
+      (==#) :: f a -> f a -> Bool
+      default (==#) :: Eq (f a) => f a -> f a -> Bool
+      x ==# y = (x == y)
+
+  And you tried to derive an instance for it: ::
+
+    instance Eq a => Eq (Option a) where ...
+    data Option a = None | Some a deriving HigherEq
+
+  Then it will fail with an error to the effect of: ::
+
+    No instance for (Eq a)
+        arising from the 'deriving' clause of a data type declaration
+
+  That is because we require an ``Eq (Option a)`` instance from the default
+  type signature for ``(==#)``, which in turn requires an ``Eq a`` instance,
+  which we don't have in scope. But if you tweak the definition of
+  ``HigherEq`` slightly: ::
+
+    class HigherEq f where
+      (==#) :: Eq a => f a -> f a -> Bool
+      default (==#) :: Eq (f a) => f a -> f a -> Bool
+      x ==# y = (x == y)
+
+  Then it becomes possible to derive a ``HigherEq Option`` instance. Note that
+  the only difference is that now the non-default type signature for ``(==#)``
+  brings in an ``Eq a`` constraint. Constraints from non-default type
+  signatures never appear in the derived instance context itself, but they can
+  be used to discharge obligations that are demanded by the default type
+  signatures. In the example above, the default type signature demanded an
+  ``Eq a`` instance, and the non-default signature was able to satisfy that
+  request, so the derived instance is simply: ::
+
+    instance HigherEq Option
 
 - :ghc-flag:`-XDeriveAnyClass` can be used with partially applied classes,
   such as ::
@@ -4106,6 +4913,16 @@ Note the following details
 
 Deriving strategies
 -------------------
+
+.. ghc-flag:: -XDerivingStrategies
+    :shortdesc: Enables :ref:`deriving strategies <deriving-strategies>`.
+    :type: dynamic
+    :reverse: -XNoDerivingStrategies
+    :category:
+
+    :since: 8.2.1
+
+    Allow multiple ``deriving``, each optionally qualified with a *strategy*.
 
 In most scenarios, every ``deriving`` statement generates a typeclass instance
 in an unambiguous fashion. There is a corner case, however, where
@@ -4157,8 +4974,8 @@ Currently, the deriving strategies are:
 
 If an explicit deriving strategy is not given, GHC has an algorithm for
 determining how it will actually derive an instance. For brevity, the algorithm
-is omitted here. You can read the full algorithm at
-:ghc-wiki:`Wiki page <DerivingStrategies>`.
+is omitted here. You can read the full algorithm on the
+:ghc-wiki:`GHC Wiki <Commentary/Compiler/DerivingStrategies>`.
 
 .. _pattern-synonyms:
 
@@ -4166,6 +4983,10 @@ Pattern synonyms
 ================
 
 .. ghc-flag:: -XPatternSynonyms
+    :shortdesc: Enable :ref:`pattern synonyms <pattern-synonyms>`.
+    :type: dynamic
+    :reverse: -XNoPatternSynonyms
+    :category:
 
     :since: 7.8.1
 
@@ -4275,6 +5096,21 @@ We can then use ``HeadC`` in both expression and pattern contexts. In a pattern
 context it will match the head of any list with length at least one. In an
 expression context it will construct a singleton list.
 
+Explicitly bidirectional pattern synonyms offer greater flexibility than
+implicitly bidirectional ones in terms of the syntax that is permitted. For
+instance, the following is not a legal implicitly bidirectional pattern
+synonym: ::
+
+      pattern StrictJust a = Just !a
+
+This is illegal because the use of :ghc-flag:`-XBangPatterns` on the right-hand
+sides prevents it from being a well formed expression. However, constructing a
+strict pattern synonym is quite possible with an explicitly bidirectional
+pattern synonym: ::
+
+      pattern StrictJust a <- Just !a where
+        StrictJust !a = Just a
+
 The table below summarises where each kind of pattern synonym can be used.
 
 +---------------+----------------+---------------+---------------------------+
@@ -4374,6 +5210,10 @@ allowed. For unidirectional and explicitly bidirectional pattern
 synonyms, there is no restriction on the right-hand side pattern.
 
 Pattern synonyms cannot be defined recursively.
+
+:ref:`complete-pragma` can be specified in order to tell
+the pattern match exhaustiveness checker that a set of pattern synonyms is
+complete.
 
 .. _patsyn-impexp:
 
@@ -4612,8 +5452,15 @@ Multi-parameter type classes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XMultiParamTypeClasses
+    :shortdesc: Enable :ref:`multi parameter type classes
+        <multi-param-type-classes>`. Implied by
+        :ghc-flag:`-XFunctionalDependencies`.
+    :type: dynamic
+    :reverse: -XNoMultiParamTypeClasses
+    :category:
 
     :implies: :ghc-flag:`-XConstrainedClassMethods`
+    :since: 6.8.1
 
     Allow the definition of typeclasses with more than one parameter.
 
@@ -4630,6 +5477,13 @@ The superclasses of a class declaration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XFlexibleContexts
+    :shortdesc: Enable :ref:`flexible contexts <flexible-contexts>`. Implied by
+        :ghc-flag:`-XImplicitParams`.
+    :type: dynamic
+    :reverse: -XNoFlexibleContexts
+    :category:
+
+    :since: 6.8.1
 
     Allow the use of complex constraints in class declaration contexts.
 
@@ -4680,6 +5534,12 @@ Constrained class method types
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XConstrainedClassMethods
+    :shortdesc: Enable :ref:`constrained class methods <class-method-types>`.
+    :type: dynamic
+    :reverse: -XNoConstrainedClassMethods
+    :category:
+
+    :since: 6.8.1
 
     Allows the definition of further constraints on individual class methods.
 
@@ -4705,8 +5565,8 @@ this case ``a``).  More precisely, a constraint in a class method signature is r
 
      class C a where
        op3 :: Eq a => a -> a    -- Rejected: constrains class variable only
-       op4 :: D b => a -> b     -- Accepted: constrains a locally-quantified varible `b`
-       op5 :: D (a,b) => a -> b -- Accepted: constrains a locally-quantified varible `b`
+       op4 :: D b => a -> b     -- Accepted: constrains a locally-quantified variable `b`
+       op5 :: D (a,b) => a -> b -- Accepted: constrains a locally-quantified variable `b`
 
 
 GHC lifts this restriction with language extension
@@ -4720,8 +5580,12 @@ Default method signatures
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XDefaultSignatures
+    :shortdesc: Enable :ref:`default signatures <class-default-signatures>`.
+    :type: dynamic
+    :reverse: -XNoDefaultSignatures
+    :category:
 
-    :since: 7.2
+    :since: 7.2.1
 
     Allows the definition of default method signatures in class definitions.
 
@@ -4747,9 +5611,62 @@ you can specify a default method that uses that generic implementation: ::
 We reuse the keyword ``default`` to signal that a signature applies to
 the default method only; when defining instances of the ``Enum`` class,
 the original type ``[a]`` of ``enum`` still applies. When giving an
-empty instance, however, the default implementation ``map to genum`` is
+empty instance, however, the default implementation ``(map to genum)`` is
 filled-in, and type-checked with the type
 ``(Generic a, GEnum (Rep a)) => [a]``.
+
+The type signature for a default method of a type class must take on the same
+form as the corresponding main method's type signature. Otherwise, the
+typechecker will reject that class's definition. By "take on the same form", we
+mean that the default type signature should differ from the main type signature
+only in their contexts. Therefore, if you have a method ``bar``: ::
+
+      class Foo a where
+        bar :: forall b. C => a -> b -> b
+
+Then a default method for ``bar`` must take on the form: ::
+
+      default bar :: forall b. C' => a -> b -> b
+
+``C`` is allowed to be different from ``C'``, but the right-hand sides of the
+type signatures must coincide. We require this because when you declare an
+empty instance for a class that uses :ghc-flag:`-XDefaultSignatures`, GHC
+implicitly fills in the default implementation like this: ::
+
+      instance Foo Int where
+        bar = default_bar @Int
+
+Where ``@Int`` utilizes visible type application
+(:ref:`visible-type-application`) to instantiate the ``b`` in
+``default bar :: forall b. C' => a -> b -> b``. In order for this type
+application to work, the default type signature for ``bar`` must have the same
+type variable order as the non-default signature! But there is no obligation
+for ``C`` and ``C'`` to be the same (see, for instance, the ``Enum`` example
+above, which relies on this).
+
+To further explain this example, the right-hand side of the default
+type signature for ``bar`` must be something that is alpha-equivalent to
+``forall b. a -> b -> b`` (where ``a`` is bound by the class itself, and is
+thus free in the methods' type signatures). So this would also be an acceptable
+default type signature: ::
+
+      default bar :: forall x. C' => a -> x -> x
+
+But not this (since the free variable ``a`` is in the wrong place): ::
+
+      default bar :: forall b. C' => b -> a -> b
+
+Nor this, since we can't match the type variable ``b`` with the concrete type
+``Int``: ::
+
+      default bar :: C' => a -> Int -> Int
+
+That last one deserves a special mention, however, since ``a -> Int -> Int`` is
+a straightforward instantiation of ``forall b. a -> b -> b``. You can still
+write such a default type signature, but you now must use type equalities to
+do so: ::
+
+      default bar :: forall b. (C', b ~ Int) => a -> b -> b
 
 We use default signatures to simplify generic programming in GHC
 (:ref:`generic-programming`).
@@ -4760,6 +5677,12 @@ Nullary type classes
 ~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XNullaryTypeClasses
+    :shortdesc: Deprecated, does nothing. :ref:`nullary (no parameter) type
+        classes <nullary-type-classes>` are now enabled using
+        :ghc-flag:`-XMultiParamTypeClasses`.
+    :type: dynamic
+    :reverse: -XNoNullaryTypeClasses
+    :category:
 
     :since: 7.8.1
 
@@ -4796,12 +5719,19 @@ Functional dependencies
 -----------------------
 
 .. ghc-flag:: -XFunctionalDependencies
+    :shortdesc: Enable :ref:`functional dependencies <functional-dependencies>`.
+        Implies :ghc-flag:`-XMultiParamTypeClasses`.
+    :type: dynamic
+    :reverse: -XNoFunctionalDependencies
+    :category:
 
     :implies: :ghc-flag:`-XMultiParamTypeClasses`
+    :since: 6.8.1
 
     Allow use of functional dependencies in class declarations.
 
-Functional dependencies are implemented as described by [Jones2000]_.Mark Jones in
+Functional dependencies are implemented as described by Mark Jones in
+[Jones2000]_.
 
 Functional dependencies are introduced by a vertical bar in the syntax
 of a class declaration; e.g. ::
@@ -4810,12 +5740,12 @@ of a class declaration; e.g. ::
 
       class Foo a b c | a b -> c where ...
 
-There should be more documentation, but there isn't (yet). Yell if you
-need it.
+More documentation can be found in the `Haskell Wiki
+<https://wiki.haskell.org/Functional_dependencies>`_.
 
 .. [Jones2000]
     "`Type Classes with Functional
-    Dependencies <http://citeseer.ist.psu.edu/jones00type.html>`__",
+    Dependencies <https://web.cecs.pdx.edu/~mpj/pubs/fundeps.html>`__",
     Mark P. Jones, In *Proceedings of the 9th European Symposium on Programming*,
     ESOP 2000, Berlin, Germany, March 2000, Springer-Verlag LNCS 1782, .
 
@@ -5133,12 +6063,26 @@ Relaxed rules for the instance head
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XTypeSynonymInstances
+    :shortdesc: Enable :ref:`type synonyms in instance heads
+        <flexible-instance-head>`. Implied by :ghc-flag:`-XFlexibleInstances`.
+    :type: dynamic
+    :reverse: -XNoTypeSynonymInstances
+    :category:
+
+    :since: 6.8.1
 
     Allow definition of type class instances for type synonyms.
 
 .. ghc-flag:: -XFlexibleInstances
+    :shortdesc: Enable :ref:`flexible instances <instance-rules>`.
+        Implies :ghc-flag:`-XTypeSynonymInstances`.
+        Implied by :ghc-flag:`-XImplicitParams`.
+    :type: dynamic
+    :reverse: -XNoFlexibleInstances
+    :category:
 
     :implies: :ghc-flag:`-XTypeSynonymInstances`
+    :since: 6.8.1
 
     Allow definition of type class instances with arbitrary nested types in the
     instance head.
@@ -5210,6 +6154,12 @@ Instance termination rules
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XUndecidableInstances
+    :shortdesc: Enable :ref:`undecidable instances <undecidable-instances>`.
+    :type: dynamic
+    :reverse: -XNoUndecidableInstances
+    :category:
+
+    :since: 6.8.1
 
     Permit definition of instances which may lead to type-checker non-termination.
 
@@ -5245,7 +6195,7 @@ reduction step makes the problem smaller by at least one constructor.
 You can find lots of background material about the reason for these
 restrictions in the paper `Understanding functional dependencies via
 Constraint Handling
-Rules <http://research.microsoft.com/%7Esimonpj/papers/fd%2Dchr/>`__.
+Rules <https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/jfp06.pdf>`__.
 
 For example, these are okay:
 
@@ -5318,7 +6268,7 @@ Condition (described in :ref:`instance-termination`) are lifted.
 Termination is still ensured by having a fixed-depth recursion stack. If
 you exceed the stack depth you get a sort of backtrace, and the
 opportunity to increase the stack depth with
-``-freduction-depth=``\ *N*. However, if you should exceed the default
+``-freduction-depth=⟨n⟩``. However, if you should exceed the default
 reduction depth limit, it is probably best just to disable depth
 checking, with ``-freduction-depth=0``. The exact depth your program
 requires depends on minutiae of your code, and it may change between
@@ -5403,9 +6353,24 @@ Overlapping instances
 ~~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XOverlappingInstances
-              -XIncoherentInstances
+    :shortdesc: Enable :ref:`overlapping instances <instance-overlap>`.
+    :type: dynamic
+    :reverse: -XNoOverlappingInstances
+    :category:
 
-    Deprecated flags to weaken checks intended to ensure instance resolution
+    Deprecated flag to weaken checks intended to ensure instance resolution
+    termination.
+
+.. ghc-flag:: -XIncoherentInstances
+    :shortdesc: Enable :ref:`incoherent instances <instance-overlap>`.
+        Implies :ghc-flag:`-XOverlappingInstances`.
+    :type: dynamic
+    :reverse: -XNoIncoherentInstances
+    :category:
+
+    :since: 6.8.1
+
+    Deprecated flag to weaken checks intended to ensure instance resolution
     termination.
 
 In general, as discussed in :ref:`instance-resolution`, *GHC requires
@@ -5450,16 +6415,16 @@ Now suppose that, in some client module, we are searching for an
 instance of the *target constraint* ``(C ty1 .. tyn)``. The search works
 like this:
 
--  Find all instances I that *match* the target constraint; that is, the
-   target constraint is a substitution instance of I. These instance
+-  Find all instances :math:`I` that *match* the target constraint; that is, the
+   target constraint is a substitution instance of :math:`I`. These instance
    declarations are the *candidates*.
 
--  Eliminate any candidate IX for which both of the following hold:
+-  Eliminate any candidate :math:`IX` for which both of the following hold:
 
-   -  There is another candidate IY that is strictly more specific; that
-      is, IY is a substitution instance of IX but not vice versa.
+   -  There is another candidate :math:`IY` that is strictly more specific; that
+      is, :math:`IY` is a substitution instance of :math:`IX` but not vice versa.
 
-   -  Either IX is *overlappable*, or IY is *overlapping*. (This
+   -  Either :math:`IX` is *overlappable*, or :math:`IY` is *overlapping*. (This
       "either/or" design, rather than a "both/and" design, allow a
       client to deliberately override an instance from a library,
       without requiring a change to the library.)
@@ -5620,6 +6585,10 @@ Instance signatures: type signatures in instance declarations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XInstanceSigs
+    :shortdesc: Enable :ref:`instance signatures <instance-sigs>`.
+    :type: dynamic
+    :reverse: -XNoInstanceSigs
+    :category:
 
     :since: 7.6.1
 
@@ -5677,6 +6646,12 @@ Overloaded string literals
 --------------------------
 
 .. ghc-flag:: -XOverloadedStrings
+    :shortdesc: Enable :ref:`overloaded string literals <overloaded-strings>`.
+    :type: dynamic
+    :reverse: -XNoOverloadedStrings
+    :category:
+
+    :since: 6.8.1
 
     Enable overloaded string literals (e.g. string literals desugared via the
     ``IsString`` class).
@@ -5757,6 +6732,10 @@ Overloaded labels
 -----------------
 
 .. ghc-flag:: -XOverloadedLabels
+    :shortdesc: Enable :ref:`overloaded labels <overloaded-labels>`.
+    :type: dynamic
+    :reverse: -XNoOverloadedLabels
+    :category:
 
     :since: 8.0.1
 
@@ -5773,42 +6752,47 @@ The class ``IsLabel`` is defined as:
 ::
 
     class IsLabel (x :: Symbol) a where
-      fromLabel :: Proxy# x -> a
+      fromLabel :: a
 
 This is rather similar to the class ``IsString`` (see
 :ref:`overloaded-strings`), but with an additional type parameter that makes the
 text of the label available as a type-level string (see
-:ref:`type-level-literals`).
+:ref:`type-level-literals`).  Note that ``fromLabel`` had an extra ``Proxy# x``
+argument in GHC 8.0, but this was removed in GHC 8.2 as a type application (see
+:ref:`visible-type-application`) can be used instead.
 
 There are no predefined instances of this class.  It is not in scope by default,
 but can be brought into scope by importing
-:base-ref:`GHC.OverloadedLabels <GHC-OverloadedLabels.html>`:.  Unlike
+:base-ref:`GHC.OverloadedLabels.`.  Unlike
 ``IsString``, there are no special defaulting rules for ``IsLabel``.
 
 During typechecking, GHC will replace an occurrence of an overloaded label like
-``#foo`` with
-
-::
-
-    fromLabel (proxy# :: Proxy# "foo")
-
-This will have some type ``alpha`` and require the solution of a class
-constraint ``IsLabel "foo" alpha``.
+``#foo`` with ``fromLabel @"foo"``.  This will have some type ``alpha`` and
+require the solution of a class constraint ``IsLabel "foo" alpha``.
 
 The intention is for ``IsLabel`` to be used to support overloaded record fields
 and perhaps anonymous records.  Thus, it may be given instances for base
 datatypes (in particular ``(->)``) in the future.
 
-When writing an overloaded label, there must be no space between the hash sign
-and the following identifier.  :ref:`magic-hash` makes use of postfix hash
-signs; if ``OverloadedLabels`` and ``MagicHash`` are both enabled then ``x#y``
-means ``x# y``, but if only ``OverloadedLabels`` is enabled then it means ``x
-#y``.  To avoid confusion, you are strongly encouraged to put a space before the
-hash when using ``OverloadedLabels``.
+If :ghc-flag:`-XRebindableSyntax` is enabled, overloaded
+labels will be desugared using whatever ``fromLabel`` function is in scope,
+rather than always using ``GHC.OverloadedLabels.fromLabel``.
 
-When using ``OverloadedLabels`` (or ``MagicHash``) in a ``.hsc`` file (see
-:ref:`hsc2hs`), the hash signs must be doubled (write ``##foo`` instead of
-``#foo``) to avoid them being treated as ``hsc2hs`` directives.
+When writing an overloaded label, there must be no space between the hash sign
+and the following identifier.  The :ghc-flag:`-XMagicHash` extension makes use
+of postfix hash signs; if :ghc-flag:`-XOverloadedLabels` and
+:ghc-flag:`-XMagicHash` are both enabled then ``x#y`` means ``x# y``, but if
+only :ghc-flag:`-XOverloadedLabels` is enabled then it means ``x #y``.  The
+:ghc-flag:`-XUnboxedTuples` extension makes ``(#`` a single lexeme, so when
+:ghc-flag:`-XUnboxedTuples` is enabled you must write a space between an opening
+parenthesis and an overloaded label.  To avoid confusion, you are strongly
+encouraged to put a space before the hash when using
+:ghc-flag:`-XOverloadedLabels`.
+
+When using :ghc-flag:`-XOverloadedLabels` (or other extensions that make use of
+hash signs) in a ``.hsc`` file (see :ref:`hsc2hs`), the hash signs must be
+doubled (write ``##foo`` instead of ``#foo``) to avoid them being treated as
+``hsc2hs`` directives.
 
 Here is an extension of the record access example in :ref:`type-level-literals`
 showing how an overloaded label can be used as a record selector:
@@ -5833,7 +6817,7 @@ showing how an overloaded label can be used as a record selector:
     instance Has Point "y" Int where from (Point _ y) _ = y
 
     instance Has a l b => IsLabel l (a -> b) where
-      fromLabel _ x = from x (Get :: Label l)
+      fromLabel x = from x (Get :: Label l)
 
     example = #x (Point 1 2)
 
@@ -5844,6 +6828,10 @@ Overloaded lists
 ----------------
 
 .. ghc-flag:: -XOverloadedLists
+    :shortdesc: Enable :ref:`overloaded lists <overloaded-lists>`.
+    :type: dynamic
+    :reverse: -XNoOverloadedLists
+    :category:
 
     :since: 7.8.1
 
@@ -5851,7 +6839,7 @@ Overloaded lists
     ``IsList`` class).
 
 GHC supports *overloading of the list notation*. Let us recap the
-notation for constructing lists. In Haskell, the list notation can be be
+notation for constructing lists. In Haskell, the list notation can be
 used in the following seven ways:
 
 ::
@@ -6011,6 +6999,11 @@ Undecidable (or recursive) superclasses
 ---------------------------------------
 
 .. ghc-flag:: -XUndecidableSuperClasses
+    :shortdesc: Allow all superclass constraints, including those that may
+        result in non-termination of the typechecker.
+    :type: dynamic
+    :reverse: -XNoUndecidableSuperClasses
+    :category:
 
     :since: 8.0.1
 
@@ -6069,9 +7062,16 @@ Type families
 =============
 
 .. ghc-flag:: -XTypeFamilies
+    :shortdesc: Enable :ref:`type families <type-families>`.
+        Implies :ghc-flag:`-XExplicitNamespaces`, :ghc-flag:`-XKindSignatures`,
+        and :ghc-flag:`-XMonoLocalBinds`.
+    :type: dynamic
+    :reverse: -XNoTypeFamilies
+    :category:
 
     :implies: :ghc-flag:`-XMonoLocalBinds`, :ghc-flag:`-XKindSignatures`,
               :ghc-flag:`-XExplicitNamespaces`
+    :since: 6.8.1
 
     Allow use and definition of indexed type and data families.
 
@@ -6168,6 +7168,11 @@ Just as with :ref:`GADT declarations <gadt>` named arguments are
 entirely optional, so that we can declare ``Array`` alternatively with ::
 
     data family Array :: * -> *
+
+Unlike with ordinary data definitions, the result kind of a data family
+does not need to be ``*``: it can alternatively be a kind variable
+(with :ghc-flag:`-XPolyKinds`). Data instances' kinds must end in
+``*``, however.
 
 .. _data-instance-declarations:
 
@@ -6519,7 +7524,8 @@ However see :ref:`ghci-decls` for the overlap rules in GHCi.
 Decidability of type synonym instances
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. ghc-flag:: -XUndeciableInstances
+.. ghc-flag:: -XUndecidableInstances
+    :noindex:
 
     Relax restrictions on the decidability of type synonym family instances.
 
@@ -6634,38 +7640,20 @@ keyword in the family instance: ::
       ...
 
 The data or type family instance for an assocated type must follow
-the following two rules:
+the rule that the type indexes corresponding to class parameters must have
+precisely the same as type given in the instance head. For example: ::
 
--  The type indexes corresponding to class parameters must have
-   precisely the same as type given in the instance head.
-   For example: ::
+    class Collects ce where
+      type Elem ce :: *
 
-       class Collects ce where
-         type Elem ce :: *
+    instance Eq (Elem [e]) => Collects [e] where
+      -- Choose one of the following alternatives:
+      type Elem [e] = e       -- OK
+      type Elem [x] = x       -- BAD; '[x]' is different to '[e]' from head
+      type Elem x   = x       -- BAD; 'x' is different to '[e]'
+      type Elem [Maybe x] = x -- BAD: '[Maybe x]' is different to '[e]'
 
-       instance Eq (Elem [e]) => Collects [e] where
-         -- Choose one of the following alternatives:
-         type Elem [e] = e       -- OK
-         type Elem [x] = x       -- BAD; '[x]' is differnet to '[e]' from head
-         type Elem x   = x       -- BAD; 'x' is different to '[e]'
-         type Elem [Maybe x] = x -- BAD: '[Maybe x]' is different to '[e]'
-
--  The type indexes of the type family that do *not* correspond to
-   class parameters must be distinct type variables, not mentioned
-   in the instance head.  For example: ::
-
-       class C b x where
-          type F a b c :: *
-
-       instance C [v] [w] where
-         -- Choose one of the following alternatives:
-         type C a [v] c = a->c  -- OK; a,c are tyvars
-         type C x [v] y = y->x  -- OK; x,y are tyvars
-         type C x [v] x = x     -- BAD: x is repeated
-         type C x [v] w = x     -- BAD: w is mentioned in instance head
-
-The effect of these two rules is that the type-family instance
-completely covers the cases covered by the instance head.
+Note the following points:
 
 -  An instance for an associated family can only appear as part of an
    instance declarations of the class in which the family was declared,
@@ -6680,9 +7668,9 @@ completely covers the cases covered by the instance head.
    inhabited; i.e., only diverging expressions, such as ``undefined``,
    can assume the type.
 
--  A historical note.  In the past (but no longer), GHC allowed you to
-   write *multiple* type or data family instances for a single
-   asssociated type.  For example: ::
+-  Although it is unusual, there (currently) can be *multiple* instances
+   for an associated family in a single instance declaration. For
+   example, this is legitimate: ::
 
        instance GMapKey Flob where
          data GMap Flob [v] = G1 v
@@ -6691,23 +7679,9 @@ completely covers the cases covered by the instance head.
 
    Here we give two data instance declarations, one in which the last
    parameter is ``[v]``, and one for which it is ``Int``. Since you
-   cannot give any *subsequent* instances for ``(GMap Flob ...)``,
-   this facility was not very useful, except perhaps when the free
-   indexed parameter has a fixed number of alternatives
-   (e.g. ``Bool``). But in that case it is better to define an auxiliary
-   closed type function like this: ::
-
-       class C a where
-         type F a (b :: Bool) :: *
-
-       instance C Int where
-         type F Int b = FInt b
-
-       type family FInt a b where
-         FInt True  = Char
-         FInt False = Bool
-
-    Here the auxiliary type function is ``FInt``.
+   cannot give any *subsequent* instances for ``(GMap Flob ...)``, this
+   facility is most useful when the free indexed parameter is of a kind
+   with a finite number of alternatives (unlike ``*``).
 
 .. _assoc-decl-defs:
 
@@ -6991,6 +7965,11 @@ Injective type families
 -----------------------
 
 .. ghc-flag:: -XTypeFamilyDependencies
+    :shortdesc: Enable :ref:`injective type families <injective-ty-fams>`.
+        Implies :ghc-flag:`-XTypeFamilies`.
+    :type: dynamic
+    :reverse: -XNoTypeFamilyDependencies
+    :category:
 
     :implies: :ghc-flag:`-XTypeFamilies`
     :since: 8.0.1
@@ -7119,6 +8098,10 @@ Datatype promotion
 ==================
 
 .. ghc-flag:: -XDataKinds
+    :shortdesc: Enable :ref:`datatype promotion <promotion>`.
+    :type: dynamic
+    :reverse: -XNoDataKinds
+    :category:
 
     :since: 7.4.1
 
@@ -7337,6 +8320,14 @@ Kind polymorphism and Type-in-Type
 ==================================
 
 .. ghc-flag:: -XTypeInType
+    :shortdesc: Allow :ref:`kinds to be used as types <type-in-type>`,
+        including explicit kind variable quantification, higher-rank
+        kinds, kind synonyms, and kind families.
+        Implies :ghc-flag:`-XDataKinds`, :ghc-flag:`-XKindSignatures`,
+        and :ghc-flag:`-XPolyKinds`.
+    :type: dynamic
+    :reverse: -XNoTypeInType
+    :category:
 
     :implies: :ghc-flag:`-XPolyKinds`, :ghc-flag:`-XDataKinds`, :ghc-flag:`-XKindSignatures`
     :since: 8.0.1
@@ -7346,6 +8337,11 @@ Kind polymorphism and Type-in-Type
     families in kinds, among other features.
 
 .. ghc-flag:: -XPolyKinds
+    :shortdesc: Enable :ref:`kind polymorphism <kind-polymorphism>`.
+        Implies :ghc-flag:`-XKindSignatures`.
+    :type: dynamic
+    :reverse: -XNoPolyKinds
+    :category:
 
     :implies: :ghc-flag:`-XKindSignatures`
     :since: 7.4.1
@@ -7724,7 +8720,7 @@ Consider the type ::
 
 This datatype ``G`` is GADT-like in both its kind and its type. Suppose you
 have ``g :: G a``, where ``a :: k``. Then pattern matching to discover that
-``g`` is in fact ```GMaybe`` tells you both that ``k ~ (* -> *)`` and
+``g`` is in fact ``GMaybe`` tells you both that ``k ~ (* -> *)`` and
 ``a ~ Maybe``. The definition for ``G`` requires that :ghc-flag:`-XTypeInType`
 be in effect, but pattern-matching on ``G`` requires no extension beyond
 :ghc-flag:`-XGADTs`. That this works is actually a straightforward extension
@@ -7736,6 +8732,45 @@ therefore that kind-indexed GADTs use a form of polymorphic recursion.
 It is thus only possible to use this feature if you have provided a
 complete user-supplied kind signature
 for the datatype (:ref:`complete-kind-signatures`).
+
+Higher-rank kinds
+-----------------
+
+In concert with :ghc-flag:`-XRankNTypes`, GHC supports higher-rank kinds.
+Here is an example::
+
+  -- Heterogeneous propositional equality
+  data (a :: k1) :~~: (b :: k2) where
+    HRefl :: a :~~: a
+
+  class HTestEquality (t :: forall k. k -> Type) where
+    hTestEquality :: forall k1 k2 (a :: k1) (b :: k2). t a -> t b -> Maybe (a :~~: b)
+
+Note that ``hTestEquality`` takes two arguments where the type variable ``t`` is applied
+to types of different kinds. That type variable must then be polykinded. Accordingly,
+the kind of ``HTestEquality`` (the class) is ``(forall k. k -> Type) -> Constraint``,
+a higher-rank kind.
+
+A big difference with higher-rank kinds as compared with higher-rank types is that
+``forall``\s in kinds *cannot* be moved. This is best illustrated by example.
+Suppose we want to have an instance of ``HTestEquality`` for ``(:~~:)``. ::
+
+  instance HTestEquality ((:~~:) a) where
+    hTestEquality HRefl HRefl = Just HRefl
+
+With the declaration of ``(:~~:)`` above, it gets kind ``forall k1 k2. k1 -> k2 -> Type``.
+Thus, the type ``(:~~:) a`` has kind ``k2 -> Type`` for some ``k2``. GHC cannot
+then *regeneralize* this kind to become ``forall k2. k2 -> Type`` as desired. Thus, the
+instance is rejected as ill-kinded.
+
+To allow for such an instance, we would have to define ``(:~~:)`` as follows::
+
+  data (:~~:) :: forall k1. k1 -> forall k2. k2 -> Type where
+    HRefl :: a :~~: a
+
+In this redefinition, we give an explicit kind for ``(:~~:)``, deferring the choice
+of ``k2`` until after the first argument (``a``) has been given. With this declaration
+for ``(:~~:)``, the instance for ``HTestEquality`` is accepted.
 
 Constraints in kinds
 --------------------
@@ -7775,9 +8810,9 @@ enabled).
 The only way ``*`` is unordinary is in its parsing. In order to be backward
 compatible, ``*`` is parsed as if it were an alphanumeric idenfifier; note
 that we do not write ``Int :: (*)`` but just plain ``Int :: *``. Due to the
-bizarreness with which ``*`` is parsed-and the fact that it is the only such
-operator in GHC-there are some corner cases that are
-not handled. We are aware of two:
+bizarreness with which ``*`` is parsed--and the fact that it is the only such
+operator in GHC--there are some corner cases that are
+not handled. We are aware of three:
 
 - In a Haskell-98-style data constructor, you must put parentheses around
   ``*``, like this: ::
@@ -7790,6 +8825,10 @@ not handled. We are aware of two:
 
   Note that the keyword ``type`` there is just to disambiguate the import
   from a term-level ``(*)``. (:ref:`explicit-namespaces`)
+
+- In an instance declaration head (the part after the word ``instance``), you
+  must parenthesize ``*``. This applies to all manners of instances, including
+  the left-hand sides of individual equations of a closed type family.
 
 The ``Data.Kind`` module also exports ``Type`` as a synonym for ``*``.
 Now that type synonyms work in kinds, it is conceivable that we will deprecate
@@ -7874,47 +8913,42 @@ these flags, especially :ghc-flag:`-fprint-explicit-kinds`.
 
 .. index::
    single: TYPE
-   single: representation polymorphism
+   single: levity polymorphism
 
 .. _runtime-rep:
 
-Runtime representation polymorphism
-===================================
+Levity polymorphism
+===================
 
 In order to allow full flexibility in how kinds are used, it is necessary
 to use the kind system to differentiate between boxed, lifted types
 (normal, everyday types like ``Int`` and ``[Bool]``) and unboxed, primitive
-types (:ref:`primitives`) like ``Int#``. We thus have so-called representation
+types (:ref:`primitives`) like ``Int#``. We thus have so-called levity
 polymorphism.
-
-.. note::
-   For quite some time, this idea was known as *levity* polymorphism, when
-   it differentiated between only lifted and unlifted types. Now that it
-   differentiates between any runtime representations, the name has been
-   changed. But anything you've read or heard about levity polymorphism
-   likely applies to the story told here -- this is just a small generalisation.
 
 Here are the key definitions, all available from ``GHC.Exts``: ::
 
   TYPE :: RuntimeRep -> *   -- highly magical, built into GHC
 
-  data RuntimeRep = PtrRepLifted     -- for things like `Int`
-                  | PtrRepUnlifted   -- for things like `Array#`
-                  | IntRep           -- for things like `Int#`
+  data RuntimeRep = LiftedRep     -- for things like `Int`
+                  | UnliftedRep   -- for things like `Array#`
+                  | IntRep        -- for `Int#`
+		  | TupleRep [RuntimeRep]  -- unboxed tuples, indexed by the representations of the elements
+		  | SumRep [RuntimeRep]    -- unboxed sums, indexed by the representations of the disjuncts
                   | ...
 
-  type * = TYPE PtrRepLifted    -- * is just an ordinary type synonym
+  type * = TYPE LiftedRep    -- * is just an ordinary type synonym
 
 The idea is that we have a new fundamental type constant ``TYPE``, which
 is parameterised by a ``RuntimeRep``. We thus get ``Int# :: TYPE 'IntRep``
-and ``Bool :: TYPE 'PtrRepLifted``. Anything with a type of the form
+and ``Bool :: TYPE 'LiftedRep``. Anything with a type of the form
 ``TYPE x`` can appear to either side of a function arrow ``->``. We can
 thus say that ``->`` has type
-``TYPE r1 -> TYPE r2 -> TYPE 'PtrRepLifted``. The result is always lifted
+``TYPE r1 -> TYPE r2 -> TYPE 'LiftedRep``. The result is always lifted
 because all functions are lifted in GHC.
 
-No representation-polymorphic variables
----------------------------------------
+No levity-polymorphic variables or arguments
+--------------------------------------------
 
 If GHC didn't have to compile programs that run in the real world, that
 would be the end of the story. But representation polymorphism can cause
@@ -7930,11 +8964,11 @@ think about compiling this to runnable code, though, problems appear.
 In particular, when we call ``bad``, we must somehow pass ``x`` into
 ``bad``. How wide (that is, how many bits) is ``x``? Is it a pointer?
 What kind of register (floating-point or integral) should ``x`` go in?
-It's all impossible to say, because ``x``'s type, ``TYPE r2`` is
-representation polymorphic. We thus forbid such constructions, via the
+It's all impossible to say, because ``x``'s type, ``a :: TYPE r1`` is
+levity polymorphic. We thus forbid such constructions, via the
 following straightforward rule:
 
-    No variable may have a representation-polymorphic type.
+    No variable may have a levity-polymorphic type.
 
 This eliminates ``bad`` because the variable ``x`` would have a
 representation-polymorphic type.
@@ -7945,15 +8979,20 @@ However, not all is lost. We can still do this: ::
          (a -> b) -> a -> b
   f $ x = f x
 
-Here, only ``b`` is representation polymorphic. There are no variables
-with a representation polymorphic type. And the code generator has no
+Here, only ``b`` is levity polymorphic. There are no variables
+with a levity-polymorphic type. And the code generator has no
 trouble with this. Indeed, this is the true type of GHC's ``$`` operator,
 slightly more general than the Haskell 98 version.
 
-Representation-polymorphic bottoms
-----------------------------------
+Because the code generator must store and move arguments as well
+as variables, the logic above applies equally well to function arguments,
+which may not be levity-polymorphic.
 
-We can use representation polymorphism to good effect with ``error``
+
+Levity-polymorphic bottoms
+--------------------------
+
+We can use levity polymorphism to good effect with ``error``
 and ``undefined``, whose types are given here: ::
 
   undefined :: forall (r :: RuntimeRep) (a :: TYPE r).
@@ -7961,25 +9000,30 @@ and ``undefined``, whose types are given here: ::
   error :: forall (r :: RuntimeRep) (a :: TYPE r).
            HasCallStack => String -> a
 
-These functions do not bind a representation-polymorphic variable, and
+These functions do not bind a levity-polymorphic variable, and
 so are accepted. Their polymorphism allows users to use these to conveniently
 stub out functions that return unboxed types.
 
-Printing representation-polymorphic types
------------------------------------------
+Printing levity-polymorphic types
+---------------------------------
 
 .. ghc-flag:: -Wprint-explicit-runtime-rep
+    :shortdesc: Print ``RuntimeRep`` variables in types which are
+        runtime-representation polymorphic.
+    :type: dynamic
+    :reverse: -fno-print-explicit-runtime-reps
+    :category:
 
-  Print ``RuntimeRep`` parameters as they appear; otherwise, they are
-  defaulted to ``'PtrRepLifted``.
+    Print ``RuntimeRep`` parameters as they appear; otherwise, they are
+    defaulted to ``'LiftedRep``.
 
-Most GHC users will not need to worry about representation polymorphism
-or unboxed types. For these users, see the representation polymorphism
+Most GHC users will not need to worry about levity polymorphism
+or unboxed types. For these users, seeing the levity polymorphism
 in the type of ``$`` is unhelpful. And thus, by default, it is suppressed,
-by supposing all type variables of type ``RuntimeType`` to be ``'PtrRepLifted``
-when printing, and printing ``TYPE 'PtrRepLifted`` as ``*``.
+by supposing all type variables of type ``RuntimeRep`` to be ``'LiftedRep``
+when printing, and printing ``TYPE 'LiftedRep`` as ``*``.
 
-Should you wish to see representation polymorphism in your types, enable
+Should you wish to see levity polymorphism in your types, enable
 the flag :ghc-flag:`-fprint-explicit-runtime-reps`.
 
 .. _type-level-literals:
@@ -8178,10 +9222,9 @@ The ``Coercible`` constraint
 
 The constraint ``Coercible t1 t2`` is similar to ``t1 ~ t2``, but
 denotes representational equality between ``t1`` and ``t2`` in the sense
-of Roles (:ref:`roles`). It is exported by
-:base-ref:`Data.Coerce <Data-Coerce.html>`, which also
-contains the documentation. More details and discussion can be found in
-the paper
+of Roles (:ref:`roles`). It is exported by :base-ref:`Data.Coerce.`, which also
+contains the documentation. More details and discussion can be found in the
+paper
 `"Safe Coercions" <http://www.cis.upenn.edu/~eir/papers/2014/coercible/coercible.pdf>`__.
 
 .. _constraint-kind:
@@ -8190,6 +9233,10 @@ The ``Constraint`` kind
 -----------------------
 
 .. ghc-flag:: -XConstraintKinds
+    :shortdesc: Enable a :ref:`kind of constraints <constraint-kind>`.
+    :type: dynamic
+    :reverse: -XNoConstraintKinds
+    :category:
 
     :since: 7.4.1
 
@@ -8274,8 +9321,14 @@ Explicit universal quantification (forall)
 ------------------------------------------
 
 .. ghc-flag:: -XExplicitForAll
+    :shortdesc: Enable :ref:`explicit universal quantification <explicit-foralls>`.
+        Implied by :ghc-flag:`-XScopedTypeVariables`, :ghc-flag:`-XLiberalTypeSynonyms`,
+        :ghc-flag:`-XRankNTypes` and :ghc-flag:`-XExistentialQuantification`.
+    :type: dynamic
+    :reverse: -XNoExplicitForAll
+    :category:
 
-    :since: 6.12
+    :since: 6.12.1
 
     Allow use of the ``forall`` keyword in places where universal quantification
     is implicit.
@@ -8335,6 +9388,11 @@ Ambiguous types and the ambiguity check
 ---------------------------------------
 
 .. ghc-flag:: -XAllowAmbiguousTypes
+    :shortdesc: Allow the user to write :ref:`ambiguous types <ambiguity>`, and
+        the type inference engine to infer them.
+    :type: dynamic
+    :reverse: -XNoAllowAmbiguousTypes
+    :category:
 
     :since: 7.8.1
 
@@ -8408,7 +9466,7 @@ is ambiguous if and only if ``((undefined :: ty) :: ty)`` would fail to
 typecheck. We use a very similar test for *inferred* types, to ensure
 that they too are unambiguous.
 
-*Switching off the ambiguity check.* Even if a function is has an
+*Switching off the ambiguity check.* Even if a function has an
 ambiguous type according the "guiding principle", it is possible that
 the function is callable. For example: ::
 
@@ -8422,9 +9480,22 @@ the function is callable. For example: ::
 
 Here ``strange``\'s type is ambiguous, but the call in ``foo`` is OK
 because it gives rise to a constraint ``(D Bool beta)``, which is
-soluble by the ``(D Bool b)`` instance. So the language extension
+soluble by the ``(D Bool b)`` instance.
+
+Another way of getting rid of the ambiguity at the call site is to use
+the :ghc-flag:`-XTypeApplications` flag to specify the types. For example: ::
+
+      class D a b where
+        h :: b
+      instance D Int Int where ...
+
+      main = print (h @Int @Int)
+
+Here ``a`` is ambiguous in the definition of ``D`` but later specified
+to be `Int` using type applications.
+
 :ghc-flag:`-XAllowAmbiguousTypes` allows you to switch off the ambiguity check.
-But even with ambiguity checking switched off, GHC will complain about a
+However, even with ambiguity checking switched off, GHC will complain about a
 function that can *never* be called, such as this one: ::
 
       f :: (Int ~ Bool) => a -> a
@@ -8447,6 +9518,13 @@ Explicitly-kinded quantification
 --------------------------------
 
 .. ghc-flag:: -XKindSignatures
+    :shortdesc: Enable :ref:`kind signatures <kinding>`.
+        Implied by :ghc-flag:`-XTypeFamilies` and :ghc-flag:`-XPolyKinds`.
+    :type: dynamic
+    :reverse: -XNoKindSignatures
+    :category:
+
+    :since: 6.8.1
 
     Allow explicit kind signatures on type variables.
 
@@ -8511,8 +9589,14 @@ Lexically scoped type variables
 ===============================
 
 .. ghc-flag:: -XScopedTypeVariables
+    :shortdesc: Enable :ref:`lexically-scoped type variables
+        <scoped-type-variables>`.
+    :type: dynamic
+    :reverse: -XNoScopedTypeVariables
+    :category:
 
     :implies: :ghc-flag:`-XExplicitForAll`
+    :since: 6.8.1
 
     Enable lexical scoping of type variables explicitly introduced with
     ``forall``.
@@ -8734,8 +9818,13 @@ Switching off the dreaded Monomorphism Restriction
 --------------------------------------------------
 
 .. ghc-flag:: -XNoMonomorphismRestriction
+    :shortdesc: Disable the :ref:`monomorphism restriction <monomorphism>`.
+    :type: dynamic
+    :reverse: -XMonomorphismRestriction
+    :category:
 
     :default: on
+    :since: 6.8.1
 
     Prevents the compiler from applying the monomorphism restriction to
     bindings lacking explicit type signatures.
@@ -8753,8 +9842,13 @@ Let-generalisation
 ------------------
 
 .. ghc-flag:: -XMonoLocalBinds
+    :shortdesc: Enable :ref:`do not generalise local bindings <mono-local-binds>`.
+        Implied by :ghc-flag:`-XTypeFamilies` and :ghc-flag:`-XGADTs`.
+    :type: dynamic
+    :reverse: -XNoMonoLocalBinds
+    :category:
 
-    :since: 6.12
+    :since: 6.12.1
 
     Infer less polymorphic types for local bindings by default.
 
@@ -8802,7 +9896,7 @@ restriction is not closed, and hence may in turn prevent generalisation
 of bindings that mention it.
 
 The rationale for this more conservative strategy is given in `the
-papers <http://research.microsoft.com/~simonpj/papers/constraints/index.htm>`__
+papers <https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/jfp-outsidein.pdf>`__
 "Let should not be generalised" and "Modular type inference with local
 assumptions", and a related `blog post <http://ghc.haskell.org/trac/ghc/blog/LetGeneralisationInGhc7>`__.
 
@@ -8811,12 +9905,59 @@ and :ghc-flag:`-XGADTs`. You can switch it off again with
 :ghc-flag:`-XNoMonoLocalBinds <-XMonoLocalBinds>` but type inference becomes
 less predicatable if you do so. (Read the papers!)
 
+.. _kind-generalisation:
+
+Kind generalisation
+-------------------
+
+Just as :ghc-flag:`-XMonoLocalBinds` places limitations on when the *type* of a
+*term* is generalised (see :ref:`mono-local-binds`), it also limits when the
+*kind* of a *type signature* is generalised. Here is an example involving
+:ref:`type signatures on instance declarations <instance-sigs>`: ::
+
+    data Proxy a = Proxy
+    newtype Tagged s b = Tagged b
+
+    class C b where
+      c :: forall (s :: k). Tagged s b
+
+    instance C (Proxy a) where
+      c :: forall s. Tagged s (Proxy a)
+      c = Tagged Proxy
+
+With :ghc-flag:`-XMonoLocalBinds` enabled, this ``C (Proxy a)`` instance will
+fail to typecheck. The reason is that the type signature for ``c`` captures
+``a``, an outer-scoped type variable, which means the type signature is not
+closed. Therefore, the inferred kind for ``s`` will *not* be generalised, and
+as a result, it will fail to unify with the kind variable ``k`` which is
+specified in the declaration of ``c``. This can be worked around by specifying
+an explicit kind variable for ``s``, e.g., ::
+
+    instance C (Proxy a) where
+      c :: forall (s :: k). Tagged s (Proxy a)
+      c = Tagged Proxy
+
+or, alternatively: ::
+
+    instance C (Proxy a) where
+      c :: forall k (s :: k). Tagged s (Proxy a)
+      c = Tagged Proxy
+
+This declarations are equivalent using Haskell's implicit "add implicit
+foralls" rules (see :ref:`implicit-quantification`). The implicit foralls rules
+are purely syntactic and are quite separate from the kind generalisation
+described here.
+
 .. _visible-type-application:
 
 Visible type application
 ========================
 
 .. ghc-flag:: -XTypeApplications
+    :shortdesc: Enable :ref:`type application syntax <visible-type-application>`.
+    :type: dynamic
+    :reverse: -XNoTypeApplications
+    :category:
 
     :since: 8.0.1
 
@@ -8883,9 +10024,46 @@ Here are the details:
 
 - When printing types with :ghc-flag:`-fprint-explicit-foralls` enabled,
   type variables not available for visible type application are printed
-  in braces. Thus, if you write ``myLength = length`` without a type
-  signature, ``myLength``'s inferred type will be
-  ``forall {f} {a}. Foldable f => f a -> Int``.
+  in braces. We can observe this behavior in a GHCi session: ::
+
+    > :set -XTypeApplications -fprint-explicit-foralls
+    > let myLength1 :: Foldable f => f a -> Int; myLength1 = length
+    > :type +v myLength1
+    myLength1 :: forall (f :: * -> *) a. Foldable f => f a -> Int
+    > let myLength2 = length
+    > :type +v myLength2
+    myLength2 :: forall {a} {t :: * -> *}. Foldable t => t a -> Int
+    > :type +v myLength2 @[]
+
+    <interactive>:1:1: error:
+        • Cannot apply expression of type ‘t0 a0 -> Int’
+          to a visible type argument ‘[]’
+        • In the expression: myLength2 @[]
+
+  Notice that since ``myLength1`` was defined with an explicit type signature,
+  :ghci-cmd:`:type +v` reports that all of its type variables are available
+  for type application. On the other hand, ``myLength2`` was not given a type
+  signature. As a result, all of its type variables are surrounded with braces,
+  and trying to use visible type application with ``myLength2`` fails.
+
+  Also note the use of :ghci-cmd:`:type +v` in the GHCi session above instead
+  of :ghci-cmd:`:type`. This is because :ghci-cmd:`:type` gives you the type
+  that would be inferred for a variable assigned to the expression provided
+  (that is, the type of ``x`` in ``let x = <expr>``). As we saw above with
+  ``myLength2``, this type will have no variables available to visible type
+  application. On the other hand, :ghci-cmd:`:type +v` gives you the actual
+  type of the expression provided. To illustrate this: ::
+
+    > :type myLength1
+    myLength1 :: forall {a} {f :: * -> *}. Foldable f => f a -> Int
+    > :type myLength2
+    myLength2 :: forall {a} {t :: * -> *}. Foldable t => t a -> Int
+
+  Using :ghci-cmd:`:type` might lead one to conclude that none of the type
+  variables in ``myLength1``'s type signature are available for type
+  application. This isn't true, however! Be sure to use :ghci-cmd:`:type +v`
+  if you want the most accurate information with respect to visible type
+  application properties.
 
 - Data constructors declared with GADT syntax follow different rules
   for the time being; it is expected that these will be brought in line
@@ -8896,7 +10074,7 @@ Here are the details:
        visible type application.
 
      * Universal variables always come first, in precisely the order they
-       appear in the type delcaration. Universal variables that are
+       appear in the type declaration. Universal variables that are
        constrained by a GADT return type are not included in the data constructor.
 
      * Existential variables come next. Their order is determined by a user-
@@ -8909,6 +10087,13 @@ Implicit parameters
 ===================
 
 .. ghc-flag:: -XImplicitParams
+    :shortdesc: Enable :ref:`Implicit Parameters <implicit-parameters>`.
+        Implies :ghc-flag:`-XFlexibleContexts` and :ghc-flag:`-XFlexibleInstances`.
+    :type: dynamic
+    :reverse: -XNoImplicitParams
+    :category:
+
+    :since: 6.8.1
 
     Allow definition of functions expecting implicit parameters.
 
@@ -9106,12 +10291,25 @@ Arbitrary-rank polymorphism
 ===========================
 
 .. ghc-flag:: -XRankNTypes
+    :shortdesc: Enable :ref:`rank-N types <universal-quantification>`.
+        Implied by :ghc-flag:`-XImpredicativeTypes`.
+    :type: dynamic
+    :reverse: -XNoRankNTypes
+    :category:
 
     :implies: :ghc-flag:`-XExplicitForAll`
+    :since: 6.8.1
 
     Allow types of arbitrary rank.
 
 .. ghc-flag:: -XRank2Types
+    :shortdesc: Enable :ref:`rank-2 types <universal-quantification>`.
+        Synonym for :ghc-flag:`-XRankNTypes`.
+    :type: dynamic
+    :reverse: -XNoRank2Types
+    :category:
+
+    :since: 6.8.1
 
     A deprecated alias of :ghc-flag:`-XRankNTypes`.
 
@@ -9206,10 +10404,8 @@ example: ::
 
     newtype Swizzle' = MkSwizzle' (Ord a => [a] -> [a])
 
-As of GHC 7.10, this is deprecated. The
-:ghc-flag:`-Wcontext-quantification` flag detects this situation and issues
-a warning. In GHC 8.0 this flag was deprecated and declarations such as
-``MkSwizzle'`` will cause an out-of-scope error.
+Since GHC 8.0 declarations such as ``MkSwizzle'`` will cause an out-of-scope
+error.
 
 As for type signatures, implicit quantification happens for
 non-overloaded types too. So if you write this: ::
@@ -9311,7 +10507,7 @@ Here we do not need to give a type signature to ``w``, because it is an
 argument of constructor ``T1`` and that tells GHC all it needs to know.
 
 
-.. _implicit-quant:
+.. _implicit-quantification:
 
 Implicit quantification
 -----------------------
@@ -9357,13 +10553,13 @@ your ``forall``\s explicitly. Indeed, doing so is strongly advised for
 rank-2 types.
 
 Sometimes there *is* no "outermost level", in which case no
-implicit quanification happens: ::
+implicit quantification happens: ::
 
       data PackMap a b s t = PackMap (Monad f => (a -> f b) -> s -> f t)
 
 This is rejected because there is no "outermost level" for the types on the RHS
 (it would obviously be terrible to add extra parameters to ``PackMap``),
-so no implicit quantificaiton happens, and the declaration is rejected
+so no implicit quantification happens, and the declaration is rejected
 (with "``f`` is out of scope").  Solution: use an explicit ``forall``: ::
 
       data PackMap a b s t = PackMap (forall f. Monad f => (a -> f b) -> s -> f t)
@@ -9374,8 +10570,14 @@ Impredicative polymorphism
 ==========================
 
 .. ghc-flag:: -XImpredicativeTypes
+    :shortdesc: Enable :ref:`impredicative types <impredicative-polymorphism>`.
+        Implies :ghc-flag:`-XRankNTypes`.
+    :type: dynamic
+    :reverse: -XNoImpredicativeTypes
+    :category:
 
-    :implies: :ghc-flag:`-RankNTypes`
+    :implies: :ghc-flag:`-XRankNTypes`
+    :since: 6.10.1
 
     Allow impredicative polymorphic types.
 
@@ -9409,13 +10611,13 @@ consistently, or working the same in subsequent releases. See
 :ghc-wiki:`this wiki page <ImpredicativePolymorphism>` for more details.
 
 If you want impredicative polymorphism, the main workaround is to use a
-newtype wrapper. The ``id runST`` example can be written using theis
+newtype wrapper. The ``id runST`` example can be written using this
 workaround like this: ::
 
     runST :: (forall s. ST s a) -> a
     id :: forall b. b -> b
 
-    nwetype Wrap a = Wrap { unWrap :: (forall s. ST s a) -> a }
+    newtype Wrap a = Wrap { unWrap :: (forall s. ST s a) -> a }
 
     foo :: (forall s. ST s a) -> a
     foo = unWrap (id (Wrap runST))
@@ -9468,14 +10670,15 @@ Here are some more details:
    containing holes, by using the :ghc-flag:`-fdefer-typed-holes` flag. This
    flag defers errors produced by typed holes until runtime, and
    converts them into compile-time warnings. These warnings can in turn
-   be suppressed entirely by :ghc-flag:`-fno-warn-typed-holes`.
+   be suppressed entirely by :ghc-flag:`-Wno-typed-holes <-Wtyped-holes>`.
 
    The same behaviour for "``Variable out of scope``" errors, it terminates
    compilation by default. You can defer such errors by using the
    :ghc-flag:`-fdefer-out-of-scope-variables` flag. This flag defers errors
    produced by out of scope variables until runtime, and
    converts them into compile-time warnings. These warnings can in turn
-   be suppressed entirely by :ghc-flag:`-fno-warn-deferred-out-of-scope-variables`.
+   be suppressed entirely by :ghc-flag:`-Wno-deferred-out-of-scope-variables
+   <-Wdeferred-out-of-scope-variables>`.
 
    The result is that a hole or a variable will behave like ``undefined``, but with
    the added benefits that it shows a warning at compile time, and will
@@ -9559,6 +10762,36 @@ Here are some more details:
    implementation terms, they are reported by the renamer rather than
    the type checker.)
 
+There's a flag for controlling the amount of context information shown for
+typed holes:
+
+.. ghc-flag:: -fshow-hole-constraints
+    :shortdesc: Show constraints when reporting typed holes
+    :type: dynamic
+    :category: verbosity
+
+    When reporting typed holes, also print constraints that are in scope.
+    Example: ::
+
+        f :: Eq a => a -> Bool
+        f x = _
+
+    results in the following message:
+
+    .. code-block:: none
+
+        show_constraints.hs:4:7: error:
+            • Found hole: _ :: Bool
+            • In the expression: _
+              In an equation for ‘f’: f x = _
+            • Relevant bindings include
+                x :: a (bound at show_constraints.hs:4:3)
+                f :: a -> Bool (bound at show_constraints.hs:4:1)
+              Constraints include
+                Eq a (from the type signature for:
+                             f :: Eq a => a -> Bool
+                      at show_constraints.hs:3:1-22)
+
 
 .. _partial-type-signatures:
 
@@ -9566,6 +10799,10 @@ Partial Type Signatures
 =======================
 
 .. ghc-flag:: -XPartialTypeSignatures
+    :shortdesc: Enable :ref:`partial type signatures <partial-type-signatures>`.
+    :type: dynamic
+    :reverse: -XNoPartialTypeSignatures
+    :category:
 
     :since: 7.10.1
 
@@ -9595,6 +10832,10 @@ type-checker will accept the inferred type for each hole, generating
 warnings instead of errors. Additionally, these warnings can be silenced
 with the :ghc-flag:`-Wno-partial-type-signatures <-Wpartial-type-signatures>`
 flag.
+
+However, because GHC must *infer* the type when part of a type is left
+out, it is unable to use polymorphic recursion. The same restriction
+takes place when the type signature is omitted completely.
 
 .. _pts-syntax:
 
@@ -9675,6 +10916,10 @@ Named Wildcards
 ~~~~~~~~~~~~~~~
 
 .. ghc-flag:: -XNamedWildCards
+    :shortdesc: Enable :ref:`named wildcards <named-wildcards>`.
+    :type: dynamic
+    :reverse: -XNoNamedWildCards
+    :category:
 
     :since: 7.10.1
 
@@ -9870,9 +11115,14 @@ splices.
 -  Typed expression splices: the same wildcards as in (untyped)
    expression splices are supported.
 
--  Pattern splices: Template Haskell doesn't support type signatures in
-   pattern splices. Consequently, partial type signatures are not
-   supported either.
+-  Pattern splices: anonymous and named wildcards can be used in pattern
+   signatures. Note that :ghc-flag:`-XScopedTypeVariables` has to be enabled
+   to allow pattern signatures. Extra-constraints wildcards are not supported,
+   just like in regular pattern signatures.
+   ::
+
+       {-# LANGUAGE TemplateHaskell, ScopedTypeVariables #-}
+       foo $( [p| (x :: _) |] ) = x
 
 -  Type splices: only anonymous wildcards are supported in type splices.
    Named and extra-constraints wildcards are not. ::
@@ -9914,7 +11164,7 @@ for constructing pretty-printed error messages, ::
         | ErrorMessage :<>: ErrorMessage     -- Put two chunks of error message next to each other
         | ErrorMessage :$$: ErrorMessage     -- Put two chunks of error message above each other
 
-in the ``GHC.TypeLits`` :base-ref:`module <GHC-TypeList.html>`.
+in the :base-ref:`GHC.TypeLits.` module.
 
 For instance, we might use this interface to provide a more useful error
 message for applications of ``show`` on unsaturated functions like this, ::
@@ -9965,24 +11215,25 @@ ignore the problems in ``a``.
 
 For more motivation and details please refer to the
 :ghc-wiki:`Wiki <DeferErrorsToRuntime>` page or the `original
-paper <http://research.microsoft.com/en-us/um/people/simonpj/papers/ext-f/>`__.
+paper <http://dreixel.net/research/pdf/epdtecp.pdf>`__.
 
 Enabling deferring of type errors
 ---------------------------------
 
 The flag :ghc-flag:`-fdefer-type-errors` controls whether type errors are
 deferred to runtime. Type errors will still be emitted as warnings, but
-will not prevent compilation. You can use
-:ghc-flag:`-Wno-deferred-type-errors <-Wdeferred-type-errors>` to suppress these
-warnings.
+will not prevent compilation. You can use :ghc-flag:`-Wno-type-errors
+<-Wtype-errors>` to suppress these warnings.
 
 This flag implies the :ghc-flag:`-fdefer-typed-holes` and
-:ghc-flag:`-fdefer-out-of-scope-variables` flags, which enables this
-behaviour for `typed holes <#typed-holes>`__ and variables. Should you so wish, it is
+:ghc-flag:`-fdefer-out-of-scope-variables` flags, which enables this behaviour
+for `typed holes <#typed-holes>`__ and variables. Should you so wish, it is
 possible to enable :ghc-flag:`-fdefer-type-errors` without enabling
 :ghc-flag:`-fdefer-typed-holes` or :ghc-flag:`-fdefer-out-of-scope-variables`,
-by explicitly specifying :ghc-flag:`-fno-defer-typed-holes` or :ghc-flag:`-fno-defer-out-of-scope-variables`
-on the command-line after the :ghc-flag:`-fdefer-type-errors` flag.
+by explicitly specifying :ghc-flag:`-fno-defer-typed-holes
+<-fdefer-typed-holes>` or :ghc-flag:`-fno-defer-out-of-scope-variables
+<-fdefer-out-of-scope-variables>` on the command-line after the
+:ghc-flag:`-fdefer-type-errors` flag.
 
 At runtime, whenever a term containing a type error would need to be
 evaluated, the error is converted into a runtime exception of type
@@ -10023,7 +11274,9 @@ Otherwise, in the common case of a simple type error such as typing
 immediately-following type error when the expression is evaluated.
 
 This exception doesn't apply to statements, as the following example
-demonstrates: ::
+demonstrates:
+
+.. code-block:: none
 
     Prelude> let x = (True, 1 == 'a')
 
@@ -10047,12 +11300,10 @@ in "`Template Meta-programming for
 Haskell <http://research.microsoft.com/~simonpj/papers/meta-haskell/>`__"
 (Proc Haskell Workshop 2002).
 
-There is a Wiki page about Template Haskell at
-http://www.haskell.org/haskellwiki/Template_Haskell, and that is the
-best place to look for further details. You may also consult the `online
-Haskell library reference
-material <http://www.haskell.org/ghc/docs/latest/html/libraries/index.html>`__
-(look for module ``Language.Haskell.TH``). Many changes to the original
+The `Template Haskell <http://www.haskell.org/haskellwiki/Template_Haskell>`__
+page on the GHC Wiki has a wealth of information. You may also consult the
+:th-ref:`Haddock reference documentation <Language.Haskell.TH.>`.
+Many changes to the original
 design are described in `Notes on Template Haskell version
 2 <http://research.microsoft.com/~simonpj/papers/meta-haskell/notes2.ps>`__.
 Not all of these changes are in GHC, however.
@@ -10070,12 +11321,22 @@ Syntax
 ------
 
 .. ghc-flag:: -XTemplateHaskell
+    :shortdesc: Enable :ref:`Template Haskell <template-haskell>`.
+    :type: dynamic
+    :reverse: -XNoTemplateHaskell
+    :category:
 
     :implies: :ghc-flag:`-XTemplateHaskellQuotes`
+    :since: 6.0. Typed splices introduced in GHC 7.8.1.
 
     Enable Template Haskell's splice and quotation syntax.
 
 .. ghc-flag:: -XTemplateHaskellQuotes
+    :shortdesc: Enable quotation subset of
+        :ref:`Template Haskell <template-haskell>`.
+    :type: dynamic
+    :reverse: -XNoTemplateHaskellQuotes
+    :category:
 
     :since: 8.0.1
 
@@ -10390,7 +11651,7 @@ Using Template Haskell
 ----------------------
 
 -  The data types and monadic constructor functions for Template Haskell
-   are in the library ``Language.Haskell.THSyntax``.
+   are in the library ``Language.Haskell.TH.Syntax``.
 
 -  You can only run a function at compile time if it is imported from
    another module. That is, you can't define a function in a module, and
@@ -10433,17 +11694,17 @@ non-trivial program, you may be interested in combining this with the
 :ghc-flag:`-ddump-to-file` flag (see :ref:`dumping-output`. For each file using
 Template Haskell, this will show the output in a ``.dump-splices`` file.
 
-The flag :ghc-flag:`-dth-dec-file` shows the expansions of all top-level TH
-declaration splices, both typed and untyped, in the file :file:`M.th.hs`
-where M is the name of the module being compiled. Note that other types
-of splices (expressions, types, and patterns) are not shown. Application
-developers can check this into their repository so that they can grep
-for identifiers that were defined in Template Haskell. This is similar
-to using :ghc-flag:`-ddump-to-file` with :ghc-flag:`-ddump-splices` but it always
+The flag :ghc-flag:`-dth-dec-file=⟨file⟩` shows the expansions of all top-level
+TH declaration splices, both typed and untyped, in the file :file:`M.th.hs`
+where M is the name of the module being compiled. Note that other types of
+splices (expressions, types, and patterns) are not shown. Application
+developers can check this into their repository so that they can grep for
+identifiers that were defined in Template Haskell. This is similar to using
+:ghc-flag:`-ddump-to-file` with :ghc-flag:`-ddump-splices` but it always
 generates a file instead of being coupled to :ghc-flag:`-ddump-to-file`. The
-format is also different: it does not show code from the original file,
-instead it only shows generated code and has a comment for the splice
-location of the original file.
+format is also different: it does not show code from the original file, instead
+it only shows generated code and has a comment for the splice location of the
+original file.
 
 Below is a sample output of :ghc-flag:`-ddump-splices` ::
 
@@ -10454,7 +11715,7 @@ Below is a sample output of :ghc-flag:`-ddump-splices` ::
       foo :: Int -> Int
       foo x = (x + 1)
 
-Below is the output of the same sample using :ghc-flag:`-dth-dec-file` ::
+Below is the output of the same sample using :ghc-flag:`-dth-dec-file=⟨file⟩` ::
 
     -- TH_pragma.hs:(6,4)-(8,26): Splicing declarations
     foo :: Int -> Int
@@ -10556,15 +11817,15 @@ Fortunately GHC provides two workarounds.
 
 The first option is to compile the program twice:
 
-1. Compile the program or library first the normal way, without :ghc-flag:`-prof`.
+1. Compile the program or library first the normal way, without
+   :ghc-flag:`-prof`.
 
-2. Then compile it again with :ghc-flag:`-prof`, and additionally use ``-osuf p_o``
-   to name the object files differently (you can
-   choose any suffix that isn't the normal object suffix here). GHC will
-   automatically load the object files built in the first step when
-   executing splice expressions. If you omit the :ghc-flag:`-osuf` flag when
-   building with :ghc-flag:`-prof` and Template Haskell is used, GHC will emit
-   an error message.
+2. Then compile it again with :ghc-flag:`-prof`, and additionally use ``-osuf
+   p_o`` to name the object files differently (you can choose any suffix that
+   isn't the normal object suffix here). GHC will automatically load the object
+   files built in the first step when executing splice expressions. If you omit
+   the :ghc-flag:`-osuf ⟨suffix⟩` flag when building with :ghc-flag:`-prof` and
+   Template Haskell is used, GHC will emit an error message.
 
    .. index::
       single : -osuf; using with profiling
@@ -10583,6 +11844,12 @@ Template Haskell Quasi-quotation
 --------------------------------
 
 .. ghc-flag:: -XQuasiQuotes
+    :shortdesc: Enable :ref:`quasiquotation <th-quasiquotation>`.
+    :type: dynamic
+    :reverse: -XNoQuasiQuotes
+    :category:
+
+    :since: 6.10.1
 
     Enable Template Haskell Quasi-quotation syntax.
 
@@ -10760,6 +12027,12 @@ Arrow notation
 ==============
 
 .. ghc-flag:: -XArrows
+    :shortdesc: Enable :ref:`arrow notation <arrow-notation>` extension
+    :type: dynamic
+    :reverse: -XNoArrows
+    :category:
+
+    :since: 6.8.1
 
     Enable arrow notation.
 
@@ -10797,7 +12070,7 @@ more details, see
 
 With the :ghc-flag:`-XArrows` flag, GHC supports the arrow notation described in
 the second of these papers, translating it using combinators from the
-:base-ref:`Control.Arrow <Control-Arrow.html>` module.
+:base-ref:`Control.Arrow.` module.
 What follows is a brief introduction to the notation; it won't make much
 sense unless you've read Hughes's paper.
 
@@ -10897,8 +12170,8 @@ You can read this much like ordinary ``do``-notation, but with commands
 in place of monadic expressions. The first line sends the value of
 ``x+1`` as an input to the arrow ``f``, and matches its output against
 ``y``. In the next line, the output is discarded. The arrow ``returnA``
-is defined in the :base-ref:`Control.Arrow <Control-Arrow.html>` module as ``arr
-id``. The above example is treated as an abbreviation for ::
+is defined in the :base-ref:`Control.Arrow.` module as ``arr id``. The above
+example is treated as an abbreviation for ::
 
     arr (\ x -> (x, x)) >>>
             first (arr (\ x -> x+1) >>> f) >>>
@@ -10912,8 +12185,7 @@ id``. The above example is treated as an abbreviation for ::
 
 Note that variables not used later in the composition are projected out.
 After simplification using rewrite rules (see :ref:`rewrite-rules`)
-defined in the :base-ref:`Control.Arrow <Control-Arrow.html>` module, this
-reduces to ::
+defined in the :base-ref:`Control.Arrow.` module, this reduces to ::
 
     arr (\ x -> (x+1, x)) >>>
             first f >>>
@@ -11039,7 +12311,7 @@ abstraction.
 We could define our own operator ::
 
     untilA :: ArrowChoice a => a (e,s) () -> a (e,s) Bool -> a (e,s) ()
-    untilA body cond = proc x ->
+    untilA body cond = proc x -> do
             b <- cond -< x
             if b then returnA -< ()
             else do
@@ -11155,7 +12427,7 @@ to check arrow programs with GHC; tracing type errors in the
 preprocessor output is not easy. Modules intended for both GHC and the
 preprocessor must observe some additional restrictions:
 
--  The module must import :base-ref:`Control.Arrow <Control-Arrow.html>`.
+-  The module must import :base-ref:`Control.Arrow.`.
 
 -  The preprocessor cannot cope with other Haskell extensions. These
    would have to go in separate modules.
@@ -11202,6 +12474,12 @@ Bang patterns
 -------------
 
 .. ghc-flag:: -XBangPatterns
+    :shortdesc: Enable :ref:`bang patterns <bang-patterns>`.
+    :type: dynamic
+    :reverse: -XNoBangPatterns
+    :category:
+
+    :since: 6.8.1
 
     Allow use of bang pattern syntax.
 
@@ -11298,6 +12576,10 @@ Strict-by-default data types
 ----------------------------
 
 .. ghc-flag:: -XStrictData
+    :shortdesc: Enable :ref:`default strict datatype fields <strict-data>`.
+    :type: dynamic
+    :reverse: -XNoStrictData
+    :category:
 
     :since: 8.0.1
 
@@ -11326,6 +12608,10 @@ Strict-by-default pattern bindings
 ----------------------------------
 
 .. ghc-flag:: -XStrict
+    :shortdesc: Make bindings in the current module strict by default.
+    :type: dynamic
+    :reverse: -XNoStrict
+    :category:
 
     :implies: :ghc-flag:`-XStrictData`
     :since: 8.0.1
@@ -11393,7 +12679,7 @@ optionally had by adding ``!`` in front of a variable.
 
        case x of !y -> rhs
 
-   which evalutes ``x``. Similarly, if ``newtype Age = MkAge Int``, then ::
+   which evaluates ``x``. Similarly, if ``newtype Age = MkAge Int``, then ::
 
        case x of MkAge i -> rhs
 
@@ -11449,7 +12735,7 @@ optionally had by adding ``!`` in front of a variable.
    In ordinary Haskell, ``f`` is lazy in its argument and hence in
    ``x``; and ``g`` is strict in its argument and hence also strict in
    ``x``. With ``Strict``, both become strict because ``f``'s argument
-   gets an implict bang.
+   gets an implicit bang.
 
 
 .. _strict-modularity:
@@ -11513,7 +12799,7 @@ Replace the "Translation" there with the following one.  Given
     Replace any binding ``p = e``, where ``p`` is not a variable, with
     ``v = e; x1 = case v of p -> x1; ...; xn = case v of p -> xn``, where
     ``v`` is fresh and ``x1``.. ``xn`` are the bound variables of ``p``.
-    Again if ``e`` is a variable, you can optimised his by not introducing a
+    Again if ``e`` is a variable, this can be optimised by not introducing a
     fresh variable.
 
 The result will be a (possibly) recursive set of bindings, binding
@@ -11523,7 +12809,7 @@ non-recursive using ``fix``, but we do not do so in Core, and it only
 obfuscates matters, so we do not do so here.)
 
 The translation is carefully crafted to make bang patterns meaningful
-for reursive and polymorphic bindings as well as straightforward
+for recursive and polymorphic bindings as well as straightforward
 non-recursive bindings.
 
 Here are some examples of how this translation works. The first
@@ -11618,7 +12904,7 @@ If we did it in Haskell source, thus ::
 
    let f = ... in f `seq` body
 
-then ``f``\ 's polymorphic type would get intantiated, so the Core
+then ``f``\ 's polymorphic type would get instantiated, so the Core
 translation would be ::
 
    let f = ... in f Any `seq` body
@@ -11690,7 +12976,7 @@ will be rewritten to ``e``. You can also disable assertions using the
 allows enabling assertions even when optimisation is turned on.
 
 Assertion failures can be caught, see the documentation for the
-:base-ref:`Control.Exception <Control-Exception.html>` library for the details.
+:base-ref:`Control.Exception` library for the details.
 
 .. _static-pointers:
 
@@ -11701,6 +12987,10 @@ Static pointers
    single: Static pointers
 
 .. ghc-flag:: -XStaticPointers
+    :shortdesc: Enable :ref:`static pointers <static-pointers>`.
+    :type: dynamic
+    :reverse: -XNoStaticPointers
+    :category:
 
     :since: 7.10.1
 
@@ -11727,12 +13017,11 @@ Using static pointers
 ---------------------
 
 Each reference is given a key which can be used to locate it at runtime
-with
-:base-ref:`unsafeLookupStaticPtr <GHC-StaticPtr.html#v%3AunsafeLookupStaticPtr>`
+with :base-ref:`GHC.StaticPtr.unsafeLookupStaticPtr`
 which uses a global and immutable table called the Static Pointer Table.
 The compiler includes entries in this table for all static forms found
 in the linked modules. The value can be obtained from the reference via
-:base-ref:`deRefStaticPtr <GHC-StaticPtr.html#v%3AdeRefStaticPtr>`.
+:base-ref:`GHC.StaticPtr.deRefStaticPtr`.
 
 The body ``e`` of a ``static e`` expression must be a closed expression. Where
 we say an expression is *closed* when all of its free (type) variables are
@@ -11758,6 +13047,13 @@ While the following definitions are rejected: ::
     ref8 y = static (let x = 1 in y)  -- y is not let-bound
     ref8 (y :: a) = let x = undefined :: a
                      in static x      -- x has a non-closed type
+
+.. note::
+
+    While modules loaded in GHCi with the :ghci-cmd:`:load` command may use
+    :ghc-flag:`-XStaticPointers` and ``static`` expressions, statements
+    entered on the REPL may not. This is a limitation of GHCi; see
+    :ghc-ticket:`12356` for details.
 
 .. _typechecking-static-pointers:
 
@@ -11786,7 +13082,7 @@ The only predefined instance is the obvious one that does nothing: ::
     instance IsStatic StaticPtr where
         fromStaticPtr sptr = sptr
 
-See :base-ref:`IsStatic <GHC-StaticPtr.html#t%3AIsStatic>`.
+See :base-ref:`GHC.StaticPtr.IsStatic`.
 
 Furthermore, type ``t`` is constrained to have a ``Typeable`` instance.
 The following are therefore illegal: ::
@@ -11798,7 +13094,6 @@ That being said, with the appropriate use of wrapper datatypes, the
 above limitations induce no loss of generality: ::
 
     {-# LANGUAGE ConstraintKinds           #-}
-    {-# LANGUAGE DeriveDataTypeable        #-}
     {-# LANGUAGE ExistentialQuantification #-}
     {-# LANGUAGE Rank2Types                #-}
     {-# LANGUAGE StandaloneDeriving        #-}
@@ -11809,7 +13104,6 @@ above limitations induce no loss of generality: ::
     import GHC.StaticPtr
 
     data Dict c = c => Dict
-      deriving Typeable
 
     g1 :: Typeable a => StaticPtr (Dict (Show a) -> a -> String)
     g1 = static (\Dict -> show)
@@ -11857,8 +13151,8 @@ Certain pragmas are *file-header pragmas*:
 
 .. _language-pragma:
 
-LANGUAGE pragma
----------------
+``LANGUAGE`` pragma
+-------------------
 
 .. index::
    single: LANGUAGE; pragma
@@ -11884,9 +13178,8 @@ A list of all supported language extensions can be obtained by invoking
 ``ghc --supported-extensions`` (see :ghc-flag:`--supported-extensions`).
 
 Any extension from the ``Extension`` type defined in
-:cabal-ref:`Language.Haskell.Extension <Language-Haskell-Extension.html>`
-may be used. GHC will report an error if any of the requested extensions
-are not supported.
+:cabal-ref:`Language.Haskell.Extension.` may be used. GHC will report an error
+if any of the requested extensions are not supported.
 
 .. _options-pragma:
 
@@ -11895,7 +13188,7 @@ are not supported.
 
 .. index::
    single: OPTIONS_GHC
-   single: pragma; ``OPTIONS_GHC``
+   single: pragma; OPTIONS_GHC
 
 The ``OPTIONS_GHC`` pragma is used to specify additional options that
 are given to the compiler when compiling this source file. See
@@ -11959,6 +13252,12 @@ are two ways of using these pragmas.
    both are in scope. If both are in scope, there is currently no way to
    specify one without the other (c.f. fixities :ref:`infix-tycons`).
 
+Also note that the argument to ``DEPRECATED`` and ``WARNING`` can also be a list
+of strings, in which case the strings will be presented on separate lines in the
+resulting warning message, ::
+
+    {-# DEPRECATED foo, bar ["Don't use these", "Use gar instead"] #-}
+
 Warnings and deprecations are not reported for (a) uses within the
 defining module, (b) defining a method in a class instance, and (c) uses
 in an export list. The latter reduces spurious complaints within a
@@ -11970,8 +13269,8 @@ You can suppress the warnings with the flag
 
 .. _minimal-pragma:
 
-MINIMAL pragma
---------------
+``MINIMAL`` pragma
+------------------
 
 .. index::
    single: MINIMAL
@@ -12015,19 +13314,19 @@ This warning can be turned off with the flag
 
 .. _inline-noinline-pragma:
 
-INLINE and NOINLINE pragmas
----------------------------
+``INLINE`` and ``NOINLINE`` pragmas
+-----------------------------------
 
 These pragmas control the inlining of function definitions.
 
 .. _inline-pragma:
 
-INLINE pragma
-~~~~~~~~~~~~~
+``INLINE`` pragma
+~~~~~~~~~~~~~~~~~
 
 .. index::
    single: INLINE
-   single: pragma; ``INLINE``
+   single: pragma; INLINE
 
 GHC (with :ghc-flag:`-O`, as always) tries to inline (or "unfold")
 functions/values that are "small enough," thus avoiding the call
@@ -12093,7 +13392,7 @@ has a number of other effects:
 -  It is useful for GHC to optimise the definition of an INLINE function
    ``f`` just like any other non-INLINE function, in case the
    non-inlined version of ``f`` is ultimately called. But we don't want
-   to inline the *optimised* version of ``f``; a major reason for INLINE
+   to inline the *optimised* version of ``f``; a major reason for ``INLINE``
    pragmas is to expose functions in ``f``\'s RHS that have rewrite
    rules, and it's no good if those functions have been optimised away.
 
@@ -12111,11 +13410,11 @@ GHC ensures that inlining cannot go on forever: every mutually-recursive
 group is cut by one or more *loop breakers* that is never inlined (see
 `Secrets of the GHC inliner, JFP 12(4) July
 2002 <http://research.microsoft.com/%7Esimonpj/Papers/inlining/index.htm>`__).
-GHC tries not to select a function with an INLINE pragma as a loop
+GHC tries not to select a function with an ``INLINE`` pragma as a loop
 breaker, but when there is no choice even an INLINE function can be
-selected, in which case the INLINE pragma is ignored. For example, for a
+selected, in which case the ``INLINE`` pragma is ignored. For example, for a
 self-recursive function, the loop breaker can only be the function
-itself, so an INLINE pragma is always ignored.
+itself, so an ``INLINE`` pragma is always ignored.
 
 Syntactically, an ``INLINE`` pragma for a function can be put anywhere
 its type signature could be put.
@@ -12132,8 +13431,8 @@ See also the ``NOINLINE`` (:ref:`noinline-pragma`) and ``INLINABLE``
 
 .. _inlinable-pragma:
 
-INLINABLE pragma
-~~~~~~~~~~~~~~~~
+``INLINABLE`` pragma
+~~~~~~~~~~~~~~~~~~~~
 
 An ``{-# INLINABLE f #-}`` pragma on a function ``f`` has the following
 behaviour:
@@ -12170,8 +13469,8 @@ The alternative spelling ``INLINEABLE`` is also accepted by GHC.
 
 .. _noinline-pragma:
 
-NOINLINE pragma
-~~~~~~~~~~~~~~~
+``NOINLINE`` pragma
+~~~~~~~~~~~~~~~~~~~
 
 .. index::
    single: NOINLINE
@@ -12187,13 +13486,13 @@ used if you want your code to be portable).
 
 .. _conlike-pragma:
 
-CONLIKE modifier
-~~~~~~~~~~~~~~~~
+``CONLIKE`` modifier
+~~~~~~~~~~~~~~~~~~~~
 
 .. index::
    single: CONLIKE
 
-An INLINE or NOINLINE pragma may have a CONLIKE modifier, which affects
+An ``INLINE`` or ``NOINLINE`` pragma may have a ``CONLIKE`` modifier, which affects
 matching in RULEs (only). See :ref:`conlike`.
 
 .. _phase-control:
@@ -12201,12 +13500,12 @@ matching in RULEs (only). See :ref:`conlike`.
 Phase control
 ~~~~~~~~~~~~~
 
-Sometimes you want to control exactly when in GHC's pipeline the INLINE
+Sometimes you want to control exactly when in GHC's pipeline the ``INLINE``
 pragma is switched on. Inlining happens only during runs of the
 *simplifier*. Each run of the simplifier has a different *phase number*;
 the phase number decreases towards zero. If you use
 ``-dverbose-core2core`` you'll see the sequence of phase numbers for
-successive runs of the simplifier. In an INLINE pragma you can
+successive runs of the simplifier. In an ``INLINE`` pragma you can
 optionally specify a phase number, thus:
 
 -  "``INLINE[k] f``" means: do not inline ``f`` until phase ``k``, but
@@ -12239,10 +13538,10 @@ By "Maybe" we mean that the usual heuristic inlining rules apply (if the
 function body is small, or it is applied to interesting-looking
 arguments etc). Another way to understand the semantics is this:
 
--  For both INLINE and NOINLINE, the phase number says when inlining is
+-  For both ``INLINE`` and ``NOINLINE``, the phase number says when inlining is
    allowed at all.
 
--  The INLINE pragma has the additional effect of making the function
+-  The ``INLINE`` pragma has the additional effect of making the function
    body look small, so that when inlining is allowed it is very likely
    to happen.
 
@@ -12275,6 +13574,29 @@ pragma.
 position for the duration of the splice and are limited to the splice.
 Note that because Template Haskell splices abstract syntax, the file
 positions are not automatically advanced.
+
+.. _column-pragma:
+
+``COLUMN`` pragma
+-----------------
+
+.. index::
+   single: COLUMN; pragma
+   single: pragma; COLUMN
+
+This is the analogue of the ``LINE`` pragma and is likewise intended for
+use in automatically generated Haskell code. It lets you specify the
+column number of the original code; for example
+
+::
+
+    foo = do
+      {-# COLUMN 42 #-}pure ()
+      pure ()
+
+This adjusts all column numbers immediately after the pragma to start
+at 42.  The presence of this pragma only affects the quality of the
+diagnostics and does not change the syntax of the code itself.
 
 .. _rules:
 
@@ -12353,7 +13675,7 @@ specialise it as follows:
    specialisation is done too early, the optimisation rules might fail
    to fire.
 
--  The type in a SPECIALIZE pragma can be any type that is less
+-  The type in a ``SPECIALIZE`` pragma can be any type that is less
    polymorphic than the type of the original function. In concrete
    terms, if the original function is ``f`` then the pragma
 
@@ -12591,6 +13913,80 @@ The ``{-# SOURCE #-}`` pragma is used only in ``import`` declarations,
 to break a module loop. It is described in detail in
 :ref:`mutual-recursion`.
 
+.. _complete-pragma:
+
+``COMPLETE`` pragmas
+--------------------
+
+The ``COMPLETE`` pragma is used to inform the pattern match checker that a
+certain set of patterns is complete and that any function which matches
+on all the specified patterns is total.
+
+The most common usage of ``COMPLETE`` pragmas is with
+:ref:`pattern-synonyms`.
+On its own, the checker is very naive and assumes that any match involving
+a pattern synonym will fail. As a result, any pattern match on a
+pattern synonym is regarded as
+incomplete unless the user adds a catch-all case.
+
+For example, the data types ``2 * A`` and ``A + A`` are isomorphic but some
+computations are more naturally expressed in terms of one or the other. To
+get the best of both worlds, we can choose one as our implementation and then
+provide a set of pattern synonyms so that users can use the other representation
+if they desire. We can then specify a ``COMPLETE`` pragma in order to
+inform the pattern match checker that a function which matches on both ``LeftChoice``
+and ``RightChoice`` is total. ::
+
+    data Choice a = Choice Bool a
+
+    pattern LeftChoice :: a -> Choice a
+    pattern LeftChoice a = Choice False a
+
+    pattern RightChoice :: a -> Choice a
+    pattern RightChoice a = Choice True a
+
+    {-# COMPLETE LeftChoice, RightChoice #-}
+
+    foo :: Choice Int -> Int
+    foo (LeftChoice n) = n * 2
+    foo (RightChoice n) = n - 2
+
+``COMPLETE`` pragmas are only used by the pattern match checker. If a function
+definition matches on all the constructors specified in the pragma then the
+compiler will produce no warning.
+
+``COMPLETE`` pragmas can contain any data constructors or pattern
+synonyms which are in scope, but must mention at least one data
+constructor or pattern synonym defined in the same module.
+``COMPLETE`` pragmas may only appear at the top level of a module.
+Once defined, they are automatically imported and exported from
+modules. ``COMPLETE`` pragmas should be thought of as asserting a
+universal truth about a set of patterns and as a result, should not be
+used to silence context specific incomplete match warnings.
+
+When specifing a ``COMPLETE`` pragma, the result types of all patterns must
+be consistent with each other. This is a sanity check as it would be impossible
+to match on all the patterns if the types were inconsistent.
+
+The result type must also be unambiguous. Usually this can be inferred but
+when all the pattern synonyms in a group are polymorphic in the constructor
+the user must provide a type signature. ::
+
+    class LL f where
+      go :: f a -> ()
+
+    instance LL [] where
+      go _ = ()
+
+    pattern T :: LL f => f a
+    pattern T <- (go -> ())
+
+    {-# COMPLETE T :: [] #-}
+
+    -- No warning
+    foo :: [a] -> Int
+    foo T = 5
+
 .. _overlap-pragma:
 
 ``OVERLAPPING``, ``OVERLAPPABLE``, ``OVERLAPS``, and ``INCOHERENT`` pragmas
@@ -12638,6 +14034,12 @@ individual rule firing and :ghc-flag:`-ddump-rule-rewrites` also shows what the
 code looks like before and after the rewrite.
 
 .. ghc-flag:: -fenable-rewrite-rules
+    :shortdesc: Switch on all rewrite rules (including rules generated by
+        automatic specialisation of overloaded functions). Implied by
+        :ghc-flag:`-O`.
+    :type: dynamic
+    :reverse: -fno-enable-rewrite-rules
+    :category: optimization
 
     Allow the compiler to apply rewrite rules to the source program.
 
@@ -12650,7 +14052,7 @@ From a syntactic point of view:
    semicolons (which may be generated by the layout rule).
 
 -  The layout rule applies in a pragma. Currently no new indentation
-   level is set, so if you put several rules in single RULES pragma and
+   level is set, so if you put several rules in single ``RULES`` pragma and
    wish to use layout to separate them, you must lay out the starting in
    the same column as the enclosing definitions. ::
 
@@ -12702,9 +14104,11 @@ From a syntactic point of view:
 
        "wrong1"   forall e1 e2.  case True of { True -> e1; False -> e2 } = e1
        "wrong2"   forall f.      f True = True
+       "wrong3"   forall x.      Just x = Nothing
 
    In ``"wrong1"``, the LHS is not an application; in ``"wrong2"``, the
-   LHS has a pattern variable in the head.
+   LHS has a pattern variable in the head. In ``"wrong3"``, the LHS consists
+   of a *constructor*, rather than a *variable*, applied to an argument.
 
 -  A rule does not need to be in the same module as (any of) the
    variables it mentions, though of course they need to be in scope.
@@ -12720,7 +14124,7 @@ From a syntactic point of view:
    extension :ghc-flag:`-XScopedTypeVariables` is automatically enabled; see
    :ref:`scoped-type-variables`.
 
--  Like other pragmas, RULE pragmas are always checked for scope errors,
+-  Like other pragmas, ``RULE`` pragmas are always checked for scope errors,
    and are typechecked. Typechecking means that the LHS and RHS of a
    rule are typechecked, and must have the same type. However, rules are
    only *enabled* if the :ghc-flag:`-fenable-rewrite-rules` flag is on (see
@@ -12736,7 +14140,7 @@ From a semantic point of view:
 -  Rules are enabled (that is, used during optimisation) by the
    :ghc-flag:`-fenable-rewrite-rules` flag. This flag is implied by
    :ghc-flag:`-O`, and may be switched off (as usual) by
-   :ghc-flag:`-fno-enable-rewrite-rules <-f-enable-rewrite-rules>`. (NB: enabling
+   :ghc-flag:`-fno-enable-rewrite-rules <-fenable-rewrite-rules>`. (NB: enabling
    :ghc-flag:`-fenable-rewrite-rules` without :ghc-flag:`-O` may not do what you
    expect, though, because without :ghc-flag:`-O` GHC ignores all optimisation
    information in interface files; see :ghc-flag:`-fignore-interface-pragmas`).
@@ -12813,16 +14217,16 @@ Now ``g`` is inlined into ``h``, but ``f``\'s RULE has no chance to fire.
 If instead GHC had first inlined ``g`` into ``h`` then there would have
 been a better chance that ``f``\'s RULE might fire.
 
-The way to get predictable behaviour is to use a NOINLINE pragma, or an
-INLINE[⟨phase⟩] pragma, on ``f``, to ensure that it is not inlined until
+The way to get predictable behaviour is to use a ``NOINLINE`` pragma, or an
+``INLINE[⟨phase⟩]`` pragma, on ``f``, to ensure that it is not inlined until
 its RULEs have had a chance to fire. The warning flag
 :ghc-flag:`-Winline-rule-shadowing` (see :ref:`options-sanity`) warns about
 this situation.
 
 .. _conlike:
 
-How rules interact with CONLIKE pragmas
----------------------------------------
+How rules interact with ``CONLIKE`` pragmas
+-------------------------------------------
 
 GHC is very cautious about duplicating work. For example, consider ::
 
@@ -12837,7 +14241,7 @@ would be duplicated if the rule fired.
 Sometimes, however, this approach is over-cautious, and we *do* want the
 rule to fire, even though doing so would duplicate redex. There is no
 way that GHC can work out when this is a good idea, so we provide the
-CONLIKE pragma to declare it, thus: ::
+``CONLIKE`` pragma to declare it, thus: ::
 
     {-# INLINE CONLIKE [1] f #-}
     f x = blah
@@ -12847,7 +14251,7 @@ an application of ``f`` to one argument (in general, the number of arguments
 to the left of the ``=`` sign) should be considered cheap enough to
 duplicate, if such a duplication would make rule fire. (The name
 "CONLIKE" is short for "constructor-like", because constructors
-certainly have such a property.) The CONLIKE pragma is a modifier to
+certainly have such a property.) The ``CONLIKE`` pragma is a modifier to
 INLINE/NOINLINE because it really only makes sense to match ``f`` on the
 LHS of a rule if you are sure that ``f`` is not going to be inlined
 before the rule has a chance to fire.
@@ -13037,7 +14441,7 @@ Controlling what's going on in rewrite rules
    great detail what rules are being fired. If you add :ghc-flag:`-dppr-debug`
    you get a still more detailed listing.
 
--  The definition of (say) ``build`` in ``GHC/Base.lhs`` looks like
+-  The definition of (say) ``build`` in ``GHC/Base.hs`` looks like
    this: ::
 
                build   :: forall a. (forall b. (a -> b -> b) -> b -> b) -> [a]
@@ -13050,10 +14454,10 @@ Controlling what's going on in rewrite rules
    any inlining happening in the RHS of the ``INLINE`` thing. I regret
    the delicacy of this.
 
--  In ``libraries/base/GHC/Base.lhs`` look at the rules for ``map`` to
+-  In ``libraries/base/GHC/Base.hs`` look at the rules for ``map`` to
    see how to write rules that will do fusion and yet give an efficient
    program even if fusion doesn't happen. More rules in
-   ``GHC/List.lhs``.
+   ``GHC/List.hs``.
 
 .. _special-ids:
 
@@ -13062,14 +14466,12 @@ Special built-in functions
 
 GHC has a few built-in functions with special behaviour. In particular:
 
--  :base-ref:`inline <GHC-Exts.html#v%3Ainline>`
-   allows control over inlining on a per-call-site basis.
+-  :base-ref:`GHC.Exts.inline` allows control over inlining on a per-call-site basis.
 
--  :base-ref:`lazy <GHC-Exts.html#v%3Alazy>` restrains the strictness analyser.
+-  :base-ref:`GHC.Exts.lazy` restrains the strictness analyser.
 
--  :base-ref:`oneShot <GHC-Exts.html#v%3AoneShot>`
-   gives a hint to the compiler about how often a function is being
-   called.
+-  :base-ref:`GHC.Exts.oneShot` gives a hint to the compiler about how often a
+   function is being called.
 
 .. _generic-classes:
 
@@ -13088,11 +14490,9 @@ Generic programming
 ===================
 
 Using a combination of :ghc-flag:`-XDeriveGeneric`,
-:ghc-flag:`-XDefaultSignatures`, and
-:ghc-flag:`-XDeriveAnyClass`, you can easily do
-datatype-generic programming using the :base-ref:`GHC.Generics
-<GHC-Generics.html>` framework. This section gives a very brief overview of how
-to do it.
+:ghc-flag:`-XDefaultSignatures`, and :ghc-flag:`-XDeriveAnyClass`, you can
+easily do datatype-generic programming using the :base-ref:`GHC.Generics.`
+framework. This section gives a very brief overview of how to do it.
 
 Generic programming support in GHC allows defining classes with methods
 that do not need a user specification when instantiating: the method
@@ -13217,8 +14617,19 @@ we show generic serialization: ::
     instance (Serialize a) => GSerialize (K1 i a) where
       gput (K1 x) = put x
 
-Typically this class will not be exported, as it only makes sense to
-have instances for the representation types.
+A caveat: this encoding strategy may not be reliable across different versions
+of GHC. When deriving a ``Generic`` instance is free to choose any nesting of
+``:+:`` and ``:*:`` it chooses, so if GHC chooses ``(a :+: b) :+: c``, then the
+encoding for ``a`` would be ``[O, O]``, ``b`` would be ``[O, I]``, and ``c``
+would be ``[I]``. However, if GHC chooses ``a :+: (b :+: c)``, then the
+encoding for ``a`` would be ``[O]``, ``b`` would be ``[I, O]``, and ``c`` would
+be ``[I, I]``. (In practice, the current implementation tries to produce a
+more-or-less balanced nesting of ``:+:`` and ``:*:`` so that the traversal of
+the structure of the datatype from the root to a particular component can be
+performed in logarithmic rather than linear time.)
+
+Typically this ``GSerialize`` class will not be exported, as it only makes
+sense to have instances for the representation types.
 
 Unlifted representation types
 -----------------------------
@@ -13275,7 +14686,7 @@ exposed to the user: ::
     class Serialize a where
       put :: a -> [Bin]
 
-      default put :: (Generic a, GSerialize (Rep a)) => a -> [Bit]
+      default put :: (Generic a, GSerialize (Rep a)) => a -> [Bin]
       put = gput . from
 
 Here we use a `default signature <#class-default-signatures>`__ to
@@ -13457,6 +14868,10 @@ Role annotations
 ----------------
 
 .. ghc-flag:: -XRoleAnnotations
+    :shortdesc: Enable :ref:`role annotations <role-annotations>`.
+    :type: dynamic
+    :reverse: -XNoRoleAnnotations
+    :category:
 
     :since: 7.8.1
 

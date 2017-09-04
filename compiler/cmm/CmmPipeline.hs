@@ -16,7 +16,7 @@ import CmmProcPoint
 import CmmContFlowOpt
 import CmmLayoutStack
 import CmmSink
-import Hoopl
+import Hoopl.Collections
 
 import UniqSupply
 import DynFlags
@@ -109,8 +109,8 @@ cpsTop hsc_env proc =
        g <- if splitting_proc_points
             then do
                ------------- Split into separate procedures -----------------------
-               pp_map  <- {-# SCC "procPointAnalysis" #-} runUniqSM $
-                          procPointAnalysis proc_points g
+               let pp_map = {-# SCC "procPointAnalysis" #-}
+                            procPointAnalysis proc_points g
                dumpWith dflags Opt_D_dump_cmm_procmap "procpoint map" $
                     ppr pp_map
                g <- {-# SCC "splitAtProcPoints" #-} runUniqSM $
@@ -163,7 +163,7 @@ cpsTop hsc_env proc =
                              || -- Note [inconsistent-pic-reg]
                                 usingInconsistentPicReg
         usingInconsistentPicReg
-           = case (platformArch platform, platformOS platform, gopt Opt_PIC dflags)
+           = case (platformArch platform, platformOS platform, positionIndependent dflags)
              of   (ArchX86, OSDarwin, pic) -> pic
                   (ArchPPC, OSDarwin, pic) -> pic
                   _                        -> False

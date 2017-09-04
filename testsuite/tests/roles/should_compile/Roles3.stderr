@@ -8,7 +8,7 @@ TYPE CONSTRUCTORS
     meth1 :: a -> a
     {-# MINIMAL meth1 #-}
   class C2 a b where
-    meth2 :: a ~ b => a -> b
+    meth2 :: (a ~ b) => a -> b
     {-# MINIMAL meth2 #-}
   class C3 a b where
     type family F3 b :: * open
@@ -23,64 +23,83 @@ TYPE CONSTRUCTORS
 COERCION AXIOMS
   axiom Roles3.N:C1 :: C1 a = a -> a -- Defined at Roles3.hs:6:1
   axiom Roles3.N:C2 ::
-    C2 a b = a ~ b => a -> b -- Defined at Roles3.hs:9:1
+    C2 a b = (a ~ b) => a -> b -- Defined at Roles3.hs:9:1
   axiom Roles3.N:C3 ::
     C3 a b = a -> F3 b -> F3 b -- Defined at Roles3.hs:12:1
   axiom Roles3.N:C4 ::
     C4 a b = a -> F4 b -> F4 b -- Defined at Roles3.hs:18:1
 Dependent modules: []
-Dependent packages: [base-4.9.0.0, ghc-prim-0.5.0.0,
+Dependent packages: [base-4.10.0.0, ghc-prim-0.5.1.0,
                      integer-gmp-1.0.0.1]
 
 ==================== Typechecker ====================
 Roles3.$tcC4
   = GHC.Types.TyCon
-      12861862461396457184##
-      6389612623460961504##
+      6800596812149592130##
+      15513203864133461281##
       Roles3.$trModule
       (GHC.Types.TrNameS "C4"#)
-Roles3.$tc'C:C4
-  = GHC.Types.TyCon
-      5012080351591218464##
-      14312195554521420369##
-      Roles3.$trModule
-      (GHC.Types.TrNameS "'C:C4"#)
+      0
+      $krep
 Roles3.$tcC3
   = GHC.Types.TyCon
-      5998139369941479154##
-      6816352641934636458##
+      5076086601454991970##
+      10299714674904836194##
       Roles3.$trModule
       (GHC.Types.TrNameS "C3"#)
-Roles3.$tc'C:C3
-  = GHC.Types.TyCon
-      5363370173992879615##
-      3444510123613553605##
-      Roles3.$trModule
-      (GHC.Types.TrNameS "'C:C3"#)
+      0
+      $krep
 Roles3.$tcC2
   = GHC.Types.TyCon
-      8833962732139387711##
-      7891126688522429937##
+      7902873224172523979##
+      11840994447152209031##
       Roles3.$trModule
       (GHC.Types.TrNameS "C2"#)
+      0
+      $krep
 Roles3.$tc'C:C2
   = GHC.Types.TyCon
-      17372867324718144313##
-      13604113872247370917##
+      11218882737915989529##
+      9454910899374397367##
       Roles3.$trModule
       (GHC.Types.TrNameS "'C:C2"#)
+      2
+      $krep
 Roles3.$tcC1
   = GHC.Types.TyCon
-      16242970448469140073##
-      10229725431456576413##
+      11013585501375994163##
+      16371608655219610659##
       Roles3.$trModule
       (GHC.Types.TrNameS "C1"#)
+      0
+      $krep
 Roles3.$tc'C:C1
   = GHC.Types.TyCon
-      2927144765823607117##
-      15172069236577673237##
+      4508088879886988796##
+      13962145553903222779##
       Roles3.$trModule
       (GHC.Types.TrNameS "'C:C1"#)
+      1
+      $krep
+$krep [InlPrag=[~]] = GHC.Types.KindRepVar 0
+$krep [InlPrag=[~]] = GHC.Types.KindRepVar 1
+$krep [InlPrag=[~]] = GHC.Types.KindRepFun $krep $krep
+$krep [InlPrag=[~]] = GHC.Types.KindRepFun $krep $krep
+$krep [InlPrag=[~]] = GHC.Types.KindRepFun $krep $krep
+$krep [InlPrag=[~]] = GHC.Types.KindRepFun $krep $krep
+$krep [InlPrag=[~]] = GHC.Types.KindRepFun $krep $krep
+$krep [InlPrag=[~]] = GHC.Types.KindRepFun GHC.Types.krep$* $krep
+$krep [InlPrag=[~]] = GHC.Types.KindRepFun GHC.Types.krep$* $krep
+$krep [InlPrag=[~]]
+  = GHC.Types.KindRepTyConApp GHC.Types.$tcConstraint []
+$krep [InlPrag=[~]]
+  = GHC.Types.KindRepTyConApp
+      Data.Type.Equality.$tc~
+      ((:) GHC.Types.krep$* ((:) $krep ((:) $krep [])))
+$krep [InlPrag=[~]]
+  = GHC.Types.KindRepTyConApp Roles3.$tcC2 ((:) $krep ((:) $krep []))
+$krep [InlPrag=[~]]
+  = GHC.Types.KindRepTyConApp Roles3.$tcC1 ((:) $krep [])
 Roles3.$trModule
   = GHC.Types.Module
       (GHC.Types.TrNameS "main"#) (GHC.Types.TrNameS "Roles3"#)

@@ -1,6 +1,30 @@
 # Changelog for [`base` package](http://hackage.haskell.org/package/base)
 
-## next *TBA*
+## 4.11.0.0 *TBA*
+  * Bundled with GHC *TBA*
+
+  * Add `Alternative` instance for `ZipList` (#13520)
+
+  * Add instances `Num`, `Functor`, `Applicative`, `Monad`, `Semigroup`
+    and `Monoid` for `Data.Ord.Down` (#13097).
+
+  * Add `infixl 9 !!` declaration for `Data.List.NonEmpty.!!`
+
+  * Add `<&>` operator to `Data.Functor` (#14029)
+
+  * Remove the deprecated `Typeable{1..7}` type synonyms (#14047)
+
+  * Add instances `Semigroup` and `Monoid` for `Control.Monad.ST` (#14107).
+
+  * The `Read` instances for `Proxy`, `Coercion`, `(:~:)`, `(:~~:)`, and `U1`
+    now ignore the parsing precedence. The effect of this is that `read` will
+    be able to successfully parse more strings containing `"Proxy"` _et al._
+    without surrounding parentheses (e.g., `"Thing Proxy"`) (#12874).
+
+  * Add `iterate'`, a strict version of `iterate`, to `Data.List`
+    and `Data.OldList` (#3474)
+
+## 4.10.0.0 *April 2017*
   * Bundled with GHC *TBA*
 
   * `Data.Type.Bool.Not` given a type family dependency (#12057).
@@ -25,6 +49,67 @@
 
   * Add `Semigroup` instance for `IO`, as well as for `Event` and `Lifetime`
     from `GHC.Event` (#12464)
+
+  * Add `Data` instance for `Const` (#12438)
+
+  * Added `Eq1`, `Ord1`, `Read1` and `Show1` instances for `NonEmpty`.
+
+  * Add wrappers for `blksize_t`, `blkcnt_t`, `clockid_t`, `fsblkcnt_t`,
+    `fsfilcnt_t`, `id_t`, `key_t`, and `timer_t` to System.Posix.Types (#12795)
+
+  * Add `CBool`, a wrapper around C's `bool` type, to `Foreign.C.Types`
+    (#13136)
+
+  * Raw buffer operations in `GHC.IO.FD` are now strict in the buffer, offset, and length operations (#9696)
+
+  * Add `plusForeignPtr` to `Foreign.ForeignPtr`.
+
+  * Add `type family AppendSymbol (m :: Symbol) (n :: Symbol) :: Symbol` to `GHC.TypeLits`
+    (#12162)
+
+  * Add `GHC.TypeNats` module with `Natural`-based `KnownNat`. The `Nat`
+    operations in `GHC.TypeLits` are a thin compatibility layer on top.
+    Note: the `KnownNat` evidence is changed from an `Integer` to a `Natural`.
+
+  * The type of `asProxyTypeOf` in `Data.Proxy` has been generalized (#12805)
+
+  * `liftA2` is now a method of the `Applicative` class. `liftA2` and
+    `<*>` each have a default implementation based on the other. Various
+    library functions have been updated to use `liftA2` where it might offer
+    some benefit. `liftA2` is not yet in the `Prelude`, and must currently be
+    imported from `Control.Applicative`. It is likely to be added to the
+    `Prelude` in the future. (#13191)
+
+  * A new module, `Type.Reflection`, exposing GHC's new type-indexed type
+    representation mechanism is now provided.
+
+  * `Data.Dynamic` now exports the `Dyn` data constructor, enabled by the new
+    type-indexed type representation mechanism.
+
+  * `Data.Type.Equality` now provides a kind heterogeneous type equality
+    evidence type, `(:~~:)`.
+
+  * The `CostCentresXML` constructor of `GHC.RTS.Flags.DoCostCentres` has been
+    replaced by `CostCentresJSON` due to the new JSON export format supported by
+    the cost centre profiler.
+
+  * The `ErrorCall` pattern synonym has been given a `COMPLETE` pragma so that
+    functions which solely match again `ErrorCall` do not produce
+    non-exhaustive pattern-match warnings (#8779)
+
+  * Change the implementations of `maximumBy` and `minimumBy` from
+    `Data.Foldable` to use `foldl1` instead of `foldr1`. This makes them run
+    in constant space when applied to lists. (#10830)
+
+  * `mkFunTy`, `mkAppTy`, and `mkTyConApp` from `Data.Typeable` no longer exist.
+    This functionality is superceded by the interfaces provided by
+    `Type.Reflection`.
+
+  * `mkTyCon3` is no longer exported by `Data.Typeable`. This function is
+    replaced by `Type.Reflection.Unsafe.mkTyCon`.
+
+  * `Data.List.NonEmpty.unfold` has been deprecated in favor of `unfoldr`,
+    which is functionally equivalent.
 
 ## 4.9.0.0  *May 2016*
 
@@ -179,6 +264,8 @@
 
   * The field `spInfoName` of `GHC.StaticPtr.StaticPtrInfo` has been removed.
     The value is no longer available when constructing the `StaticPtr`.
+
+  * `VecElem` and `VecCount` now have `Enum` and `Bounded` instances.
 
 ### Generalizations
 

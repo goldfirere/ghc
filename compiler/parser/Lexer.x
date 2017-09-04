@@ -71,22 +71,21 @@ module Lexer (
    addWarning,
    lexTokenStream,
    addAnnotation,AddAnn,addAnnsAt,mkParensApiAnn,
+   commentToAnnotation,
    moveAnnotations
   ) where
 
 -- base
 import Control.Monad
-#if __GLASGOW_HASKELL__ > 710
 import Control.Monad.Fail
-#endif
 import Data.Bits
 import Data.Char
 import Data.List
 import Data.Maybe
 import Data.Word
 
-import Data.IntSet (IntSet)
-import qualified Data.IntSet as IntSet
+import EnumSet (EnumSet)
+import qualified EnumSet
 
 -- ghc-boot
 import qualified GHC.LanguageExtensions as LangExt
@@ -113,8 +112,9 @@ import DynFlags
 -- compiler/basicTypes
 import SrcLoc
 import Module
-import BasicTypes     ( InlineSpec(..), RuleMatchInfo(..), FractionalLit(..),
-                        SourceText )
+import BasicTypes     ( InlineSpec(..), RuleMatchInfo(..),
+                        IntegralLit(..), FractionalLit(..),
+                        SourceText(..) )
 
 -- compiler/parser
 import Ctype
@@ -316,6 +316,10 @@ $tab          { warnTab }
 <line_prag2b> "#-}"|"-}"                { pop }
    -- NOTE: accept -} at the end of a LINE pragma, for compatibility
    -- with older versions of GHC which generated these.
+
+-- Haskell-style column pragmas, of the form
+--    {-# COLUMN <column> #-}
+<column_prag> @decimal $whitechar* "#-}" { setColumn }
 
 <0,option_prags> {
   "{-#" $whitechar* $pragmachar+
@@ -636,6 +640,7 @@ data Token
   | ITunpack_prag       SourceText
   | ITnounpack_prag     SourceText
   | ITann_prag          SourceText
+  | ITcomplete_prag     SourceText
   | ITclose_prag
   | IToptions_prag String
   | ITinclude_prag String
@@ -701,7 +706,7 @@ data Token
 
   | ITchar     SourceText Char       -- Note [Literal source text] in BasicTypes
   | ITstring   SourceText FastString -- Note [Literal source text] in BasicTypes
-  | ITinteger  SourceText Integer    -- Note [Literal source text] in BasicTypes
+  | ITinteger  IntegralLit           -- Note [Literal source text] in BasicTypes
   | ITrational FractionalLit
 
   | ITprimchar   SourceText Char     -- Note [Literal source text] in BasicTypes
@@ -1126,7 +1131,7 @@ rulePrag :: Action
 rulePrag span buf len = do
   setExts (.|. xbit InRulePragBit)
   let !src = lexemeToString buf len
-  return (L span (ITrules_prag src))
+  return (L span (ITrules_prag (SourceText src)))
 
 endPrag :: Action
 endPrag span _buf _len = do
@@ -1260,25 +1265,31 @@ sym con span buf len =
     !fs = lexemeToFastString buf len
 
 -- Variations on the integral numeric literal.
-tok_integral :: (String -> Integer -> Token)
+tok_integral :: (SourceText -> Integer -> Token)
              -> (Integer -> Integer)
              -> Int -> Int
              -> (Integer, (Char -> Int))
              -> Action
 tok_integral itint transint transbuf translen (radix,char_to_int) span buf len
- = return $ L span $ itint (lexemeToString buf len)
+ = return $ L span $ itint (SourceText $ lexemeToString buf len)
        $! transint $ parseUnsignedInteger
        (offsetBytes transbuf buf) (subtract translen len) radix char_to_int
 
--- some conveniences for use with tok_integral
 tok_num :: (Integer -> Integer)
-        -> Int -> Int
-        -> (Integer, (Char->Int)) -> Action
-tok_num = tok_integral ITinteger
+                        -> Int -> Int
+                        -> (Integer, (Char->Int)) -> Action
+tok_num = tok_integral itint
+  where
+    itint st@(SourceText ('-':str)) val = ITinteger (((IL $! st) $! True)      $! val)
+    itint st@(SourceText      str ) val = ITinteger (((IL $! st) $! False)     $! val)
+    itint st@(NoSourceText        ) val = ITinteger (((IL $! st) $! (val < 0)) $! val)
+
 tok_primint :: (Integer -> Integer)
             -> Int -> Int
             -> (Integer, (Char->Int)) -> Action
 tok_primint = tok_integral ITprimint
+
+
 tok_primword :: Int -> Int
              -> (Integer, (Char->Int)) -> Action
 tok_primword = tok_integral ITprimword positive
@@ -1293,12 +1304,14 @@ hexadecimal = (16,hexDigit)
 
 -- readRational can understand negative rationals, exponents, everything.
 tok_float, tok_primfloat, tok_primdouble :: String -> Token
-tok_float        str = ITrational   $! readFractionalLit str
-tok_primfloat    str = ITprimfloat  $! readFractionalLit str
-tok_primdouble   str = ITprimdouble $! readFractionalLit str
+tok_float      str  = ITrational   $! readFractionalLit str
+tok_primfloat  str  = ITprimfloat  $! readFractionalLit str
+tok_primdouble str  = ITprimdouble $! readFractionalLit str
 
 readFractionalLit :: String -> FractionalLit
-readFractionalLit str = (FL $! str) $! readRational str
+readFractionalLit str = ((FL $! (SourceText str)) $! is_neg) $! readRational str
+                        where is_neg = case str of ('-':_) -> True
+                                                   _       -> False
 
 -- -----------------------------------------------------------------------------
 -- Layout processing
@@ -1388,6 +1401,17 @@ setLine code span buf len = do
   pushLexState code
   lexToken
 
+setColumn :: Action
+setColumn span buf len = do
+  let column =
+        case reads (lexemeToString buf len) of
+          [(column, _)] -> column
+          _ -> error "setColumn: expected integer" -- shouldn't happen
+  setSrcLoc (mkRealSrcLoc (srcSpanFile span) (srcSpanEndLine span)
+                          (fromIntegral (column :: Integer)))
+  _ <- popLexState
+  lexToken
+
 setFile :: Int -> Action
 setFile code span buf len = do
   let file = mkFastString (go (lexemeToString (stepOn buf) (len-2)))
@@ -1452,8 +1476,8 @@ lex_string_tok span buf _len = do
   (AI end bufEnd) <- getInput
   let
     tok' = case tok of
-            ITprimstring _ bs -> ITprimstring src bs
-            ITstring _ s -> ITstring src s
+            ITprimstring _ bs -> ITprimstring (SourceText src) bs
+            ITstring _ s -> ITstring (SourceText src) s
             _ -> panic "lex_string_tok"
     src = lexemeToString buf (cur bufEnd - cur buf)
   return (L (mkRealSrcSpan (realSrcSpanStart span) end) tok')
@@ -1476,11 +1500,13 @@ lex_string s = do
                    if any (> '\xFF') s
                     then failMsgP "primitive string literal must contain only characters <= \'\\xFF\'"
                     else let bs = unsafeMkByteString (reverse s)
-                         in return (ITprimstring "" bs)
+                         in return (ITprimstring (SourceText (reverse s)) bs)
               _other ->
-                return (ITstring "" (mkFastString (reverse s)))
+                return (ITstring (SourceText (reverse s))
+                                 (mkFastString (reverse s)))
           else
-                return (ITstring "" (mkFastString (reverse s)))
+                return (ITstring (SourceText (reverse s))
+                                 (mkFastString (reverse s)))
 
     Just ('\\',i)
         | Just ('&',i) <- next -> do
@@ -1555,14 +1581,16 @@ finish_char_tok buf loc ch  -- We've already seen the closing quote
         i@(AI end bufEnd) <- getInput
         let src = lexemeToString buf (cur bufEnd - cur buf)
         if magicHash then do
-                case alexGetChar' i of
-                        Just ('#',i@(AI end _)) -> do
-                          setInput i
-                          return (L (mkRealSrcSpan loc end) (ITprimchar src ch))
-                        _other ->
-                          return (L (mkRealSrcSpan loc end) (ITchar src ch))
+            case alexGetChar' i of
+              Just ('#',i@(AI end _)) -> do
+                setInput i
+                return (L (mkRealSrcSpan loc end)
+                          (ITprimchar (SourceText src) ch))
+              _other ->
+                return (L (mkRealSrcSpan loc end)
+                          (ITchar (SourceText src) ch))
             else do
-                   return (L (mkRealSrcSpan loc end) (ITchar src ch))
+              return (L (mkRealSrcSpan loc end) (ITchar (SourceText src) ch))
 
 isAny :: Char -> Bool
 isAny c | c > '\x7f' = isPrint c
@@ -1770,23 +1798,27 @@ data LayoutContext
 data ParseResult a
   = POk PState a
   | PFailed
-        SrcSpan         -- The start and end of the text span related to
-                        -- the error.  Might be used in environments which can
-                        -- show this span, e.g. by highlighting it.
-        MsgDoc          -- The error message
+        (DynFlags -> Messages) -- A function that returns warnings that
+                               -- accumulated during parsing, including
+                               -- the warnings related to tabs.
+        SrcSpan                -- The start and end of the text span related
+                               -- to the error.  Might be used in environments
+                               -- which can show this span, e.g. by
+                               -- highlighting it.
+        MsgDoc                 -- The error message
 
 -- | Test whether a 'WarningFlag' is set
 warnopt :: WarningFlag -> ParserFlags -> Bool
-warnopt f options = fromEnum f `IntSet.member` pWarningFlags options
+warnopt f options = f `EnumSet.member` pWarningFlags options
 
 -- | Test whether a 'LangExt.Extension' is set
 extopt :: LangExt.Extension -> ParserFlags -> Bool
-extopt f options = fromEnum f `IntSet.member` pExtensionFlags options
+extopt f options = f `EnumSet.member` pExtensionFlags options
 
 -- | The subset of the 'DynFlags' used by the parser
 data ParserFlags = ParserFlags {
-    pWarningFlags   :: IntSet
-  , pExtensionFlags :: IntSet
+    pWarningFlags   :: EnumSet WarningFlag
+  , pExtensionFlags :: EnumSet LangExt.Extension
   , pThisPackage    :: UnitId      -- ^ key of package currently being compiled
   , pExtsBitmap     :: !ExtsBitmap -- ^ bitmap of permitted extensions
   }
@@ -1860,10 +1892,8 @@ instance Monad P where
   (>>=) = thenP
   fail = failP
 
-#if __GLASGOW_HASKELL__ > 710
 instance MonadFail P where
   fail = failP
-#endif
 
 returnP :: a -> P a
 returnP a = a `seq` (P $ \s -> POk s a)
@@ -1872,19 +1902,27 @@ thenP :: P a -> (a -> P b) -> P b
 (P m) `thenP` k = P $ \ s ->
         case m s of
                 POk s1 a         -> (unP (k a)) s1
-                PFailed span err -> PFailed span err
+                PFailed warnFn span err -> PFailed warnFn span err
 
 failP :: String -> P a
-failP msg = P $ \s -> PFailed (RealSrcSpan (last_loc s)) (text msg)
+failP msg =
+  P $ \s ->
+    PFailed (getMessages s) (RealSrcSpan (last_loc s)) (text msg)
 
 failMsgP :: String -> P a
-failMsgP msg = P $ \s -> PFailed (RealSrcSpan (last_loc s)) (text msg)
+failMsgP msg =
+  P $ \s ->
+    PFailed (getMessages s) (RealSrcSpan (last_loc s)) (text msg)
 
 failLocMsgP :: RealSrcLoc -> RealSrcLoc -> String -> P a
-failLocMsgP loc1 loc2 str = P $ \_ -> PFailed (RealSrcSpan (mkRealSrcSpan loc1 loc2)) (text str)
+failLocMsgP loc1 loc2 str =
+  P $ \s ->
+    PFailed (getMessages s) (RealSrcSpan (mkRealSrcSpan loc1 loc2)) (text str)
 
 failSpanMsgP :: SrcSpan -> SDoc -> P a
-failSpanMsgP span msg = P $ \_ -> PFailed span msg
+failSpanMsgP span msg =
+  P $ \s ->
+    PFailed (getMessages s) span msg
 
 getPState :: P PState
 getPState = P $ \s -> POk s s
@@ -2345,8 +2383,10 @@ popContext :: P ()
 popContext = P $ \ s@(PState{ buffer = buf, options = o, context = ctx,
                               last_len = len, last_loc = last_loc }) ->
   case ctx of
-        (_:tl) -> POk s{ context = tl } ()
-        []     -> PFailed (RealSrcSpan last_loc) (srcParseErr o buf len)
+        (_:tl) ->
+          POk s{ context = tl } ()
+        []     ->
+          PFailed (getMessages s) (RealSrcSpan last_loc) (srcParseErr o buf len)
 
 -- Push a new layout context at the indentation of the last token read.
 pushCurrentContext :: GenSemic -> P ()
@@ -2384,20 +2424,28 @@ srcParseErr options buf len
               $$ ppWhen (not th_enabled && token == "$") -- #7396
                         (text "Perhaps you intended to use TemplateHaskell")
               $$ ppWhen (token == "<-")
-                        (text "Perhaps this statement should be within a 'do' block?")
+                        (if mdoInLast100
+                           then text "Perhaps you intended to use RecursiveDo"
+                           else text "Perhaps this statement should be within a 'do' block?")
               $$ ppWhen (token == "=")
                         (text "Perhaps you need a 'let' in a 'do' block?"
                          $$ text "e.g. 'let x = 5' instead of 'x = 5'")
+              $$ ppWhen (not ps_enabled && pattern == "pattern ") -- #12429
+                        (text "Perhaps you intended to use PatternSynonyms")
   where token = lexemeToString (offsetBytes (-len) buf) len
+        pattern = decodePrevNChars 8 buf
+        last100 = decodePrevNChars 100 buf
+        mdoInLast100 = "mdo" `isInfixOf` last100
         th_enabled = extopt LangExt.TemplateHaskell options
+        ps_enabled = extopt LangExt.PatternSynonyms options
 
 -- Report a parse failure, giving the span of the previous token as
 -- the location of the error.  This is the entry point for errors
 -- detected during parsing.
 srcParseFail :: P a
-srcParseFail = P $ \PState{ buffer = buf, options = o, last_len = len,
+srcParseFail = P $ \s@PState{ buffer = buf, options = o, last_len = len,
                             last_loc = last_loc } ->
-    PFailed (RealSrcSpan last_loc) (srcParseErr o buf len)
+    PFailed (getMessages s) (RealSrcSpan last_loc) (srcParseErr o buf len)
 
 -- A lexical error is reported at a particular position in the source file,
 -- not over a token range.
@@ -2486,7 +2534,7 @@ alternativeLayoutRuleToken t
              (_, ALRLayout _ col : _ls, Just expectingOCurly)
               | (thisCol > col) ||
                 (thisCol == col &&
-                 isNonDecreasingIntentation expectingOCurly) ->
+                 isNonDecreasingIndentation expectingOCurly) ->
                  do setAlrExpectingOCurly Nothing
                     setALRContext (ALRLayout expectingOCurly thisCol : context)
                     setNextToken t
@@ -2630,9 +2678,9 @@ isALRclose ITccurly = True
 isALRclose ITcubxparen = True
 isALRclose _        = False
 
-isNonDecreasingIntentation :: ALRLayout -> Bool
-isNonDecreasingIntentation ALRLayoutDo = True
-isNonDecreasingIntentation _           = False
+isNonDecreasingIndentation :: ALRLayout -> Bool
+isNonDecreasingIndentation ALRLayoutDo = True
+isNonDecreasingIndentation _           = False
 
 containsCommas :: Token -> Bool
 containsCommas IToparen = True
@@ -2712,38 +2760,50 @@ ignoredPrags = Map.fromList (map ignored pragmas)
                      -- CFILES is a hugs-only thing.
                      pragmas = options_pragmas ++ ["cfiles", "contract"]
 
-oneWordPrags = Map.fromList([
-           ("rules", rulePrag),
-           ("inline", strtoken (\s -> (ITinline_prag s Inline FunLike))),
-           ("inlinable", strtoken (\s -> (ITinline_prag s Inlinable FunLike))),
-           ("inlineable", strtoken (\s -> (ITinline_prag s Inlinable FunLike))),
-                                          -- Spelling variant
-           ("notinline", strtoken (\s -> (ITinline_prag s NoInline FunLike))),
-           ("specialize", strtoken (\s -> ITspec_prag s)),
-           ("source", strtoken (\s -> ITsource_prag s)),
-           ("warning", strtoken (\s -> ITwarning_prag s)),
-           ("deprecated", strtoken (\s -> ITdeprecated_prag s)),
-           ("scc", strtoken (\s -> ITscc_prag s)),
-           ("generated", strtoken (\s -> ITgenerated_prag s)),
-           ("core", strtoken (\s -> ITcore_prag s)),
-           ("unpack", strtoken (\s -> ITunpack_prag s)),
-           ("nounpack", strtoken (\s -> ITnounpack_prag s)),
-           ("ann", strtoken (\s -> ITann_prag s)),
-           ("vectorize", strtoken (\s -> ITvect_prag s)),
-           ("novectorize", strtoken (\s -> ITnovect_prag s)),
-           ("minimal", strtoken (\s -> ITminimal_prag s)),
-           ("overlaps", strtoken (\s -> IToverlaps_prag s)),
-           ("overlappable", strtoken (\s -> IToverlappable_prag s)),
-           ("overlapping", strtoken (\s -> IToverlapping_prag s)),
-           ("incoherent", strtoken (\s -> ITincoherent_prag s)),
-           ("ctype", strtoken (\s -> ITctype s))])
+oneWordPrags = Map.fromList [
+     ("rules", rulePrag),
+     ("inline",
+         strtoken (\s -> (ITinline_prag (SourceText s) Inline FunLike))),
+     ("inlinable",
+         strtoken (\s -> (ITinline_prag (SourceText s) Inlinable FunLike))),
+     ("inlineable",
+         strtoken (\s -> (ITinline_prag (SourceText s) Inlinable FunLike))),
+                                    -- Spelling variant
+     ("notinline",
+         strtoken (\s -> (ITinline_prag (SourceText s) NoInline FunLike))),
+     ("specialize", strtoken (\s -> ITspec_prag (SourceText s))),
+     ("source", strtoken (\s -> ITsource_prag (SourceText s))),
+     ("warning", strtoken (\s -> ITwarning_prag (SourceText s))),
+     ("deprecated", strtoken (\s -> ITdeprecated_prag (SourceText s))),
+     ("scc", strtoken (\s -> ITscc_prag (SourceText s))),
+     ("generated", strtoken (\s -> ITgenerated_prag (SourceText s))),
+     ("core", strtoken (\s -> ITcore_prag (SourceText s))),
+     ("unpack", strtoken (\s -> ITunpack_prag (SourceText s))),
+     ("nounpack", strtoken (\s -> ITnounpack_prag (SourceText s))),
+     ("ann", strtoken (\s -> ITann_prag (SourceText s))),
+     ("vectorize", strtoken (\s -> ITvect_prag (SourceText s))),
+     ("novectorize", strtoken (\s -> ITnovect_prag (SourceText s))),
+     ("minimal", strtoken (\s -> ITminimal_prag (SourceText s))),
+     ("overlaps", strtoken (\s -> IToverlaps_prag (SourceText s))),
+     ("overlappable", strtoken (\s -> IToverlappable_prag (SourceText s))),
+     ("overlapping", strtoken (\s -> IToverlapping_prag (SourceText s))),
+     ("incoherent", strtoken (\s -> ITincoherent_prag (SourceText s))),
+     ("ctype", strtoken (\s -> ITctype (SourceText s))),
+     ("complete", strtoken (\s -> ITcomplete_prag (SourceText s))),
+     ("column", begin column_prag)
+     ]
 
 twoWordPrags = Map.fromList([
-     ("inline conlike", strtoken (\s -> (ITinline_prag s Inline ConLike))),
-     ("notinline conlike", strtoken (\s -> (ITinline_prag s NoInline ConLike))),
-     ("specialize inline", strtoken (\s -> (ITspec_inline_prag s True))),
-     ("specialize notinline", strtoken (\s -> (ITspec_inline_prag s False))),
-     ("vectorize scalar", strtoken (\s -> ITvect_scalar_prag s))])
+     ("inline conlike",
+         strtoken (\s -> (ITinline_prag (SourceText s) Inline ConLike))),
+     ("notinline conlike",
+         strtoken (\s -> (ITinline_prag (SourceText s) NoInline ConLike))),
+     ("specialize inline",
+         strtoken (\s -> (ITspec_inline_prag (SourceText s) True))),
+     ("specialize notinline",
+         strtoken (\s -> (ITspec_inline_prag (SourceText s) False))),
+     ("vectorize scalar",
+         strtoken (\s -> ITvect_scalar_prag (SourceText s)))])
 
 dispatch_pragmas :: Map String Action -> Action
 dispatch_pragmas prags span buf len = case Map.lookup (clean_pragma (lexemeToString buf len)) prags of
@@ -2783,7 +2843,22 @@ clean_pragma prag = canon_ws (map toLower (unprefix prag))
 
 -- | Encapsulated call to addAnnotation, requiring only the SrcSpan of
 --   the AST construct the annotation belongs to; together with the
---   AnnKeywordId, this is is the key of the annotation map
+--   AnnKeywordId, this is the key of the annotation map.
+--
+--   This type is useful for places in the parser where it is not yet
+--   known what SrcSpan an annotation should be added to.  The most
+--   common situation is when we are parsing a list: the annotations
+--   need to be associated with the AST element that *contains* the
+--   list, not the list itself.  'AddAnn' lets us defer adding the
+--   annotations until we finish parsing the list and are now parsing
+--   the enclosing element; we then apply the 'AddAnn' to associate
+--   the annotations.  Another common situation is where a common fragment of
+--   the AST has been factored out but there is no separate AST node for
+--   this fragment (this occurs in class and data declarations). In this
+--   case, the annotation belongs to the parent data declaration.
+--
+--   The usual way an 'AddAnn' is created is using the 'mj' ("make jump")
+--   function, and then it can be discharged using the 'ams' function.
 type AddAnn = SrcSpan -> P ()
 
 addAnnotation :: SrcSpan          -- SrcSpan of enclosing AST construct

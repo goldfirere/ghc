@@ -14,15 +14,15 @@
 #include <string.h>
 #include <assert.h>
 
-#ifdef HAVE_SYS_TYPES_H
+#if defined(HAVE_SYS_TYPES_H)
 #include <sys/types.h>
 #endif
 
-#ifdef HAVE_SYS_STAT_H
+#if defined(HAVE_SYS_STAT_H)
 #include <sys/stat.h>
 #endif
 
-#ifdef HAVE_UNISTD_H
+#if defined(HAVE_UNISTD_H)
 #include <unistd.h>
 #endif
 
@@ -120,7 +120,7 @@ readTix(void) {
   while(tix_ch != ']') {
     tmpModule = (HpcModuleInfo *)stgMallocBytes(sizeof(HpcModuleInfo),
                                                 "Hpc.readTix");
-    tmpModule->from_file = rtsTrue;
+    tmpModule->from_file = true;
     expect('T');
     expect('i');
     expect('x');
@@ -216,7 +216,7 @@ startupHpc(void)
     /* Make sure the directory is present;
      * conditional code for mkdir lifted from lndir.c
      */
-#ifdef WIN32
+#if defined(WIN32)
     mkdir(hpc_tixdir);
 #else
     mkdir(hpc_tixdir,0777);
@@ -279,7 +279,7 @@ hs_hpc_module(char *modName,
           tixArr[i] = 0;
       }
       tmpModule->next = modules;
-      tmpModule->from_file = rtsFalse;
+      tmpModule->from_file = false;
       modules = tmpModule;
       insertHashTable(moduleHash, (StgWord)modName, tmpModule);
   }
@@ -308,7 +308,7 @@ hs_hpc_module(char *modName,
           stgFree(tmpModule->modName);
           stgFree(tmpModule->tixArr);
       }
-      tmpModule->from_file = rtsFalse;
+      tmpModule->from_file = false;
   }
 }
 

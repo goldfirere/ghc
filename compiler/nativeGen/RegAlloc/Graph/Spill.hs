@@ -12,6 +12,7 @@ import Instruction
 import Reg
 import Cmm hiding (RegSet)
 import BlockId
+import Hoopl.Collections
 
 import MonadUtils
 import State
@@ -33,7 +34,7 @@ import qualified Data.IntSet    as IntSet
 --   TODO: See if we can split some of the live ranges instead of just globally
 --         spilling the virtual reg. This might make the spill cleaner's job easier.
 --
---   TODO: On CISCy x86 and x86_64 we don't nessesarally have to add a mov instruction
+--   TODO: On CISCy x86 and x86_64 we don't necessarily have to add a mov instruction
 --         when making spills. If an instr is using a spilled virtual we may be able to
 --         address the spill slot directly.
 --
@@ -60,9 +61,9 @@ regSpill platform code slotsFree regs
         | otherwise
         = do
                 -- Allocate a slot for each of the spilled regs.
-                let slots       = take (sizeUniqSet regs) $ nonDetEltsUFM slotsFree
+                let slots       = take (sizeUniqSet regs) $ nonDetEltsUniqSet slotsFree
                 let regSlotMap  = listToUFM
-                                $ zip (nonDetEltsUFM regs) slots
+                                $ zip (nonDetEltsUniqSet regs) slots
                     -- This is non-deterministic but we do not
                     -- currently support deterministic code-generation.
                     -- See Note [Unique Determinism and code generation]
@@ -135,17 +136,17 @@ regSpill_top platform regSlotMap cmm
          = let
                 -- Slots that are already recorded as being live.
                 curSlotsLive    = fromMaybe IntSet.empty
-                                $ lookupBlockMap blockId slotMap
+                                $ mapLookup blockId slotMap
 
                 moreSlotsLive   = IntSet.fromList
                                 $ catMaybes
                                 $ map (lookupUFM regSlotMap)
-                                $ nonDetEltsUFM regsLive
+                                $ nonDetEltsUniqSet regsLive
                     -- See Note [Unique Determinism and code generation]
 
                 slotMap'
-                 = insertBlockMap blockId (IntSet.union curSlotsLive moreSlotsLive)
-                                  slotMap
+                 = mapInsert blockId (IntSet.union curSlotsLive moreSlotsLive)
+                             slotMap
 
            in   slotMap'
 

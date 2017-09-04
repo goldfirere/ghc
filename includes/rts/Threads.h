@@ -12,10 +12,9 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef RTS_THREADS_H
-#define RTS_THREADS_H
+#pragma once
 
-#ifdef HAVE_SYS_TYPES_H
+#if defined(HAVE_SYS_TYPES_H)
 #include <sys/types.h>
 #endif
 
@@ -36,7 +35,7 @@ StgTSO *createStrictIOThread  (Capability *cap, W_ stack_size,
                                StgClosure *closure);
 
 // Suspending/resuming threads around foreign calls
-void *        suspendThread (StgRegTable *, rtsBool interruptible);
+void *        suspendThread (StgRegTable *, bool interruptible);
 StgRegTable * resumeThread  (void *);
 
 //
@@ -75,5 +74,3 @@ extern Capability MainCapability;
 // current value at the moment).
 //
 extern void setNumCapabilities (uint32_t new_);
-
-#endif /* RTS_THREADS_H */

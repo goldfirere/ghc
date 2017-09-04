@@ -8,13 +8,17 @@ module CmmContFlowOpt
     )
 where
 
-import Hoopl
+import Hoopl.Block
+import Hoopl.Collections
+import Hoopl.Graph
+import Hoopl.Label
 import BlockId
 import Cmm
 import CmmUtils
 import CmmSwitch (mapSwitchTargets)
 import Maybes
 import Panic
+import Util
 
 import Control.Monad
 import Prelude hiding (succ, unzip, zip)
@@ -74,7 +78,7 @@ import Prelude hiding (succ, unzip, zip)
 -- Note [Shortcut call returns]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 --
--- We are going to maintain the "current" graph (BlockEnv CmmBlock) as
+-- We are going to maintain the "current" graph (LabelMap CmmBlock) as
 -- we go, and also a mapping from BlockId to BlockId, representing
 -- continuation labels that we have renamed.  This latter mapping is
 -- important because we might shortcut a CmmCall continuation.  For
@@ -153,7 +157,7 @@ cmmCfgOptsProc split (CmmProc info lbl live g) = CmmProc info' lbl live g'
 cmmCfgOptsProc _ top = top
 
 
-blockConcat :: Bool -> CmmGraph -> (CmmGraph, BlockEnv BlockId)
+blockConcat :: Bool -> CmmGraph -> (CmmGraph, LabelMap BlockId)
 blockConcat splitting_procs g@CmmGraph { g_entry = entry_id }
   = (replaceLabels shortcut_map $ ofBlockMap new_entry new_blocks, shortcut_map')
   where
@@ -188,8 +192,8 @@ blockConcat splitting_procs g@CmmGraph { g_entry = entry_id }
      initialBackEdges = incPreds entry_id (predMap blocks)
 
      maybe_concat :: CmmBlock
-                  -> (BlockEnv CmmBlock, BlockEnv BlockId, BlockEnv Int)
-                  -> (BlockEnv CmmBlock, BlockEnv BlockId, BlockEnv Int)
+                  -> (LabelMap CmmBlock, LabelMap BlockId, LabelMap Int)
+                  -> (LabelMap CmmBlock, LabelMap BlockId, LabelMap Int)
      maybe_concat block (blocks, shortcut_map, backEdges)
         -- If:
         --   (1) current block ends with unconditional branch to b' and
@@ -282,18 +286,23 @@ blockConcat splitting_procs g@CmmGraph { g_entry = entry_id }
           -- This helps the native codegen a little bit, and probably has no
           -- effect on LLVM.  It's convenient to do it here, where we have the
           -- information about predecessors.
-          --
-          -- NB., only do this if the branch does not have a
-          -- likeliness annotation.
           swapcond_last
-            | CmmCondBranch cond t f Nothing <- shortcut_last
+            | CmmCondBranch cond t f l <- shortcut_last
+            , likelyFalse l
             , numPreds f > 1
             , hasOnePredecessor t
             , Just cond' <- maybeInvertCmmExpr cond
-            = CmmCondBranch cond' f t Nothing
+            = CmmCondBranch cond' f t (invertLikeliness l)
 
             | otherwise
             = shortcut_last
+
+          likelyFalse (Just False) = True
+          likelyFalse Nothing      = True
+          likelyFalse _            = False
+
+          invertLikeliness (Just b)     = Just (not b)
+          invertLikeliness Nothing      = Nothing
 
           -- Number of predecessors for a block
           numPreds bid = mapLookup bid backEdges `orElse` 0
@@ -308,7 +317,7 @@ blockConcat splitting_procs g@CmmGraph { g_entry = entry_id }
 -- that invariant, but calling replaceLabels may introduce unreachable blocks.
 -- We rely on subsequent passes in the Cmm pipeline to remove unreachable
 -- blocks.
-incPreds, decPreds :: BlockId -> BlockEnv Int -> BlockEnv Int
+incPreds, decPreds :: BlockId -> LabelMap Int -> LabelMap Int
 incPreds bid edges = mapInsertWith (+) bid 1 edges
 decPreds bid edges = case mapLookup bid edges of
                        Just preds | preds > 1 -> mapInsert bid (preds - 1) edges
@@ -347,8 +356,8 @@ callContinuation_maybe _ = Nothing
 
 
 -- Map over the CmmGraph, replacing each label with its mapping in the
--- supplied BlockEnv.
-replaceLabels :: BlockEnv BlockId -> CmmGraph -> CmmGraph
+-- supplied LabelMap.
+replaceLabels :: LabelMap BlockId -> CmmGraph -> CmmGraph
 replaceLabels env g
   | mapNull env = g
   | otherwise   = replace_eid $ mapGraphNodes1 txnode g
@@ -378,7 +387,7 @@ mkCmmCondBranch p t f l =
   if t == f then CmmBranch t else CmmCondBranch p t f l
 
 -- Build a map from a block to its set of predecessors.
-predMap :: [CmmBlock] -> BlockEnv Int
+predMap :: [CmmBlock] -> LabelMap Int
 predMap blocks = foldr add_preds mapEmpty blocks
   where
     add_preds block env = foldr add env (successors block)
@@ -387,7 +396,7 @@ predMap blocks = foldr add_preds mapEmpty blocks
 -- Removing unreachable blocks
 removeUnreachableBlocksProc :: CmmDecl -> CmmDecl
 removeUnreachableBlocksProc proc@(CmmProc info lbl live g)
-   | length used_blocks < mapSize (toBlockMap g)
+   | used_blocks `lengthLessThan` mapSize (toBlockMap g)
    = CmmProc info' lbl live g'
    | otherwise
    = proc
@@ -396,10 +405,10 @@ removeUnreachableBlocksProc proc@(CmmProc info lbl live g)
      info' = info { info_tbls = keep_used (info_tbls info) }
              -- Remove any info_tbls for unreachable
 
-     keep_used :: BlockEnv CmmInfoTable -> BlockEnv CmmInfoTable
-     keep_used bs = mapFoldWithKey keep emptyBlockMap bs
+     keep_used :: LabelMap CmmInfoTable -> LabelMap CmmInfoTable
+     keep_used bs = mapFoldWithKey keep mapEmpty bs
 
-     keep :: Label -> CmmInfoTable -> BlockEnv CmmInfoTable -> BlockEnv CmmInfoTable
+     keep :: Label -> CmmInfoTable -> LabelMap CmmInfoTable -> LabelMap CmmInfoTable
      keep l i env | l `setMember` used_lbls = mapInsert l i env
                   | otherwise               = env
 

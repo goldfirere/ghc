@@ -78,7 +78,7 @@ extern void *adjustorCode;
  * recover the writable address, we subtract 1 word from the executable
  * address and fetch. This works because Linux kernel magic gives us two
  * pointers with different addresses that refer to the same memory. Whatever
- * you write into the writeable address can be read back at the executable
+ * you write into the writable address can be read back at the executable
  * address. This method is very efficient.
  *
  * On iOS this breaks for two reasons: 1. the two pointers do not refer to
@@ -188,7 +188,7 @@ createAdjustor (int cconv,
 #include <string.h>
 #endif
 
-#ifdef LEADING_UNDERSCORE
+#if defined(LEADING_UNDERSCORE)
 #define UNDERSCORE "_"
 #else 
 #define UNDERSCORE ""
@@ -718,7 +718,7 @@ createAdjustor(int cconv, StgStablePtr hptr,
      To do this, we extend the *caller's* stack frame by 2 words and shift
      the output registers used for argument passing (%o0 - %o5, we are a *leaf*
      procedure because of the tail-jump) by 2 positions. This makes room in
-     %o0 and %o1 for the additinal arguments, namely  hptr and a dummy (used
+     %o0 and %o1 for the additional arguments, namely  hptr and a dummy (used
      for destination addr of jump on SPARC, return address on x86, ...). This
      shouldn't cause any problems for a C-like caller: alloca is implemented
      similarly, and local variables should be accessed via %fp, not %sp. In a
@@ -1057,7 +1057,7 @@ TODO: Depending on how much allocation overhead stgMallocBytes uses for
         AdjustorStub *adjustorStub;
         int sz = 0, extra_sz, total_sz;
 
-#ifdef FUNDESCS
+#if defined(FUNDESCS)
         adjustorStub = stgMallocBytes(sizeof(AdjustorStub), "createAdjustor");
 #else
         adjustorStub = allocateExec(sizeof(AdjustorStub),&code);
@@ -1066,7 +1066,7 @@ TODO: Depending on how much allocation overhead stgMallocBytes uses for
             
         adjustorStub->code = (void*) &adjustorCode;
 
-#ifdef FUNDESCS
+#if defined(FUNDESCS)
             // function descriptors are a cool idea.
             // We don't need to generate any code at runtime.
         adjustorStub->toc = adjustorStub;

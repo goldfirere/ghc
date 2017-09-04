@@ -6,20 +6,19 @@
  *
  * --------------------------------------------------------------------------*/
 
-#ifndef RAISEASYNC_H
-#define RAISEASYNC_H
+#pragma once
 
 #define THROWTO_SUCCESS   0
 #define THROWTO_BLOCKED   1
 
-#ifndef CMINUSMINUS
+#if !defined(CMINUSMINUS)
 
 #include "BeginPrivate.h"
 
 StgTSO* raiseAsync (Capability *cap,
                     StgTSO *tso,
                     StgClosure *exception,
-                    rtsBool stop_at_atomically,
+                    bool stop_at_atomically,
                     StgUpdateFrame *stop_here);
 
 void throwToSingleThreaded (Capability *cap,
@@ -29,7 +28,7 @@ void throwToSingleThreaded (Capability *cap,
 void throwToSingleThreaded_ (Capability *cap,
                              StgTSO *tso,
                              StgClosure *exception,
-                             rtsBool stop_at_atomically);
+                             bool stop_at_atomically);
 
 void throwToSelf (Capability *cap,
                   StgTSO *tso,
@@ -79,5 +78,3 @@ interruptible(StgTSO *t)
 #include "EndPrivate.h"
 
 #endif /* CMINUSMINUS */
-
-#endif /* RAISEASYNC_H */

@@ -6,8 +6,7 @@
  *
  * -------------------------------------------------------------------------- */
 
-#ifndef RTS_STORAGE_CLOSUREMACROS_H
-#define RTS_STORAGE_CLOSUREMACROS_H
+#pragma once
 
 /* -----------------------------------------------------------------------------
    Info tables are slammed up against the entry code, and the label
@@ -55,7 +54,7 @@ INLINE_HEADER const StgInfoTable *GET_INFO(StgClosure *c) {
 
 #define GET_ENTRY(c)  (ENTRY_CODE(GET_INFO(c)))
 
-#ifdef TABLES_NEXT_TO_CODE
+#if defined(TABLES_NEXT_TO_CODE)
 EXTERN_INLINE StgInfoTable *INFO_PTR_TO_STRUCT(const StgInfoTable *info);
 EXTERN_INLINE StgInfoTable *INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgInfoTable *)info - 1;}
 EXTERN_INLINE StgRetInfoTable *RET_INFO_PTR_TO_STRUCT(const StgInfoTable *info);
@@ -117,8 +116,8 @@ INLINE_HEADER StgHalfWord GET_TAG(const StgClosure *con)
    Macros for building closures
    -------------------------------------------------------------------------- */
 
-#ifdef PROFILING
-#ifdef DEBUG_RETAINER
+#if defined(PROFILING)
+#if defined(DEBUG_RETAINER)
 /*
   For the sake of debugging, we take the safest way for the moment. Actually, this
   is useful to check the sanity of heap before beginning retainer profiling.
@@ -258,18 +257,18 @@ TAG_CLOSURE(StgWord tag,StgClosure * p)
    make sense...
    -------------------------------------------------------------------------- */
 
-INLINE_HEADER rtsBool LOOKS_LIKE_INFO_PTR_NOT_NULL (StgWord p)
+INLINE_HEADER bool LOOKS_LIKE_INFO_PTR_NOT_NULL (StgWord p)
 {
     StgInfoTable *info = INFO_PTR_TO_STRUCT((StgInfoTable *)p);
-    return (info->type != INVALID_OBJECT && info->type < N_CLOSURE_TYPES) ? rtsTrue : rtsFalse;
+    return info->type != INVALID_OBJECT && info->type < N_CLOSURE_TYPES;
 }
 
-INLINE_HEADER rtsBool LOOKS_LIKE_INFO_PTR (StgWord p)
+INLINE_HEADER bool LOOKS_LIKE_INFO_PTR (StgWord p)
 {
-    return (p && (IS_FORWARDING_PTR(p) || LOOKS_LIKE_INFO_PTR_NOT_NULL(p))) ? rtsTrue : rtsFalse;
+    return p && (IS_FORWARDING_PTR(p) || LOOKS_LIKE_INFO_PTR_NOT_NULL(p));
 }
 
-INLINE_HEADER rtsBool LOOKS_LIKE_CLOSURE_PTR (const void *p)
+INLINE_HEADER bool LOOKS_LIKE_CLOSURE_PTR (const void *p)
 {
     return LOOKS_LIKE_INFO_PTR((StgWord)
             (UNTAG_CONST_CLOSURE((const StgClosure *)(p)))->header.info);
@@ -421,12 +420,6 @@ closure_sizeW_ (const StgClosure *p, const StgInfoTable *info)
         return bco_sizeW((StgBCO *)p);
     case TREC_CHUNK:
         return sizeofW(StgTRecChunk);
-    case COMPACT_NFDATA:
-        // Nothing should ever call closure_sizeW() on a StgCompactNFData
-        // because CompactNFData is a magical object/list-of-objects that
-        // requires special paths pretty much everywhere in the GC
-        barf("closure_sizeW() called on a StgCompactNFData. "
-             "This should never happen.");
     default:
         return sizeW_fromITBL(info);
     }
@@ -526,8 +519,17 @@ INLINE_HEADER StgWord8 *mutArrPtrsCard (StgMutArrPtrs *a, W_ n)
 
    -------------------------------------------------------------------------- */
 
-#define ZERO_SLOP_FOR_LDV_PROF     (defined(PROFILING))
-#define ZERO_SLOP_FOR_SANITY_CHECK (defined(DEBUG) && !defined(THREADED_RTS))
+#if defined(PROFILING)
+#define ZERO_SLOP_FOR_LDV_PROF 1
+#else
+#define ZERO_SLOP_FOR_LDV_PROF 0
+#endif
+
+#if defined(DEBUG) && !defined(THREADED_RTS)
+#define ZERO_SLOP_FOR_SANITY_CHECK 1
+#else
+#define ZERO_SLOP_FOR_SANITY_CHECK 0
+#endif
 
 #if ZERO_SLOP_FOR_LDV_PROF || ZERO_SLOP_FOR_SANITY_CHECK
 #define OVERWRITING_CLOSURE(c) overwritingClosure(c)
@@ -538,7 +540,7 @@ INLINE_HEADER StgWord8 *mutArrPtrsCard (StgMutArrPtrs *a, W_ n)
 #define OVERWRITING_CLOSURE_OFS(c,n) /* nothing */
 #endif
 
-#ifdef PROFILING
+#if defined(PROFILING)
 void LDV_recordDead (const StgClosure *c, uint32_t size);
 #endif
 
@@ -593,5 +595,3 @@ EXTERN_INLINE void overwritingClosureOfs (StgClosure *p, uint32_t offset)
     for (i = offset; i < size; i++)
         ((StgWord *)p)[i] = 0;
 }
-
-#endif /* RTS_STORAGE_CLOSUREMACROS_H */

@@ -174,7 +174,7 @@ Now for @Char@-like closures.  We generate an assignment of the
 address of the closure to a temporary.  It would be possible simply to
 generate no code, and record the addressing mode in the environment,
 but we'd have to be careful if the argument wasn't a constant --- so
-for simplicity we just always asssign to a temporary.
+for simplicity we just always assign to a temporary.
 
 Last special case: @Int@-like closures.  We only special-case the
 situation in which the argument is a literal in the range
@@ -191,7 +191,7 @@ because they don't support cross package data references well.
 
 buildDynCon' dflags platform binder _ _cc con [arg]
   | maybeIntLikeCon con
-  , platformOS platform /= OSMinGW32 || not (gopt Opt_PIC dflags)
+  , platformOS platform /= OSMinGW32 || not (positionIndependent dflags)
   , NonVoid (StgLitArg (MachInt val)) <- arg
   , val <= fromIntegral (mAX_INTLIKE dflags) -- Comparisons at type Integer!
   , val >= fromIntegral (mIN_INTLIKE dflags) -- ...ditto...
@@ -205,7 +205,7 @@ buildDynCon' dflags platform binder _ _cc con [arg]
 
 buildDynCon' dflags platform binder _ _cc con [arg]
   | maybeCharLikeCon con
-  , platformOS platform /= OSMinGW32 || not (gopt Opt_PIC dflags)
+  , platformOS platform /= OSMinGW32 || not (positionIndependent dflags)
   , NonVoid (StgLitArg (MachChar val)) <- arg
   , let val_int = ord val :: Int
   , val_int <= mAX_CHARLIKE dflags

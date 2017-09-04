@@ -213,7 +213,7 @@ pprInstance :: ClsInst -> SDoc
 pprInstance ispec
   = hang (pprInstanceHdr ispec)
        2 (vcat [ text "--" <+> pprDefinedAt (getName ispec)
-               , ifPprDebug (ppr (is_dfun ispec)) ])
+               , whenPprDebug (ppr (is_dfun ispec)) ])
 
 -- * pprInstanceHdr is used in VStudio to populate the ClassView tree
 pprInstanceHdr :: ClsInst -> SDoc
@@ -524,7 +524,7 @@ These functions implement the carefully-written rules in the user
 manual section on "overlapping instances". At risk of duplication,
 here are the rules.  If the rules change, change this text and the
 user manual simultaneously.  The link may be this:
-http://www.haskell.org/ghc/docs/latest/html/users_guide/type-class-extensions.html#instance-overlap
+http://www.haskell.org/ghc/docs/latest/html/users_guide/glasgow_exts.html#instance-overlap
 
 The willingness to be overlapped or incoherent is a property of the
 instance declaration itself, controlled as follows:
@@ -965,8 +965,8 @@ incoherent instances as long as there are others.
 -}
 
 instanceBindFun :: TyCoVar -> BindFlag
-instanceBindFun tv | isTcTyVar tv && isOverlappableTyVar tv = Skolem
-                   | otherwise                              = BindMe
+instanceBindFun tv | isOverlappableTyVar tv = Skolem
+                   | otherwise              = BindMe
    -- Note [Binding when looking up instances]
 
 {-

@@ -10,7 +10,6 @@
 --
 module GHCi.Run
   ( run, redirectInterrupts
-  , toSerializableException, fromSerializableException
   ) where
 
 import GHCi.CreateBCO
@@ -21,6 +20,7 @@ import GHCi.ObjLink
 import GHCi.RemoteTypes
 import GHCi.TH
 import GHCi.BreakArray
+import GHCi.StaticPtrTable
 
 import Control.Concurrent
 import Control.DeepSeq
@@ -36,7 +36,6 @@ import Foreign
 import Foreign.C
 import GHC.Conc.Sync
 import GHC.IO hiding ( bracket )
-import System.Exit
 import System.Mem.Weak  ( deRefWeak )
 import Unsafe.Coerce
 
@@ -58,6 +57,7 @@ run m = case m of
   FindSystemLibrary str -> findSystemLibrary str
   CreateBCOs bcos -> createBCOs (concatMap (runGet get) bcos)
   FreeHValueRefs rs -> mapM_ freeRemoteRef rs
+  AddSptEntry fpr r -> localRef r >>= sptAddEntry fpr
   EvalStmt opts r -> evalStmt opts r
   ResumeStmt opts r -> resumeStmt opts r
   AbandonStmt r -> abandonStmt r
@@ -223,17 +223,6 @@ tryEval io = do
     Left ex -> return (EvalException (toSerializableException ex))
     Right a -> return (EvalSuccess a)
 
-toSerializableException :: SomeException -> SerializableException
-toSerializableException ex
-  | Just UserInterrupt <- fromException ex  = EUserInterrupt
-  | Just (ec::ExitCode) <- fromException ex = (EExitCode ec)
-  | otherwise = EOtherException (show (ex :: SomeException))
-
-fromSerializableException :: SerializableException -> SomeException
-fromSerializableException EUserInterrupt = toException UserInterrupt
-fromSerializableException (EExitCode c) = toException c
-fromSerializableException (EOtherException str) = toException (ErrorCall str)
-
 -- This function sets up the interpreter for catching breakpoints, and
 -- resets everything when the computation has stopped running.  This
 -- is a not-very-good way to ensure that only the interactive
@@ -355,9 +344,7 @@ mkCostCentres _ _ = return []
 
 getIdValFromApStack :: HValue -> Int -> IO (Maybe HValue)
 getIdValFromApStack apStack (I# stackDepth) = do
-   case getApStackVal# apStack (stackDepth +# 1#) of
-                                -- The +1 is magic!  I don't know where it comes
-                                -- from, but this makes things line up.  --SDM
+   case getApStackVal# apStack stackDepth of
         (# ok, result #) ->
             case ok of
               0# -> return Nothing -- AP_STACK not found

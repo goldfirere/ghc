@@ -70,15 +70,6 @@ GhcStage1HcOpts=
 GhcStage2HcOpts=-O2
 GhcStage3HcOpts=-O2
 
-# Disable -O2 optimization. Otherwise amount of generated C code
-# makes things very slow to compile (~5 minutes on core-i7 for 'compiler/hsSyn/HsExpr.lhs')
-# and sometimes not compile at all (powerpc64 overflows something
-# on 'compiler/hsSyn/HsExpr.lhs').
-ifeq "$(GhcUnregisterised)" "YES"
-GhcStage1HcOpts=
-GhcStage2HcOpts=
-GhcStage3HcOpts=
-endif
 
 # Note [Stage number in build variables].
 #
@@ -95,10 +86,21 @@ endif
 #   The stage number refers to the compiler stage the options are passed to.
 
 GhcDebugged=NO
-GhcDynamic=NO
 
 # GhcProfiled=YES means compile a profiled stage-2 compiler
 GhcProfiled=NO
+
+# WITH_TERMINFO can be used to disable terminfo support throughout the compiler
+# and its tools. This is handy in the case of cross-compilation, where we may
+# not have an ncurses build for the target.
+ifeq "$(TargetOS_CPP)" "ios"
+# iOS has no terminfo support
+WITH_TERMINFO=NO
+else ifeq "$(Windows_Target)" "YES"
+WITH_TERMINFO=NO
+else
+WITH_TERMINFO=YES
+endif
 
 ifeq "$(findstring $(TargetOS_CPP),linux freebsd dragonfly openbsd netbsd solaris2 kfreebsdgnu haiku linux-android)" ""
 TargetElf = NO
@@ -181,18 +183,16 @@ GhcWithNativeCodeGen := $(strip\
     $(if $(filter YESYESNO,\
 		  $(OsSupportsNCG)$(ArchSupportsNCG)$(GhcUnregisterised)),YES,NO))
 
-HaveLibDL = @HaveLibDL@
-
 # ArchSupportsSMP should be set iff there is support for that arch in
 # includes/stg/SMP.h
 ifeq "$(TargetArch_CPP)" "arm"
 # We don't support load/store barriers pre-ARMv7. See #10433.
-ArchSupportsSMP="$(if $(filter $(ARM_ISA),ARMv5 ARMv6),NO,YES)"
+ArchSupportsSMP=$(if $(filter $(ARM_ISA),ARMv5 ARMv6),NO,YES)
 else
 ArchSupportsSMP=$(strip $(patsubst $(TargetArch_CPP), YES, $(findstring $(TargetArch_CPP), i386 x86_64 sparc powerpc powerpc64 powerpc64le aarch64)))
 endif
 
-# The THREADED_RTS requites `BaseReg` to be in a register and the
+# The THREADED_RTS requires `BaseReg` to be in a register and the
 # `GhcUnregisterised` mode doesn't allow that.
 GhcWithSMP := $(strip $(if $(filter YESNO, $(ArchSupportsSMP)$(GhcUnregisterised)),YES,NO))
 
@@ -328,19 +328,24 @@ StripLibraries=NO
 #		system needs to do other special magic if you are
 #		doing object-file splitting
 
-ArchSupportsSplitObjs=$(strip $(if $(filter $(TargetArch_CPP),i386 x86_64 powerpc sparc),YES,NO))
-OsSupportsSplitObjs=$(strip $(if $(filter $(TargetOS_CPP),mingw32 linux darwin solaris2 freebsd dragonfly netbsd openbsd),YES,NO))
+ArchSupportsSplitObjs=$(if $(filter \
+  $(TargetArch_CPP),i386 x86_64 powerpc sparc),YES,NO)#
+
+# We used to support splitting on Darwin, but there is no point, since Darwin
+# uses subsections via symbols
+OsSupportsSplitObjs=$(if $(filter $(TargetOS_CPP),\
+   mingw32 linux solaris2 freebsd dragonfly netbsd openbsd),YES,NO)
 SplitObjsBroken = @SplitObjsBroken@
 
-SupportsSplitObjs := $(strip \
-                    $(if $(and $(filter YES,$(ArchSupportsSplitObjs)),\
-                               $(filter YES,$(OsSupportsSplitObjs)),\
-                               $(filter NO,$(SplitObjsBroken)),\
-                               $(filter NO,$(GhcUnregisterised))),\
-                          YES,NO))
+SupportsSplitObjs := $(if $(and $(filter YES,$(ArchSupportsSplitObjs)),\
+                                $(filter YES,$(OsSupportsSplitObjs)),\
+                                $(filter NO,$(SplitObjsBroken)),\
+                                $(filter YES,$(GhcWithNativeCodeGen))),YES,NO)
 
-# By default, enable SplitObjs for the libraries if this build supports it
-SplitObjs=$(SupportsSplitObjs)
+# By default, enable SplitObjs for the libraries if this build supports it.
+# Unless SplitSections is enabled - then let that take precedence.
+SplitObjs = $(if $(and $(filter YES,$(SupportsSplitObjs)),\
+                       $(filter NO,$(SplitSections))),YES,NO)
 
 # ----------------------------------------------------------------------------
 # Section splitting
@@ -349,9 +354,15 @@ SplitObjs=$(SupportsSplitObjs)
 # like SplitObjs, but doesn't require post-processing and splitting of object
 # files.
 #
-# Set SplitSections=YES in your build.mk to enable.
-
-SplitSections=NO
+# Set SplitSections=YES or NO in your build.mk to override the default.
+#
+# This is not supported on Darwin (where you can use subsections-via-symbols
+# instead) and Windows is disabled until we figure the linking performance
+# issues related to BFD out. (See #11445, #12913 and related tickets.)
+OsSupportsSplitSections=$(if $(filter $(TargetOS_CPP),mingw32 darwin),NO,YES)
+SupportsSplitSections=$(if $(and $(filter YES,$(OsSupportsSplitSections)),\
+                                   $(filter YES,$(LdIsGNULd))),YES,NO)
+SplitSections ?= $(SupportsSplitSections)
 
 # ----------------------------------------------------------------------------
 
@@ -396,6 +407,7 @@ GhcRtsWithLibdw=$(strip $(if $(filter $(TargetArch_CPP),i386 x86_64),@UseLibdw@,
 #
 ################################################################################
 
+BINDIST               = NO
 BIN_DIST_NAME         = ghc-$(ProjectVersion)
 BIN_DIST_PREP_DIR     = bindistprep/$(BIN_DIST_NAME)
 BIN_DIST_PREP_TAR     = bindistprep/$(BIN_DIST_NAME)-$(TARGETPLATFORM).tar
@@ -508,11 +520,7 @@ SUPPORTS_THIS_UNIT_ID = @SUPPORTS_THIS_UNIT_ID@
 # needs to know which gcc you're using in order to perform its tests.
 
 GccVersion            = @GccVersion@
-ifeq "$(phase)" "0"
-CrossCompilePrefix    =
-else
-CrossCompilePrefix    = @CrossCompilePrefix@
-endif
+
 # TargetPlatformFull retains the string passed to configure so we have it in
 # the necessary format to pass to libffi's configure.
 TargetPlatformFull    = @TargetPlatformFull@
@@ -548,6 +556,11 @@ CrossCompiling        = @CrossCompiling@
 # See Note [CrossCompiling vs Stage1Only]
 # See Note [Stage1Only vs stage=1]
 Stage1Only = NO
+
+# Installed tools prefix:
+#    we add prefix to crosscompiler GHC only (ghc-stage1),
+#    not cross-built GHC (not ghc-stage2).
+CrossCompilePrefix    = $(if $(filter YES,$(Stage1Only)),@CrossCompilePrefix@,)
 
 # Install stage 2 by default, or stage 1 in the cross compiler
 # case. Can be changed to 3
@@ -618,6 +631,9 @@ CONF_LD_LINKER_OPTS_STAGE2 = @CONF_LD_LINKER_OPTS_STAGE2@
 CONF_CPP_OPTS_STAGE0 = @CONF_CPP_OPTS_STAGE0@
 CONF_CPP_OPTS_STAGE1 = @CONF_CPP_OPTS_STAGE1@
 CONF_CPP_OPTS_STAGE2 = @CONF_CPP_OPTS_STAGE2@
+CONF_HC_OPTS_STAGE0 = @CONF_HC_OPTS_STAGE0@
+CONF_HC_OPTS_STAGE1 = @CONF_HC_OPTS_STAGE1@
+CONF_HC_OPTS_STAGE2 = @CONF_HC_OPTS_STAGE2@
 
 # The .hsc files aren't currently safe for cross-compilation on Windows:
 #     libraries\haskeline\.\System\Console\Haskeline\Backend\Win32.hsc:160
@@ -764,9 +780,9 @@ STRIP_CMD      = strip
 endif
 PATCH_CMD      = @PatchCmd@
 TAR_CMD        = @TarCmd@
-BZIP2_CMD      = bzip2
-GZIP_CMD       = gzip
-XZ_CMD         = xz
+BZIP2_CMD      = @Bzip2Cmd@
+GZIP_CMD       = @GzipCmd@
+XZ_CMD         = @XzCmd@
 
 # xz is default compression
 TAR_COMP      ?= xz
@@ -875,5 +891,21 @@ ICONV_LIB_DIRS = @ICONV_LIB_DIRS@
 GMP_INCLUDE_DIRS = @GMP_INCLUDE_DIRS@
 GMP_LIB_DIRS = @GMP_LIB_DIRS@
 
-CURSES_INCLUDE_DIRS = @CURSES_INCLUDE_DIRS@
 CURSES_LIB_DIRS = @CURSES_LIB_DIRS@
+
+# See Note [Disable -O2 in unregisterised mode]
+# Be careful: 'GhcUnregisterised' should be defined earlier in this file.
+ifeq "$(GhcUnregisterised)" "YES"
+GhcStage1HcOpts=
+GhcStage2HcOpts=
+GhcStage3HcOpts=
+
+GhcLibHcOpts=
+endif
+
+# Note [Disable -O2 in unregisterised mode]
+# Disable -O2 optimization in unregisterised mode. Otherwise amount
+# of generated C code # makes things very slow to compile (~5 minutes
+# on core-i7 for 'compiler/hsSyn/HsExpr.hs') and sometimes not compile
+# at all: powerpc64 overflows TOC section on 'compiler/hsSyn/HsExpr.hs'
+#         ia64 overflows short data section on 'compiler/main/DynFlags.hs'

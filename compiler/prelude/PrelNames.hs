@@ -224,11 +224,30 @@ basicKnownKeyNames
         -- Typeable
         typeableClassName,
         typeRepTyConName,
+        someTypeRepTyConName,
+        someTypeRepDataConName,
+        kindRepTyConName,
+        kindRepTyConAppDataConName,
+        kindRepVarDataConName,
+        kindRepAppDataConName,
+        kindRepFunDataConName,
+        kindRepTYPEDataConName,
+        kindRepTypeLitSDataConName,
+        kindRepTypeLitDDataConName,
+        typeLitSortTyConName,
+        typeLitSymbolDataConName,
+        typeLitNatDataConName,
         typeRepIdName,
-        mkPolyTyConAppName,
-        mkAppTyName,
+        mkTrConName,
+        mkTrAppName,
+        mkTrFunName,
         typeSymbolTypeRepName, typeNatTypeRepName,
         trGhcPrimModuleName,
+
+        -- KindReps for common cases
+        starKindRepName,
+        starArrStarKindRepName,
+        starArrStarArrStarKindRepName,
 
         -- Dynamic
         toDynName,
@@ -256,9 +275,12 @@ basicKnownKeyNames
         -- Applicative stuff
         pureAName, apAName, thenAName,
 
+        -- Functor stuff
+        fmapName,
+
         -- Monad stuff
         thenIOName, bindIOName, returnIOName, failIOName, bindMName, thenMName,
-        returnMName, fmapName, joinMName,
+        returnMName, joinMName,
 
         -- MonadFail
         monadFailClassName, failMName, failMName_preMFP,
@@ -330,6 +352,10 @@ basicKnownKeyNames
         andIntegerName, orIntegerName, xorIntegerName, complementIntegerName,
         shiftLIntegerName, shiftRIntegerName, bitIntegerName,
 
+        -- Natural
+        naturalTyConName,
+        naturalFromIntegerName,
+
         -- Float/Double
         rationalToFloatName,
         rationalToDoubleName,
@@ -345,6 +371,9 @@ basicKnownKeyNames
 
         -- Implicit Parameters
         ipClassName,
+
+        -- Overloaded record fields
+        hasFieldClassName,
 
         -- Call Stacks
         callStackTyConName,
@@ -383,6 +412,7 @@ basicKnownKeyNames
         , ghciIoClassName, ghciStepIoMName
 
         -- StaticPtr
+        , makeStaticName
         , staticPtrTyConName
         , staticPtrDataConName, staticPtrInfoDataConName
         , fromStaticPtrName
@@ -439,7 +469,7 @@ pRELUDE         = mkBaseModule_ pRELUDE_NAME
 
 gHC_PRIM, gHC_TYPES, gHC_GENERICS, gHC_MAGIC,
     gHC_CLASSES, gHC_BASE, gHC_ENUM, gHC_GHCI, gHC_CSTRING,
-    gHC_SHOW, gHC_READ, gHC_NUM, gHC_INTEGER_TYPE, gHC_LIST,
+    gHC_SHOW, gHC_READ, gHC_NUM, gHC_INTEGER_TYPE, gHC_NATURAL, gHC_LIST,
     gHC_TUPLE, dATA_TUPLE, dATA_EITHER, dATA_STRING,
     dATA_FOLDABLE, dATA_TRAVERSABLE, dATA_MONOID, dATA_SEMIGROUP,
     gHC_CONC, gHC_IO, gHC_IO_Exception,
@@ -448,7 +478,7 @@ gHC_PRIM, gHC_TYPES, gHC_GENERICS, gHC_MAGIC,
     tYPEABLE, tYPEABLE_INTERNAL, gENERICS,
     rEAD_PREC, lEX, gHC_INT, gHC_WORD, mONAD, mONAD_FIX, mONAD_ZIP, mONAD_FAIL,
     aRROW, cONTROL_APPLICATIVE, gHC_DESUGAR, rANDOM, gHC_EXTS,
-    cONTROL_EXCEPTION_BASE, gHC_TYPELITS, dATA_TYPE_EQUALITY,
+    cONTROL_EXCEPTION_BASE, gHC_TYPELITS, gHC_TYPENATS, dATA_TYPE_EQUALITY,
     dATA_COERCE :: Module
 
 gHC_PRIM        = mkPrimModule (fsLit "GHC.Prim")   -- Primitive types and values
@@ -464,6 +494,7 @@ gHC_SHOW        = mkBaseModule (fsLit "GHC.Show")
 gHC_READ        = mkBaseModule (fsLit "GHC.Read")
 gHC_NUM         = mkBaseModule (fsLit "GHC.Num")
 gHC_INTEGER_TYPE= mkIntegerModule (fsLit "GHC.Integer.Type")
+gHC_NATURAL     = mkBaseModule (fsLit "GHC.Natural")
 gHC_LIST        = mkBaseModule (fsLit "GHC.List")
 gHC_TUPLE       = mkPrimModule (fsLit "GHC.Tuple")
 dATA_TUPLE      = mkBaseModule (fsLit "Data.Tuple")
@@ -505,6 +536,7 @@ gHC_EXTS        = mkBaseModule (fsLit "GHC.Exts")
 cONTROL_EXCEPTION_BASE = mkBaseModule (fsLit "Control.Exception.Base")
 gHC_GENERICS    = mkBaseModule (fsLit "GHC.Generics")
 gHC_TYPELITS    = mkBaseModule (fsLit "GHC.TypeLits")
+gHC_TYPENATS    = mkBaseModule (fsLit "GHC.TypeNats")
 dATA_TYPE_EQUALITY = mkBaseModule (fsLit "Data.Type.Equality")
 dATA_COERCE     = mkBaseModule (fsLit "Data.Coerce")
 
@@ -521,11 +553,17 @@ gHC_STACK_TYPES = mkBaseModule (fsLit "GHC.Stack.Types")
 gHC_STATICPTR :: Module
 gHC_STATICPTR = mkBaseModule (fsLit "GHC.StaticPtr")
 
+gHC_STATICPTR_INTERNAL :: Module
+gHC_STATICPTR_INTERNAL = mkBaseModule (fsLit "GHC.StaticPtr.Internal")
+
 gHC_FINGERPRINT_TYPE :: Module
 gHC_FINGERPRINT_TYPE = mkBaseModule (fsLit "GHC.Fingerprint.Type")
 
 gHC_OVER_LABELS :: Module
 gHC_OVER_LABELS = mkBaseModule (fsLit "GHC.OverloadedLabels")
+
+gHC_RECORDS :: Module
+gHC_RECORDS = mkBaseModule (fsLit "GHC.Records")
 
 mAIN, rOOT_MAIN :: Module
 mAIN            = mkMainModule_ mAIN_NAME
@@ -584,11 +622,10 @@ forall_tv_RDR, dot_tv_RDR :: RdrName
 forall_tv_RDR = mkUnqual tvName (fsLit "forall")
 dot_tv_RDR    = mkUnqual tvName (fsLit ".")
 
-eq_RDR, ge_RDR, ne_RDR, le_RDR, lt_RDR, gt_RDR, compare_RDR,
+eq_RDR, ge_RDR, le_RDR, lt_RDR, gt_RDR, compare_RDR,
     ltTag_RDR, eqTag_RDR, gtTag_RDR :: RdrName
 eq_RDR                  = nameRdrName eqName
 ge_RDR                  = nameRdrName geName
-ne_RDR                  = varQual_RDR  gHC_CLASSES (fsLit "/=")
 le_RDR                  = varQual_RDR  gHC_CLASSES (fsLit "<=")
 lt_RDR                  = varQual_RDR  gHC_CLASSES (fsLit "<")
 gt_RDR                  = varQual_RDR  gHC_CLASSES (fsLit ">")
@@ -717,14 +754,13 @@ reset_RDR               = varQual_RDR  rEAD_PREC (fsLit "reset")
 prec_RDR                = varQual_RDR  rEAD_PREC (fsLit "prec")
 pfail_RDR               = varQual_RDR  rEAD_PREC (fsLit "pfail")
 
-showList_RDR, showList___RDR, showsPrec_RDR, shows_RDR, showString_RDR,
-    showSpace_RDR, showParen_RDR :: RdrName
-showList_RDR            = varQual_RDR gHC_SHOW (fsLit "showList")
-showList___RDR          = varQual_RDR gHC_SHOW (fsLit "showList__")
+showsPrec_RDR, shows_RDR, showString_RDR,
+    showSpace_RDR, showCommaSpace_RDR, showParen_RDR :: RdrName
 showsPrec_RDR           = varQual_RDR gHC_SHOW (fsLit "showsPrec")
 shows_RDR               = varQual_RDR gHC_SHOW (fsLit "shows")
 showString_RDR          = varQual_RDR gHC_SHOW (fsLit "showString")
 showSpace_RDR           = varQual_RDR gHC_SHOW (fsLit "showSpace")
+showCommaSpace_RDR      = varQual_RDR gHC_SHOW (fsLit "showCommaSpace")
 showParen_RDR           = varQual_RDR gHC_SHOW (fsLit "showParen")
 
 undefined_RDR :: RdrName
@@ -799,13 +835,18 @@ uFloatHash_RDR  = varQual_RDR gHC_GENERICS (fsLit "uFloat#")
 uIntHash_RDR    = varQual_RDR gHC_GENERICS (fsLit "uInt#")
 uWordHash_RDR   = varQual_RDR gHC_GENERICS (fsLit "uWord#")
 
-fmap_RDR, pure_RDR, ap_RDR, foldable_foldr_RDR, foldMap_RDR,
-    traverse_RDR, mempty_RDR, mappend_RDR :: RdrName
+fmap_RDR, replace_RDR, pure_RDR, ap_RDR, liftA2_RDR, foldable_foldr_RDR,
+    foldMap_RDR, null_RDR, all_RDR, traverse_RDR, mempty_RDR,
+    mappend_RDR :: RdrName
 fmap_RDR                = varQual_RDR gHC_BASE (fsLit "fmap")
+replace_RDR             = varQual_RDR gHC_BASE (fsLit "<$")
 pure_RDR                = nameRdrName pureAName
 ap_RDR                  = nameRdrName apAName
+liftA2_RDR              = varQual_RDR gHC_BASE (fsLit "liftA2")
 foldable_foldr_RDR      = varQual_RDR dATA_FOLDABLE       (fsLit "foldr")
 foldMap_RDR             = varQual_RDR dATA_FOLDABLE       (fsLit "foldMap")
+null_RDR                = varQual_RDR dATA_FOLDABLE       (fsLit "null")
+all_RDR                 = varQual_RDR dATA_FOLDABLE       (fsLit "all")
 traverse_RDR            = varQual_RDR dATA_TRAVERSABLE    (fsLit "traverse")
 mempty_RDR              = varQual_RDR gHC_BASE            (fsLit "mempty")
 mappend_RDR             = varQual_RDR gHC_BASE            (fsLit "mappend")
@@ -1123,6 +1164,13 @@ shiftLIntegerName     = varQual gHC_INTEGER_TYPE (fsLit "shiftLInteger")     shi
 shiftRIntegerName     = varQual gHC_INTEGER_TYPE (fsLit "shiftRInteger")     shiftRIntegerIdKey
 bitIntegerName        = varQual gHC_INTEGER_TYPE (fsLit "bitInteger")        bitIntegerIdKey
 
+-- GHC.Natural types
+naturalTyConName :: Name
+naturalTyConName     = tcQual gHC_NATURAL (fsLit "Natural") naturalTyConKey
+
+naturalFromIntegerName :: Name
+naturalFromIntegerName = varQual gHC_NATURAL (fsLit "naturalFromInteger") naturalFromIntegerIdKey
+
 -- GHC.Real types and classes
 rationalTyConName, ratioTyConName, ratioDataConName, realClassName,
     integralClassName, realFracClassName, fractionalClassName,
@@ -1172,11 +1220,40 @@ trNameDDataConName    = dcQual gHC_TYPES          (fsLit "TrNameD")        trNam
 trTyConTyConName      = tcQual gHC_TYPES          (fsLit "TyCon")          trTyConTyConKey
 trTyConDataConName    = dcQual gHC_TYPES          (fsLit "TyCon")          trTyConDataConKey
 
+kindRepTyConName
+  , kindRepTyConAppDataConName
+  , kindRepVarDataConName
+  , kindRepAppDataConName
+  , kindRepFunDataConName
+  , kindRepTYPEDataConName
+  , kindRepTypeLitSDataConName
+  , kindRepTypeLitDDataConName
+  :: Name
+kindRepTyConName      = tcQual gHC_TYPES          (fsLit "KindRep")        kindRepTyConKey
+kindRepTyConAppDataConName = dcQual gHC_TYPES     (fsLit "KindRepTyConApp") kindRepTyConAppDataConKey
+kindRepVarDataConName = dcQual gHC_TYPES          (fsLit "KindRepVar")     kindRepVarDataConKey
+kindRepAppDataConName = dcQual gHC_TYPES          (fsLit "KindRepApp")     kindRepAppDataConKey
+kindRepFunDataConName = dcQual gHC_TYPES          (fsLit "KindRepFun")     kindRepFunDataConKey
+kindRepTYPEDataConName = dcQual gHC_TYPES         (fsLit "KindRepTYPE")    kindRepTYPEDataConKey
+kindRepTypeLitSDataConName = dcQual gHC_TYPES     (fsLit "KindRepTypeLitS") kindRepTypeLitSDataConKey
+kindRepTypeLitDDataConName = dcQual gHC_TYPES     (fsLit "KindRepTypeLitD") kindRepTypeLitDDataConKey
+
+typeLitSortTyConName
+  , typeLitSymbolDataConName
+  , typeLitNatDataConName
+  :: Name
+typeLitSortTyConName     = tcQual gHC_TYPES       (fsLit "TypeLitSort")    typeLitSortTyConKey
+typeLitSymbolDataConName = dcQual gHC_TYPES       (fsLit "TypeLitSymbol")  typeLitSymbolDataConKey
+typeLitNatDataConName    = dcQual gHC_TYPES       (fsLit "TypeLitNat")     typeLitNatDataConKey
+
 -- Class Typeable, and functions for constructing `Typeable` dictionaries
 typeableClassName
   , typeRepTyConName
-  , mkPolyTyConAppName
-  , mkAppTyName
+  , someTypeRepTyConName
+  , someTypeRepDataConName
+  , mkTrConName
+  , mkTrAppName
+  , mkTrFunName
   , typeRepIdName
   , typeNatTypeRepName
   , typeSymbolTypeRepName
@@ -1184,14 +1261,23 @@ typeableClassName
   :: Name
 typeableClassName     = clsQual tYPEABLE_INTERNAL (fsLit "Typeable")       typeableClassKey
 typeRepTyConName      = tcQual  tYPEABLE_INTERNAL (fsLit "TypeRep")        typeRepTyConKey
+someTypeRepTyConName   = tcQual tYPEABLE_INTERNAL (fsLit "SomeTypeRep")    someTypeRepTyConKey
+someTypeRepDataConName = dcQual tYPEABLE_INTERNAL (fsLit "SomeTypeRep")    someTypeRepDataConKey
 typeRepIdName         = varQual tYPEABLE_INTERNAL (fsLit "typeRep#")       typeRepIdKey
-mkPolyTyConAppName    = varQual tYPEABLE_INTERNAL (fsLit "mkPolyTyConApp") mkPolyTyConAppKey
-mkAppTyName           = varQual tYPEABLE_INTERNAL (fsLit "mkAppTy")        mkAppTyKey
+mkTrConName           = varQual tYPEABLE_INTERNAL (fsLit "mkTrCon")        mkTrConKey
+mkTrAppName           = varQual tYPEABLE_INTERNAL (fsLit "mkTrApp")        mkTrAppKey
+mkTrFunName           = varQual tYPEABLE_INTERNAL (fsLit "mkTrFun")        mkTrFunKey
 typeNatTypeRepName    = varQual tYPEABLE_INTERNAL (fsLit "typeNatTypeRep") typeNatTypeRepKey
 typeSymbolTypeRepName = varQual tYPEABLE_INTERNAL (fsLit "typeSymbolTypeRep") typeSymbolTypeRepKey
 -- this is the Typeable 'Module' for GHC.Prim (which has no code, so we place in GHC.Types)
 -- See Note [Grand plan for Typeable] in TcTypeable.
 trGhcPrimModuleName   = varQual gHC_TYPES         (fsLit "tr$ModuleGHCPrim")  trGhcPrimModuleKey
+
+-- Typeable KindReps for some common cases
+starKindRepName, starArrStarKindRepName, starArrStarArrStarKindRepName :: Name
+starKindRepName        = varQual gHC_TYPES         (fsLit "krep$*")         starKindRepKey
+starArrStarKindRepName = varQual gHC_TYPES         (fsLit "krep$*Arr*")     starArrStarKindRepKey
+starArrStarArrStarKindRepName = varQual gHC_TYPES  (fsLit "krep$*->*->*")   starArrStarArrStarKindRepKey
 
 -- Custom type errors
 errorMessageTypeErrorFamName
@@ -1351,7 +1437,7 @@ isStringClassName   = clsQual dATA_STRING (fsLit "IsString") isStringClassKey
 
 -- Type-level naturals
 knownNatClassName :: Name
-knownNatClassName     = clsQual gHC_TYPELITS (fsLit "KnownNat") knownNatClassNameKey
+knownNatClassName     = clsQual gHC_TYPENATS (fsLit "KnownNat") knownNatClassNameKey
 knownSymbolClassName :: Name
 knownSymbolClassName  = clsQual gHC_TYPELITS (fsLit "KnownSymbol") knownSymbolClassNameKey
 
@@ -1364,6 +1450,11 @@ isLabelClassName
 ipClassName :: Name
 ipClassName
   = clsQual gHC_CLASSES (fsLit "IP") ipClassKey
+
+-- Overloaded record fields
+hasFieldClassName :: Name
+hasFieldClassName
+ = clsQual gHC_RECORDS (fsLit "HasField") hasFieldClassNameKey
 
 -- Source Locations
 callStackTyConName, emptyCallStackName, pushCallStackName,
@@ -1386,6 +1477,10 @@ frontendPluginTyConName :: Name
 frontendPluginTyConName = tcQual pLUGINS (fsLit "FrontendPlugin") frontendPluginTyConKey
 
 -- Static pointers
+makeStaticName :: Name
+makeStaticName =
+    varQual gHC_STATICPTR_INTERNAL (fsLit "makeStatic") makeStaticKey
+
 staticPtrInfoTyConName :: Name
 staticPtrInfoTyConName =
     tcQual gHC_STATICPTR (fsLit "StaticPtrInfo") staticPtrInfoTyConKey
@@ -1528,6 +1623,11 @@ monoidClassKey    = mkPreludeClassUnique 47
 ipClassKey :: Unique
 ipClassKey = mkPreludeClassUnique 48
 
+-- Overloaded record fields
+hasFieldClassNameKey :: Unique
+hasFieldClassNameKey = mkPreludeClassUnique 49
+
+
 ---------------- Template Haskell -------------------
 --      THNames.hs: USES ClassUniques 200-299
 -----------------------------------------------------
@@ -1545,7 +1645,8 @@ addrPrimTyConKey, arrayPrimTyConKey, arrayArrayPrimTyConKey, boolTyConKey,
     doubleTyConKey, floatPrimTyConKey, floatTyConKey, funTyConKey,
     intPrimTyConKey, intTyConKey, int8TyConKey, int16TyConKey,
     int32PrimTyConKey, int32TyConKey, int64PrimTyConKey, int64TyConKey,
-    integerTyConKey, listTyConKey, foreignObjPrimTyConKey, maybeTyConKey,
+    integerTyConKey, naturalTyConKey,
+    listTyConKey, foreignObjPrimTyConKey, maybeTyConKey,
     weakPrimTyConKey, mutableArrayPrimTyConKey, mutableArrayArrayPrimTyConKey,
     mutableByteArrayPrimTyConKey, orderingTyConKey, mVarPrimTyConKey,
     ratioTyConKey, rationalTyConKey, realWorldTyConKey, stablePtrPrimTyConKey,
@@ -1571,6 +1672,7 @@ int32TyConKey                           = mkPreludeTyConUnique 19
 int64PrimTyConKey                       = mkPreludeTyConUnique 20
 int64TyConKey                           = mkPreludeTyConUnique 21
 integerTyConKey                         = mkPreludeTyConUnique 22
+naturalTyConKey                         = mkPreludeTyConUnique 23
 
 listTyConKey                            = mkPreludeTyConUnique 24
 foreignObjPrimTyConKey                  = mkPreludeTyConUnique 25
@@ -1642,12 +1744,11 @@ eitherTyConKey                          = mkPreludeTyConUnique 84
 
 -- Kind constructors
 liftedTypeKindTyConKey, tYPETyConKey,
-  unliftedTypeKindTyConKey, constraintKindTyConKey,
+  constraintKindTyConKey,
   starKindTyConKey, unicodeStarKindTyConKey, runtimeRepTyConKey,
   vecCountTyConKey, vecElemTyConKey :: Unique
 liftedTypeKindTyConKey                  = mkPreludeTyConUnique 87
 tYPETyConKey                            = mkPreludeTyConUnique 88
-unliftedTypeKindTyConKey                = mkPreludeTyConUnique 89
 constraintKindTyConKey                  = mkPreludeTyConUnique 92
 starKindTyConKey                        = mkPreludeTyConUnique 93
 unicodeStarKindTyConKey                 = mkPreludeTyConUnique 94
@@ -1759,8 +1860,14 @@ callStackTyConKey :: Unique
 callStackTyConKey = mkPreludeTyConUnique 183
 
 -- Typeables
-typeRepTyConKey :: Unique
-typeRepTyConKey = mkPreludeTyConUnique 184
+typeRepTyConKey, someTypeRepTyConKey, someTypeRepDataConKey :: Unique
+typeRepTyConKey       = mkPreludeTyConUnique 184
+someTypeRepTyConKey   = mkPreludeTyConUnique 185
+someTypeRepDataConKey = mkPreludeTyConUnique 186
+
+
+typeSymbolAppendFamNameKey :: Unique
+typeSymbolAppendFamNameKey = mkPreludeTyConUnique 187
 
 ---------------- Template Haskell -------------------
 --      THNames.hs: USES TyConUniques 200-299
@@ -1842,15 +1949,18 @@ srcLocDataConKey                        = mkPreludeDataConUnique 37
 trTyConTyConKey, trTyConDataConKey,
   trModuleTyConKey, trModuleDataConKey,
   trNameTyConKey, trNameSDataConKey, trNameDDataConKey,
-  trGhcPrimModuleKey :: Unique
-trTyConTyConKey                         = mkPreludeDataConUnique 41
-trTyConDataConKey                       = mkPreludeDataConUnique 42
-trModuleTyConKey                        = mkPreludeDataConUnique 43
-trModuleDataConKey                      = mkPreludeDataConUnique 44
-trNameTyConKey                          = mkPreludeDataConUnique 45
-trNameSDataConKey                       = mkPreludeDataConUnique 46
-trNameDDataConKey                       = mkPreludeDataConUnique 47
-trGhcPrimModuleKey                      = mkPreludeDataConUnique 48
+  trGhcPrimModuleKey, kindRepTyConKey,
+  typeLitSortTyConKey :: Unique
+trTyConTyConKey                         = mkPreludeDataConUnique 40
+trTyConDataConKey                       = mkPreludeDataConUnique 41
+trModuleTyConKey                        = mkPreludeDataConUnique 42
+trModuleDataConKey                      = mkPreludeDataConUnique 43
+trNameTyConKey                          = mkPreludeDataConUnique 44
+trNameSDataConKey                       = mkPreludeDataConUnique 45
+trNameDDataConKey                       = mkPreludeDataConUnique 46
+trGhcPrimModuleKey                      = mkPreludeDataConUnique 47
+kindRepTyConKey                         = mkPreludeDataConUnique 48
+typeLitSortTyConKey                     = mkPreludeDataConUnique 49
 
 typeErrorTextDataConKey,
   typeErrorAppendDataConKey,
@@ -1887,28 +1997,48 @@ metaDataDataConKey                      = mkPreludeDataConUnique 68
 metaConsDataConKey                      = mkPreludeDataConUnique 69
 metaSelDataConKey                       = mkPreludeDataConUnique 70
 
-vecRepDataConKey :: Unique
+vecRepDataConKey, tupleRepDataConKey, sumRepDataConKey :: Unique
 vecRepDataConKey                        = mkPreludeDataConUnique 71
+tupleRepDataConKey                      = mkPreludeDataConUnique 72
+sumRepDataConKey                        = mkPreludeDataConUnique 73
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
 runtimeRepSimpleDataConKeys :: [Unique]
-ptrRepLiftedDataConKey, ptrRepUnliftedDataConKey :: Unique
+liftedRepDataConKey :: Unique
 runtimeRepSimpleDataConKeys@(
-  ptrRepLiftedDataConKey : ptrRepUnliftedDataConKey : _)
-  = map mkPreludeDataConUnique [72..83]
+  liftedRepDataConKey : _)
+  = map mkPreludeDataConUnique [74..82]
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
 -- VecCount
 vecCountDataConKeys :: [Unique]
-vecCountDataConKeys = map mkPreludeDataConUnique [84..89]
+vecCountDataConKeys = map mkPreludeDataConUnique [83..88]
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
 -- VecElem
 vecElemDataConKeys :: [Unique]
-vecElemDataConKeys = map mkPreludeDataConUnique [90..99]
+vecElemDataConKeys = map mkPreludeDataConUnique [89..98]
+
+-- Typeable things
+kindRepTyConAppDataConKey, kindRepVarDataConKey, kindRepAppDataConKey,
+    kindRepFunDataConKey, kindRepTYPEDataConKey,
+    kindRepTypeLitSDataConKey, kindRepTypeLitDDataConKey
+    :: Unique
+kindRepTyConAppDataConKey = mkPreludeDataConUnique 100
+kindRepVarDataConKey      = mkPreludeDataConUnique 101
+kindRepAppDataConKey      = mkPreludeDataConUnique 102
+kindRepFunDataConKey      = mkPreludeDataConUnique 103
+kindRepTYPEDataConKey     = mkPreludeDataConUnique 104
+kindRepTypeLitSDataConKey = mkPreludeDataConUnique 105
+kindRepTypeLitDDataConKey = mkPreludeDataConUnique 106
+
+typeLitSymbolDataConKey, typeLitNatDataConKey :: Unique
+typeLitSymbolDataConKey   = mkPreludeDataConUnique 107
+typeLitNatDataConKey      = mkPreludeDataConUnique 108
+
 
 ---------------- Template Haskell -------------------
---      THNames.hs: USES DataUniques 100-150
+--      THNames.hs: USES DataUniques 200-250
 -----------------------------------------------------
 
 
@@ -2181,44 +2311,70 @@ proxyHashKey = mkPreludeMiscIdUnique 502
 
 -- Used to make `Typeable` dictionaries
 mkTyConKey
-  , mkPolyTyConAppKey
-  , mkAppTyKey
+  , mkTrConKey
+  , mkTrAppKey
+  , mkTrFunKey
   , typeNatTypeRepKey
   , typeSymbolTypeRepKey
   , typeRepIdKey
   :: Unique
 mkTyConKey            = mkPreludeMiscIdUnique 503
-mkPolyTyConAppKey     = mkPreludeMiscIdUnique 504
-mkAppTyKey            = mkPreludeMiscIdUnique 505
+mkTrConKey            = mkPreludeMiscIdUnique 504
+mkTrAppKey            = mkPreludeMiscIdUnique 505
 typeNatTypeRepKey     = mkPreludeMiscIdUnique 506
 typeSymbolTypeRepKey  = mkPreludeMiscIdUnique 507
 typeRepIdKey          = mkPreludeMiscIdUnique 508
+mkTrFunKey            = mkPreludeMiscIdUnique 509
+
+-- Representations for primitive types
+trTYPEKey
+  ,trTYPE'PtrRepLiftedKey
+  , trRuntimeRepKey
+  , tr'PtrRepLiftedKey
+  :: Unique
+trTYPEKey              = mkPreludeMiscIdUnique 510
+trTYPE'PtrRepLiftedKey = mkPreludeMiscIdUnique 511
+trRuntimeRepKey        = mkPreludeMiscIdUnique 512
+tr'PtrRepLiftedKey     = mkPreludeMiscIdUnique 513
+
+-- KindReps for common cases
+starKindRepKey, starArrStarKindRepKey, starArrStarArrStarKindRepKey :: Unique
+starKindRepKey        = mkPreludeMiscIdUnique 520
+starArrStarKindRepKey = mkPreludeMiscIdUnique 521
+starArrStarArrStarKindRepKey = mkPreludeMiscIdUnique 522
 
 -- Dynamic
 toDynIdKey :: Unique
-toDynIdKey            = mkPreludeMiscIdUnique 509
+toDynIdKey            = mkPreludeMiscIdUnique 550
 
 bitIntegerIdKey :: Unique
-bitIntegerIdKey       = mkPreludeMiscIdUnique 510
+bitIntegerIdKey       = mkPreludeMiscIdUnique 551
 
 heqSCSelIdKey, coercibleSCSelIdKey :: Unique
-heqSCSelIdKey       = mkPreludeMiscIdUnique 511
-coercibleSCSelIdKey = mkPreludeMiscIdUnique 512
+heqSCSelIdKey       = mkPreludeMiscIdUnique 552
+coercibleSCSelIdKey = mkPreludeMiscIdUnique 553
 
 sappendClassOpKey :: Unique
-sappendClassOpKey = mkPreludeMiscIdUnique 513
+sappendClassOpKey = mkPreludeMiscIdUnique 554
 
 memptyClassOpKey, mappendClassOpKey, mconcatClassOpKey :: Unique
-memptyClassOpKey  = mkPreludeMiscIdUnique 514
-mappendClassOpKey = mkPreludeMiscIdUnique 515
-mconcatClassOpKey = mkPreludeMiscIdUnique 516
+memptyClassOpKey  = mkPreludeMiscIdUnique 555
+mappendClassOpKey = mkPreludeMiscIdUnique 556
+mconcatClassOpKey = mkPreludeMiscIdUnique 557
 
 emptyCallStackKey, pushCallStackKey :: Unique
-emptyCallStackKey = mkPreludeMiscIdUnique 517
-pushCallStackKey  = mkPreludeMiscIdUnique 518
+emptyCallStackKey = mkPreludeMiscIdUnique 558
+pushCallStackKey  = mkPreludeMiscIdUnique 559
 
 fromStaticPtrClassOpKey :: Unique
-fromStaticPtrClassOpKey = mkPreludeMiscIdUnique 519
+fromStaticPtrClassOpKey = mkPreludeMiscIdUnique 560
+
+makeStaticKey :: Unique
+makeStaticKey = mkPreludeMiscIdUnique 561
+
+-- Natural
+naturalFromIntegerIdKey :: Unique
+naturalFromIntegerIdKey = mkPreludeMiscIdUnique 562
 
 {-
 ************************************************************************
@@ -2298,5 +2454,4 @@ pretendNameIsInScope :: Name -> Bool
 pretendNameIsInScope n
   = any (n `hasKey`)
     [ starKindTyConKey, liftedTypeKindTyConKey, tYPETyConKey
-    , unliftedTypeKindTyConKey
-    , runtimeRepTyConKey, ptrRepLiftedDataConKey, ptrRepUnliftedDataConKey ]
+    , runtimeRepTyConKey, liftedRepDataConKey ]

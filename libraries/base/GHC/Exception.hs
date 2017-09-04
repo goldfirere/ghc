@@ -26,6 +26,7 @@ module GHC.Exception
        , throw
        , SomeException(..), ErrorCall(..,ErrorCall), ArithException(..)
        , divZeroException, overflowException, ratioZeroDenomException
+       , underflowException
        , errorCallException, errorCallWithCallStackException
          -- re-export CallStack and SrcLoc from GHC.Types
        , CallStack, fromCallSiteList, getCallStack, prettyCallStack
@@ -175,6 +176,8 @@ pattern ErrorCall :: String -> ErrorCall
 pattern ErrorCall err <- ErrorCallWithLocation err _ where
   ErrorCall err = ErrorCallWithLocation err ""
 
+{-# COMPLETE ErrorCall #-}
+
 -- | @since 4.0.0.0
 instance Exception ErrorCall
 
@@ -238,10 +241,11 @@ data ArithException
   | RatioZeroDenominator -- ^ @since 4.6.0.0
   deriving (Eq, Ord)
 
-divZeroException, overflowException, ratioZeroDenomException  :: SomeException
+divZeroException, overflowException, ratioZeroDenomException, underflowException  :: SomeException
 divZeroException        = toException DivideByZero
 overflowException       = toException Overflow
 ratioZeroDenomException = toException RatioZeroDenominator
+underflowException      = toException Underflow
 
 -- | @since 4.0.0.0
 instance Exception ArithException

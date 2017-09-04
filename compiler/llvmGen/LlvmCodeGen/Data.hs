@@ -16,6 +16,7 @@ import BlockId
 import CLabel
 import Cmm
 import DynFlags
+import Platform
 
 import FastString
 import Outputable
@@ -46,32 +47,33 @@ genLlvmData (sec, Statics lbl xs) = do
         struct         = Just $ LMStaticStruc static tyAlias
         link           = if (externallyVisibleCLabel lbl)
                             then ExternallyVisible else Internal
+        align          = case sec of
+                            Section CString _ -> Just 1
+                            _                 -> Nothing
         const          = if isSecConstant sec then Constant else Global
-        varDef         = LMGlobalVar label tyAlias link lmsec Nothing const
+        varDef         = LMGlobalVar label tyAlias link lmsec align const
         globDef        = LMGlobal varDef struct
 
     return ([globDef], [tyAlias])
 
--- | Should a data in this section be considered constant
-isSecConstant :: Section -> Bool
-isSecConstant (Section t _) = case t of
-    Text                    -> True
-    ReadOnlyData            -> True
-    RelocatableReadOnlyData -> True
-    ReadOnlyData16          -> True
-    Data                    -> False
-    UninitialisedData       -> False
-    (OtherSection _)        -> False
-
 -- | Format the section type part of a Cmm Section
-llvmSectionType :: SectionType -> FastString
-llvmSectionType t = case t of
+llvmSectionType :: Platform -> SectionType -> FastString
+llvmSectionType p t = case t of
     Text                    -> fsLit ".text"
-    ReadOnlyData            -> fsLit ".rodata"
-    RelocatableReadOnlyData -> fsLit ".data.rel.ro"
-    ReadOnlyData16          -> fsLit ".rodata.cst16"
+    ReadOnlyData            -> case platformOS p of
+                                 OSMinGW32 -> fsLit ".rdata"
+                                 _         -> fsLit ".rodata"
+    RelocatableReadOnlyData -> case platformOS p of
+                                 OSMinGW32 -> fsLit ".rdata$rel.ro"
+                                 _         -> fsLit ".data.rel.ro"
+    ReadOnlyData16          -> case platformOS p of
+                                 OSMinGW32 -> fsLit ".rdata$cst16"
+                                 _         -> fsLit ".rodata.cst16"
     Data                    -> fsLit ".data"
     UninitialisedData       -> fsLit ".bss"
+    CString                 -> case platformOS p of
+                                 OSMinGW32 -> fsLit ".rdata$str"
+                                 _         -> fsLit ".rodata.str"
     (OtherSection _)        -> panic "llvmSectionType: unknown section type"
 
 -- | Format a Cmm Section into a LLVM section name
@@ -79,11 +81,16 @@ llvmSection :: Section -> LlvmM LMSection
 llvmSection (Section t suffix) = do
   dflags <- getDynFlags
   let splitSect = gopt Opt_SplitSections dflags
+      platform  = targetPlatform dflags
   if not splitSect
   then return Nothing
   else do
     lmsuffix <- strCLabel_llvm suffix
-    return (Just (concatFS [llvmSectionType t, fsLit ".", lmsuffix]))
+    let result sep = Just (concatFS [llvmSectionType platform t
+                                    , fsLit sep, lmsuffix])
+    case platformOS platform of
+      OSMinGW32 -> return (result "$")
+      _         -> return (result ".")
 
 -- ----------------------------------------------------------------------------
 -- * Generate static data

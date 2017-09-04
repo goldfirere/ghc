@@ -32,22 +32,43 @@ import Reg
 import PprBase
 
 
-import BlockId
+import Hoopl.Collections
+import Hoopl.Label
 import BasicTypes       (Alignment)
 import DynFlags
 import Cmm              hiding (topInfoTable)
 import CLabel
-import Unique           ( pprUnique, Uniquable(..) )
+import Unique           ( pprUniqueAlways, Uniquable(..) )
 import Platform
 import FastString
 import Outputable
 
 import Data.Word
 
+import Data.Char
+
 import Data.Bits
 
 -- -----------------------------------------------------------------------------
 -- Printing this stuff out
+--
+--
+-- Note [Subsections Via Symbols]
+--
+-- If we are using the .subsections_via_symbols directive
+-- (available on recent versions of Darwin),
+-- we have to make sure that there is some kind of reference
+-- from the entry code to a label on the _top_ of of the info table,
+-- so that the linker will not think it is unreferenced and dead-strip
+-- it. That's why the label is called a DeadStripPreventer (_dsp).
+--
+-- The LLVM code gen already creates `iTableSuf` symbols, where
+-- the X86 would generate the DeadStripPreventer (_dsp) symbol.
+-- Therefore all that is left for llvm code gen, is to ensure
+-- that all the `iTableSuf` symbols are marked as used.
+-- As of this writing the documentation regarding the
+-- .subsections_via_symbols and -dead_strip can be found at
+-- <https://developer.apple.com/library/mac/documentation/DeveloperTools/Reference/Assembler/040-Assembler_Directives/asm_directives.html#//apple_ref/doc/uid/TP30000823-TPXREF101>
 
 pprNatCmmDecl :: NatCmmDecl (Alignment, CmmStatics) Instr -> SDoc
 pprNatCmmDecl (CmmData section dats) =
@@ -96,7 +117,7 @@ pprSizeDecl lbl
    then text "\t.size" <+> ppr lbl <> ptext (sLit ", .-") <> ppr lbl
    else empty
 
-pprBasicBlock :: BlockEnv CmmStatics -> NatBasicBlock Instr -> SDoc
+pprBasicBlock :: LabelMap CmmStatics -> NatBasicBlock Instr -> SDoc
 pprBasicBlock info_env (BasicBlock blockid instrs)
   = sdocWithDynFlags $ \dflags ->
     maybe_infotable $$
@@ -122,10 +143,10 @@ pprBasicBlock info_env (BasicBlock blockid instrs)
 pprDatas :: (Alignment, CmmStatics) -> SDoc
 pprDatas (align, (Statics lbl dats))
  = vcat (pprAlign align : pprLabel lbl : map pprData dats)
- -- TODO: could remove if align == 1
 
 pprData :: CmmStatic -> SDoc
-pprData (CmmString str) = pprASCII str
+pprData (CmmString str)
+ = ptext (sLit "\t.asciz ") <> doubleQuotes (pprASCII str)
 
 pprData (CmmUninitialised bytes)
  = sdocWithPlatform $ \platform ->
@@ -154,10 +175,20 @@ pprLabel lbl = pprGloblDecl lbl
 
 pprASCII :: [Word8] -> SDoc
 pprASCII str
-  = vcat (map do1 str) $$ do1 0
+  = hcat (map (do1 . fromIntegral) str)
     where
-       do1 :: Word8 -> SDoc
-       do1 w = text "\t.byte\t" <> int (fromIntegral w)
+       do1 :: Int -> SDoc
+       do1 w | '\t' <- chr w = ptext (sLit "\\t")
+       do1 w | '\n' <- chr w = ptext (sLit "\\n")
+       do1 w | '"'  <- chr w = ptext (sLit "\\\"")
+       do1 w | '\\' <- chr w = ptext (sLit "\\\\")
+       do1 w | isPrint (chr w) = char (chr w)
+       do1 w | otherwise = char '\\' <> octal w
+
+       octal :: Int -> SDoc
+       octal w = int ((w `div` 64) `mod` 8)
+                  <> int ((w `div` 8) `mod` 8)
+                  <> int (w `mod` 8)
 
 pprAlign :: Int -> SDoc
 pprAlign bytes
@@ -190,11 +221,11 @@ pprReg f r
           if target32Bit platform then ppr32_reg_no f i
                                   else ppr64_reg_no f i
       RegReal    (RealRegPair _ _) -> panic "X86.Ppr: no reg pairs on this arch"
-      RegVirtual (VirtualRegI  u)  -> text "%vI_" <> pprUnique u
-      RegVirtual (VirtualRegHi u)  -> text "%vHi_" <> pprUnique u
-      RegVirtual (VirtualRegF  u)  -> text "%vF_" <> pprUnique u
-      RegVirtual (VirtualRegD  u)  -> text "%vD_" <> pprUnique u
-      RegVirtual (VirtualRegSSE  u) -> text "%vSSE_" <> pprUnique u
+      RegVirtual (VirtualRegI  u)  -> text "%vI_"   <> pprUniqueAlways u
+      RegVirtual (VirtualRegHi u)  -> text "%vHi_"  <> pprUniqueAlways u
+      RegVirtual (VirtualRegF  u)  -> text "%vF_"   <> pprUniqueAlways u
+      RegVirtual (VirtualRegD  u)  -> text "%vD_"   <> pprUniqueAlways u
+      RegVirtual (VirtualRegSSE u) -> text "%vSSE_" <> pprUniqueAlways u
   where
     ppr32_reg_no :: Format -> Int -> SDoc
     ppr32_reg_no II8   = ppr32_reg_byte
@@ -400,10 +431,12 @@ pprAlignForSection seg =
        | target32Bit platform ->
           case seg of
            ReadOnlyData16    -> int 4
+           CString           -> int 1
            _                 -> int 2
        | otherwise ->
           case seg of
            ReadOnlyData16    -> int 4
+           CString           -> int 1
            _                 -> int 3
       -- Other: alignments are given as bytes.
       _
@@ -411,10 +444,12 @@ pprAlignForSection seg =
           case seg of
            Text              -> text "4,0x90"
            ReadOnlyData16    -> int 16
+           CString           -> int 1
            _                 -> int 4
        | otherwise ->
           case seg of
            ReadOnlyData16    -> int 16
+           CString           -> int 1
            _                 -> int 8
 
 pprDataItem :: CmmLit -> SDoc
@@ -480,22 +515,26 @@ pprDataItem' dflags lit
                 = panic "X86.Ppr.ppr_item: no match"
 
 
+asmComment :: SDoc -> SDoc
+asmComment c = whenPprDebug $ text "# " <> c
 
 pprInstr :: Instr -> SDoc
 
-pprInstr (COMMENT _) = empty -- nuke 'em
-{-
-pprInstr (COMMENT s) = text "# " <> ftext s
--}
+pprInstr (COMMENT s)
+   = asmComment (ftext s)
 
 pprInstr (LOCATION file line col _name)
    = text "\t.loc " <> ppr file <+> ppr line <+> ppr col
 
 pprInstr (DELTA d)
-   = pprInstr (COMMENT (mkFastString ("\tdelta = " ++ show d)))
+   = asmComment $ text ("\tdelta = " ++ show d)
 
 pprInstr (NEWBLOCK _)
    = panic "PprMach.pprInstr: NEWBLOCK"
+
+pprInstr (UNWIND lbl d)
+   = asmComment (text "\tunwind = " <> ppr d)
+     $$ ppr lbl <> colon
 
 pprInstr (LDATA _ _)
    = panic "PprMach.pprInstr: LDATA"
@@ -593,6 +632,8 @@ pprInstr (SUB_CC format src dst)
 pprInstr (AND II64 src@(OpImm (ImmInteger mask)) dst)
   | 0 <= mask && mask < 0xffffffff
     = pprInstr (AND II32 src dst)
+pprInstr (AND FF32 src dst) = pprOpOp (sLit "andps") FF32 src dst
+pprInstr (AND FF64 src dst) = pprOpOp (sLit "andpd") FF64 src dst
 pprInstr (AND format src dst) = pprFormatOpOp (sLit "and") format src dst
 pprInstr (OR  format src dst) = pprFormatOpOp (sLit "or")  format src dst
 
@@ -631,8 +672,12 @@ pprInstr (TEST format src dst) = sdocWithPlatform $ \platform ->
         -- (We could handle masks larger than a single byte too,
         -- but it would complicate the code considerably
         -- and tag checks are by far the most common case.)
+        -- The mask must have the high bit clear for this smaller encoding
+        -- to be completely equivalent to the original; in particular so
+        -- that the signed comparison condition bits are the same as they
+        -- would be if doing a full word comparison. See Trac #13425.
         (OpImm (ImmInteger mask), OpReg dstReg)
-          | 0 <= mask && mask < 256 -> minSizeOfReg platform dstReg
+          | 0 <= mask && mask < 128 -> minSizeOfReg platform dstReg
         _ -> format
   in pprFormatOpOp (sLit "test") format' src dst
   where
@@ -680,6 +725,7 @@ pprInstr (MUL format op1 op2) = pprFormatOpOp (sLit "mul") format op1 op2
 pprInstr (MUL2 format op) = pprFormatOp (sLit "mul") format op
 
 pprInstr (FDIV format op1 op2) = pprFormatOpOp (sLit "div") format op1 op2
+pprInstr (SQRT format op1 op2) = pprFormatOpReg (sLit "sqrt") format op1 op2
 
 pprInstr (CVTSS2SD from to)      = pprRegReg (sLit "cvtss2sd") from to
 pprInstr (CVTSD2SS from to)      = pprRegReg (sLit "cvtsd2ss") from to

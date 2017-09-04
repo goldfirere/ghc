@@ -39,7 +39,7 @@ $(eval $(call all-target,rts,$(ALL_RTS_LIBS)))
 
 ALL_DIRS = hooks sm eventlog linker
 
-ifeq "$(HostOS_CPP)" "mingw32"
+ifeq "$(TargetOS_CPP)" "mingw32"
 ALL_DIRS += win32
 else
 ALL_DIRS += posix
@@ -55,7 +55,10 @@ rts_S_SRCS += rts/AdjustorAsm.S
 endif
 # this matches substrings of powerpc64le, including "powerpc" and "powerpc64"
 ifneq "$(findstring $(TargetArch_CPP), powerpc64le)" ""
+# unregisterised builds use the mini interpreter
+ifneq "$(GhcUnregisterised)" "YES"
 rts_S_SRCS += rts/StgCRunAsm.S
+endif
 endif
 endif
 
@@ -68,10 +71,6 @@ rts_AUTO_APPLY_CMM = rts/dist/build/AutoApply.cmm
 $(rts_AUTO_APPLY_CMM): $$(genapply_INPLACE)
 	"$(genapply_INPLACE)" >$@
 
-rts/dist/build/sm/Evac_thr.c : rts/sm/Evac.c | $$(dir $$@)/.
-	cp $< $@
-rts/dist/build/sm/Scav_thr.c : rts/sm/Scav.c | $$(dir $$@)/.
-	cp $< $@
 
 rts_H_FILES := $(wildcard rts/*.h rts/*/*.h)
 
@@ -96,7 +95,7 @@ rts/dist/libs.depend : $$(ghc-pkg_INPLACE) | $$(dir $$@)/.
 # 	These are made from rts/win32/libHS*.def which contain lists of
 # 	all the symbols in those libraries used by the RTS.
 #
-ifeq "$(HostOS_CPP)" "mingw32" 
+ifeq "$(TargetOS_CPP)" "mingw32"
 
 ALL_RTS_DEF_LIBNAMES 	= base ghc-prim
 ALL_RTS_DEF_LIBS	= \
@@ -120,7 +119,7 @@ endif
 
 ifneq "$(BINDIST)" "YES"
 ifneq "$(UseSystemLibFFI)" "YES"
-ifeq "$(HostOS_CPP)" "mingw32" 
+ifeq "$(TargetOS_CPP)" "mingw32"
 rts/dist/build/$(LIBFFI_DLL): libffi/build/inst/bin/$(LIBFFI_DLL)
 	cp $< $@
 else
@@ -151,15 +150,12 @@ rts_dist_$1_CC_OPTS += -fno-omit-frame-pointer -g -O0
 endif
 
 ifneq "$$(findstring dyn, $1)" ""
-ifeq "$$(HostOS_CPP)" "mingw32" 
+ifeq "$$(TargetOS_CPP)" "mingw32"
 rts_dist_$1_CC_OPTS += -DCOMPILING_WINDOWS_DLL
 endif
 rts_dist_$1_CC_OPTS += -DDYNAMIC
 endif
 
-ifneq "$$(findstring thr, $1)" ""
-rts_$1_EXTRA_C_SRCS  =  rts/dist/build/sm/Evac_thr.c rts/dist/build/sm/Scav_thr.c
-endif
 
 $(call distdir-way-opts,rts,dist,$1,1) # 1 because the rts is built with stage1
 $(call c-suffix-rules,rts,dist,$1,YES)
@@ -174,8 +170,12 @@ rts_$1_CMM_OBJS = $$(patsubst rts/%.cmm,rts/dist/build/%.$$($1_osuf),$$(rts_CMM_
 
 rts_$1_OBJS = $$(rts_$1_C_OBJS) $$(rts_$1_S_OBJS) $$(rts_$1_CMM_OBJS)
 
+ifneq "$$(findstring linux solaris2, $(TargetOS_CPP))" ""
+NEED_DTRACE_PROBES_OBJ = YES
+endif
+
 ifeq "$(USE_DTRACE)" "YES"
-ifeq "$(TargetOS_CPP)" "solaris2"
+ifeq "$(NEED_DTRACE_PROBES_OBJ)" "YES"
 # On Darwin we don't need to generate binary containing probes defined
 # in DTrace script, but DTrace on Solaris expects generation of binary
 # from the DTrace probes definitions
@@ -204,14 +204,28 @@ endif
 
 # Making a shared library for the RTS.
 ifneq "$$(findstring dyn, $1)" ""
-ifeq "$$(HostOS_CPP)" "mingw32" 
+ifeq "$$(TargetOS_CPP)" "mingw32"
 $$(rts_$1_LIB) : $$(rts_$1_OBJS) $$(ALL_RTS_DEF_LIBS) rts/dist/libs.depend rts/dist/build/$$(LIBFFI_DLL)
 	"$$(RM)" $$(RM_OPTS) $$@
-	"$$(rts_dist_HC)" -this-unit-id rts -shared -dynamic -dynload deploy \
-	  -no-auto-link-packages -Lrts/dist/build -l$$(LIBFFI_NAME) \
-         `cat rts/dist/libs.depend` $$(rts_$1_OBJS) $$(ALL_RTS_DEF_LIBS) \
-         $$(rts_dist_$1_GHC_LD_OPTS) \
-         -o $$@
+	# Call out to the shell script to decide how to build the dll.
+	# Making a shared library for the RTS.
+	# $$1  = dir
+	# $$2  = distdir
+	# $$3  = way
+	# $$4  = extra flags
+	# $$5  = extra libraries to link
+	# $$6  = object files to link
+	# $$7  = output filename
+	# $$8  = link command
+	# $$9  = create delay load import lib
+	# $$10 = SxS Name
+	# $$11 = SxS Version
+	$$(gen-dll_INPLACE) link "rts/dist/build" "rts/dist/build" "" "" "$$(ALL_RTS_DEF_LIBS)" "$$(rts_$1_OBJS)" "$$@" "$$(rts_dist_HC) -this-unit-id rts -no-hs-main -shared -dynamic -dynload deploy \
+         -no-auto-link-packages -Lrts/dist/build -l$$(LIBFFI_NAME) \
+         `cat rts/dist/libs.depend | tr '\n' ' '` \
+         $$(rts_dist_$1_GHC_LD_OPTS)" "NO" \
+         "$(rts_INSTALL_INFO)-$(subst dyn,,$(subst _dyn,,$(subst v,,$1)))" "$(ProjectVersion)"
+
 else
 ifneq "$$(UseSystemLibFFI)" "YES"
 LIBFFI_LIBS = -Lrts/dist/build -l$$(LIBFFI_NAME)
@@ -274,7 +288,10 @@ WARNING_OPTS += -Waggregate-return
 WARNING_OPTS += -Wpointer-arith
 WARNING_OPTS += -Wmissing-noreturn
 WARNING_OPTS += -Wnested-externs
-WARNING_OPTS += -Wredundant-decls 
+WARNING_OPTS += -Wredundant-decls
+ifeq "$(GccLT46)" "NO"
+WARNING_OPTS += -Wundef
+endif
 
 # These ones are hard to avoid:
 #WARNING_OPTS += -Wconversion
@@ -333,10 +350,6 @@ endif
 # Set Windows version
 ifeq "$$(TargetOS_CPP)" "mingw32"
 rts_CC_OPTS += -DWINVER=$(rts_WINVER)
-endif
-
-ifeq "$(SplitSections)" "YES"
-rts_CC_OPTS += -ffunction-sections -fdata-sections
 endif
 
 #-----------------------------------------------------------------------------
@@ -456,12 +469,8 @@ endif
 
 # -O3 helps unroll some loops (especially in copy() with a constant argument).
 rts/sm/Evac_CC_OPTS += -funroll-loops
-rts/dist/build/sm/Evac_thr_HC_OPTS += -optc-funroll-loops
+rts/sm/Evac_thr_HC_OPTS += -optc-funroll-loops
 
-# These files are just copies of sm/Evac.c and sm/Scav.c respectively,
-# but compiled with -DPARALLEL_GC.
-rts/dist/build/sm/Evac_thr_CC_OPTS += -DPARALLEL_GC -Irts/sm
-rts/dist/build/sm/Scav_thr_CC_OPTS += -DPARALLEL_GC -Irts/sm
 
 #-----------------------------------------------------------------------------
 # Use system provided libffi

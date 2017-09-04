@@ -33,7 +33,8 @@ module LoadIface (
 #include "HsVersions.h"
 
 import {-# SOURCE #-}   TcIface( tcIfaceDecl, tcIfaceRules, tcIfaceInst,
-                                 tcIfaceFamInst, tcIfaceVectInfo, tcIfaceAnnotations )
+                                 tcIfaceFamInst, tcIfaceVectInfo,
+                                 tcIfaceAnnotations, tcIfaceCompleteSigs )
 
 import DynFlags
 import IfaceSyn
@@ -75,6 +76,7 @@ import RnModIface
 import UniqDSet
 
 import Control.Monad
+import Control.Exception
 import Data.IORef
 import System.FilePath
 
@@ -142,7 +144,7 @@ importDecl name
         { eps <- getEps
         ; case lookupTypeEnv (eps_PTE eps) name of
             Just thing -> return $ Succeeded thing
-            Nothing    -> let doc = ifPprDebug (found_things_msg eps $$ empty)
+            Nothing    -> let doc = whenPprDebug (found_things_msg eps $$ empty)
                                     $$ not_found_msg
                           in return $ Failed doc
     }}}
@@ -461,6 +463,7 @@ loadInterface doc_str mod from
         ; new_eps_rules     <- tcIfaceRules ignore_prags (mi_rules iface)
         ; new_eps_anns      <- tcIfaceAnnotations (mi_anns iface)
         ; new_eps_vect_info <- tcIfaceVectInfo mod (mkNameEnv new_eps_decls) (mi_vect_info iface)
+        ; new_eps_complete_sigs <- tcIfaceCompleteSigs (mi_complete_sigs iface)
 
         ; let { final_iface = iface {
                                 mi_decls     = panic "No mi_decls in PIT",
@@ -479,6 +482,10 @@ loadInterface doc_str mod from
                   eps_PTE          = addDeclsToPTE   (eps_PTE eps) new_eps_decls,
                   eps_rule_base    = extendRuleBaseList (eps_rule_base eps)
                                                         new_eps_rules,
+                  eps_complete_matches
+                                   = extendCompleteMatchMap
+                                         (eps_complete_matches eps)
+                                         new_eps_complete_sigs,
                   eps_inst_env     = extendInstEnvList (eps_inst_env eps)
                                                        new_eps_insts,
                   eps_fam_inst_env = extendFamInstEnvList (eps_fam_inst_env eps)
@@ -536,15 +543,19 @@ computeInterface doc_str hi_boot_file mod0 = do
     dflags <- getDynFlags
     case splitModuleInsts mod0 of
         (imod, Just indef) | not (unitIdIsDefinite (thisPackage dflags)) -> do
-            r <- findAndReadIface doc_str imod hi_boot_file
+            r <- findAndReadIface doc_str imod mod0 hi_boot_file
             case r of
                 Succeeded (iface0, path) -> do
                     hsc_env <- getTopEnv
-                    r <- liftIO (rnModIface hsc_env (indefUnitIdInsts (indefModuleUnitId indef)) Nothing iface0)
-                    return (Succeeded (r, path))
+                    r <- liftIO $
+                        rnModIface hsc_env (indefUnitIdInsts (indefModuleUnitId indef))
+                                   Nothing iface0
+                    case r of
+                        Right x -> return (Succeeded (x, path))
+                        Left errs -> liftIO . throwIO . mkSrcErr $ errs
                 Failed err -> return (Failed err)
         (mod, _) ->
-            findAndReadIface doc_str mod hi_boot_file
+            findAndReadIface doc_str mod mod0 hi_boot_file
 
 -- | Compute the signatures which must be compiled in order to
 -- load the interface for a 'Module'.  The output of this function
@@ -580,7 +591,7 @@ moduleFreeHolesPrecise doc_str mod
             Just ifhs  -> Just (renameFreeHoles ifhs insts)
             _otherwise -> Nothing
     readAndCache imod insts = do
-        mb_iface <- findAndReadIface (text "moduleFreeHolesPrecise" <+> doc_str) imod False
+        mb_iface <- findAndReadIface (text "moduleFreeHolesPrecise" <+> doc_str) imod mod False
         case mb_iface of
             Succeeded (iface, _) -> do
                 let ifhs = mi_free_holes iface
@@ -773,7 +784,14 @@ This actually happened with P=base, Q=ghc-prim, via the AMP warnings.
 See Trac #8320.
 -}
 
-findAndReadIface :: SDoc -> InstalledModule
+findAndReadIface :: SDoc
+                 -- The unique identifier of the on-disk module we're
+                 -- looking for
+                 -> InstalledModule
+                 -- The *actual* module we're looking for.  We use
+                 -- this to check the consistency of the requirements
+                 -- of the module we read out.
+                 -> Module
                  -> IsBootInterface     -- True  <=> Look for a .hi-boot file
                                         -- False <=> Look for .hi file
                  -> TcRnIf gbl lcl (MaybeErr MsgDoc (ModIface, FilePath))
@@ -782,7 +800,7 @@ findAndReadIface :: SDoc -> InstalledModule
 
         -- It *doesn't* add an error to the monad, because
         -- sometimes it's ok to fail... see notes with loadInterface
-findAndReadIface doc_str mod hi_boot_file
+findAndReadIface doc_str mod wanted_mod_with_insts hi_boot_file
   = do traceIf (sep [hsep [text "Reading",
                            if hi_boot_file
                              then text "[boot]"
@@ -823,14 +841,20 @@ findAndReadIface doc_str mod hi_boot_file
                                            (installedModuleName mod) err))
     where read_file file_path = do
               traceIf (text "readIFace" <+> text file_path)
-              read_result <- readIface mod file_path
+              -- Figure out what is recorded in mi_module.  If this is
+              -- a fully definite interface, it'll match exactly, but
+              -- if it's indefinite, the inside will be uninstantiated!
+              dflags <- getDynFlags
+              let wanted_mod =
+                    case splitModuleInsts wanted_mod_with_insts of
+                        (_, Nothing) -> wanted_mod_with_insts
+                        (_, Just indef_mod) ->
+                          indefModuleToModule dflags
+                            (generalizeIndefModule indef_mod)
+              read_result <- readIface wanted_mod file_path
               case read_result of
                 Failed err -> return (Failed (badIfaceFile file_path err))
-                Succeeded iface
-                    | not (mod `installedModuleEq` mi_module iface) ->
-                      return (Failed (wrongIfaceModErr iface mod file_path))
-                    | otherwise ->
-                      return (Succeeded (iface, file_path))
+                Succeeded iface -> return (Succeeded (iface, file_path))
                             -- Don't forget to fill in the package name...
           checkBuildDynamicToo (Succeeded (iface, filePath)) = do
               dflags <- getDynFlags
@@ -857,7 +881,7 @@ findAndReadIface doc_str mod hi_boot_file
 
 -- @readIface@ tries just the one file.
 
-readIface :: InstalledModule -> FilePath
+readIface :: Module -> FilePath
           -> TcRnIf gbl lcl (MaybeErr MsgDoc ModIface)
         -- Failed err    <=> file not found, or unreadable, or illegible
         -- Succeeded iface <=> successfully found and parsed
@@ -865,15 +889,18 @@ readIface :: InstalledModule -> FilePath
 readIface wanted_mod file_path
   = do  { res <- tryMostM $
                  readBinIface CheckHiWay QuietBinIFaceReading file_path
+        ; dflags <- getDynFlags
         ; case res of
             Right iface
-                -- Same deal
-                | wanted_mod `installedModuleEq` actual_mod
+                -- NB: This check is NOT just a sanity check, it is
+                -- critical for correctness of recompilation checking
+                -- (it lets us tell when -this-unit-id has changed.)
+                | wanted_mod == actual_mod
                                 -> return (Succeeded iface)
                 | otherwise     -> return (Failed err)
                 where
                   actual_mod = mi_module iface
-                  err = hiModuleNameMismatchWarn wanted_mod actual_mod
+                  err = hiModuleNameMismatchWarn dflags wanted_mod actual_mod
 
             Left exn    -> return (Failed (text (showException exn)))
     }
@@ -889,18 +916,19 @@ readIface wanted_mod file_path
 initExternalPackageState :: ExternalPackageState
 initExternalPackageState
   = EPS {
-      eps_is_boot      = emptyUFM,
-      eps_PIT          = emptyPackageIfaceTable,
-      eps_free_holes   = emptyInstalledModuleEnv,
-      eps_PTE          = emptyTypeEnv,
-      eps_inst_env     = emptyInstEnv,
-      eps_fam_inst_env = emptyFamInstEnv,
-      eps_rule_base    = mkRuleBase builtinRules,
+      eps_is_boot          = emptyUFM,
+      eps_PIT              = emptyPackageIfaceTable,
+      eps_free_holes       = emptyInstalledModuleEnv,
+      eps_PTE              = emptyTypeEnv,
+      eps_inst_env         = emptyInstEnv,
+      eps_fam_inst_env     = emptyFamInstEnv,
+      eps_rule_base        = mkRuleBase builtinRules,
         -- Initialise the EPS rule pool with the built-in rules
       eps_mod_fam_inst_env
-                       = emptyModuleEnv,
-      eps_vect_info    = noVectInfo,
-      eps_ann_env      = emptyAnnEnv,
+                           = emptyModuleEnv,
+      eps_vect_info        = noVectInfo,
+      eps_complete_matches = emptyUFM,
+      eps_ann_env          = emptyAnnEnv,
       eps_stats = EpsStats { n_ifaces_in = 0, n_decls_in = 0, n_decls_out = 0
                            , n_insts_in = 0, n_insts_out = 0
                            , n_rules_in = length builtinRules, n_rules_out = 0 }
@@ -923,7 +951,8 @@ ghcPrimIface
         mi_fix_fn  = mkIfaceFixCache fixities
     }
   where
-    fixities = (getOccName seqId, Fixity "0" 0 InfixR)  -- seq is infixr 0
+    fixities = (getOccName seqId, Fixity NoSourceText 0 InfixR)
+                                      -- seq is infixr 0
              : (occName funTyConName, funTyFixity)  -- trac #10145
              : mapMaybe mkFixity allThePrimOps
     mkFixity op = (,) (primOpOcc op) <$> primOpFixity op
@@ -967,7 +996,8 @@ showIface hsc_env filename = do
    iface <- initTcRnIf 's' hsc_env () () $
        readBinIface IgnoreHiWay TraceBinIFaceReading filename
    let dflags = hsc_dflags hsc_env
-   log_action dflags dflags NoReason SevDump noSrcSpan defaultDumpStyle (pprModIface iface)
+   putLogMsg dflags NoReason SevDump noSrcSpan
+      (defaultDumpStyle dflags) (pprModIface iface)
 
 -- Show a ModIface but don't display details; suitable for ModIfaces stored in
 -- the EPT.
@@ -1005,6 +1035,7 @@ pprModIface iface
         , ppr (mi_warns iface)
         , pprTrustInfo (mi_trust iface)
         , pprTrustPkg (mi_trust_pkg iface)
+        , vcat (map ppr (mi_complete_sigs iface))
         ]
   where
     pp_hsc_src HsBootFile = text "[boot]"
@@ -1121,30 +1152,27 @@ badIfaceFile file err
   = vcat [text "Bad interface file:" <+> text file,
           nest 4 err]
 
-hiModuleNameMismatchWarn :: InstalledModule -> Module -> MsgDoc
-hiModuleNameMismatchWarn requested_mod read_mod =
+hiModuleNameMismatchWarn :: DynFlags -> Module -> Module -> MsgDoc
+hiModuleNameMismatchWarn dflags requested_mod read_mod
+ | moduleUnitId requested_mod == moduleUnitId read_mod =
+    sep [text "Interface file contains module" <+> quotes (ppr read_mod) <> comma,
+         text "but we were expecting module" <+> quotes (ppr requested_mod),
+         sep [text "Probable cause: the source code which generated interface file",
+             text "has an incompatible module name"
+            ]
+        ]
+ | otherwise =
   -- ToDo: This will fail to have enough qualification when the package IDs
   -- are the same
-  withPprStyle (mkUserStyle alwaysQualify AllTheWay) $
+  withPprStyle (mkUserStyle dflags alwaysQualify AllTheWay) $
     -- we want the Modules below to be qualified with package names,
     -- so reset the PrintUnqualified setting.
     hsep [ text "Something is amiss; requested module "
          , ppr requested_mod
          , text "differs from name found in the interface file"
          , ppr read_mod
+         , parens (text "if these names look the same, try again with -dppr-debug")
          ]
-
-wrongIfaceModErr :: ModIface -> InstalledModule -> String -> SDoc
-wrongIfaceModErr iface mod file_path
-  = sep [text "Interface file" <+> iface_file,
-         text "contains module" <+> quotes (ppr (mi_module iface)) <> comma,
-         text "but we were expecting module" <+> quotes (ppr mod),
-         sep [text "Probable cause: the source code which generated",
-             nest 2 iface_file,
-             text "has an incompatible module name"
-            ]
-        ]
-  where iface_file = doubleQuotes (text file_path)
 
 homeModError :: InstalledModule -> ModLocation -> SDoc
 -- See Note [Home module load error]

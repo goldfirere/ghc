@@ -67,11 +67,19 @@ INFO_TABLE_RET(stg_stop_thread, STOP_FRAME,
        debuggers to find their way back to the C stack.
 
        This is a bit fiddly as we assume the layout of the stack prepared
-       for us by StgRun.
+       for us by StgRun. Note that in most cases StgRun is written in assembler
+       and therefore has no associated unwind information. For this reason we
+       need to identify the platform stack pointer and return address values for
+       the StgRun's caller.
      */
-#ifdef x86_64_HOST_ARCH
-    unwind MachSp = MachSp + RESERVED_C_STACK_BYTES + 0x38 + 8
-    unwind UnwindReturnReg = W_[MachSp + RESERVED_C_STACK_BYTES + 0x38]
+#if defined(x86_64_HOST_ARCH)
+    // offset of 8 in MachSp value due to return address
+    unwind MachSp = MachSp + RESERVED_C_STACK_BYTES + STG_RUN_STACK_FRAME_SIZE + 8,
+           UnwindReturnReg = W_[MachSp + RESERVED_C_STACK_BYTES + STG_RUN_STACK_FRAME_SIZE];
+#else
+    // FIXME: Fill in for other platforms
+    unwind MachSp = return,
+           UnwindReturnReg = return;
 #endif
 
     Sp = Sp + SIZEOF_StgStopFrame - WDS(2);
@@ -119,6 +127,9 @@ stg_returnToSched /* no args: explicit stack layout */
 // current thread.  This is used for switching from compiled execution to the
 // interpreter, where calling threadPaused() on every switch would be too
 // expensive.
+//
+// See Note [avoiding threadPaused] in Interpreter.c
+//
 stg_returnToSchedNotPaused /* no args: explicit stack layout */
 {
   SAVE_THREAD_STATE();
@@ -169,26 +180,4 @@ INFO_TABLE_RET(stg_forceIO, RET_SMALL, P_ info_ptr)
     return (P_ ret)
 {
     ENTER(ret);
-}
-
-/* -----------------------------------------------------------------------------
-   Special STG entry points for module registration.
-   -------------------------------------------------------------------------- */
-
-stg_init_finish /* no args: explicit stack layout */
-{
-  jump StgReturn [];
-}
-
-/* On entry to stg_init:
- *    init_stack[0] = &stg_init_ret;
- *    init_stack[1] = __stginit_Something;
- */
-stg_init /* no args: explicit stack layout */
-{
-  W_ next;
-  Sp = W_[BaseReg + OFFSET_StgRegTable_rSp];
-  next = W_[Sp];
-  Sp_adj(1);
-  jump next [];
 }

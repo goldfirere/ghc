@@ -17,13 +17,13 @@
 #include "Printer.h"
 #include "RtsUtils.h"
 
-#ifdef PROFILING
+#if defined(PROFILING)
 #include "Profiling.h"
 #endif
 
 #include <string.h>
 
-#ifdef DEBUG
+#if defined(DEBUG)
 
 #include "Disassembler.h"
 #include "Apply.h"
@@ -61,7 +61,7 @@ printStdObjHdr( const StgClosure *obj, char* tag )
 {
     debugBelch("%s(",tag);
     printPtr((StgPtr)obj->header.info);
-#ifdef PROFILING
+#if defined(PROFILING)
     debugBelch(", %s", obj->header.prof.ccs->cc->label);
 #endif
 }
@@ -122,8 +122,7 @@ printClosure( const StgClosure *obj )
     case CONSTR:
     case CONSTR_1_0: case CONSTR_0_1:
     case CONSTR_1_1: case CONSTR_0_2: case CONSTR_2_0:
-    case CONSTR_STATIC:
-    case CONSTR_NOCAF_STATIC:
+    case CONSTR_NOCAF:
         {
             StgWord i, j;
             const StgConInfoTable *con_info = get_con_itbl (obj);
@@ -147,7 +146,7 @@ printClosure( const StgClosure *obj )
     case FUN_STATIC:
         debugBelch("FUN/%d(",(int)itbl_to_fun_itbl(info)->f.arity);
         printPtr((StgPtr)obj->header.info);
-#ifdef PROFILING
+#if defined(PROFILING)
         debugBelch(", %s", obj->header.prof.ccs->cc->label);
 #endif
         printStdObjPayload(obj);
@@ -170,7 +169,7 @@ printClosure( const StgClosure *obj )
     case THUNK_1_1: case THUNK_0_2: case THUNK_2_0:
     case THUNK_STATIC:
             /* ToDo: will this work for THUNK_STATIC too? */
-#ifdef PROFILING
+#if defined(PROFILING)
             printThunkObject((StgThunk *)obj,GET_PROF_DESC(info));
 #else
             printThunkObject((StgThunk *)obj,"THUNK");
@@ -388,7 +387,7 @@ printClosure( const StgClosure *obj )
 
     case COMPACT_NFDATA:
         debugBelch("COMPACT_NFDATA(size=%" FMT_Word ")\n",
-                   (W_)((StgCompactNFData *)obj)->totalDataW * sizeof(W_));
+                   (W_)((StgCompactNFData *)obj)->totalW * sizeof(W_));
         break;
 
 
@@ -521,9 +520,14 @@ printStackChunk( StgPtr sp, StgPtr spBottom )
                 debugBelch("stg_ap_ppppp_info\n" );
             } else if (c == (StgWord)&stg_ap_pppppp_info) {
                 debugBelch("stg_ap_pppppp_info\n" );
-#ifdef PROFILING
+#if defined(PROFILING)
             } else if (c == (StgWord)&stg_restore_cccs_info) {
                 debugBelch("stg_restore_cccs_info\n" );
+                fprintCCS(stderr, (CostCentreStack*)sp[1]);
+                debugBelch("\n" );
+                continue;
+            } else if (c == (StgWord)&stg_restore_cccs_eval_info) {
+                debugBelch("stg_restore_cccs_eval_info\n" );
                 fprintCCS(stderr, (CostCentreStack*)sp[1]);
                 debugBelch("\n" );
                 continue;
@@ -620,7 +624,7 @@ const char *lookupGHCName( void *addr )
 /* Causing linking trouble on Win32 plats, so I'm
    disabling this for now.
 */
-#ifdef USING_LIBBFD
+#if defined(USING_LIBBFD)
 #    define PACKAGE 1
 #    define PACKAGE_VERSION 1
 /* Those PACKAGE_* defines are workarounds for bfd:
@@ -636,7 +640,7 @@ const char *lookupGHCName( void *addr )
  * rubbish like the obj-splitting symbols
  */
 
-static rtsBool isReal( flagword flags STG_UNUSED, const char *name )
+static bool isReal( flagword flags STG_UNUSED, const char *name )
 {
 #if 0
     /* ToDo: make this work on BFD */
@@ -644,15 +648,15 @@ static rtsBool isReal( flagword flags STG_UNUSED, const char *name )
     if (tp == N_TEXT || tp == N_DATA) {
         return (name[0] == '_' && name[1] != '_');
     } else {
-        return rtsFalse;
+        return false;
     }
 #else
     if (*name == '\0'  ||
         (name[0] == 'g' && name[1] == 'c' && name[2] == 'c') ||
         (name[0] == 'c' && name[1] == 'c' && name[2] == '.')) {
-        return rtsFalse;
+        return false;
     }
-    return rtsTrue;
+    return true;
 #endif
 }
 
@@ -827,8 +831,7 @@ const char *closure_type_names[] = {
  [CONSTR_2_0]            = "CONSTR_2_0",
  [CONSTR_1_1]            = "CONSTR_1_1",
  [CONSTR_0_2]            = "CONSTR_0_2",
- [CONSTR_STATIC]         = "CONSTR_STATIC",
- [CONSTR_NOCAF_STATIC]   = "CONSTR_NOCAF_STATIC",
+ [CONSTR_NOCAF]          = "CONSTR_NOCAF",
  [FUN]                   = "FUN",
  [FUN_1_0]               = "FUN_1_0",
  [FUN_0_1]               = "FUN_0_1",

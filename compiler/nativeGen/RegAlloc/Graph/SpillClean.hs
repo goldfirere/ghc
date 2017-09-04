@@ -40,6 +40,7 @@ import Unique
 import State
 import Outputable
 import Platform
+import Hoopl.Collections
 
 import Data.List
 import Data.Maybe
@@ -381,7 +382,7 @@ cleanBackward' liveSlotsOnEntry reloadedBy noReloads acc (li : instrs)
                 let slotsReloadedByTargets
                         = IntSet.unions
                         $ catMaybes
-                        $ map (flip lookupBlockMap liveSlotsOnEntry)
+                        $ map (flip mapLookup liveSlotsOnEntry)
                         $ targets
 
                 let noReloads'
@@ -412,7 +413,7 @@ intersects assocs       = foldl1' intersectAssoc assocs
 findRegOfSlot :: Assoc Store -> Int -> Maybe Reg
 findRegOfSlot assoc slot
         | close                 <- closeAssoc (SSlot slot) assoc
-        , Just (SReg reg)       <- find isStoreReg $ nonDetEltsUFM close
+        , Just (SReg reg)       <- find isStoreReg $ nonDetEltsUniqSet close
            -- See Note [Unique Determinism and code generation]
         = Just reg
 
@@ -548,7 +549,7 @@ delAssoc :: (Uniquable a)
 delAssoc a m
         | Just aSet     <- lookupUFM  m a
         , m1            <- delFromUFM m a
-        = nonDetFoldUFM (\x m -> delAssoc1 x a m) m1 aSet
+        = nonDetFoldUniqSet (\x m -> delAssoc1 x a m) m1 aSet
           -- It's OK to use nonDetFoldUFM here because deletion is commutative
 
         | otherwise     = m
@@ -581,7 +582,7 @@ closeAssoc a assoc
  =      closeAssoc' assoc emptyUniqSet (unitUniqSet a)
  where
         closeAssoc' assoc visited toVisit
-         = case nonDetEltsUFM toVisit of
+         = case nonDetEltsUniqSet toVisit of
              -- See Note [Unique Determinism and code generation]
 
                 -- nothing else to visit, we're done

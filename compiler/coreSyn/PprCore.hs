@@ -6,12 +6,13 @@
 Printing of Core syntax
 -}
 
+{-# LANGUAGE MultiWayIf #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module PprCore (
         pprCoreExpr, pprParendExpr,
         pprCoreBinding, pprCoreBindings, pprCoreAlt,
         pprCoreBindingWithSize, pprCoreBindingsWithSize,
-        pprRules
+        pprRules, pprOptCo
     ) where
 
 import CoreSyn
@@ -28,6 +29,7 @@ import Type
 import Coercion
 import DynFlags
 import BasicTypes
+import Maybes
 import Util
 import Outputable
 import FastString
@@ -111,8 +113,23 @@ ppr_bind ann (Rec binds)           = vcat (map pp binds)
 
 ppr_binding :: OutputableBndr b => Annotation b -> (b, Expr b) -> SDoc
 ppr_binding ann (val_bdr, expr)
-  = ann expr $$ pprBndr LetBind val_bdr $$
-    hang (ppr val_bdr <+> equals) 2 (pprCoreExpr expr)
+  = ann expr $$ pprBndr LetBind val_bdr $$ pp_bind
+  where
+    pp_bind = case bndrIsJoin_maybe val_bdr of
+                Nothing -> pp_normal_bind
+                Just ar -> pp_join_bind ar
+
+    pp_normal_bind = hang (ppr val_bdr) 2 (equals <+> pprCoreExpr expr)
+
+      -- For a join point of join arity n, we want to print j = \x1 ... xn -> e
+      -- as "j x1 ... xn = e" to differentiate when a join point returns a
+      -- lambda (the first rendering looks like a nullary join point returning
+      -- an n-argument function).
+    pp_join_bind join_arity
+      = hang (ppr val_bdr <+> sep (map (pprBndr LambdaBind) lhs_bndrs))
+           2 (equals <+> pprCoreExpr rhs)
+      where
+        (lhs_bndrs, rhs) = collectNBinders join_arity expr
 
 pprParendExpr expr = ppr_expr parens expr
 pprCoreExpr   expr = ppr_expr noParens expr
@@ -121,16 +138,19 @@ noParens :: SDoc -> SDoc
 noParens pp = pp
 
 pprOptCo :: Coercion -> SDoc
+-- Print a coercion optionally; i.e. honouring -dsuppress-coercions
 pprOptCo co = sdocWithDynFlags $ \dflags ->
               if gopt Opt_SuppressCoercions dflags
-              then text "..."
+              then angleBrackets (text "Co:" <> int (coercionSize co))
               else parens (sep [ppr co, dcolon <+> ppr (coercionType co)])
 
 ppr_expr :: OutputableBndr b => (SDoc -> SDoc) -> Expr b -> SDoc
         -- The function adds parens in context that need
         -- an atomic value (e.g. function args)
 
-ppr_expr _       (Var name)    = ppr name
+ppr_expr add_par (Var name)
+ | isJoinId name               = add_par ((text "jump") <+> ppr name)
+ | otherwise                   = ppr name
 ppr_expr add_par (Type ty)     = add_par (text "TYPE:" <+> ppr ty)       -- Weird
 ppr_expr add_par (Coercion co) = add_par (text "CO:" <+> ppr co)
 ppr_expr add_par (Lit lit)     = pprLiteral add_par lit
@@ -171,7 +191,10 @@ ppr_expr add_par expr@(App {})
                              tc        = dataConTyCon dc
                              saturated = val_args `lengthIs` idArity f
 
-                   _ -> parens (hang (ppr f) 2 pp_args)
+                   _ -> parens (hang fun_doc 2 pp_args)
+                   where
+                     fun_doc | isJoinId f = text "jump" <+> ppr f
+                             | otherwise  = ppr f
 
         _ -> parens (hang (pprParendExpr fun) 2 pp_args)
     }
@@ -190,7 +213,7 @@ ppr_expr add_par (Case expr var ty [(con,args,rhs)])
              ]
     else add_par $
          sep [sep [sep [ text "case" <+> pprCoreExpr expr
-                       , ifPprDebug (text "return" <+> ppr ty)
+                       , whenPprDebug (text "return" <+> ppr ty)
                        , text "of" <+> ppr_bndr var
                        ]
                   , char '{' <+> ppr_case_pat con args <+> arrow
@@ -205,7 +228,7 @@ ppr_expr add_par (Case expr var ty alts)
   = add_par $
     sep [sep [text "case"
                 <+> pprCoreExpr expr
-                <+> ifPprDebug (text "return" <+> ppr ty),
+                <+> whenPprDebug (text "return" <+> ppr ty),
               text "of" <+> ppr_bndr var <+> char '{'],
          nest 2 (vcat (punctuate semi (map pprCoreAlt alts))),
          char '}'
@@ -235,21 +258,26 @@ ppr_expr add_par (Let bind@(NonRec val_bdr rhs) expr@(Let _ _))
      pprCoreExpr expr)
 -}
 
+
 -- General case (recursive case, too)
 ppr_expr add_par (Let bind expr)
   = add_par $
-    sep [hang (ptext keyword) 2 (ppr_bind noAnn bind <+> text "} in"),
+    sep [hang (keyword bind <+> char '{') 2 (ppr_bind noAnn bind <+> text "} in"),
          pprCoreExpr expr]
   where
-    keyword = case bind of
-                Rec _      -> (sLit "letrec {")
-                NonRec _ _ -> (sLit "let {")
+    keyword (NonRec b _)
+     | isJust (bndrIsJoin_maybe b) = text "join"
+     | otherwise                   = text "let"
+    keyword (Rec pairs)
+     | ((b,_):_) <- pairs
+     , isJust (bndrIsJoin_maybe b) = text "joinrec"
+     | otherwise                   = text "letrec"
 
 ppr_expr add_par (Tick tickish expr)
   = sdocWithDynFlags $ \dflags ->
-  if gopt Opt_PprShowTicks dflags
-  then add_par (sep [ppr tickish, pprCoreExpr expr])
-  else ppr_expr add_par expr
+  if gopt Opt_SuppressTicks dflags
+  then ppr_expr add_par expr
+  else add_par (sep [ppr tickish, pprCoreExpr expr])
 
 pprCoreAlt :: OutputableBndr a => (AltCon, [a] , Expr a) -> SDoc
 pprCoreAlt (con, args, rhs)
@@ -310,10 +338,19 @@ Furthermore, a dead case-binder is completely ignored, while otherwise, dead
 binders are printed as "_".
 -}
 
+-- These instances are sadly orphans
+
 instance OutputableBndr Var where
   pprBndr = pprCoreBinder
   pprInfixOcc  = pprInfixName  . varName
   pprPrefixOcc = pprPrefixName . varName
+  bndrIsJoin_maybe = isJoinId_maybe
+
+instance Outputable b => OutputableBndr (TaggedBndr b) where
+  pprBndr _    b = ppr b   -- Simple
+  pprInfixOcc  b = ppr b
+  pprPrefixOcc b = ppr b
+  bndrIsJoin_maybe (TB b _) = isJoinId_maybe b
 
 pprCoreBinder :: BindingSite -> Var -> SDoc
 pprCoreBinder LetBind binder
@@ -337,7 +374,7 @@ pprTypedLamBinder bind_site debug_on var
   = sdocWithDynFlags $ \dflags ->
     case () of
     _
-      | not debug_on            -- Show case-bound wild bilders only if debug is on
+      | not debug_on            -- Show case-bound wild binders only if debug is on
       , CaseBind <- bind_site
       , isDeadBinder var        -> empty
 
@@ -378,7 +415,7 @@ pprTypedLetBinder binder
 pprKindedTyVarBndr :: TyVar -> SDoc
 -- Print a type variable binder with its kind (but not if *)
 pprKindedTyVarBndr tyvar
-  = text "@" <+> pprTvBndr tyvar
+  = text "@" <+> pprTyVar tyvar
 
 -- pprIdBndr does *not* print the type
 -- When printing any Id binder in debug mode, we print its inline pragma and one-shot-ness
@@ -397,12 +434,12 @@ pprIdBndrInfo info
     lbv_info  = oneShotInfo info
 
     has_prag  = not (isDefaultInlinePragma prag_info)
-    has_occ   = not (isNoOcc occ_info)
+    has_occ   = not (isManyOccs occ_info)
     has_dmd   = not $ isTopDmd dmd_info
     has_lbv   = not (hasNoOneShotInfo lbv_info)
 
     doc = showAttributes
-          [ (has_prag, text "InlPrag=" <> ppr prag_info)
+          [ (has_prag, text "InlPrag=" <> pprInlineDebug prag_info)
           , (has_occ,  text "Occ=" <> ppr occ_info)
           , (has_dmd,  text "Dmd=" <> ppr dmd_info)
           , (has_lbv , text "OS=" <> ppr lbv_info)

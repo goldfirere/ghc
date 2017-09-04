@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-
 -- -----------------------------------------------------------------------------
 --
 -- (c) The University of Glasgow, 2005-2007
@@ -9,14 +7,10 @@
 -- -----------------------------------------------------------------------------
 
 module InteractiveEvalTypes (
-#ifdef GHCI
         Resume(..), History(..), ExecResult(..),
         SingleStep(..), isStep, ExecOptions(..),
         BreakInfo(..)
-#endif
         ) where
-
-#ifdef GHCI
 
 import GHCi.RemoteTypes
 import GHCi.Message (EvalExpr, ResumeContext)
@@ -91,4 +85,3 @@ data History
         historyBreakInfo :: BreakInfo,
         historyEnclosingDecls :: [String]  -- declarations enclosing the breakpoint
    }
-#endif

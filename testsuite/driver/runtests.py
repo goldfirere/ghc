@@ -1,14 +1,16 @@
-# 
+#!/usr/bin/env python3
+
+#
 # (c) Simon Marlow 2002
 #
 
 from __future__ import print_function
 
+import argparse
+import signal
 import sys
 import os
 import string
-import getopt
-import platform
 import shutil
 import tempfile
 import time
@@ -22,13 +24,9 @@ import re
 # So we import it here first, so that the testsuite doesn't appear to fail.
 import subprocess
 
-PYTHON3 = sys.version_info >= (3, 0)
-if PYTHON3:
-    print("*** WARNING: running testsuite using Python 3.\n"
-          "*** Python 3 support is experimental. See Trac #9184.")
-
 from testutil import *
 from testglobals import *
+from junit import junit
 
 # Readline sometimes spews out ANSI escapes for some values of TERM,
 # which result in test failures. Thus set TERM to a nice, simple, safe
@@ -38,107 +36,67 @@ os.environ['TERM'] = 'vt100'
 global config
 config = getConfig() # get it from testglobals
 
+def signal_handler(signal, frame):
+        stopNow()
+
 # -----------------------------------------------------------------------------
 # cmd-line options
 
-long_options = [
-  "configfile=",	# config file
-  "config=",  		# config field
-  "rootdir=", 		# root of tree containing tests (default: .)
-  "summary-file=",      # file in which to save the (human-readable) summary
-  "no-print-summary=",  # should we print the summary?
-  "only=",		# just this test (can be give multiple --only= flags)
-  "way=",		# just this way
-  "skipway=",		# skip this way
-  "threads=",           # threads to run simultaneously
-  "check-files-written", # check files aren't written by multiple tests
-  "verbose=",          # verbose (0,1,2 so far)
-  "skip-perf-tests",       # skip performance tests
-  ]
+parser = argparse.ArgumentParser(description="GHC's testsuite driver")
 
-opts, args = getopt.getopt(sys.argv[1:], "e:", long_options)
-       
-for opt,arg in opts:
-    if opt == '--configfile':
-        exec(open(arg).read())
+parser.add_argument("-e", action='append', help="A string to execute from the command line.")
+parser.add_argument("--config-file", action="append", help="config file")
+parser.add_argument("--config", action='append', help="config field")
+parser.add_argument("--rootdir", action='append', help="root of tree containing tests (default: .)")
+parser.add_argument("--summary-file", help="file in which to save the (human-readable) summary")
+parser.add_argument("--no-print-summary", action="store_true", help="should we print the summary?")
+parser.add_argument("--only", action="append", help="just this test (can be give multiple --only= flags)")
+parser.add_argument("--way", choices=config.run_ways+config.compile_ways+config.other_ways, help="just this way")
+parser.add_argument("--skipway", action="append", choices=config.run_ways+config.compile_ways+config.other_ways, help="skip this way")
+parser.add_argument("--threads", type=int, help="threads to run simultaneously")
+parser.add_argument("--check-files-written", help="check files aren't written by multiple tests") # NOTE: This doesn't seem to exist?
+parser.add_argument("--verbose", type=int, choices=[0,1,2,3,4,5], help="verbose (Values 0 through 5 accepted)")
+parser.add_argument("--skip-perf-tests", action="store_true", help="skip performance tests")
+parser.add_argument("--junit", type=argparse.FileType('wb'), help="output testsuite summary in JUnit format")
 
-    # -e is a string to execute from the command line.  For example:
-    # testframe -e 'config.compiler=ghc-5.04'
-    if opt == '-e':
-        exec(arg)
+args = parser.parse_args()
 
-    if opt == '--config':
-        field, value = arg.split('=', 1)
-        setattr(config, field, value)
+for e in args.e:
+    exec(e)
 
-    if opt == '--rootdir':
-        config.rootdirs.append(arg)
+for arg in args.config_file:
+    exec(open(arg).read())
 
-    if opt == '--summary-file':
-        config.summary_file = arg
+for arg in args.config:
+    field, value = arg.split('=', 1)
+    setattr(config, field, value)
 
-    if opt == '--no-print-summary':
-        config.no_print_summary = True
+config.rootdirs = args.rootdir
+config.summary_file = args.summary_file
+config.no_print_summary = args.no_print_summary
 
-    if opt == '--only':
-        config.run_only_some_tests = True
-        config.only.add(arg)
+if args.only:
+    config.only = args.only
+    config.run_only_some_tests = True
 
-    if opt == '--way':
-        if (arg not in config.run_ways and arg not in config.compile_ways and arg not in config.other_ways):
-            sys.stderr.write("ERROR: requested way \'" +
-                             arg + "\' does not exist\n")
-            sys.exit(1)
-        config.cmdline_ways = [arg] + config.cmdline_ways
-        if (arg in config.other_ways):
-            config.run_ways = [arg] + config.run_ways
-            config.compile_ways = [arg] + config.compile_ways
+if args.way:
+    config.cmdline_ways = [args.way] + config.cmdline_ways
+    if (args.way in config.other_ways):
+        config.run_ways = [args.way] + config.run_ways
+        config.compile_ways = [args.way] + config.compile_ways
 
-    if opt == '--skipway':
-        if (arg not in config.run_ways and arg not in config.compile_ways and arg not in config.other_ways):
-            sys.stderr.write("ERROR: requested way \'" +
-                             arg + "\' does not exist\n")
-            sys.exit(1)
-        config.other_ways = [w for w in config.other_ways if w != arg]
-        config.run_ways = [w for w in config.run_ways if w != arg]
-        config.compile_ways = [w for w in config.compile_ways if w != arg]
+if args.skipway:
+    config.other_ways = [w for w in config.other_ways if w != args.skipway]
+    config.run_ways = [w for w in config.run_ways if w != args.skipway]
+    config.compile_ways = [w for w in config.compile_ways if w != args.skipway]
 
-    if opt == '--threads':
-        config.threads = int(arg)
-        config.use_threads = 1
+if args.threads:
+    config.threads = args.threads
+    config.use_threads = True
 
-    if opt == '--skip-perf-tests':
-        config.skip_perf_tests = True
-
-    if opt == '--verbose':
-        if arg not in ["0","1","2","3","4"]:
-            sys.stderr.write("ERROR: requested verbosity %s not supported, use 0,1,2,3 or 4" % arg)
-            sys.exit(1)
-        config.verbose = int(arg)
-
-
-if config.use_threads == 1:
-    # Trac #1558 says threads don't work in python 2.4.4, but do
-    # in 2.5.2. Probably >= 2.5 is sufficient, but let's be
-    # conservative here.
-    # Some versions of python have things like '1c1' for some of
-    # these components (see trac #3091), but int() chokes on the
-    # 'c1', so we drop it.
-    (maj, min, pat) = platform.python_version_tuple()
-    # We wrap maj, min, and pat in str() to work around a bug in python
-    # 2.6.1
-    maj = int(re.sub('[^0-9].*', '', str(maj)))
-    min = int(re.sub('[^0-9].*', '', str(min)))
-    pat = int(re.sub('[^0-9].*', '', str(pat)))
-    if (maj, min) < (2, 6):
-        print("Python < 2.6 is not supported")
-        sys.exit(1)
-    # We also need to disable threads for python 2.7.2, because of
-    # this bug: http://bugs.python.org/issue13817
-    elif (maj, min, pat) == (2, 7, 2):
-        print("Warning: Ignoring request to use threads as python version is 2.7.2")
-        print("See http://bugs.python.org/issue13817 for details.")
-        config.use_threads = 0
+if args.verbose:
+    config.verbose = args.verbose
+config.skip_perf_tests = args.skip_perf_tests
 
 config.cygwin = False
 config.msys = False
@@ -173,6 +131,9 @@ if windows:
         raise Exception("Failure calling SetConsoleCP(65001)")
     if kernel32.SetConsoleOutputCP(65001) == 0:
         raise Exception("Failure calling SetConsoleOutputCP(65001)")
+
+    # register the interrupt handler
+    signal.signal(signal.SIGINT, signal_handler)
 else:
     # Try and find a utf8 locale to use
     # First see if we already have a UTF8 locale
@@ -237,12 +198,6 @@ if windows or darwin:
 global testopts_local
 testopts_local.x = TestOptions()
 
-if config.use_threads:
-    t.lock = threading.Lock()
-    t.thread_pool = threading.Condition(t.lock)
-    t.lockFilesWritten = threading.Lock()
-    t.running_threads = 0
-
 # if timeout == -1 then we try to calculate a sensible value
 if config.timeout == -1:
     config.timeout = int(read_no_crs(config.top + '/timeout/calibrate.out'))
@@ -267,12 +222,8 @@ t.start_time = time.localtime()
 print('Beginning test run at', time.strftime("%c %Z",t.start_time))
 
 sys.stdout.flush()
-if PYTHON3:
-    # in Python 3, we output text, which cannot be unbuffered
-    sys.stdout = os.fdopen(sys.__stdout__.fileno(), "w")
-else:
-    # set stdout to unbuffered (is this the best way to do it?)
-    sys.stdout = os.fdopen(sys.__stdout__.fileno(), "w", 0)
+# we output text, which cannot be unbuffered
+sys.stdout = os.fdopen(sys.__stdout__.fileno(), "w")
 
 if config.local:
     tempdir = ''
@@ -301,10 +252,8 @@ for file in t_files:
     if_verbose(2, '====> Scanning %s' % file)
     newTestDir(tempdir, os.path.dirname(file))
     try:
-        if PYTHON3:
-            src = io.open(file, encoding='utf8').read()
-        else:
-            src = open(file).read()
+        with io.open(file, encoding='utf8') as f:
+            src = f.read()
 
         exec(src)
     except Exception as e:
@@ -333,28 +282,37 @@ if config.list_broken:
         print('WARNING:', len(framework_failures), 'framework failures!')
         print('')
 else:
+    # completion watcher
+    watcher = Watcher(len(parallelTests))
+
     # Now run all the tests
-    if config.use_threads:
-        t.running_threads=0
     for oneTest in parallelTests:
         if stopping():
             break
-        oneTest()
-    if config.use_threads:
-        t.thread_pool.acquire()
-        while t.running_threads>0:
-            t.thread_pool.wait()
-        t.thread_pool.release()
+        oneTest(watcher)
+
+    # wait for parallel tests to finish
+    if not stopping():
+        watcher.wait()
+
+    # Run the following tests purely sequential
     config.use_threads = False
     for oneTest in aloneTests:
         if stopping():
             break
-        oneTest()
-        
+        oneTest(watcher)
+
+    # flush everything before we continue
+    sys.stdout.flush()
+
     summary(t, sys.stdout, config.no_print_summary)
 
-    if config.summary_file != '':
-        summary(t, open(config.summary_file, 'w'))
+    if config.summary_file:
+        with open(config.summary_file, 'w') as file:
+            summary(t, file)
+
+    if args.junit:
+        junit(t).write(args.junit)
 
 cleanup_and_exit(0)
 

@@ -151,7 +151,7 @@ data LlvmStatement
   | Store LlvmVar LlvmVar
 
   {- |
-    Mutliway branch
+    Multiway branch
       * scrutinee: Variable or constant which must be of integer type that is
                    determines which arm is chosen.
       * def:       The default label if there is no match in target.
@@ -267,7 +267,7 @@ data LlvmExpression
 
   {- |
     Cast the variable from to the to type. This is an abstraction of three
-    cast operators in Llvm, inttoptr, prttoint and bitcast.
+    cast operators in Llvm, inttoptr, ptrtoint and bitcast.
        * cast: Cast type
        * from: Variable to cast
        * to:   type to cast to
@@ -323,8 +323,8 @@ data LlvmExpression
     basic block in a new variable of type tp.
       * tp:         type of the merged variable, must match the types of the
                     predecessor variables.
-      * precessors: A list of variables and the basic block that they originate
-                    from.
+      * predecessors: A list of variables and the basic block that they originate
+                      from.
   -}
   | Phi LlvmType [(LlvmVar,LlvmVar)]
 

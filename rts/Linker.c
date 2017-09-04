@@ -39,7 +39,7 @@
 // get protos for is*()
 #include <ctype.h>
 
-#ifdef HAVE_SYS_TYPES_H
+#if defined(HAVE_SYS_TYPES_H)
 #include <sys/types.h>
 #endif
 
@@ -49,7 +49,7 @@
 #include <stdio.h>
 #include <assert.h>
 
-#ifdef HAVE_SYS_STAT_H
+#if defined(HAVE_SYS_STAT_H)
 #include <sys/stat.h>
 #endif
 
@@ -57,17 +57,14 @@
 #include <dlfcn.h>
 #endif
 
-#if defined(linux_HOST_OS) || defined(solaris2_HOST_OS) || defined(freebsd_HOST_OS) || defined(kfreebsdgnu_HOST_OS) || defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) || defined(openbsd_HOST_OS) || defined(gnu_HOST_OS)
-#  define OBJFORMAT_ELF
+#if defined(OBJFORMAT_ELF)
 #  include "linker/Elf.h"
 #  include <regex.h>    // regex is already used by dlopen() so this is OK
                         // to use here without requiring an additional lib
-#elif defined (mingw32_HOST_OS)
-#  define OBJFORMAT_PEi386
+#elif defined(OBJFORMAT_PEi386)
 #  include "linker/PEi386.h"
 #  include <windows.h>
-#elif defined(darwin_HOST_OS)
-#  define OBJFORMAT_MACHO
+#elif defined(OBJFORMAT_MACHO)
 #  include "linker/MachO.h"
 #  include <regex.h>
 #  include <mach/machine.h>
@@ -81,7 +78,13 @@
 #if defined(dragonfly_HOST_OS)
 #include <sys/tls.h>
 #endif
-
+/*
+   Note [runtime-linker-support]
+   -----------------------------
+   When adding support for a new platform to the runtime linker please
+   update `$TOP/configure.ac` under heading `Does target have runtime
+   linker support?`.
+ */
 /* `symhash` is a Hash table mapping symbol names to RtsSymbolInfo.
    This hashtable will contain information on all symbols
    that we know of, however the .o they are in may not be loaded.
@@ -102,7 +105,7 @@
 
    This is to enable lazy loading of symbols. Eager loading is problematic
    as it means that all symbols must be available, even those which we will
-   never use. This is especially painful of Windows, where the number of
+   never use. This is especially painful on Windows, where the number of
    libraries required to link things like mingwex grows to be quite high.
 
    We proceed through these stages as follows,
@@ -111,12 +114,12 @@
      perform a quick scan/indexing of the ObjectCode. All the work
      required to actually load the ObjectCode is done.
 
-     All symbols from the ObjectCode is also inserted into
+     All symbols from the ObjectCode are also inserted into
      `symhash`, where possible duplicates are handled via the semantics
      described in `ghciInsertSymbolTable`.
 
      This phase will produce ObjectCode with status `OBJECT_LOADED` or `OBJECT_NEEDED`
-     depending on whether they are an archive members or not.
+     depending on whether they are an archive member or not.
 
    * During initialization we load ObjectCode, perform relocations, execute
      static constructors etc. This phase may trigger other ObjectCodes to
@@ -134,10 +137,10 @@
      This phase will produce ObjectCode with status `OBJECT_RESOLVED` if
      the previous status was `OBJECT_NEEDED`.
 
-   * Lookup symbols is used to lookup any symbols required, both during initial
+   * lookupSymbols is used to lookup any symbols required, both during initial
      link and during statement and expression compilations in the REPL.
-     Declaration of e.g. an foreign import, will eventually call lookupSymbol
-     which will either fail (symbol unknown) or succeed (and possibly triggered a
+     Declaration of e.g. a foreign import, will eventually call lookupSymbol
+     which will either fail (symbol unknown) or succeed (and possibly trigger a
      load).
 
      This phase may transition an ObjectCode from `OBJECT_LOADED` to `OBJECT_RESOLVED`
@@ -167,7 +170,7 @@ ObjectCode *objects = NULL;     /* initially empty */
    to be actually freed via checkUnload() */
 ObjectCode *unloaded_objects = NULL; /* initially empty */
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
 /* This protects all the Linker's global state except unloaded_objects */
 Mutex linker_mutex;
 /*
@@ -178,13 +181,6 @@ Mutex linker_mutex;
  */
 Mutex linker_unloaded_mutex;
 #endif
-
-static HsInt isAlreadyLoaded( pathchar *path );
-static HsInt loadOc( ObjectCode* oc );
-static ObjectCode* mkOc( pathchar *path, char *image, int imageSize,
-                         rtsBool mapped, char *archiveMemberName,
-                         int misalignment
-                       );
 
 /* Generic wrapper function to try and Resolve and RunInit oc files */
 int ocTryLoad( ObjectCode* oc );
@@ -234,6 +230,9 @@ static void ghciRemoveSymbolTable(HashTable *table, const SymbolName* key,
     RtsSymbolInfo *pinfo = lookupStrHashTable(table, key);
     if (!pinfo || owner != pinfo->owner) return;
     removeStrHashTable(table, key, NULL);
+    if (isSymbolImport (owner, key))
+      stgFree(pinfo->value);
+
     stgFree(pinfo);
 }
 
@@ -399,7 +398,7 @@ static int linker_init_done = 0 ;
 static void *dl_prog_handle;
 static regex_t re_invalid;
 static regex_t re_realso;
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
 static Mutex dl_mutex; // mutex to protect dlopen/dlerror critical section
 #endif
 #endif
@@ -448,7 +447,8 @@ initLinker_ (int retain_cafs)
     /* populate the symbol table with stuff from the RTS */
     for (sym = rtsSyms; sym->lbl != NULL; sym++) {
         if (! ghciInsertSymbolTable(WSTR("(GHCi built-in symbols)"),
-                                    symhash, sym->lbl, sym->addr, HS_BOOL_FALSE, NULL)) {
+                                    symhash, sym->lbl, sym->addr,
+                                    sym->weak, NULL)) {
             barf("ghciInsertSymbolTable failed");
         }
         IF_DEBUG(linker, debugBelch("initLinker: inserting rts symbol %s, %p\n", sym->lbl, sym->addr));
@@ -482,7 +482,7 @@ initLinker_ (int retain_cafs)
 #   endif /* RTLD_DEFAULT */
 
     compileResult = regcomp(&re_invalid,
-           "(([^ \t()])+\\.so([^ \t:()])*):([ \t])*(invalid ELF header|file too short)",
+           "(([^ \t()])+\\.so([^ \t:()])*):([ \t])*(invalid ELF header|file too short|invalid file format)",
            REG_EXTENDED);
     if (compileResult != 0) {
         barf("Compiling re_invalid failed");
@@ -519,7 +519,7 @@ exitLinker( void ) {
    if (linker_init_done == 1) {
       regfree(&re_invalid);
       regfree(&re_realso);
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
       closeMutex(&dl_mutex);
 #endif
    }
@@ -527,7 +527,7 @@ exitLinker( void ) {
    if (linker_init_done == 1) {
        freeHashTable(symhash, free);
    }
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
    closeMutex(&linker_mutex);
 #endif
 }
@@ -734,7 +734,7 @@ addDLL( pathchar *dll_name )
    return errmsg;
 
 #  elif defined(OBJFORMAT_PEi386)
-   return addDLL_PEi386(dll_name);
+   return addDLL_PEi386(dll_name, NULL);
 
 #  else
    barf("addDLL: not implemented on this platform");
@@ -751,7 +751,8 @@ addDLL( pathchar *dll_name )
 */
 pathchar* findSystemLibrary(pathchar* dll_name)
 {
-    IF_DEBUG(linker, debugBelch("\nfindSystemLibrary: dll_name = `%" PATH_FMT "'\n", dll_name));
+    IF_DEBUG(linker, debugBelch("\nfindSystemLibrary: dll_name = `%"
+                                PATH_FMT "'\n", dll_name));
 
 #if defined(OBJFORMAT_PEi386)
     return findSystemLibrary_PEi386(dll_name);
@@ -782,7 +783,8 @@ void warnMissingKBLibraryPaths( void )
 */
 HsPtr addLibrarySearchPath(pathchar* dll_path)
 {
-    IF_DEBUG(linker, debugBelch("\naddLibrarySearchPath: dll_path = `%" PATH_FMT "'\n", dll_path));
+    IF_DEBUG(linker, debugBelch("\naddLibrarySearchPath: dll_path = `%"
+                                PATH_FMT "'\n", dll_path));
 
 #if defined(OBJFORMAT_PEi386)
     return addLibrarySearchPath_PEi386(dll_path);
@@ -799,7 +801,8 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
 */
 HsBool removeLibrarySearchPath(HsPtr dll_path_index)
 {
-    IF_DEBUG(linker, debugBelch("\nremoveLibrarySearchPath: ptr = `%p'\n", dll_path_index));
+    IF_DEBUG(linker, debugBelch("\nremoveLibrarySearchPath: ptr = `%p'\n",
+                                dll_path_index));
 
 #if defined(OBJFORMAT_PEi386)
     return removeLibrarySearchPath_PEi386(dll_path_index);
@@ -816,7 +819,8 @@ HsBool removeLibrarySearchPath(HsPtr dll_path_index)
  */
 HsInt insertSymbol(pathchar* obj_name, SymbolName* key, SymbolAddr* data)
 {
-    return ghciInsertSymbolTable(obj_name, symhash, key, data, HS_BOOL_FALSE, NULL);
+    return ghciInsertSymbolTable(obj_name, symhash, key, data, HS_BOOL_FALSE,
+                                 NULL);
 }
 
 /* -----------------------------------------------------------------------------
@@ -846,11 +850,12 @@ SymbolAddr* lookupSymbol_ (SymbolName* lbl)
 
         /* HACK: On OS X, all symbols are prefixed with an underscore.
                  However, dlsym wants us to omit the leading underscore from the
-                 symbol name -- the dlsym routine puts it back on before searching
-                 for the symbol. For now, we simply strip it off here (and ONLY
-                 here).
+                 symbol name -- the dlsym routine puts it back on before
+                 searching for the symbol. For now, we simply strip it off here
+                 (and ONLY here).
         */
-        IF_DEBUG(linker, debugBelch("lookupSymbol: looking up %s with dlsym\n", lbl));
+        IF_DEBUG(linker, debugBelch("lookupSymbol: looking up %s with dlsym\n",
+                                    lbl));
         ASSERT(lbl[0] == '_');
         return internal_dlsym(lbl + 1);
 
@@ -869,21 +874,22 @@ SymbolAddr* lookupSymbol_ (SymbolName* lbl)
  * Symbol name only used for diagnostics output.
  */
 SymbolAddr* loadSymbol(SymbolName *lbl, RtsSymbolInfo *pinfo) {
-    IF_DEBUG(linker, debugBelch("lookupSymbol: value of %s is %p\n", lbl, pinfo->value));
+    IF_DEBUG(linker, debugBelch("lookupSymbol: value of %s is %p\n", lbl,
+                                pinfo->value));
     ObjectCode* oc = pinfo->owner;
 
     /* Symbol can be found during linking, but hasn't been relocated. Do so now.
         See Note [runtime-linker-phases] */
-    if (oc && oc->status == OBJECT_LOADED) {
+    if (oc && lbl && oc->status == OBJECT_LOADED) {
         oc->status = OBJECT_NEEDED;
-        IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand loading symbol '%s'\n", lbl));
+        IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand "
+                                    "loading symbol '%s'\n", lbl));
         int r = ocTryLoad(oc);
         if (!r) {
-            errorBelch("Could not on-demand load symbol '%s'\n", lbl);
             return NULL;
         }
 
-#ifdef PROFILING
+#if defined(PROFILING)
         // collect any new cost centres & CCSs
         // that were defined during runInit
         initProfiling2();
@@ -897,6 +903,11 @@ SymbolAddr* lookupSymbol( SymbolName* lbl )
 {
     ACQUIRE_LOCK(&linker_mutex);
     SymbolAddr* r = lookupSymbol_(lbl);
+    if (!r) {
+        errorBelch("^^ Could not load '%s', dependency unresolved. "
+                   "See top entry above.\n", lbl);
+        fflush(stderr);
+    }
     RELEASE_LOCK(&linker_mutex);
     return r;
 }
@@ -936,7 +947,7 @@ StgStablePtr foreignExportStablePtr (StgPtr p)
  * Debugging aid: look in GHCi's object symbol tables for symbols
  * within DELTA bytes of the specified address, and show their names.
  */
-#ifdef DEBUG
+#if defined(DEBUG)
 void ghci_enquire ( SymbolAddr* addr );
 
 void ghci_enquire(SymbolAddr* addr)
@@ -961,7 +972,8 @@ void ghci_enquire(SymbolAddr* addr)
          else if (   a->value
                   && (char*)addr-DELTA <= (char*)a->value
                   && (char*)a->value <= (char*)addr+DELTA) {
-             debugBelch("%p + %3d  ==  `%s'\n", addr, (int)((char*)a->value - (char*)addr), sym);
+             debugBelch("%p + %3d  ==  `%s'\n", addr,
+                        (int)((char*)a->value - (char*)addr), sym);
          }
       }
    }
@@ -1163,6 +1175,9 @@ void freeObjectCode (ObjectCode *oc)
                     break;
                 }
             }
+            if (oc->sections[i].info) {
+                stgFree(oc->sections[i].info);
+            }
         }
         stgFree(oc->sections);
     }
@@ -1171,7 +1186,8 @@ void freeObjectCode (ObjectCode *oc)
 
     /* Free symbol_extras.  On x86_64 Windows, symbol_extras are allocated
      * alongside the image, so we don't need to free. */
-#if NEED_SYMBOL_EXTRAS && (!defined(x86_64_HOST_ARCH) || !defined(mingw32_HOST_OS))
+#if defined(NEED_SYMBOL_EXTRAS) && (!defined(x86_64_HOST_ARCH) \
+                                    || !defined(mingw32_HOST_OS))
     if (RTS_LINKER_USE_MMAP) {
         if (!USE_CONTIGUOUS_MMAP && oc->symbol_extras != NULL) {
             m32_free(oc->symbol_extras,
@@ -1181,6 +1197,13 @@ void freeObjectCode (ObjectCode *oc)
     else {
         stgFree(oc->symbol_extras);
     }
+#endif
+
+#if defined(OBJECTFORMAT_MACHO)
+    ocDeinit_MachO(oc);
+#endif
+#if defined(OBJFORMAT_ELF)
+    ocDeinit_ELF(oc);
 #endif
 
     stgFree(oc->fileName);
@@ -1200,13 +1223,15 @@ static void setOcInitialStatus(ObjectCode* oc) {
     }
 }
 
-static ObjectCode*
+ObjectCode*
 mkOc( pathchar *path, char *image, int imageSize,
-      rtsBool mapped, char *archiveMemberName, int misalignment ) {
+      bool mapped, char *archiveMemberName, int misalignment ) {
    ObjectCode* oc;
 
    IF_DEBUG(linker, debugBelch("mkOc: start\n"));
    oc = stgMallocBytes(sizeof(ObjectCode), "mkOc(oc)");
+
+   oc->info = NULL;
 
 #  if defined(OBJFORMAT_ELF)
    oc->formatName = "ELF";
@@ -1223,7 +1248,8 @@ mkOc( pathchar *path, char *image, int imageSize,
    oc->fileName = pathdup(path);
 
    if (archiveMemberName) {
-       oc->archiveMemberName = stgMallocBytes( strlen(archiveMemberName)+1, "loadObj" );
+       oc->archiveMemberName = stgMallocBytes( strlen(archiveMemberName)+1,
+                                               "loadObj" );
        strcpy(oc->archiveMemberName, archiveMemberName);
    } else {
        oc->archiveMemberName = NULL;
@@ -1237,7 +1263,7 @@ mkOc( pathchar *path, char *image, int imageSize,
    oc->sections          = NULL;
    oc->proddables        = NULL;
    oc->stable_ptrs       = NULL;
-#if NEED_SYMBOL_EXTRAS
+#if defined(NEED_SYMBOL_EXTRAS)
    oc->symbol_extras     = NULL;
 #endif
    oc->imageMapped       = mapped;
@@ -1257,7 +1283,7 @@ mkOc( pathchar *path, char *image, int imageSize,
  *
  * Returns: 1 if the path is already loaded, 0 otherwise.
  */
-static HsInt
+HsInt
 isAlreadyLoaded( pathchar *path )
 {
     ObjectCode *o;
@@ -1267,522 +1293,6 @@ isAlreadyLoaded( pathchar *path )
        }
     }
     return 0; /* not loaded yet */
-}
-
-static HsInt loadArchive_ (pathchar *path)
-{
-    ObjectCode* oc;
-    char *image;
-    int memberSize;
-    FILE *f;
-    int n;
-    size_t thisFileNameSize;
-    char *fileName;
-    size_t fileNameSize;
-    int isObject, isGnuIndex, isThin, isImportLib;
-    char tmp[20];
-    char *gnuFileIndex;
-    int gnuFileIndexSize;
-#if defined(darwin_HOST_OS)
-    int i;
-    uint32_t nfat_arch, nfat_offset, cputype, cpusubtype;
-#if defined(i386_HOST_ARCH)
-    const uint32_t mycputype = CPU_TYPE_X86;
-    const uint32_t mycpusubtype = CPU_SUBTYPE_X86_ALL;
-#elif defined(x86_64_HOST_ARCH)
-    const uint32_t mycputype = CPU_TYPE_X86_64;
-    const uint32_t mycpusubtype = CPU_SUBTYPE_X86_64_ALL;
-#elif defined(powerpc_HOST_ARCH)
-    const uint32_t mycputype = CPU_TYPE_POWERPC;
-    const uint32_t mycpusubtype = CPU_SUBTYPE_POWERPC_ALL;
-#elif defined(powerpc64_HOST_ARCH)
-    const uint32_t mycputype = CPU_TYPE_POWERPC64;
-    const uint32_t mycpusubtype = CPU_SUBTYPE_POWERPC_ALL;
-#else
-#error Unknown Darwin architecture
-#endif
-#endif
-    int misalignment = 0;
-
-    /* TODO: don't call barf() on error, instead return an error code, freeing
-     * all resources correctly.  This function is pretty complex, so it needs
-     * to be refactored to make this practical. */
-
-    IF_DEBUG(linker, debugBelch("loadArchive: start\n"));
-    IF_DEBUG(linker, debugBelch("loadArchive: Loading archive `%" PATH_FMT" '\n", path));
-
-    /* Check that we haven't already loaded this archive.
-       Ignore requests to load multiple times */
-    if (isAlreadyLoaded(path)) {
-        IF_DEBUG(linker,
-                 debugBelch("ignoring repeated load of %" PATH_FMT "\n", path));
-        return 1; /* success */
-    }
-
-    gnuFileIndex = NULL;
-    gnuFileIndexSize = 0;
-
-    fileNameSize = 32;
-    fileName = stgMallocBytes(fileNameSize, "loadArchive(fileName)");
-
-    isThin = 0;
-    isImportLib = 0;
-
-    f = pathopen(path, WSTR("rb"));
-    if (!f)
-        barf("loadObj: can't read `%" PATH_FMT "'", path);
-
-    /* Check if this is an archive by looking for the magic "!<arch>\n"
-     * string.  Usually, if this fails, we barf and quit.  On Darwin however,
-     * we may have a fat archive, which contains archives for more than
-     * one architecture.  Fat archives start with the magic number 0xcafebabe,
-     * always stored big endian.  If we find a fat_header, we scan through
-     * the fat_arch structs, searching through for one for our host
-     * architecture.  If a matching struct is found, we read the offset
-     * of our archive data (nfat_offset) and seek forward nfat_offset bytes
-     * from the start of the file.
-     *
-     * A subtlety is that all of the members of the fat_header and fat_arch
-     * structs are stored big endian, so we need to call byte order
-     * conversion functions.
-     *
-     * If we find the appropriate architecture in a fat archive, we gobble
-     * its magic "!<arch>\n" string and continue processing just as if
-     * we had a single architecture archive.
-     */
-
-    n = fread ( tmp, 1, 8, f );
-    if (n != 8)
-        barf("loadArchive: Failed reading header from `%" PATH_FMT "'", path);
-    if (strncmp(tmp, "!<arch>\n", 8) == 0) {}
-    /* Check if this is a thin archive by looking for the magic string "!<thin>\n"
-     *
-     * ar thin libraries have the exact same format as normal archives except they
-     * have a different magic string and they don't copy the object files into the
-     * archive.
-     *
-     * Instead each header entry points to the location of the object file on disk.
-     * This is useful when a library is only created to satisfy a compile time dependency
-     * instead of to be distributed. This saves the time required for copying.
-     *
-     * Thin archives are always flattened. They always only contain simple headers
-     * pointing to the object file and so we need not allocate more memory than needed
-     * to find the object file.
-     *
-     */
-    else if (strncmp(tmp, "!<thin>\n", 8) == 0) {
-        isThin = 1;
-    }
-#if defined(darwin_HOST_OS)
-    /* Not a standard archive, look for a fat archive magic number: */
-    else if (ntohl(*(uint32_t *)tmp) == FAT_MAGIC) {
-        nfat_arch = ntohl(*(uint32_t *)(tmp + 4));
-        IF_DEBUG(linker, debugBelch("loadArchive: found a fat archive containing %d architectures\n", nfat_arch));
-        nfat_offset = 0;
-
-        for (i = 0; i < (int)nfat_arch; i++) {
-            /* search for the right arch */
-            n = fread( tmp, 1, 20, f );
-            if (n != 8)
-                barf("loadArchive: Failed reading arch from `%s'", path);
-            cputype = ntohl(*(uint32_t *)tmp);
-            cpusubtype = ntohl(*(uint32_t *)(tmp + 4));
-
-            if (cputype == mycputype && cpusubtype == mycpusubtype) {
-                IF_DEBUG(linker, debugBelch("loadArchive: found my archive in a fat archive\n"));
-                nfat_offset = ntohl(*(uint32_t *)(tmp + 8));
-                break;
-            }
-        }
-
-        if (nfat_offset == 0) {
-           barf ("loadArchive: searched %d architectures, but no host arch found", (int)nfat_arch);
-        }
-        else {
-            n = fseek( f, nfat_offset, SEEK_SET );
-            if (n != 0)
-                barf("loadArchive: Failed to seek to arch in `%s'", path);
-            n = fread ( tmp, 1, 8, f );
-            if (n != 8)
-                barf("loadArchive: Failed reading header from `%s'", path);
-            if (strncmp(tmp, "!<arch>\n", 8) != 0) {
-                barf("loadArchive: couldn't find archive in `%s' at offset %d", path, nfat_offset);
-            }
-        }
-    }
-    else {
-        barf("loadArchive: Neither an archive, nor a fat archive: `%s'", path);
-    }
-#else
-    else {
-        barf("loadArchive: Not an archive: `%" PATH_FMT "'", path);
-    }
-#endif
-
-    IF_DEBUG(linker, debugBelch("loadArchive: loading archive contents\n"));
-
-    while (1) {
-        IF_DEBUG(linker, debugBelch("loadArchive: reading at %ld\n", ftell(f)));
-        n = fread ( fileName, 1, 16, f );
-        if (n != 16) {
-            if (feof(f)) {
-                IF_DEBUG(linker, debugBelch("loadArchive: EOF while reading from '%" PATH_FMT "'\n", path));
-                break;
-            }
-            else {
-                barf("loadArchive: Failed reading file name from `%" PATH_FMT "'", path);
-            }
-        }
-
-#if defined(darwin_HOST_OS)
-        if (strncmp(fileName, "!<arch>\n", 8) == 0) {
-            IF_DEBUG(linker, debugBelch("loadArchive: found the start of another archive, breaking\n"));
-            break;
-        }
-#endif
-
-        n = fread ( tmp, 1, 12, f );
-        if (n != 12)
-            barf("loadArchive: Failed reading mod time from `%" PATH_FMT "'", path);
-        n = fread ( tmp, 1, 6, f );
-        if (n != 6)
-            barf("loadArchive: Failed reading owner from `%" PATH_FMT "'", path);
-        n = fread ( tmp, 1, 6, f );
-        if (n != 6)
-            barf("loadArchive: Failed reading group from `%" PATH_FMT "'", path);
-        n = fread ( tmp, 1, 8, f );
-        if (n != 8)
-            barf("loadArchive: Failed reading mode from `%" PATH_FMT "'", path);
-        n = fread ( tmp, 1, 10, f );
-        if (n != 10)
-            barf("loadArchive: Failed reading size from `%" PATH_FMT "'", path);
-        tmp[10] = '\0';
-        for (n = 0; isdigit(tmp[n]); n++);
-        tmp[n] = '\0';
-        memberSize = atoi(tmp);
-
-        IF_DEBUG(linker, debugBelch("loadArchive: size of this archive member is %d\n", memberSize));
-        n = fread ( tmp, 1, 2, f );
-        if (n != 2)
-            barf("loadArchive: Failed reading magic from `%" PATH_FMT "'", path);
-        if (strncmp(tmp, "\x60\x0A", 2) != 0)
-            barf("loadArchive: Failed reading magic from `%" PATH_FMT "' at %ld. Got %c%c",
-                 path, ftell(f), tmp[0], tmp[1]);
-
-        isGnuIndex = 0;
-        /* Check for BSD-variant large filenames */
-        if (0 == strncmp(fileName, "#1/", 3)) {
-            fileName[16] = '\0';
-            if (isdigit(fileName[3])) {
-                for (n = 4; isdigit(fileName[n]); n++);
-                fileName[n] = '\0';
-                thisFileNameSize = atoi(fileName + 3);
-                memberSize -= thisFileNameSize;
-                if (thisFileNameSize >= fileNameSize) {
-                    /* Double it to avoid potentially continually
-                       increasing it by 1 */
-                    fileNameSize = thisFileNameSize * 2;
-                    fileName = stgReallocBytes(fileName, fileNameSize, "loadArchive(fileName)");
-                }
-                n = fread ( fileName, 1, thisFileNameSize, f );
-                if (n != (int)thisFileNameSize) {
-                    barf("loadArchive: Failed reading filename from `%" PATH_FMT "'",
-                         path);
-                }
-                fileName[thisFileNameSize] = 0;
-
-                /* On OS X at least, thisFileNameSize is the size of the
-                   fileName field, not the length of the fileName
-                   itself. */
-                thisFileNameSize = strlen(fileName);
-            }
-            else {
-                barf("loadArchive: BSD-variant filename size not found while reading filename from `%s'", path);
-            }
-        }
-        /* Check for GNU file index file */
-        else if (0 == strncmp(fileName, "//", 2)) {
-            fileName[0] = '\0';
-            thisFileNameSize = 0;
-            isGnuIndex = 1;
-        }
-        /* Check for a file in the GNU file index */
-        else if (fileName[0] == '/') {
-            if (isdigit(fileName[1])) {
-                int i;
-
-                for (n = 2; isdigit(fileName[n]); n++);
-                fileName[n] = '\0';
-                n = atoi(fileName + 1);
-
-                if (gnuFileIndex == NULL) {
-                    barf("loadArchive: GNU-variant filename without an index while reading from `%s'", path);
-                }
-                if (n < 0 || n > gnuFileIndexSize) {
-                    barf("loadArchive: GNU-variant filename offset %d out of range [0..%d] while reading filename from `%s'", n, gnuFileIndexSize, path);
-                }
-                if (n != 0 && gnuFileIndex[n - 1] != '\n') {
-                    barf("loadArchive: GNU-variant filename offset %d invalid (range [0..%d]) while reading filename from `%s'", n, gnuFileIndexSize, path);
-                }
-                for (i = n; gnuFileIndex[i] != '\n'; i++);
-                thisFileNameSize = i - n - 1;
-                if (thisFileNameSize >= fileNameSize) {
-                    /* Double it to avoid potentially continually
-                       increasing it by 1 */
-                    fileNameSize = thisFileNameSize * 2;
-                    fileName = stgReallocBytes(fileName, fileNameSize, "loadArchive(fileName)");
-                }
-                memcpy(fileName, gnuFileIndex + n, thisFileNameSize);
-                fileName[thisFileNameSize] = '\0';
-            }
-            else if (fileName[1] == ' ') {
-                fileName[0] = '\0';
-                thisFileNameSize = 0;
-            }
-            else {
-                barf("loadArchive: GNU-variant filename offset not found while reading filename from `%s'", path);
-            }
-        }
-        /* Finally, the case where the filename field actually contains
-           the filename */
-        else {
-            /* GNU ar terminates filenames with a '/', this allowing
-               spaces in filenames. So first look to see if there is a
-               terminating '/'. */
-            for (thisFileNameSize = 0;
-                 thisFileNameSize < 16;
-                 thisFileNameSize++) {
-                if (fileName[thisFileNameSize] == '/') {
-                    fileName[thisFileNameSize] = '\0';
-                    break;
-                }
-            }
-            /* If we didn't find a '/', then a space teminates the
-               filename. Note that if we don't find one, then
-               thisFileNameSize ends up as 16, and we already have the
-               '\0' at the end. */
-            if (thisFileNameSize == 16) {
-                for (thisFileNameSize = 0;
-                     thisFileNameSize < 16;
-                     thisFileNameSize++) {
-                    if (fileName[thisFileNameSize] == ' ') {
-                        fileName[thisFileNameSize] = '\0';
-                        break;
-                    }
-                }
-            }
-        }
-
-        IF_DEBUG(linker,
-                 debugBelch("loadArchive: Found member file `%s'\n", fileName));
-
-        isObject = (thisFileNameSize >= 2 && strncmp(fileName + thisFileNameSize - 2, ".o"  , 2) == 0)
-                || (thisFileNameSize >= 4 && strncmp(fileName + thisFileNameSize - 4, ".p_o", 4) == 0);
-
-#if defined(OBJFORMAT_PEi386)
-        /*
-        * Note [MSVC import files (ext .lib)]
-        * MSVC compilers store the object files in
-        * the import libraries with extension .dll
-        * so on Windows we should look for those too.
-        * The PE COFF format doesn't specify any specific file name
-        * for sections. So on windows, just try to load it all.
-        *
-        * Linker members (e.g. filename / are skipped since they are not needed)
-        */
-        isImportLib = thisFileNameSize >= 4 && strncmp(fileName + thisFileNameSize - 4, ".dll", 4) == 0;
-
-        /*
-         * Note [GCC import files (ext .dll.a)]
-         * GCC stores import information in the same binary format
-         * as the object file normally has. The only difference is that
-         * all the information are put in .idata sections. The only real
-         * way to tell if we're dealing with an import lib is by looking
-         * at the file extension.
-         */
-        isImportLib = isImportLib || endsWithPath(path, WSTR(".dll.a"));
-#endif // windows
-
-        IF_DEBUG(linker, debugBelch("loadArchive: \tthisFileNameSize = %d\n", (int)thisFileNameSize));
-        IF_DEBUG(linker, debugBelch("loadArchive: \tisObject = %d\n", isObject));
-
-        if (isObject) {
-            char *archiveMemberName;
-
-            IF_DEBUG(linker, debugBelch("loadArchive: Member is an object file...loading...\n"));
-
-#if defined(mingw32_HOST_OS)
-            // TODO: We would like to use allocateExec here, but allocateExec
-            //       cannot currently allocate blocks large enough.
-            image = allocateImageAndTrampolines(path, fileName, f, memberSize,
-                                                isThin);
-#elif defined(darwin_HOST_OS)
-            if (RTS_LINKER_USE_MMAP)
-                image = mmapForLinker(memberSize, MAP_ANONYMOUS, -1, 0);
-            else {
-                /* See loadObj() */
-                misalignment = machoGetMisalignment(f);
-                image = stgMallocBytes(memberSize + misalignment,
-                                        "loadArchive(image)");
-                image += misalignment;
-            }
-
-#else // not windows or darwin
-            image = stgMallocBytes(memberSize, "loadArchive(image)");
-#endif
-            if (isThin) {
-                FILE *member;
-                pathchar *pathCopy, *dirName, *memberPath, *objFileName;
-
-                /* Allocate and setup the dirname of the archive.  We'll need
-                    this to locate the thin member */
-                pathCopy = pathdup(path); // Convert the char* to a pathchar*
-                dirName  = pathdir(pathCopy);
-
-                /* Append the relative member name to the dirname.  This should be
-                   be the full path to the actual thin member. */
-                int memberLen = pathlen(dirName) + 1 + strlen(fileName) + 1;
-                memberPath    = stgMallocBytes(pathsize * memberLen, "loadArchive(file)");
-                objFileName   = mkPath(fileName);
-                pathprintf(memberPath, memberLen, WSTR("%" PATH_FMT "%" PATH_FMT), dirName, objFileName);
-                stgFree(objFileName);
-                stgFree(dirName);
-
-                member = pathopen(memberPath, WSTR("rb"));
-                if (!member)
-                    barf("loadObj: can't read thin archive `%" PATH_FMT "'", memberPath);
-
-                n = fread ( image, 1, memberSize, member );
-                if (n != memberSize) {
-                    barf("loadArchive: error whilst reading `%s'", fileName);
-                }
-
-                fclose(member);
-                stgFree(memberPath);
-                stgFree(pathCopy);
-            }
-            else
-            {
-                n = fread ( image, 1, memberSize, f );
-                if (n != memberSize) {
-                    barf("loadArchive: error whilst reading `%" PATH_FMT "'", path);
-                }
-            }
-
-            archiveMemberName = stgMallocBytes(pathlen(path) + thisFileNameSize + 3,
-                                               "loadArchive(file)");
-            sprintf(archiveMemberName, "%" PATH_FMT "(%.*s)",
-                    path, (int)thisFileNameSize, fileName);
-
-            oc = mkOc(path, image, memberSize, rtsFalse, archiveMemberName
-                     , misalignment);
-
-            stgFree(archiveMemberName);
-
-            if (0 == loadOc(oc)) {
-                stgFree(fileName);
-                fclose(f);
-                return 0;
-            } else {
-#if defined(OBJFORMAT_PEi386)
-                if (isImportLib)
-                {
-                    findAndLoadImportLibrary(oc);
-                    stgFree(oc);
-                    oc = NULL;
-                    break;
-                } else {
-#endif
-                    oc->next = objects;
-                    objects = oc;
-#if defined(OBJFORMAT_PEi386)
-                }
-#endif
-            }
-        }
-        else if (isGnuIndex) {
-            if (gnuFileIndex != NULL) {
-                barf("loadArchive: GNU-variant index found, but already have an index, while reading filename from `%s'", path);
-            }
-            IF_DEBUG(linker, debugBelch("loadArchive: Found GNU-variant file index\n"));
-#if RTS_LINKER_USE_MMAP
-            gnuFileIndex = mmapForLinker(memberSize + 1, MAP_ANONYMOUS, -1, 0);
-#else
-            gnuFileIndex = stgMallocBytes(memberSize + 1, "loadArchive(image)");
-#endif
-            n = fread ( gnuFileIndex, 1, memberSize, f );
-            if (n != memberSize) {
-                barf("loadArchive: error whilst reading `%" PATH_FMT "'", path);
-            }
-            gnuFileIndex[memberSize] = '/';
-            gnuFileIndexSize = memberSize;
-        }
-        else if (isImportLib) {
-#if defined(OBJFORMAT_PEi386)
-            if (checkAndLoadImportLibrary(path, fileName, f)) {
-                IF_DEBUG(linker, debugBelch("loadArchive: Member is an import file section... Corresponding DLL has been loaded...\n"));
-            }
-            else {
-                IF_DEBUG(linker, debugBelch("loadArchive: Member is not a valid import file section... Skipping...\n"));
-                n = fseek(f, memberSize, SEEK_CUR);
-                if (n != 0)
-                    barf("loadArchive: error whilst seeking by %d in `%" PATH_FMT "'",
-                    memberSize, path);
-            }
-#endif
-        }
-        else {
-            IF_DEBUG(linker, debugBelch("loadArchive: '%s' does not appear to be an object file\n", fileName));
-            if (!isThin || thisFileNameSize == 0) {
-                n = fseek(f, memberSize, SEEK_CUR);
-                if (n != 0)
-                    barf("loadArchive: error whilst seeking by %d in `%" PATH_FMT "'",
-                         memberSize, path);
-            }
-        }
-
-        /* .ar files are 2-byte aligned */
-        if (!(isThin && thisFileNameSize > 0) && memberSize % 2) {
-            IF_DEBUG(linker, debugBelch("loadArchive: trying to read one pad byte\n"));
-            n = fread ( tmp, 1, 1, f );
-            if (n != 1) {
-                if (feof(f)) {
-                    IF_DEBUG(linker, debugBelch("loadArchive: found EOF while reading one pad byte\n"));
-                    break;
-                }
-                else {
-                    barf("loadArchive: Failed reading padding from `%" PATH_FMT "'", path);
-                }
-            }
-            IF_DEBUG(linker, debugBelch("loadArchive: successfully read one pad byte\n"));
-        }
-        IF_DEBUG(linker, debugBelch("loadArchive: reached end of archive loading while loop\n"));
-    }
-
-    fclose(f);
-
-    stgFree(fileName);
-    if (gnuFileIndex != NULL) {
-#if RTS_LINKER_USE_MMAP
-        munmap(gnuFileIndex, gnuFileIndexSize + 1);
-#else
-        stgFree(gnuFileIndex);
-#endif
-    }
-
-    if (RTS_LINKER_USE_MMAP)
-        m32_allocator_flush();
-
-    IF_DEBUG(linker, debugBelch("loadArchive: done\n"));
-    return 1;
-}
-
-HsInt loadArchive (pathchar *path)
-{
-   ACQUIRE_LOCK(&linker_mutex);
-   HsInt r = loadArchive_(path);
-   RELEASE_LOCK(&linker_mutex);
-   return r;
 }
 
 //
@@ -1824,9 +1334,26 @@ preloadObjectFile (pathchar *path)
       return NULL;
    }
 
+   /* iOS does not permit to mmap with r+w+x, however while the comment for
+    * this function says this is not the final resting place, for some
+    * architectures / hosts (at least mach-o non-iOS -- see ocGetNames_MachO)
+    * the image mmaped here in fact ends up being the final resting place for
+    * the sections. And hence we need to leave r+w+x here for other hosts
+    * until all hosts have been made aware of the initial image being r+w only.
+    *
+    * See also the misalignment logic for darwin below.
+    */
+#if defined(ios_HOST_OS)
+   image = mmap(NULL, fileSize, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
+#else
    image = mmap(NULL, fileSize, PROT_READ|PROT_WRITE|PROT_EXEC,
                 MAP_PRIVATE, fd, 0);
-       // not 32-bit yet, we'll remap later
+#endif
+
+   if (image == MAP_FAILED) {
+       errorBelch("mmap: failed. errno = %d", errno);
+   }
+   // not 32-bit yet, we'll remap later
    close(fd);
 
 #else /* !RTS_LINKER_USE_MMAP */
@@ -1883,8 +1410,16 @@ preloadObjectFile (pathchar *path)
 
 #endif /* RTS_LINKER_USE_MMAP */
 
-   oc = mkOc(path, image, fileSize, rtsTrue, NULL, misalignment);
+   oc = mkOc(path, image, fileSize, true, NULL, misalignment);
 
+#if defined(OBJFORMAT_MACHO)
+   if (ocVerifyImage_MachO( oc ))
+       ocInit_MachO( oc );
+#endif
+#if defined(OBJFORMAT_ELF)
+   if(ocVerifyImage_ELF( oc ))
+       ocInit_ELF( oc );
+#endif
    return oc;
 }
 
@@ -1933,7 +1468,7 @@ HsInt loadObj (pathchar *path)
    return r;
 }
 
-static HsInt loadOc (ObjectCode* oc)
+HsInt loadOc (ObjectCode* oc)
 {
    int r;
 
@@ -1954,17 +1489,19 @@ static HsInt loadOc (ObjectCode* oc)
        return r;
    }
 
-#if NEED_SYMBOL_EXTRAS
+#if defined(NEED_SYMBOL_EXTRAS)
 #  if defined(OBJFORMAT_MACHO)
    r = ocAllocateSymbolExtras_MachO ( oc );
    if (!r) {
-       IF_DEBUG(linker, debugBelch("loadOc: ocAllocateSymbolExtras_MachO failed\n"));
+       IF_DEBUG(linker,
+                debugBelch("loadOc: ocAllocateSymbolExtras_MachO failed\n"));
        return r;
    }
 #  elif defined(OBJFORMAT_ELF)
    r = ocAllocateSymbolExtras_ELF ( oc );
    if (!r) {
-       IF_DEBUG(linker, debugBelch("loadOc: ocAllocateSymbolExtras_ELF failed\n"));
+       IF_DEBUG(linker,
+                debugBelch("loadOc: ocAllocateSymbolExtras_ELF failed\n"));
        return r;
    }
 #  elif defined(OBJFORMAT_PEi386)
@@ -2022,37 +1559,38 @@ int ocTryLoad (ObjectCode* oc) {
     for (x = 0; x < oc->n_symbols; x++) {
         symbol = oc->symbols[x];
         if (   symbol
-            && !ghciInsertSymbolTable(oc->fileName, symhash, symbol, NULL, isSymbolWeak(oc, symbol), oc)) {
+            && !ghciInsertSymbolTable(oc->fileName, symhash, symbol, NULL,
+                                      isSymbolWeak(oc, symbol), oc)) {
             return 0;
         }
     }
 
-#           if defined(OBJFORMAT_ELF)
-        r = ocResolve_ELF ( oc );
-#           elif defined(OBJFORMAT_PEi386)
-        r = ocResolve_PEi386 ( oc );
-#           elif defined(OBJFORMAT_MACHO)
-        r = ocResolve_MachO ( oc );
-#           else
+#   if defined(OBJFORMAT_ELF)
+    r = ocResolve_ELF ( oc );
+#   elif defined(OBJFORMAT_PEi386)
+    r = ocResolve_PEi386 ( oc );
+#   elif defined(OBJFORMAT_MACHO)
+    r = ocResolve_MachO ( oc );
+#   else
     barf("ocTryLoad: not implemented on this platform");
-#           endif
-        if (!r) { return r; }
+#   endif
+    if (!r) { return r; }
 
-        // run init/init_array/ctors/mod_init_func
+    // run init/init_array/ctors/mod_init_func
 
-        loading_obj = oc; // tells foreignExportStablePtr what to do
+    loading_obj = oc; // tells foreignExportStablePtr what to do
 #if defined(OBJFORMAT_ELF)
-        r = ocRunInit_ELF ( oc );
+    r = ocRunInit_ELF ( oc );
 #elif defined(OBJFORMAT_PEi386)
-        r = ocRunInit_PEi386 ( oc );
+    r = ocRunInit_PEi386 ( oc );
 #elif defined(OBJFORMAT_MACHO)
-        r = ocRunInit_MachO ( oc );
+    r = ocRunInit_MachO ( oc );
 #else
     barf("ocTryLoad: initializers not implemented on this platform");
 #endif
-        loading_obj = NULL;
+    loading_obj = NULL;
 
-        if (!r) { return r; }
+    if (!r) { return r; }
 
     oc->status = OBJECT_RESOLVED;
 
@@ -2079,7 +1617,7 @@ static HsInt resolveObjs_ (void)
         }
     }
 
-#ifdef PROFILING
+#if defined(PROFILING)
     // collect any new cost centres & CCSs that were defined during runInit
     initProfiling2();
 #endif
@@ -2099,7 +1637,7 @@ HsInt resolveObjs (void)
 /* -----------------------------------------------------------------------------
  * delete an object from the pool
  */
-static HsInt unloadObj_ (pathchar *path, rtsBool just_purge)
+static HsInt unloadObj_ (pathchar *path, bool just_purge)
 {
     ObjectCode *oc, *prev, *next;
     HsBool unloadedAnyObj = HS_BOOL_FALSE;
@@ -2157,7 +1695,7 @@ static HsInt unloadObj_ (pathchar *path, rtsBool just_purge)
 HsInt unloadObj (pathchar *path)
 {
     ACQUIRE_LOCK(&linker_mutex);
-    HsInt r = unloadObj_(path, rtsFalse);
+    HsInt r = unloadObj_(path, false);
     RELEASE_LOCK(&linker_mutex);
     return r;
 }
@@ -2165,7 +1703,7 @@ HsInt unloadObj (pathchar *path)
 HsInt purgeObj (pathchar *path)
 {
     ACQUIRE_LOCK(&linker_mutex);
-    HsInt r = unloadObj_(path, rtsTrue);
+    HsInt r = unloadObj_(path, true);
     RELEASE_LOCK(&linker_mutex);
     return r;
 }
@@ -2230,6 +1768,9 @@ addSection (Section *s, SectionKind kind, SectionAlloc alloc,
 
    s->mapped_start = mapped_start; /* start of mmap() block */
    s->mapped_size  = mapped_size;  /* size of mmap() block */
+
+   s->info = (struct SectionFormatInfo*)stgCallocBytes(1, sizeof *s->info,
+                                            "addSection(SectionFormatInfo)");
 
    IF_DEBUG(linker,
             debugBelch("addSection: %p-%p (size %" FMT_Word "), kind %d\n",

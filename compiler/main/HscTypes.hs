@@ -5,6 +5,7 @@
 -}
 
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
+{-# LANGUAGE RecordWildCards #-}
 
 -- | Types for the per-module compiler
 module HscTypes (
@@ -12,11 +13,13 @@ module HscTypes (
         HscEnv(..), hscEPS,
         FinderCache, FindResult(..), InstalledFindResult(..),
         Target(..), TargetId(..), pprTarget, pprTargetId,
-        ModuleGraph, emptyMG,
         HscStatus(..),
-#ifdef GHCI
         IServ(..),
-#endif
+
+        -- * ModuleGraph
+        ModuleGraph, emptyMG, mkModuleGraph, extendMG, mapMG,
+        mgModSummaries, mgElemModule, mgLookupModule,
+        needsTemplateHaskellOrQQ, mgBootModules,
 
         -- * Hsc monad
         Hsc(..), runHsc, runInteractiveHsc,
@@ -24,11 +27,12 @@ module HscTypes (
         -- * Information about modules
         ModDetails(..), emptyModDetails,
         ModGuts(..), CgGuts(..), ForeignStubs(..), appendStubC,
-        ImportedMods, ImportedModsVal(..),
+        ImportedMods, ImportedBy(..), importedByUser, ImportedModsVal(..), SptEntry(..),
+        ForeignSrcLang(..),
 
         ModSummary(..), ms_imps, ms_installed_mod, ms_mod_name, showModMsg, isBootSummary,
         msHsFilePath, msHiFilePath, msObjFilePath,
-        SourceModified(..),
+        SourceModified(..), isTemplateHaskellOrQQNonBoot,
 
         -- * Information about the module being compiled
         -- (re-exported from DriverPhases)
@@ -39,8 +43,8 @@ module HscTypes (
         HomePackageTable, HomeModInfo(..), emptyHomePackageTable,
         lookupHpt, eltsHpt, filterHpt, allHpt, mapHpt, delFromHpt,
         addToHpt, addListToHpt, lookupHptDirectly, listToHpt,
+        hptCompleteSigs,
         hptInstances, hptRules, hptVectInfo, pprHPT,
-        hptObjs,
 
         -- * State relating to known packages
         ExternalPackageState(..), EpsStats(..), addEpsInStats,
@@ -48,6 +52,7 @@ module HscTypes (
         lookupIfaceByModule, emptyModIface, lookupHptByModule,
 
         PackageInstEnv, PackageFamInstEnv, PackageRuleBase,
+        PackageCompleteMatchMap,
 
         mkSOName, mkHsSOName, soExt,
 
@@ -82,7 +87,7 @@ module HscTypes (
 
         -- * TyThings and type environments
         TyThing(..),  tyThingAvailInfo,
-        tyThingTyCon, tyThingDataCon,
+        tyThingTyCon, tyThingDataCon, tyThingConLike,
         tyThingId, tyThingCoAxiom, tyThingParent_maybe, tyThingsTyCoVars,
         implicitTyThings, implicitTyConThings, implicitClassThings,
         isImplicitTyThing,
@@ -133,16 +138,19 @@ module HscTypes (
         SourceError, GhcApiError, mkSrcErr, srcErrorMessages, mkApiErr,
         throwOneError, handleSourceError,
         handleFlagWarnings, printOrThrowWarnings,
+
+        -- * COMPLETE signature
+        CompleteMatch(..), CompleteMatchMap,
+        mkCompleteMatchMap, extendCompleteMatchMap
     ) where
 
 #include "HsVersions.h"
 
-#ifdef GHCI
 import ByteCodeTypes
 import InteractiveEvalTypes ( Resume )
 import GHCi.Message         ( Pipe )
 import GHCi.RemoteTypes
-#endif
+import GHC.ForeignSrcLang
 
 import UniqFM
 import HsSyn
@@ -174,6 +182,7 @@ import PrelNames        ( gHC_PRIM, ioTyConName, printName, mkInteractiveModule
                         , eqTyConName )
 import TysWiredIn
 import Packages hiding  ( Version(..) )
+import CmdLineParser
 import DynFlags
 import DriverPhases     ( Phase, HscSource(..), isHsBootOrSig, hscSourceString )
 import BasicTypes
@@ -195,17 +204,17 @@ import Platform
 import Util
 import UniqDSet
 import GHC.Serialized   ( Serialized )
+import qualified GHC.LanguageExtensions as LangExt
 
 import Foreign
-import Control.Monad    ( guard, liftM, when, ap )
+import Control.Monad    ( guard, liftM, ap )
+import Data.Foldable    ( foldl' )
 import Data.IORef
 import Data.Time
 import Exception
 import System.FilePath
-#ifdef GHCI
 import Control.Concurrent
 import System.Process   ( ProcessHandle )
-#endif
 
 -- -----------------------------------------------------------------------------
 -- Compilation state
@@ -317,22 +326,41 @@ instance Exception GhcApiError
 -- | Given a bag of warnings, turn them into an exception if
 -- -Werror is enabled, or print them out otherwise.
 printOrThrowWarnings :: DynFlags -> Bag WarnMsg -> IO ()
-printOrThrowWarnings dflags warns
-  | gopt Opt_WarnIsError dflags
-  = when (not (isEmptyBag warns)) $ do
-      throwIO $ mkSrcErr $ warns `snocBag` warnIsErrorMsg dflags
-  | otherwise
-  = printBagOfErrors dflags warns
+printOrThrowWarnings dflags warns = do
+  let (make_error, warns') =
+        mapAccumBagL
+          (\make_err warn ->
+            case isWarnMsgFatal dflags warn of
+              Nothing ->
+                (make_err, warn)
+              Just err_reason ->
+                (True, warn{ errMsgSeverity = SevError
+                           , errMsgReason = ErrReason err_reason
+                           }))
+          False warns
+  if make_error
+    then throwIO (mkSrcErr warns')
+    else printBagOfErrors dflags warns
 
-handleFlagWarnings :: DynFlags -> [Located String] -> IO ()
-handleFlagWarnings dflags warns
- = when (wopt Opt_WarnDeprecatedFlags dflags) $ do
-        -- It would be nicer if warns :: [Located MsgDoc], but that
-        -- has circular import problems.
-      let bag = listToBag [ mkPlainWarnMsg dflags loc (text warn)
-                          | L loc warn <- warns ]
+handleFlagWarnings :: DynFlags -> [Warn] -> IO ()
+handleFlagWarnings dflags warns = do
+  let warns' = filter (shouldPrintWarning dflags . warnReason)  warns
 
-      printOrThrowWarnings dflags bag
+      -- It would be nicer if warns :: [Located MsgDoc], but that
+      -- has circular import problems.
+      bag = listToBag [ mkPlainWarnMsg dflags loc (text warn)
+                      | Warn _ (L loc warn) <- warns' ]
+
+  printOrThrowWarnings dflags bag
+
+-- Given a warn reason, check to see if it's associated -W opt is enabled
+shouldPrintWarning :: DynFlags -> CmdLineParser.WarnReason -> Bool
+shouldPrintWarning dflags ReasonDeprecatedFlag
+  = wopt Opt_WarnDeprecatedFlags dflags
+shouldPrintWarning dflags ReasonUnrecognisedFlag
+  = wopt Opt_WarnUnrecognisedWarningFlags dflags
+shouldPrintWarning _ _
+  = True
 
 {-
 ************************************************************************
@@ -404,11 +432,9 @@ data HscEnv
                 -- the 'IfGblEnv'. See 'TcRnTypes.tcg_type_env_var' for
                 -- 'TcRnTypes.TcGblEnv'.  See also Note [hsc_type_env_var hack]
 
-#ifdef GHCI
         , hsc_iserv :: MVar (Maybe IServ)
                 -- ^ interactive server process.  Created the first
                 -- time it is needed.
-#endif
  }
 
 -- Note [hsc_type_env_var hack]
@@ -454,14 +480,12 @@ data HscEnv
 -- another day.
 
 
-#ifdef GHCI
 data IServ = IServ
   { iservPipe :: Pipe
   , iservProcess :: ProcessHandle
   , iservLookupSymbolCache :: IORef (UniqFM (Ptr ()))
   , iservPendingFrees :: [HValueRef]
   }
-#endif
 
 -- | Retrieve the ExternalPackageState cache.
 hscEPS :: HscEnv -> IO ExternalPackageState
@@ -531,7 +555,7 @@ emptyPackageIfaceTable :: PackageIfaceTable
 emptyPackageIfaceTable = emptyModuleEnv
 
 pprHPT :: HomePackageTable -> SDoc
--- A bit aribitrary for now
+-- A bit arbitrary for now
 pprHPT hpt = pprUDFM hpt $ \hms ->
     vcat [ hang (ppr (mi_module (hm_iface hm)))
               2 (ppr (md_types (hm_details hm)))
@@ -624,6 +648,8 @@ lookupIfaceByModule _dflags hpt pit mod
 -- We could eliminate (b) if we wanted, by making GHC.Prim belong to a package
 -- of its own, but it doesn't seem worth the bother.
 
+hptCompleteSigs :: HscEnv -> [CompleteMatch]
+hptCompleteSigs = hptAllThings  (md_complete_sigs . hm_details)
 
 -- | Find all the instance declarations (of classes and families) from
 -- the Home Package Table filtered by the provided predicate function.
@@ -688,8 +714,6 @@ hptSomeThingsBelowUs extract include_hi_boot hsc_env deps
         -- And get its dfuns
     , thing <- things ]
 
-hptObjs :: HomePackageTable -> [FilePath]
-hptObjs hpt = concat (map (maybe [] linkableObjs . hm_linkable) (eltsHpt hpt))
 
 {-
 ************************************************************************
@@ -701,35 +725,35 @@ hptObjs hpt = concat (map (maybe [] linkableObjs . hm_linkable) (eltsHpt hpt))
 
 -- | The supported metaprogramming result types
 data MetaRequest
-  = MetaE  (LHsExpr RdrName   -> MetaResult)
-  | MetaP  (LPat RdrName      -> MetaResult)
-  | MetaT  (LHsType RdrName   -> MetaResult)
-  | MetaD  ([LHsDecl RdrName] -> MetaResult)
-  | MetaAW (Serialized        -> MetaResult)
+  = MetaE  (LHsExpr GhcPs   -> MetaResult)
+  | MetaP  (LPat GhcPs      -> MetaResult)
+  | MetaT  (LHsType GhcPs   -> MetaResult)
+  | MetaD  ([LHsDecl GhcPs] -> MetaResult)
+  | MetaAW (Serialized     -> MetaResult)
 
 -- | data constructors not exported to ensure correct result type
 data MetaResult
-  = MetaResE  { unMetaResE  :: LHsExpr RdrName   }
-  | MetaResP  { unMetaResP  :: LPat RdrName      }
-  | MetaResT  { unMetaResT  :: LHsType RdrName   }
-  | MetaResD  { unMetaResD  :: [LHsDecl RdrName] }
+  = MetaResE  { unMetaResE  :: LHsExpr GhcPs   }
+  | MetaResP  { unMetaResP  :: LPat GhcPs      }
+  | MetaResT  { unMetaResT  :: LHsType GhcPs   }
+  | MetaResD  { unMetaResD  :: [LHsDecl GhcPs] }
   | MetaResAW { unMetaResAW :: Serialized        }
 
-type MetaHook f = MetaRequest -> LHsExpr Id -> f MetaResult
+type MetaHook f = MetaRequest -> LHsExpr GhcTc -> f MetaResult
 
-metaRequestE :: Functor f => MetaHook f -> LHsExpr Id -> f (LHsExpr RdrName)
+metaRequestE :: Functor f => MetaHook f -> LHsExpr GhcTc -> f (LHsExpr GhcPs)
 metaRequestE h = fmap unMetaResE . h (MetaE MetaResE)
 
-metaRequestP :: Functor f => MetaHook f -> LHsExpr Id -> f (LPat RdrName)
+metaRequestP :: Functor f => MetaHook f -> LHsExpr GhcTc -> f (LPat GhcPs)
 metaRequestP h = fmap unMetaResP . h (MetaP MetaResP)
 
-metaRequestT :: Functor f => MetaHook f -> LHsExpr Id -> f (LHsType RdrName)
+metaRequestT :: Functor f => MetaHook f -> LHsExpr GhcTc -> f (LHsType GhcPs)
 metaRequestT h = fmap unMetaResT . h (MetaT MetaResT)
 
-metaRequestD :: Functor f => MetaHook f -> LHsExpr Id -> f [LHsDecl RdrName]
+metaRequestD :: Functor f => MetaHook f -> LHsExpr GhcTc -> f [LHsDecl GhcPs]
 metaRequestD h = fmap unMetaResD . h (MetaD MetaResD)
 
-metaRequestAW :: Functor f => MetaHook f -> LHsExpr Id -> f Serialized
+metaRequestAW :: Functor f => MetaHook f -> LHsExpr GhcTc -> f Serialized
 metaRequestAW h = fmap unMetaResAW . h (MetaAW MetaResAW)
 
 {-
@@ -834,7 +858,9 @@ data ModIface
                                               -- used when compiling this module
 
         mi_orphan     :: !WhetherHasOrphans,  -- ^ Whether this module has orphans
-        mi_finsts     :: !WhetherHasFamInst,  -- ^ Whether this module has family instances
+        mi_finsts     :: !WhetherHasFamInst,
+                -- ^ Whether this module has family instances.
+                -- See Note [The type family instance consistency story].
         mi_hsc_src    :: !HscSource,          -- ^ Boot? Signature?
 
         mi_deps     :: Dependencies,
@@ -926,13 +952,14 @@ data ModIface
         mi_trust     :: !IfaceTrustInfo,
                 -- ^ Safe Haskell Trust information for this module.
 
-        mi_trust_pkg :: !Bool
+        mi_trust_pkg :: !Bool,
                 -- ^ Do we require the package this module resides in be trusted
                 -- to trust this module? This is used for the situation where a
                 -- module is Safe (so doesn't require the package be trusted
                 -- itself) but imports some trustworthy modules from its own
                 -- package (which does require its own package be trusted).
                 -- See Note [RnNames . Trust Own Package]
+        mi_complete_sigs :: [IfaceCompleteMatch]
      }
 
 -- | Old-style accessor for whether or not the ModIface came from an hs-boot
@@ -1007,7 +1034,8 @@ instance Binary ModIface where
                  mi_vect_info = vect_info,
                  mi_hpc       = hpc_info,
                  mi_trust     = trust,
-                 mi_trust_pkg = trust_pkg }) = do
+                 mi_trust_pkg = trust_pkg,
+                 mi_complete_sigs = complete_sigs }) = do
         put_ bh mod
         put_ bh sig_of
         put_ bh hsc_src
@@ -1033,6 +1061,7 @@ instance Binary ModIface where
         put_ bh hpc_info
         put_ bh trust
         put_ bh trust_pkg
+        put_ bh complete_sigs
 
    get bh = do
         mod         <- get bh
@@ -1060,6 +1089,7 @@ instance Binary ModIface where
         hpc_info    <- get bh
         trust       <- get bh
         trust_pkg   <- get bh
+        complete_sigs <- get bh
         return (ModIface {
                  mi_module      = mod,
                  mi_sig_of      = sig_of,
@@ -1090,7 +1120,8 @@ instance Binary ModIface where
                         -- And build the cached values
                  mi_warn_fn     = mkIfaceWarnCache warns,
                  mi_fix_fn      = mkIfaceFixCache fixities,
-                 mi_hash_fn     = mkIfaceHashCache decls })
+                 mi_hash_fn     = mkIfaceHashCache decls,
+                 mi_complete_sigs = complete_sigs })
 
 -- | The original names declared of a certain module that are exported
 type IfaceExport = AvailInfo
@@ -1126,7 +1157,8 @@ emptyModIface mod
                mi_hash_fn     = emptyIfaceHashCache,
                mi_hpc         = False,
                mi_trust       = noIfaceTrustInfo,
-               mi_trust_pkg   = False }
+               mi_trust_pkg   = False,
+               mi_complete_sigs = [] }
 
 
 -- | Constructs cache for the 'mi_hash_fn' field of a 'ModIface'
@@ -1135,10 +1167,10 @@ mkIfaceHashCache :: [(Fingerprint,IfaceDecl)]
 mkIfaceHashCache pairs
   = \occ -> lookupOccEnv env occ
   where
-    env = foldr add_decl emptyOccEnv pairs
-    add_decl (v,d) env0 = foldr add env0 (ifaceDeclFingerprints v d)
+    env = foldl' add_decl emptyOccEnv pairs
+    add_decl env0 (v,d) = foldl' add env0 (ifaceDeclFingerprints v d)
       where
-        add (occ,hash) env0 = extendOccEnv env0 occ (occ,hash)
+        add env0 (occ,hash) = extendOccEnv env0 occ (occ,hash)
 
 emptyIfaceHashCache :: OccName -> Maybe (OccName, Fingerprint)
 emptyIfaceHashCache _occ = Nothing
@@ -1158,7 +1190,9 @@ data ModDetails
         md_rules     :: ![CoreRule],    -- ^ Domain may include 'Id's from other modules
         md_anns      :: ![Annotation],  -- ^ Annotations present in this module: currently
                                         -- they only annotate things also declared in this module
-        md_vect_info :: !VectInfo       -- ^ Module vectorisation information
+        md_vect_info :: !VectInfo,       -- ^ Module vectorisation information
+        md_complete_sigs :: [CompleteMatch]
+          -- ^ Complete match pragmas for this module
      }
 
 -- | Constructs an empty ModDetails
@@ -1170,11 +1204,25 @@ emptyModDetails
                  md_rules     = [],
                  md_fam_insts = [],
                  md_anns      = [],
-                 md_vect_info = noVectInfo }
+                 md_vect_info = noVectInfo,
+                 md_complete_sigs = [] }
 
 -- | Records the modules directly imported by a module for extracting e.g.
 -- usage information, and also to give better error message
-type ImportedMods = ModuleEnv [ImportedModsVal]
+type ImportedMods = ModuleEnv [ImportedBy]
+
+-- | If a module was "imported" by the user, we associate it with
+-- more detailed usage information 'ImportedModsVal'; a module
+-- imported by the system only gets used for usage information.
+data ImportedBy
+    = ImportedByUser ImportedModsVal
+    | ImportedBySystem
+
+importedByUser :: [ImportedBy] -> [ImportedModsVal]
+importedByUser (ImportedByUser imv : bys) = imv : importedByUser bys
+importedByUser (ImportedBySystem   : bys) =       importedByUser bys
+importedByUser [] = []
+
 data ImportedModsVal
  = ImportedModsVal {
         imv_name :: ModuleName,          -- ^ The name the module is imported with
@@ -1215,8 +1263,11 @@ data ModGuts
                                          -- See Note [Overall plumbing for rules] in Rules.hs
         mg_binds     :: !CoreProgram,    -- ^ Bindings for this module
         mg_foreign   :: !ForeignStubs,   -- ^ Foreign exports declared in this module
+        mg_foreign_files :: ![(ForeignSrcLang, String)],
+        -- ^ Files to be compiled with the C compiler
         mg_warns     :: !Warnings,       -- ^ Warnings declared in the module
         mg_anns      :: [Annotation],    -- ^ Annotations declared in this module
+        mg_complete_sigs :: [CompleteMatch], -- ^ Complete Matches
         mg_hpc_info  :: !HpcInfo,        -- ^ Coverage tick boxes in the module
         mg_modBreaks :: !(Maybe ModBreaks), -- ^ Breakpoints for the module
         mg_vect_decls:: ![CoreVect],     -- ^ Vectorisation declarations in this module
@@ -1273,10 +1324,15 @@ data CgGuts
                 -- as part of the code-gen of tycons
 
         cg_foreign   :: !ForeignStubs,   -- ^ Foreign export stubs
+        cg_foreign_files :: ![(ForeignSrcLang, String)],
         cg_dep_pkgs  :: ![InstalledUnitId], -- ^ Dependent packages, used to
                                             -- generate #includes for C code gen
-        cg_hpc_info  :: !HpcInfo,        -- ^ Program coverage tick box information
-        cg_modBreaks :: !(Maybe ModBreaks) -- ^ Module breakpoints
+        cg_hpc_info  :: !HpcInfo,           -- ^ Program coverage tick box information
+        cg_modBreaks :: !(Maybe ModBreaks), -- ^ Module breakpoints
+        cg_spt_entries :: [SptEntry]
+                -- ^ Static pointer table entries for static forms defined in
+                -- the module.
+                -- See Note [Grand plan for static forms] in StaticPtrTable
     }
 
 -----------------------------------
@@ -1296,6 +1352,13 @@ data ForeignStubs
 appendStubC :: ForeignStubs -> SDoc -> ForeignStubs
 appendStubC NoStubs            c_code = ForeignStubs empty c_code
 appendStubC (ForeignStubs h c) c_code = ForeignStubs h (c $$ c_code)
+
+-- | An entry to be inserted into a module's static pointer table.
+-- See Note [Grand plan for static forms] in StaticPtrTable.
+data SptEntry = SptEntry Id Fingerprint
+
+instance Outputable SptEntry where
+  ppr (SptEntry id fpr) = ppr id <> colon <+> ppr fpr
 
 {-
 ************************************************************************
@@ -1491,10 +1554,8 @@ data InteractiveContext
          ic_default :: Maybe [Type],
              -- ^ The current default types, set by a 'default' declaration
 
-#ifdef GHCI
           ic_resume :: [Resume],
              -- ^ The stack of breakpoint contexts
-#endif
 
          ic_monad      :: Name,
              -- ^ The monad that GHCi is executing in
@@ -1508,7 +1569,7 @@ data InteractiveContext
     }
 
 data InteractiveImport
-  = IIDecl (ImportDecl RdrName)
+  = IIDecl (ImportDecl GhcPs)
       -- ^ Bring the exports of a particular module
       -- (filtered by an import decl) into scope
 
@@ -1532,9 +1593,7 @@ emptyInteractiveContext dflags
        ic_monad      = ioTyConName,  -- IO monad by default
        ic_int_print  = printName,    -- System.IO.print by default
        ic_default    = Nothing,
-#ifdef GHCI
        ic_resume     = [],
-#endif
        ic_cwd        = Nothing }
 
 icInteractiveModule :: InteractiveContext -> Module
@@ -1570,17 +1629,18 @@ extendInteractiveContext ictxt new_tythings new_cls_insts new_fam_insts defaults
           , ic_tythings   = new_tythings ++ ic_tythings ictxt
           , ic_rn_gbl_env = ic_rn_gbl_env ictxt `icExtendGblRdrEnv` new_tythings
           , ic_instances  = ( new_cls_insts ++ old_cls_insts
-                            , new_fam_insts ++ old_fam_insts )
+                            , new_fam_insts ++ fam_insts )
+                            -- we don't shadow old family instances (#7102),
+                            -- so don't need to remove them here
           , ic_default    = defaults
           , ic_fix_env    = fix_env  -- See Note [Fixity declarations in GHCi]
           }
   where
 
-    -- Discard old instances that have been fully overrridden
+    -- Discard old instances that have been fully overridden
     -- See Note [Override identical instances in GHCi]
     (cls_insts, fam_insts) = ic_instances ictxt
     old_cls_insts = filterOut (\i -> any (identicalClsInstHead i) new_cls_insts) cls_insts
-    old_fam_insts = filterOut (\i -> any (identicalFamInstHead i) new_fam_insts) fam_insts
 
 extendInteractiveContextWithIds :: InteractiveContext -> [Id] -> InteractiveContext
 -- Just a specialised version
@@ -1905,7 +1965,7 @@ isImplicitTyThing (ATyCon tc)   = isImplicitTyCon tc
 isImplicitTyThing (ACoAxiom ax) = isImplicitCoAxiom ax
 
 -- | tyThingParent_maybe x returns (Just p)
--- when pprTyThingInContext sould print a declaration for p
+-- when pprTyThingInContext should print a declaration for p
 -- (albeit with some "..." in it) when asked to show x
 -- It returns the *immediate* parent.  So a datacon returns its tycon
 -- but the tycon could be the associated type of a class, so it in turn
@@ -2072,6 +2132,12 @@ tyThingCoAxiom other         = pprPanic "tyThingCoAxiom" (ppr other)
 tyThingDataCon :: TyThing -> DataCon
 tyThingDataCon (AConLike (RealDataCon dc)) = dc
 tyThingDataCon other                       = pprPanic "tyThingDataCon" (ppr other)
+
+-- | Get the 'ConLike' from a 'TyThing' if it is a data constructor thing.
+-- Panics otherwise
+tyThingConLike :: TyThing -> ConLike
+tyThingConLike (AConLike dc) = dc
+tyThingConLike other         = pprPanic "tyThingConLike" (ppr other)
 
 -- | Get the 'Id' from a 'TyThing' if it is a id *or* data constructor thing. Panics otherwise
 tyThingId :: TyThing -> Id
@@ -2264,7 +2330,8 @@ data Dependencies
                         -- ^ Transitive closure of depended upon modules which
                         -- contain family instances (whether home or external).
                         -- This is used by 'checkFamInstConsistency'.  This
-                        -- does NOT include us, unlike 'imp_finsts'.
+                        -- does NOT include us, unlike 'imp_finsts'. See Note
+                        -- [The type family instance consistency story].
          }
   deriving( Eq )
         -- Equality used only for old/new comparison in MkIface.addFingerprints
@@ -2410,12 +2477,13 @@ instance Binary Usage where
 ************************************************************************
 -}
 
-type PackageTypeEnv    = TypeEnv
-type PackageRuleBase   = RuleBase
-type PackageInstEnv    = InstEnv
-type PackageFamInstEnv = FamInstEnv
-type PackageVectInfo   = VectInfo
-type PackageAnnEnv     = AnnEnv
+type PackageTypeEnv          = TypeEnv
+type PackageRuleBase         = RuleBase
+type PackageInstEnv          = InstEnv
+type PackageFamInstEnv       = FamInstEnv
+type PackageVectInfo         = VectInfo
+type PackageAnnEnv           = AnnEnv
+type PackageCompleteMatchMap = CompleteMatchMap
 
 -- | Information about other packages that we have slurped in by reading
 -- their interface files
@@ -2479,6 +2547,9 @@ data ExternalPackageState
                                                -- from all the external-package modules
         eps_ann_env      :: !PackageAnnEnv,    -- ^ The total 'AnnEnv' accumulated
                                                -- from all the external-package modules
+        eps_complete_matches :: !PackageCompleteMatchMap,
+                                  -- ^ The total 'CompleteMatchMap' accumulated
+                                  -- from all the external-package modules
 
         eps_mod_fam_inst_env :: !(ModuleEnv FamInstEnv), -- ^ The family instances accumulated from external
                                                          -- packages, keyed off the module that declared them
@@ -2521,9 +2592,8 @@ updNameCacheIO hsc_env upd_fn
 mkSOName :: Platform -> FilePath -> FilePath
 mkSOName platform root
     = case platformOS platform of
-      OSDarwin  -> ("lib" ++ root) <.> "dylib"
-      OSMinGW32 ->           root  <.> "dll"
-      _         -> ("lib" ++ root) <.> "so"
+      OSMinGW32 ->           root  <.> soExt platform
+      _         -> ("lib" ++ root) <.> soExt platform
 
 mkHsSOName :: Platform -> FilePath -> FilePath
 mkHsSOName platform root = ("lib" ++ root) <.> soExt platform
@@ -2532,6 +2602,7 @@ soExt :: Platform -> FilePath
 soExt platform
     = case platformOS platform of
       OSDarwin  -> "dylib"
+      OSiOS     -> "dylib"
       OSMinGW32 -> "dll"
       _         -> "so"
 
@@ -2551,10 +2622,72 @@ soExt platform
 --
 -- The graph is not necessarily stored in topologically-sorted order.  Use
 -- 'GHC.topSortModuleGraph' and 'Digraph.flattenSCC' to achieve this.
-type ModuleGraph = [ModSummary]
+data ModuleGraph = ModuleGraph
+  { mg_mss :: [ModSummary]
+  , mg_non_boot :: ModuleEnv ModSummary
+    -- a map of all non-boot ModSummaries keyed by Modules
+  , mg_boot :: ModuleSet
+    -- a set of boot Modules
+  , mg_needs_th_or_qq :: !Bool
+    -- does any of the modules in mg_mss require TemplateHaskell or
+    -- QuasiQuotes?
+  }
+
+-- | Determines whether a set of modules requires Template Haskell or
+-- Quasi Quotes
+--
+-- Note that if the session's 'DynFlags' enabled Template Haskell when
+-- 'depanal' was called, then each module in the returned module graph will
+-- have Template Haskell enabled whether it is actually needed or not.
+needsTemplateHaskellOrQQ :: ModuleGraph -> Bool
+needsTemplateHaskellOrQQ mg = mg_needs_th_or_qq mg
+
+-- | Map a function 'f' over all the 'ModSummaries'.
+-- To preserve invariants 'f' can't change the isBoot status.
+mapMG :: (ModSummary -> ModSummary) -> ModuleGraph -> ModuleGraph
+mapMG f mg@ModuleGraph{..} = mg
+  { mg_mss = map f mg_mss
+  , mg_non_boot = mapModuleEnv f mg_non_boot
+  }
+
+mgBootModules :: ModuleGraph -> ModuleSet
+mgBootModules ModuleGraph{..} = mg_boot
+
+mgModSummaries :: ModuleGraph -> [ModSummary]
+mgModSummaries = mg_mss
+
+mgElemModule :: ModuleGraph -> Module -> Bool
+mgElemModule ModuleGraph{..} m = elemModuleEnv m mg_non_boot
+
+-- | Look up a ModSummary in the ModuleGraph
+mgLookupModule :: ModuleGraph -> Module -> Maybe ModSummary
+mgLookupModule ModuleGraph{..} m = lookupModuleEnv mg_non_boot m
 
 emptyMG :: ModuleGraph
-emptyMG = []
+emptyMG = ModuleGraph [] emptyModuleEnv emptyModuleSet False
+
+isTemplateHaskellOrQQNonBoot :: ModSummary -> Bool
+isTemplateHaskellOrQQNonBoot ms =
+  (xopt LangExt.TemplateHaskell (ms_hspp_opts ms)
+    || xopt LangExt.QuasiQuotes (ms_hspp_opts ms)) &&
+  not (isBootSummary ms)
+
+-- | Add a ModSummary to ModuleGraph. Assumes that the new ModSummary is
+-- not an element of the ModuleGraph.
+extendMG :: ModuleGraph -> ModSummary -> ModuleGraph
+extendMG ModuleGraph{..} ms = ModuleGraph
+  { mg_mss = ms:mg_mss
+  , mg_non_boot = if isBootSummary ms
+      then mg_non_boot
+      else extendModuleEnv mg_non_boot (ms_mod ms) ms
+  , mg_boot = if isBootSummary ms
+      then extendModuleSet mg_boot (ms_mod ms)
+      else mg_boot
+  , mg_needs_th_or_qq = mg_needs_th_or_qq || isTemplateHaskellOrQQNonBoot ms
+  }
+
+mkModuleGraph :: [ModSummary] -> ModuleGraph
+mkModuleGraph = foldr (flip extendMG) emptyMG
 
 -- | A single node in a 'ModuleGraph'. The nodes of the module graph
 -- are one of:
@@ -2577,7 +2710,7 @@ data ModSummary
         ms_iface_date   :: Maybe UTCTime,
           -- ^ Timestamp of hi file, if we *only* are typechecking (it is
           -- 'Nothing' otherwise.
-          -- See Note [Recompilation checking when typechecking only] and #9243
+          -- See Note [Recompilation checking in -fno-code mode] and #9243
         ms_srcimps      :: [(Maybe FastString, Located ModuleName)],
           -- ^ Source imports of the module
         ms_textual_imps :: [(Maybe FastString, Located ModuleName)],
@@ -2638,20 +2771,23 @@ instance Outputable ModSummary where
             ]
 
 showModMsg :: DynFlags -> HscTarget -> Bool -> ModSummary -> String
-showModMsg dflags target recomp mod_summary
-  = showSDoc dflags $
-        hsep [text (mod_str ++ replicate (max 0 (16 - length mod_str)) ' '),
-              char '(', text (normalise $ msHsFilePath mod_summary) <> comma,
-              case target of
-                  HscInterpreted | recomp
-                             -> text "interpreted"
-                  HscNothing -> text "nothing"
-                  _ -> text (normalise $ msObjFilePath mod_summary),
-              char ')']
- where
+showModMsg dflags target recomp mod_summary = showSDoc dflags $
+   if gopt Opt_HideSourcePaths dflags
+      then text mod_str
+      else hsep
+         [ text (mod_str ++ replicate (max 0 (16 - length mod_str)) ' ')
+         , char '('
+         , text (op $ msHsFilePath mod_summary) <> char ','
+         , case target of
+              HscInterpreted | recomp -> text "interpreted"
+              HscNothing              -> text "nothing"
+              _                       -> text (op $ msObjFilePath mod_summary)
+         , char ')'
+         ]
+  where
+    op      = normalise
     mod     = moduleName (ms_mod mod_summary)
-    mod_str = showPpr dflags mod
-                ++ hscSourceString (ms_hsc_src mod_summary)
+    mod_str = showPpr dflags mod ++ hscSourceString (ms_hsc_src mod_summary)
 
 {-
 ************************************************************************
@@ -2886,7 +3022,7 @@ instance Binary IfaceTrustInfo where
 -}
 
 data HsParsedModule = HsParsedModule {
-    hpm_module    :: Located (HsModule RdrName),
+    hpm_module    :: Located (HsModule GhcPs),
     hpm_src_files :: [FilePath],
        -- ^ extra source files (e.g. from #includes).  The lexer collects
        -- these from '# <file> <line>' pragmas, which the C preprocessor
@@ -2947,27 +3083,18 @@ data Unlinked
    = DotO FilePath      -- ^ An object file (.o)
    | DotA FilePath      -- ^ Static archive file (.a)
    | DotDLL FilePath    -- ^ Dynamically linked library file (.so, .dll, .dylib)
-   | BCOs CompiledByteCode    -- ^ A byte-code object, lives only in memory
-
-#ifndef GHCI
-data CompiledByteCode = CompiledByteCodeUndefined
-_unusedCompiledByteCode :: CompiledByteCode
-_unusedCompiledByteCode = CompiledByteCodeUndefined
-
-data ModBreaks = ModBreaksUndefined
-emptyModBreaks :: ModBreaks
-emptyModBreaks = ModBreaksUndefined
-#endif
+   | BCOs CompiledByteCode
+          [SptEntry]    -- ^ A byte-code object, lives only in memory. Also
+                        -- carries some static pointer table entries which
+                        -- should be loaded along with the BCOs.
+                        -- See Note [Grant plan for static forms] in
+                        -- StaticPtrTable.
 
 instance Outputable Unlinked where
    ppr (DotO path)   = text "DotO" <+> text path
    ppr (DotA path)   = text "DotA" <+> text path
    ppr (DotDLL path) = text "DotDLL" <+> text path
-#ifdef GHCI
-   ppr (BCOs bcos) = text "BCOs" <+> ppr bcos
-#else
-   ppr (BCOs _)    = text "No byte code"
-#endif
+   ppr (BCOs bcos spt) = text "BCOs" <+> ppr bcos <+> ppr spt
 
 -- | Is this an actual file on disk we can link in somehow?
 isObject :: Unlinked -> Bool
@@ -2989,6 +3116,86 @@ nameOfObject other       = pprPanic "nameOfObject" (ppr other)
 
 -- | Retrieve the compiled byte-code if possible. Panic if it is a file-based linkable
 byteCodeOfObject :: Unlinked -> CompiledByteCode
-byteCodeOfObject (BCOs bc) = bc
-byteCodeOfObject other     = pprPanic "byteCodeOfObject" (ppr other)
+byteCodeOfObject (BCOs bc _) = bc
+byteCodeOfObject other       = pprPanic "byteCodeOfObject" (ppr other)
 
+
+-------------------------------------------
+
+-- | A list of conlikes which represents a complete pattern match.
+-- These arise from @COMPLETE@ signatures.
+
+-- See Note [Implementation of COMPLETE signatures]
+data CompleteMatch = CompleteMatch {
+                            completeMatchConLikes :: [Name]
+                            -- ^ The ConLikes that form a covering family
+                            -- (e.g. Nothing, Just)
+                          , completeMatchTyCon :: Name
+                            -- ^ The TyCon that they cover (e.g. Maybe)
+                          }
+
+instance Outputable CompleteMatch where
+  ppr (CompleteMatch cl ty) = text "CompleteMatch:" <+> ppr cl
+                                                    <+> dcolon <+> ppr ty
+
+-- | A map keyed by the 'completeMatchTyCon'.
+
+-- See Note [Implementation of COMPLETE signatures]
+type CompleteMatchMap = UniqFM [CompleteMatch]
+
+mkCompleteMatchMap :: [CompleteMatch] -> CompleteMatchMap
+mkCompleteMatchMap = extendCompleteMatchMap emptyUFM
+
+extendCompleteMatchMap :: CompleteMatchMap -> [CompleteMatch]
+                       -> CompleteMatchMap
+extendCompleteMatchMap = foldl' insertMatch
+  where
+    insertMatch :: CompleteMatchMap -> CompleteMatch -> CompleteMatchMap
+    insertMatch ufm c@(CompleteMatch _ t) = addToUFM_C (++) ufm t [c]
+
+{-
+Note [Implementation of COMPLETE signatures]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A COMPLETE signature represents a set of conlikes (i.e., constructors or
+pattern synonyms) such that if they are all pattern-matched against in a
+function, it gives rise to a total function. An example is:
+
+  newtype Boolean = Boolean Int
+  pattern F, T :: Boolean
+  pattern F = Boolean 0
+  pattern T = Boolean 1
+  {-# COMPLETE F, T #-}
+
+  -- This is a total function
+  booleanToInt :: Boolean -> Int
+  booleanToInt F = 0
+  booleanToInt T = 1
+
+COMPLETE sets are represented internally in GHC with the CompleteMatch data
+type. For example, {-# COMPLETE F, T #-} would be represented as:
+
+  CompleteMatch { complateMatchConLikes = [F, T]
+                , completeMatchTyCon    = Boolean }
+
+Note that GHC was able to infer the completeMatchTyCon (Boolean), but for the
+cases in which it's ambiguous, you can also explicitly specify it in the source
+language by writing this:
+
+  {-# COMPLETE F, T :: Boolean #-}
+
+For efficiency purposes, GHC collects all of the CompleteMatches that it knows
+about into a CompleteMatchMap, which is a map that is keyed by the
+completeMatchTyCon. In other words, you could have a multiple COMPLETE sets
+for the same TyCon:
+
+  {-# COMPLETE F, T1 :: Boolean #-}
+  {-# COMPLETE F, T2 :: Boolean #-}
+
+And looking up the values in the CompleteMatchMap associated with Boolean
+would give you [CompleteMatch [F, T1] Boolean, CompleteMatch [F, T2] Boolean].
+dsGetCompleteMatches in DsMeta accomplishes this lookup.
+
+Also see Note [Typechecking Complete Matches] in TcBinds for a more detailed
+explanation for how GHC ensures that all the conlikes in a COMPLETE set are
+consistent.
+-}

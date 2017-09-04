@@ -14,7 +14,8 @@ module CgUtils ( fixStgRegisters ) where
 
 import CodeGen.Platform
 import Cmm
-import Hoopl
+import Hoopl.Block
+import Hoopl.Graph
 import CmmUtils
 import CLabel
 import DynFlags
@@ -84,10 +85,10 @@ baseRegOffset dflags HpAlloc             = oFFSET_StgRegTable_rHpAlloc dflags
 baseRegOffset dflags EagerBlackholeInfo  = oFFSET_stgEagerBlackholeInfo dflags
 baseRegOffset dflags GCEnter1            = oFFSET_stgGCEnter1 dflags
 baseRegOffset dflags GCFun               = oFFSET_stgGCFun dflags
-baseRegOffset _      BaseReg             = panic "baseRegOffset:BaseReg"
-baseRegOffset _      PicBaseReg          = panic "baseRegOffset:PicBaseReg"
-baseRegOffset _      MachSp              = panic "baseRegOffset:MachSp"
-baseRegOffset _      UnwindReturnReg     = panic "baseRegOffset:UnwindReturnReg"
+baseRegOffset _      BaseReg             = panic "CgUtils.baseRegOffset:BaseReg"
+baseRegOffset _      PicBaseReg          = panic "CgUtils.baseRegOffset:PicBaseReg"
+baseRegOffset _      MachSp              = panic "CgUtils.baseRegOffset:MachSp"
+baseRegOffset _      UnwindReturnReg     = panic "CgUtils.baseRegOffset:UnwindReturnReg"
 
 
 -- -----------------------------------------------------------------------------
@@ -137,7 +138,11 @@ fixStgRegStmt dflags stmt = fixAssign $ mapExpDeep fixExpr stmt
 
     fixAssign stmt =
       case stmt of
-        CmmAssign (CmmGlobal reg) src ->
+        CmmAssign (CmmGlobal reg) src
+          -- MachSp isn't an STG register; it's merely here for tracking unwind
+          -- information
+          | reg == MachSp -> stmt
+          | otherwise ->
             let baseAddr = get_GlobalReg_addr dflags reg
             in case reg `elem` activeStgRegs (targetPlatform dflags) of
                 True  -> CmmAssign (CmmGlobal reg) src
@@ -145,6 +150,8 @@ fixStgRegStmt dflags stmt = fixAssign $ mapExpDeep fixExpr stmt
         other_stmt -> other_stmt
 
     fixExpr expr = case expr of
+        -- MachSp isn't an STG; it's merely here for tracking unwind information
+        CmmReg (CmmGlobal MachSp) -> expr
         CmmReg (CmmGlobal reg) ->
             -- Replace register leaves with appropriate StixTrees for
             -- the given target.  MagicIds which map to a reg on this

@@ -239,7 +239,6 @@ import Unique
 import UniqFM
 import SrcLoc
 import DynFlags
-import StaticFlags
 import ErrUtils
 import StringBuffer
 import FastString
@@ -594,9 +593,9 @@ stmt    :: { CmmParse () }
 
 
         | lreg '=' expr ';'
-                { do reg <- $1; e <- $3; emitAssign reg e }
+                { do reg <- $1; e <- $3; withSourceNote $2 $4 (emitAssign reg e) }
         | type '[' expr ']' '=' expr ';'
-                { doStore $1 $3 $6 }
+                { withSourceNote $2 $7 (doStore $1 $3 $6) }
 
         -- Gah! We really want to say "foreign_results" but that causes
         -- a shift/reduce conflict with assignment.  We either
@@ -636,8 +635,23 @@ stmt    :: { CmmParse () }
                 { pushStackFrame $3 $5 }
         | 'reserve' expr '=' lreg maybe_body
                 { reserveStackFrame $2 $4 $5 }
-        | 'unwind' GLOBALREG '=' expr
-                { $4 >>= code . emitUnwind $2 }
+        | 'unwind' unwind_regs ';'
+                { $2 >>= code . emitUnwind }
+
+unwind_regs
+        :: { CmmParse [(GlobalReg, Maybe CmmExpr)] }
+        : GLOBALREG '=' expr_or_unknown ',' unwind_regs
+                { do e <- $3; rest <- $5; return (($1, e) : rest) }
+        | GLOBALREG '=' expr_or_unknown
+                { do e <- $3; return [($1, e)] }
+
+-- | Used by unwind to indicate unknown unwinding values.
+expr_or_unknown
+        :: { CmmParse (Maybe CmmExpr) }
+        : 'return'
+                { do return Nothing }
+        | expr
+                { do e <- $1; return (Just e) }
 
 foreignLabel     :: { CmmParse CmmExpr }
         : NAME                          { return (CmmLit (CmmLabel (mkForeignLabel $1 Nothing ForeignLabelInThisPackage IsFunction))) }
@@ -1389,9 +1403,11 @@ parseCmmFile dflags filename = withTiming (pure dflags) (text "ParseCmm"<+>brack
                 -- reset the lex_state: the Lexer monad leaves some stuff
                 -- in there we don't want.
   case unPD cmmParse dflags init_state of
-    PFailed span err -> do
+    PFailed warnFn span err -> do
         let msg = mkPlainErrMsg dflags span err
-        return ((emptyBag, unitBag msg), Nothing)
+            errMsgs = (emptyBag, unitBag msg)
+            warnMsgs = warnFn dflags
+        return (unionMessages warnMsgs errMsgs, Nothing)
     POk pst code -> do
         st <- initC
         let fcode = getCmm $ unEC code "global" (initEnv dflags) [] >> return ()

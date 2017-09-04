@@ -20,8 +20,9 @@ import CoreFVs
 import CoreTidy
 import CoreMonad
 import CorePrep
-import CoreUtils        (rhsIsStatic, collectStaticPtrSatArgs)
+import CoreUtils        (rhsIsStatic)
 import CoreStats        (coreBindsStats, CoreStats(..))
+import CoreSeq          (seqBinds)
 import CoreLint
 import Literal
 import Rules
@@ -163,6 +164,7 @@ mkBootModDetailsTc hsc_env
                              , md_anns      = []
                              , md_exports   = exports
                              , md_vect_info = noVectInfo
+                             , md_complete_sigs = []
                              })
         }
   where
@@ -318,8 +320,10 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
                               , mg_rules     = imp_rules
                               , mg_vect_info = vect_info
                               , mg_anns      = anns
+                              , mg_complete_sigs = complete_sigs
                               , mg_deps      = deps
                               , mg_foreign   = foreign_stubs
+                              , mg_foreign_files = foreign_files
                               , mg_hpc_info  = hpc_info
                               , mg_modBreaks = modBreaks
                               })
@@ -373,12 +377,22 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
               ; type_env2    = extendTypeEnvWithPatSyns tidy_patsyns type_env1
 
               ; tidy_type_env = tidyTypeEnv omit_prags type_env2
+              }
+          -- See Note [Grand plan for static forms] in StaticPtrTable.
+        ; (spt_entries, tidy_binds') <-
+             sptCreateStaticBinds hsc_env mod tidy_binds
+        ; let { spt_init_code = sptModuleInitCode mod spt_entries
+              ; add_spt_init_code =
+                  case hscTarget dflags of
+                    -- If we are compiling for the interpreter we will insert
+                    -- any necessary SPT entries dynamically
+                    HscInterpreted -> id
+                    -- otherwise add a C stub to do so
+                    _              -> (`appendStubC` spt_init_code)
+              }
 
-              -- See Note [Injecting implicit bindings]
-              ; all_tidy_binds = implicit_binds ++ tidy_binds
-
-              -- See SimplCore Note [Grand plan for static forms]
-              ; spt_init_code = sptModuleInitCode mod all_tidy_binds
+        ; let { -- See Note [Injecting implicit bindings]
+                all_tidy_binds = implicit_binds ++ tidy_binds'
 
               -- Get the TyCons to generate code for.  Careful!  We must use
               -- the untidied TypeEnv here, because we need
@@ -398,12 +412,13 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
         ; unless (dopt Opt_D_dump_simpl dflags) $
             Err.dumpIfSet_dyn dflags Opt_D_dump_rules
               (showSDoc dflags (ppr CoreTidy <+> text "rules"))
-              (pprRulesForUser tidy_rules)
+              (pprRulesForUser dflags tidy_rules)
 
           -- Print one-line size info
         ; let cs = coreBindsStats tidy_binds
         ; when (dopt Opt_D_dump_core_stats dflags)
-               (log_action dflags dflags NoReason SevDump noSrcSpan defaultDumpStyle
+               (putLogMsg dflags NoReason SevDump noSrcSpan
+                          (defaultDumpStyle dflags)
                           (text "Tidy size (terms,types,coercions)"
                            <+> ppr (moduleName mod) <> colon
                            <+> int (cs_tm cs)
@@ -413,11 +428,12 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
         ; return (CgGuts { cg_module   = mod,
                            cg_tycons   = alg_tycons,
                            cg_binds    = all_tidy_binds,
-                           cg_foreign  = foreign_stubs `appendStubC`
-                                         spt_init_code,
+                           cg_foreign  = add_spt_init_code foreign_stubs,
+                           cg_foreign_files = foreign_files,
                            cg_dep_pkgs = map fst $ dep_pkgs deps,
                            cg_hpc_info = hpc_info,
-                           cg_modBreaks = modBreaks },
+                           cg_modBreaks = modBreaks,
+                           cg_spt_entries = spt_entries },
 
                    ModDetails { md_types     = tidy_type_env,
                                 md_rules     = tidy_rules,
@@ -425,7 +441,8 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
                                 md_vect_info = tidy_vect_info,
                                 md_fam_insts = fam_insts,
                                 md_exports   = exports,
-                                md_anns      = anns      -- are already tidy
+                                md_anns      = anns,      -- are already tidy
+                                md_complete_sigs = complete_sigs
                               })
         }
   where
@@ -638,27 +655,19 @@ chooseExternalIds hsc_env mod omit_prags expose_all binds implicit_binds imp_id_
   -- same list every time this module is compiled), in contrast to the
   -- bindings, which are ordered non-deterministically.
   init_work_list = zip init_ext_ids init_ext_ids
-  init_ext_ids   = sortBy (compare `on` getOccName) $
-                   map fst $ filter is_external flatten_binds
+  init_ext_ids   = sortBy (compare `on` getOccName) $ filter is_external binders
 
   -- An Id should be external if either (a) it is exported,
   -- (b) it appears in the RHS of a local rule for an imported Id, or
-  -- (c) it is the vectorised version of an imported Id, or
-  -- (d) it is a static pointer (see notes in StaticPtrTable.hs).
+  -- (c) it is the vectorised version of an imported Id.
   -- See Note [Which rules to expose]
-  is_external (id, e) = isExportedId id || id `elemVarSet` rule_rhs_vars
-                      || id `elemVarSet` vect_var_vs
-                      || isStaticPtrApp e
-
-  isStaticPtrApp :: CoreExpr -> Bool
-  isStaticPtrApp (collectTyBinders -> (_, e)) =
-    isJust $ collectStaticPtrSatArgs e
+  is_external id = isExportedId id || id `elemVarSet` rule_rhs_vars
+                 || id `elemVarSet` vect_var_vs
 
   rule_rhs_vars  = mapUnionVarSet ruleRhsFreeVars imp_id_rules
   vect_var_vs    = mkVarSet [var_v | (var, var_v) <- eltsUDFM vect_vars, isGlobalId var]
 
-  flatten_binds    = flattenBinds binds
-  binders          = map fst flatten_binds
+  binders          = map fst $ flattenBinds binds
   implicit_binders = bindersOfBinds implicit_binds
   binder_set       = mkVarSet binders
 
@@ -685,7 +694,7 @@ chooseExternalIds hsc_env mod omit_prags expose_all binds implicit_binds imp_id_
   init_occ_env = initTidyOccEnv avoids
 
 
-  search :: [(Id,Id)]    -- The work-list: (external id, referrring id)
+  search :: [(Id,Id)]    -- The work-list: (external id, referring id)
                          -- Make a tidy, external Name for the external id,
                          --   add it to the UnfoldEnv, and do the same for the
                          --   transitive closure of Ids it refers to
@@ -954,7 +963,7 @@ findExternalRules omit_prags binds imp_id_rules unfold_env
         -- local binder (on LHS or RHS) that we have now discarded.
         -- (NB: ruleFreeVars only includes LocalIds)
         --
-        -- LHS: we have alrady filtered out rules that mention internal Ids
+        -- LHS: we have already filtered out rules that mention internal Ids
         --     on LHS but that isn't enough because we might have by now
         --     discarded a binding with an external Id. (How?
         --     chooseExternalIds is a bit conservative.)
@@ -1126,24 +1135,23 @@ tidyTopBinds hsc_env this_mod unfold_env init_occ_env binds
   = do mkIntegerId <- lookupMkIntegerName dflags hsc_env
        integerSDataCon <- lookupIntegerSDataConName dflags hsc_env
        let cvt_integer = cvtLitInteger dflags mkIntegerId integerSDataCon
-       return $ tidy cvt_integer init_env binds
+           result      = tidy cvt_integer init_env binds
+       seqBinds (snd result) `seq` return result
+       -- This seqBinds avoids a spike in space usage (see #13564)
   where
     dflags = hsc_dflags hsc_env
 
     init_env = (init_occ_env, emptyVarEnv)
 
-    this_pkg = thisPackage dflags
-
     tidy _           env []     = (env, [])
     tidy cvt_integer env (b:bs)
-        = let (env1, b')  = tidyTopBind dflags this_pkg this_mod
+        = let (env1, b')  = tidyTopBind dflags this_mod
                                         cvt_integer unfold_env env b
               (env2, bs') = tidy cvt_integer env1 bs
           in  (env2, b':bs')
 
 ------------------------
 tidyTopBind  :: DynFlags
-             -> UnitId
              -> Module
              -> (Integer -> CoreExpr)
              -> UnfoldEnv
@@ -1151,17 +1159,19 @@ tidyTopBind  :: DynFlags
              -> CoreBind
              -> (TidyEnv, CoreBind)
 
-tidyTopBind dflags this_pkg this_mod cvt_integer unfold_env
+tidyTopBind dflags this_mod cvt_integer unfold_env
             (occ_env,subst1) (NonRec bndr rhs)
   = (tidy_env2,  NonRec bndr' rhs')
   where
     Just (name',show_unfold) = lookupVarEnv unfold_env bndr
-    caf_info      = hasCafRefs dflags this_pkg this_mod (subst1, cvt_integer) (idArity bndr) rhs
-    (bndr', rhs') = tidyTopPair dflags show_unfold tidy_env2 caf_info name' (bndr, rhs)
+    caf_info      = hasCafRefs dflags this_mod (subst1, cvt_integer)
+                               (idArity bndr) rhs
+    (bndr', rhs') = tidyTopPair dflags show_unfold tidy_env2 caf_info name'
+                                (bndr, rhs)
     subst2        = extendVarEnv subst1 bndr bndr'
     tidy_env2     = (occ_env, subst2)
 
-tidyTopBind dflags this_pkg this_mod cvt_integer unfold_env
+tidyTopBind dflags this_mod cvt_integer unfold_env
             (occ_env, subst1) (Rec prs)
   = (tidy_env2, Rec prs')
   where
@@ -1179,7 +1189,7 @@ tidyTopBind dflags this_pkg this_mod cvt_integer unfold_env
         -- the CafInfo for a recursive group says whether *any* rhs in
         -- the group may refer indirectly to a CAF (because then, they all do).
     caf_info
-        | or [ mayHaveCafRefs (hasCafRefs dflags this_pkg this_mod
+        | or [ mayHaveCafRefs (hasCafRefs dflags this_mod
                                           (subst1, cvt_integer)
                                           (idArity bndr) rhs)
              | (bndr,rhs) <- prs ] = MayHaveCafRefs
@@ -1256,10 +1266,10 @@ tidyTopIdInfo dflags rhs_tidy_env name orig_rhs tidy_rhs idinfo show_unfold caf_
 
     sig = strictnessInfo idinfo
     final_sig | not $ isTopSig sig
-                 = WARN( _bottom_hidden sig , ppr name ) sig
-                 -- try a cheap-and-cheerful bottom analyser
-                 | Just (_, nsig) <- mb_bot_str = nsig
-                 | otherwise                    = sig
+              = WARN( _bottom_hidden sig , ppr name ) sig
+              -- try a cheap-and-cheerful bottom analyser
+              | Just (_, nsig) <- mb_bot_str = nsig
+              | otherwise                    = sig
 
     _bottom_hidden id_sig = case mb_bot_str of
                                   Nothing         -> False
@@ -1331,15 +1341,15 @@ type CafRefEnv = (VarEnv Id, Integer -> CoreExpr)
   -- The Integer -> CoreExpr is the desugaring function for Integer literals
   -- See Note [Disgusting computation of CafRefs]
 
-hasCafRefs :: DynFlags -> UnitId -> Module
+hasCafRefs :: DynFlags -> Module
            -> CafRefEnv -> Arity -> CoreExpr
            -> CafInfo
-hasCafRefs dflags this_pkg this_mod p@(_,cvt_integer) arity expr
+hasCafRefs dflags this_mod p@(_,cvt_integer) arity expr
   | is_caf || mentions_cafs = MayHaveCafRefs
   | otherwise               = NoCafRefs
  where
   mentions_cafs   = cafRefsE p expr
-  is_dynamic_name = isDllName dflags this_pkg this_mod
+  is_dynamic_name = isDllName dflags this_mod
   is_caf = not (arity > 0 || rhsIsStatic (targetPlatform dflags) is_dynamic_name cvt_integer expr)
 
   -- NB. we pass in the arity of the expression, which is expected
@@ -1420,7 +1430,7 @@ First, Template Haskell.  Consider (Trac #2386) this
           data T = Yay String
           makeOne = [| Yay "Yep" |]
 Notice that T is exported abstractly, but makeOne effectively exports it too!
-A module that splices in $(makeOne) will then look for a declartion of Yay,
+A module that splices in $(makeOne) will then look for a declaration of Yay,
 so it'd better be there.  Hence, brutally but simply, we switch off type
 constructor trimming if TH is enabled in this module.
 

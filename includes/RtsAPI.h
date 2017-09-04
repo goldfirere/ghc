@@ -9,14 +9,15 @@
  *
  * --------------------------------------------------------------------------*/
 
-#ifndef RTSAPI_H
-#define RTSAPI_H
+#pragma once
 
-#ifdef __cplusplus
+#if defined(__cplusplus)
 extern "C" {
 #endif
 
 #include "HsFFI.h"
+#include "rts/Time.h"
+#include "rts/EventLogWriter.h"
 
 /*
  * Running the scheduler
@@ -52,9 +53,13 @@ typedef struct CapabilityPublic_ {
 
 typedef enum {
     RtsOptsNone,         // +RTS causes an error
+    RtsOptsIgnore,       // Ignore command line arguments
+    RtsOptsIgnoreAll,    // Ignore command line and Environment arguments
     RtsOptsSafeOnly,     // safe RTS options allowed; others cause an error
     RtsOptsAll           // all RTS options allowed
   } RtsOptsEnabledEnum;
+
+struct GCDetails_;
 
 // The RtsConfig struct is passed (by value) to hs_init_ghc().  The
 // reason for using a struct is extensibility: we can add more
@@ -76,6 +81,9 @@ typedef struct {
     // Whether to retain CAFs (default: false)
     HsBool keep_cafs;
 
+    // Writer a for eventlog.
+    const EventLogWriter *eventlog_writer;
+
     // Called before processing command-line flags, so that default
     // settings for RtsFlags can be provided.
     void (* defaultsHook) (void);
@@ -93,21 +101,119 @@ typedef struct {
     void (* mallocFailHook) (W_ request_size /* in bytes */, const char *msg);
 
     // Called for every GC
-    void (* gcDoneHook) (unsigned int gen,
-                         W_ allocated_bytes, /* since last GC */
-                         W_ live_bytes,
-                         W_ copied_bytes,
-                         W_ max_copied_per_thread_bytes,
-                         W_ total_bytes,
-                         W_ slop_bytes,
-                         W_ sync_elapsed_ns, W_ elapsed_ns, W_ cpu_ns);
-
+    void (* gcDoneHook) (const struct GCDetails_ *stats);
 } RtsConfig;
 
 // Clients should start with defaultRtsConfig and then customise it.
 // Bah, I really wanted this to be a const struct value, but it seems
 // you can't do that in C (it generates code).
 extern const RtsConfig defaultRtsConfig;
+
+/* -----------------------------------------------------------------------------
+   Statistics
+   -------------------------------------------------------------------------- */
+
+//
+// Stats about a single GC
+//
+typedef struct GCDetails_ {
+    // The generation number of this GC
+  uint32_t gen;
+    // Number of threads used in this GC
+  uint32_t threads;
+    // Number of bytes allocated since the previous GC
+  uint64_t allocated_bytes;
+    // Total amount of live data in the heap (incliudes large + compact data)
+  uint64_t live_bytes;
+    // Total amount of live data in large objects
+  uint64_t large_objects_bytes;
+    // Total amount of live data in compact regions
+  uint64_t compact_bytes;
+    // Total amount of slop (wasted memory)
+  uint64_t slop_bytes;
+    // Total amount of memory in use by the RTS
+  uint64_t mem_in_use_bytes;
+    // Total amount of data copied during this GC
+  uint64_t copied_bytes;
+    // In parallel GC, the max amount of data copied by any one thread
+  uint64_t par_max_copied_bytes;
+  // In parallel GC, the amount of balanced data copied by all threads
+  uint64_t par_balanced_copied_bytes;
+    // The time elapsed during synchronisation before GC
+  Time sync_elapsed_ns;
+    // The CPU time used during GC itself
+  Time cpu_ns;
+    // The time elapsed during GC itself
+  Time elapsed_ns;
+} GCDetails;
+
+//
+// Stats about the RTS currently, and since the start of execution
+//
+typedef struct _RTSStats {
+
+  // -----------------------------------
+  // Cumulative stats about memory use
+
+    // Total number of GCs
+  uint32_t gcs;
+    // Total number of major (oldest generation) GCs
+  uint32_t major_gcs;
+    // Total bytes allocated
+  uint64_t allocated_bytes;
+    // Maximum live data (including large objects + compact regions)
+  uint64_t max_live_bytes;
+    // Maximum live data in large objects
+  uint64_t max_large_objects_bytes;
+    // Maximum live data in compact regions
+  uint64_t max_compact_bytes;
+    // Maximum slop
+  uint64_t max_slop_bytes;
+    // Maximum memory in use by the RTS
+  uint64_t max_mem_in_use_bytes;
+    // Sum of live bytes across all major GCs.  Divided by major_gcs
+    // gives the average live data over the lifetime of the program.
+  uint64_t cumulative_live_bytes;
+    // Sum of copied_bytes across all GCs
+  uint64_t copied_bytes;
+    // Sum of copied_bytes across all parallel GCs
+  uint64_t par_copied_bytes;
+    // Sum of par_max_copied_bytes across all parallel GCs
+  uint64_t cumulative_par_max_copied_bytes;
+  // Sum of par_balanced_copied_byes across all parallel GCs.
+  uint64_t cumulative_par_balanced_copied_bytes;
+
+  // -----------------------------------
+  // Cumulative stats about time use
+  // (we use signed values here because due to inaccuracies in timers
+  // the values can occasionally go slightly negative)
+
+    // Total CPU time used by the mutator
+  Time mutator_cpu_ns;
+    // Total elapsed time used by the mutator
+  Time mutator_elapsed_ns;
+    // Total CPU time used by the GC
+  Time gc_cpu_ns;
+    // Total elapsed time used by the GC
+  Time gc_elapsed_ns;
+    // Total CPU time (at the previous GC)
+  Time cpu_ns;
+    // Total elapsed time (at the previous GC)
+  Time elapsed_ns;
+
+  // -----------------------------------
+  // Stats about the most recent GC
+
+  GCDetails gc;
+
+} RTSStats;
+
+void getRTSStats (RTSStats *s);
+int getRTSStatsEnabled (void);
+
+// Returns the total number of bytes allocated since the start of the program.
+// TODO: can we remove this?
+uint64_t getAllocations (void);
 
 /* ----------------------------------------------------------------------------
    Starting up and shutting down the Haskell RTS.
@@ -136,7 +242,7 @@ extern void hs_init_ghc (int *argc, char **argv[],   // program arguments
 extern void shutdownHaskellAndExit (int exitCode, int fastExit)
     GNUC3_ATTRIBUTE(__noreturn__);
 
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
 extern void shutdownHaskellAndSignal (int sig, int fastExit)
      GNUC3_ATTRIBUTE(__noreturn__);
 #endif
@@ -172,6 +278,24 @@ void rts_unlock (Capability *token);
 // when there is no current capability.
 Capability *rts_unsafeGetMyCapability (void);
 
+/* ----------------------------------------------------------------------------
+   Which cpu should the OS thread and Haskell thread run on?
+
+   1. Run the current thread on the given capability:
+     rts_setInCallCapability(cap, 0);
+
+   2. Run the current thread on the given capability and set the cpu affinity
+      for this thread:
+     rts_setInCallCapability(cap, 1);
+
+   3. Run the current thread on the given numa node:
+     rts_pinThreadToNumaNode(node);
+
+   4. Run the current thread on the given capability and on the given numa node:
+     rts_setInCallCapability(cap, 0);
+     rts_pinThreadToNumaNode(cap);
+   ------------------------------------------------------------------------- */
+
 // Specify the Capability that the current OS thread should run on when it calls
 // into Haskell.  The actual capability will be calculated as the supplied
 // value modulo the number of enabled Capabilities.
@@ -184,6 +308,12 @@ Capability *rts_unsafeGetMyCapability (void);
 // specific CPUs according to the prevailing affinity policy for the
 // specified capability, set by either +RTS -qa or +RTS --numa.
 void rts_setInCallCapability (int preferred_capability, int affinity);
+
+// Specify the CPU Node that the current OS thread should run on when it calls
+// into Haskell. The argument can be either a node number or capability number.
+// The actual node will be calculated as the supplied value modulo the number
+// of numa nodes.
+void rts_pinThreadToNumaNode (int node);
 
 /* ----------------------------------------------------------------------------
    Building Haskell objects from C datatypes.
@@ -258,6 +388,10 @@ void rts_evalIO (/* inout */ Capability **,
                  /* in    */ HaskellObj p,
                  /* out */   HaskellObj *ret);
 
+void rts_evalStableIOMain (/* inout */ Capability **,
+                           /* in    */ HsStablePtr s,
+                           /* out */   HsStablePtr *ret);
+
 void rts_evalStableIO (/* inout */ Capability **,
                        /* in    */ HsStablePtr s,
                        /* out */   HsStablePtr *ret);
@@ -313,8 +447,6 @@ extern StgWord base_GHCziTopHandler_runNonIO_closure[];
 
 /* ------------------------------------------------------------------------ */
 
-#ifdef __cplusplus
+#if defined(__cplusplus)
 }
 #endif
-
-#endif /* RTSAPI_H */

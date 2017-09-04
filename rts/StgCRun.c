@@ -59,12 +59,12 @@
 #include "StgRun.h"
 #include "Capability.h"
 
-#ifdef DEBUG
+#if defined(DEBUG)
 #include "RtsUtils.h"
 #include "Printer.h"
 #endif
 
-#ifdef USE_MINIINTERPRETER
+#if defined(USE_MINIINTERPRETER)
 
 /* -----------------------------------------------------------------------------
    any architecture (using miniinterpreter)
@@ -90,7 +90,7 @@ StgFunPtr StgReturn(void)
 
 #else /* !USE_MINIINTERPRETER */
 
-#ifdef LEADING_UNDERSCORE
+#if defined(LEADING_UNDERSCORE)
 #define STG_RUN "_StgRun"
 #define STG_RETURN "_StgReturn"
 #else
@@ -114,7 +114,7 @@ StgWord8 *win32AllocStack(void)
    x86 architecture
    -------------------------------------------------------------------------- */
 
-#ifdef i386_HOST_ARCH
+#if defined(i386_HOST_ARCH)
 
 #if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
 #define STG_GLOBAL ".globl "
@@ -141,7 +141,7 @@ StgWord8 *win32AllocStack(void)
  * we only jump to other STG procedures, so we maintain the 16n - word_size
  * alignment for these jumps.
  *
- * This gives us binary compatability with LLVM and GCC as well as dealing
+ * This gives us binary compatibility with LLVM and GCC as well as dealing
  * with the FFI. Previously we just maintianed a 16n byte alignment for
  * procedure entry and calls, which led to bugs (see #4211 and #5250).
  *
@@ -241,7 +241,7 @@ StgRunIsImplementedInAssembler(void)
    enough space.  Oh well, it's not much harder this way.
    ------------------------------------------------------------------------- */
 
-#ifdef x86_64_HOST_ARCH
+#if defined(x86_64_HOST_ARCH)
 
 #define STG_GLOBAL ".globl "
 
@@ -320,11 +320,7 @@ StgRunIsImplementedInAssembler(void)
 
         :
         : "i"(RESERVED_C_STACK_BYTES),
-#if defined(mingw32_HOST_OS)
-          "i"(80 /*stack frame size; 8 too large to make the alignment right*/)
-#else
-          "i"(48 /*stack frame size*/)
-#endif
+          "i"(STG_RUN_STACK_FRAME_SIZE /* stack frame size */)
         );
         /*
          * See Note [Stack Alignment on X86]
@@ -364,7 +360,7 @@ StgRunIsImplementedInAssembler(void)
    Updated info (GHC 4.08.2): not saving %i7 any more (see below).
    -------------------------------------------------------------------------- */
 
-#ifdef sparc_HOST_ARCH
+#if defined(sparc_HOST_ARCH)
 
 StgRegTable *
 StgRun(StgFunPtr f, StgRegTable *basereg) {
@@ -413,7 +409,7 @@ StgRun(StgFunPtr f, StgRegTable *basereg) {
    Everything is in assembler, so we don't have to deal with GCC...
    -------------------------------------------------------------------------- */
 
-#ifdef powerpc_HOST_ARCH
+#if defined(powerpc_HOST_ARCH)
 
 #define STG_GLOBAL ".globl "
 
@@ -542,9 +538,9 @@ StgRunIsImplementedInAssembler(void)
    Everything is in assembler, so we don't have to deal with GCC...
    -------------------------------------------------------------------------- */
 
-#ifdef powerpc64_HOST_ARCH
+#if defined(powerpc64_HOST_ARCH)
 
-#ifdef linux_HOST_OS
+#if defined(linux_HOST_OS)
 static void GNUC3_ATTRIBUTE(used)
 StgRunIsImplementedInAssembler(void)
 {
@@ -672,7 +668,7 @@ StgRunIsImplementedInAssembler(void)
 
 #endif
 
-#ifdef powerpc64le_HOST_ARCH
+#if defined(powerpc64le_HOST_ARCH)
 /* -----------------------------------------------------------------------------
    PowerPC 64 little endian architecture
 
@@ -684,7 +680,7 @@ StgRunIsImplementedInAssembler(void)
    ARM architecture
    -------------------------------------------------------------------------- */
 
-#ifdef arm_HOST_ARCH
+#if defined(arm_HOST_ARCH)
 
 #if defined(__thumb__)
 #define THUMB_FUNC ".thumb\n\t.thumb_func\n\t"
@@ -761,7 +757,7 @@ StgRun(StgFunPtr f, StgRegTable *basereg) {
 }
 #endif
 
-#ifdef aarch64_HOST_ARCH
+#if defined(aarch64_HOST_ARCH)
 
 StgRegTable *
 StgRun(StgFunPtr f, StgRegTable *basereg) {

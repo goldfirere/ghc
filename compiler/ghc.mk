@@ -170,6 +170,7 @@ compiler/stage1/$(PLATFORM_H) : mk/config.mk mk/project.mk | $$(dir $$@)/.
 	@echo "#define BUILD_ARCH \"$(BuildArch_CPP)\""           >> $@
 	@echo "#define HOST_ARCH \"$(HostArch_CPP)\""             >> $@
 	@echo "#define TARGET_ARCH \"$(TargetArch_CPP)\""         >> $@
+	@echo "#define LLVM_TARGET \"$(LLVMTarget_CPP)\""         >> $@
 	@echo                                                     >> $@
 	@echo "#define $(BuildOS_CPP)_BUILD_OS 1"                 >> $@
 	@echo "#define $(HostOS_CPP)_HOST_OS 1"                   >> $@
@@ -211,6 +212,7 @@ compiler/stage2/$(PLATFORM_H) : mk/config.mk mk/project.mk | $$(dir $$@)/.
 	@echo "#define BUILD_ARCH \"$(HostArch_CPP)\""            >> $@
 	@echo "#define HOST_ARCH \"$(TargetArch_CPP)\""           >> $@
 	@echo "#define TARGET_ARCH \"$(TargetArch_CPP)\""         >> $@
+	@echo "#define LLVM_TARGET \"$(LLVMTarget_CPP)\""         >> $@
 	@echo                                                     >> $@
 	@echo "#define $(HostOS_CPP)_BUILD_OS 1"                  >> $@
 	@echo "#define $(TargetOS_CPP)_HOST_OS 1"                 >> $@
@@ -233,7 +235,7 @@ compiler/stage3/$(PLATFORM_H) : compiler/stage2/$(PLATFORM_H)
 	"$(CP)" $< $@
 
 # ----------------------------------------------------------------------------
-#		Generate supporting stuff for prelude/PrimOp.lhs
+#		Generate supporting stuff for prelude/PrimOp.hs
 #		from prelude/primops.txt
 
 PRIMOP_BITS_NAMES = primop-data-decl.hs-incl        \
@@ -361,6 +363,10 @@ compiler_CONFIGURE_OPTS += --ghc-option=-DNOSMP
 compiler_CONFIGURE_OPTS += --ghc-option=-optc-DNOSMP
 endif
 
+ifeq "$(WITH_TERMINFO)" "NO"
+compiler_stage2_CONFIGURE_OPTS += --flags=-terminfo
+endif
+
 # Careful optimisation of the parser: we don't want to throw everything
 # at it, because that takes too long and doesn't buy much, but we do want
 # to inline certain key external functions, so we instruct GHC not to
@@ -421,147 +427,6 @@ compiler_stage3_SplitObjs = NO
 compiler_stage1_SplitSections = NO
 compiler_stage2_SplitSections = NO
 compiler_stage3_SplitSections = NO
-
-# There are too many symbols in the ghc package for a Windows DLL
-# (due to a limitation of bfd ld, see Trac #5987). We therefore need to split
-# some of the modules off into a separate DLL. This clump are the modules
-# reachable from DynFlags:
-compiler_stage2_dll0_START_MODULE = DynFlags
-compiler_stage2_dll0_MODULES = \
-	Annotations \
-	ApiAnnotation \
-	Avail \
-	Bag \
-	BasicTypes \
-	Binary \
-	BinFingerprint \
-	BooleanFormula \
-	BufWrite \
-	Class \
-	CmdLineParser \
-	CmmType \
-	CoAxiom \
-	ConLike \
-	Coercion \
-	Config \
-	Constants \
-	CoreArity \
-	CoreFVs \
-	CoreSubst \
-	CoreSyn \
-	CoreTidy \
-	CoreUnfold \
-	CoreUtils \
-	CoreSeq \
-	CoreStats \
-	CostCentre \
-	DataCon \
-	Demand \
-	Digraph \
-	DriverPhases \
-	DynFlags \
-	Encoding \
-	ErrUtils \
-	Exception \
-	FamInstEnv \
-	FastFunctions \
-	FastMutInt \
-	FastString \
-	FastStringEnv \
-	FieldLabel \
-	Fingerprint \
-	FiniteMap \
-	ForeignCall \
-	FV \
-	Hooks \
-	HsBinds \
-	HsDecls \
-	HsDoc \
-	HsExpr \
-	HsImpExp \
-	HsLit \
-	PlaceHolder \
-	PmExpr \
-	HsPat \
-	HsSyn \
-	HsTypes \
-	HsUtils \
-	HscTypes \
-	IOEnv \
-  NameCache \
-	Id \
-	IdInfo \
-	IfaceSyn \
-	IfaceType \
-	InstEnv \
-	Kind \
-	KnownUniques \
-	Lexeme \
-	ListSetOps \
-	Literal \
-	Maybes \
-	MkCore \
-	MkId \
-	Module \
-	MonadUtils \
-	Name \
-	NameEnv \
-	NameSet \
-	OccName \
-	OccurAnal \
-	OptCoercion \
-	OrdList \
-	Outputable \
-	PackageConfig \
-	Packages \
-	Pair \
-	Panic \
-	PatSyn \
-	PipelineMonad \
-	Platform \
-	PlatformConstants \
-	PprCore \
-	PrelNames \
-	PrelRules \
-	Pretty \
-	PrimOp \
-	RepType \
-	RdrName \
-	Rules \
-	SrcLoc \
-	StaticFlags \
-	StringBuffer \
-	TcEvidence \
-	TcRnTypes \
-	TcType \
-	TrieMap \
-	TyCon \
-	Type \
-	TyCoRep \
-	TysPrim \
-	TysWiredIn \
-	Unify \
-	UniqDFM \
-	UniqDSet \
-	UniqFM \
-	UniqSet \
-	UniqSupply \
-	Unique \
-	Util \
-	Var \
-	VarEnv \
-	VarSet
-
-ifeq "$(GhcWithInterpreter)" "YES"
-# These files are reacheable from DynFlags
-# only by GHCi-enabled code (see #9552)
-compiler_stage2_dll0_MODULES += \
-	ByteCodeTypes \
-	InteractiveEvalTypes
-endif
-
-compiler_stage2_dll0_HS_OBJS = \
-    $(patsubst %,compiler/stage2/build/%.$(dyn_osuf),$(subst .,/,$(compiler_stage2_dll0_MODULES)))
 
 # if stage is set to something other than "1" or "", disable stage 1
 # See Note [Stage1Only vs stage=1] in mk/config.mk.in.

@@ -11,8 +11,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef SM_MARKSTACK_H
-#define SM_MARKSTACK_H
+#pragma once
 
 #include "BeginPrivate.h"
 #include "GCUtils.h"
@@ -61,12 +60,10 @@ pop_mark_stack(void)
     return (StgPtr)*--mark_sp;
 }
 
-INLINE_HEADER rtsBool
+INLINE_HEADER bool
 mark_stack_empty(void)
 {
     return (((W_)mark_sp & BLOCK_MASK) == 0 && mark_stack_bd->link == NULL);
 }
 
 #include "EndPrivate.h"
-
-#endif /* SM_MARKSTACK_H */

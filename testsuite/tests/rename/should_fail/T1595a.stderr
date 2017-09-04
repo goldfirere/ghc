@@ -1,2 +1,3 @@
 
-T1595a.hs:3:20: Not in scope: type constructor or class ‘Tpyo’
+T1595a.hs:3:20: error:
+    Not in scope: type constructor or class ‘Tpyo’

@@ -203,16 +203,6 @@ $(error Can not build haddock docs when CrossCompiling or Stage1Only. \
 endif
 endif
 
-ifneq "$(BUILD_SPHINX_HTML) $(BUILD_SPHINX_PDF)" "NO NO"
-# The User's Guide requires mkUserGuidePart, which uses the GHC API.
-ifneq "$(CrossCompiling) $(Stage1Only)" "NO NO"
-$(error Can not build User's Guide when CrossCompiling or Stage1Only. \
-  Set BUILD_SPHINX_HTML=NO, BUILD_SPHINX_PDF=NO in your \
-  mk/build.mk file. \
-  See Note [No stage2 packages when CrossCompiling or Stage1Only])
-endif
-endif
-
 endif # CLEANING
 
 # -----------------------------------------------------------------------------
@@ -430,11 +420,9 @@ else # CLEANING
 # programs such as GHC and ghc-pkg, that we do not assume the stage0
 # compiler already has installed (or up-to-date enough).
 
-PACKAGES_STAGE0 = binary Cabal/Cabal hpc ghc-boot-th ghc-boot hoopl transformers template-haskell
+PACKAGES_STAGE0 = binary text transformers mtl parsec Cabal/Cabal hpc ghc-boot-th ghc-boot template-haskell ghci
 ifeq "$(Windows_Host)" "NO"
-ifneq "$(HostOS_CPP)" "ios"
 PACKAGES_STAGE0 += terminfo
-endif
 endif
 
 PACKAGES_STAGE1 += ghc-prim
@@ -459,23 +447,29 @@ PACKAGES_STAGE1 += process
 PACKAGES_STAGE1 += hpc
 PACKAGES_STAGE1 += pretty
 PACKAGES_STAGE1 += binary
+PACKAGES_STAGE1 += text
+PACKAGES_STAGE1 += transformers
+PACKAGES_STAGE1 += mtl
+PACKAGES_STAGE1 += parsec
+# temporary until Cabal switches to parsec mode by default
+libraries/Cabal/Cabal_dist-boot_CONFIGURE_OPTS += --flag parsec
+libraries/Cabal/Cabal_dist-install_CONFIGURE_OPTS += --flag parsec
 PACKAGES_STAGE1 += Cabal/Cabal
 PACKAGES_STAGE1 += ghc-boot-th
 PACKAGES_STAGE1 += ghc-boot
 PACKAGES_STAGE1 += template-haskell
-PACKAGES_STAGE1 += hoopl
-PACKAGES_STAGE1 += transformers
-PACKAGES_STAGE1 += compact
+PACKAGES_STAGE1 += ghc-compact
 
 ifeq "$(HADDOCK_DOCS)" "YES"
 PACKAGES_STAGE1 += xhtml
 endif
 
-ifeq "$(Windows_Target)" "NO"
-ifneq "$(TargetOS_CPP)" "ios"
+ifeq "$(WITH_TERMINFO)" "YES"
 PACKAGES_STAGE1 += terminfo
+else
+libraries/haskeline_CONFIGURE_OPTS += --flags=-terminfo
 endif
-endif
+
 PACKAGES_STAGE1 += haskeline
 PACKAGES_STAGE1 += ghci
 
@@ -545,6 +539,9 @@ utils/runghc/dist-install/package-data.mk: $(fixed_pkg_prev)
 iserv/stage2/package-data.mk: $(fixed_pkg_prev)
 iserv/stage2_p/package-data.mk: $(fixed_pkg_prev)
 iserv/stage2_dyn/package-data.mk: $(fixed_pkg_prev)
+ifeq "$(Windows_Host)" "YES"
+utils/gen-dll/dist-install/package-data.mk: $(fixed_pkg_prev)
+endif
 
 # the GHC package doesn't live in libraries/, so we add its dependency manually:
 compiler/stage2/package-data.mk: $(fixed_pkg_prev)
@@ -563,7 +560,7 @@ ghc/stage2/package-data.mk: compiler/stage2/package-data.mk
 utils/haddock/dist/package-data.mk: compiler/stage2/package-data.mk
 utils/ghctags/dist-install/package-data.mk: compiler/stage2/package-data.mk
 utils/check-api-annotations/dist-install/package-data.mk: compiler/stage2/package-data.mk
-utils/mkUserGuidePart/dist/package-data.mk: compiler/stage2/package-data.mk
+utils/check-ppr/dist-install/package-data.mk: compiler/stage2/package-data.mk
 
 # add the final package.conf dependency: ghc-prim depends on RTS
 libraries/ghc-prim/dist-install/package-data.mk : rts/dist/package.conf.inplace
@@ -591,6 +588,9 @@ ifeq "$(BuildSharedLibs)" "YES"
 ALL_STAGE1_LIBS += $(foreach lib,$(PACKAGES_STAGE1),$(libraries/$(lib)_dist-install_dyn_LIB))
 endif
 BOOT_LIBS = $(foreach lib,$(PACKAGES_STAGE0),$(libraries/$(lib)_dist-boot_v_LIB))
+
+# Only build internal interpreter support for the stage2 ghci lib
+libraries/ghci_dist-install_CONFIGURE_OPTS += --flags=ghci
 
 # ----------------------------------------
 # Special magic for the ghc-prim package
@@ -649,6 +649,9 @@ BUILD_DIRS += includes
 BUILD_DIRS += rts
 BUILD_DIRS += bindisttest
 BUILD_DIRS += utils/genapply
+ifeq "$(Windows_Host)" "YES"
+BUILD_DIRS += utils/gen-dll
+endif
 
 # When cleaning, don't add any library packages to BUILD_DIRS. We include
 # ghc.mk files for all BUILD_DIRS, but they don't exist until after running
@@ -681,12 +684,11 @@ BUILD_DIRS += utils/ghc-pkg
 BUILD_DIRS += utils/testremove
 BUILD_DIRS += utils/ghctags
 BUILD_DIRS += utils/check-api-annotations
-BUILD_DIRS += utils/dll-split
+BUILD_DIRS += utils/check-ppr
 BUILD_DIRS += utils/ghc-cabal
 BUILD_DIRS += utils/hpc
 BUILD_DIRS += utils/runghc
 BUILD_DIRS += ghc
-BUILD_DIRS += utils/mkUserGuidePart
 BUILD_DIRS += docs/users_guide
 BUILD_DIRS += utils/count_lines
 BUILD_DIRS += utils/compare_sizes
@@ -705,7 +707,6 @@ BUILD_DIRS := $(filter-out utils/mkdirhier,$(BUILD_DIRS))
 BUILD_DIRS := $(filter-out utils/genprimopcode,$(BUILD_DIRS))
 BUILD_DIRS := $(filter-out bindisttest,$(BUILD_DIRS))
 BUILD_DIRS := $(filter-out utils/genapply,$(BUILD_DIRS))
-BUILD_DIRS := $(filter-out utils/mkUserGuidePart,$(BUILD_DIRS))
 endif
 ifeq "$(HADDOCK_DOCS)" "NO"
 BUILD_DIRS := $(filter-out utils/haddock,$(BUILD_DIRS))
@@ -714,7 +715,6 @@ endif
 ifeq "$(BUILD_SPHINX_HTML) $(BUILD_SPHINX_PDF)" "NO NO"
 BUILD_DIRS := $(filter-out docs/users_guide,$(BUILD_DIRS))
 # Don't to build this little utility if we're not building the User's Guide.
-BUILD_DIRS := $(filter-out utils/mkUserGuidePart,$(BUILD_DIRS))
 endif
 ifeq "$(Windows_Host)" "NO"
 BUILD_DIRS := $(filter-out utils/touchy,$(BUILD_DIRS))
@@ -734,6 +734,7 @@ ifneq "$(CrossCompiling) $(Stage1Only)" "NO NO"
 # See Note [Stage1Only vs stage=1] in mk/config.mk.in.
 BUILD_DIRS := $(filter-out utils/ghctags,$(BUILD_DIRS))
 BUILD_DIRS := $(filter-out utils/check-api-annotations,$(BUILD_DIRS))
+BUILD_DIRS := $(filter-out utils/check-ppr,$(BUILD_DIRS))
 endif
 endif # CLEANING
 
@@ -902,9 +903,11 @@ endef
 
 install_bins: $(INSTALL_BINS) $(INSTALL_SCRIPTS)
 	$(INSTALL_DIR) "$(DESTDIR)$(bindir)"
+ifneq "$(INSTALL_BINS)" ""
 	for i in $(INSTALL_BINS); do \
 		$(INSTALL_PROGRAM) $(INSTALL_BIN_OPTS) $$i "$(DESTDIR)$(bindir)" ;  \
 	done
+endif
 ifneq "$(INSTALL_SCRIPTS)" ""
 	for i in $(INSTALL_SCRIPTS); do \
 		$(INSTALL_SCRIPT) $(INSTALL_OPTS) $$i "$(DESTDIR)$(bindir)" ;  \
@@ -914,15 +917,25 @@ endif
 install_libs: $(INSTALL_LIBS)
 	$(call installLibsTo, $(INSTALL_LIBS), "$(DESTDIR)$(ghclibdir)")
 
+# We rename ghc-stage2, so that the right program name is used in error
+# messages etc. But not on windows.
+RENAME_LIBEXEC_GHC_STAGE_TO_GHC = YES
+ifeq "$(Stage1Only) $(Windows_Host)" "YES YES"
+# resulting ghc-stage1 is built to run on windows
+RENAME_LIBEXEC_GHC_STAGE_TO_GHC = NO
+endif
+ifeq "$(Stage1Only) $(Windows_Target)" "NO YES"
+# resulting ghc-stage1 is built to run on windows
+RENAME_LIBEXEC_GHC_STAGE_TO_GHC = NO
+endif
+
 install_libexecs:  $(INSTALL_LIBEXECS)
 ifneq "$(INSTALL_LIBEXECS)" ""
 	$(INSTALL_DIR) "$(DESTDIR)$(ghclibexecdir)/bin"
 	for i in $(INSTALL_LIBEXECS); do \
 		$(INSTALL_PROGRAM) $(INSTALL_BIN_OPTS) $$i "$(DESTDIR)$(ghclibexecdir)/bin"; \
 	done
-# We rename ghc-stage2, so that the right program name is used in error
-# messages etc.
-ifeq "$(Windows_Host)" "NO"
+ifeq "$(RENAME_LIBEXEC_GHC_STAGE_TO_GHC)" "YES"
 	"$(MV)" "$(DESTDIR)$(ghclibexecdir)/bin/ghc-stage$(INSTALL_GHC_STAGE)" "$(DESTDIR)$(ghclibexecdir)/bin/ghc"
 endif
 endif
@@ -960,6 +973,12 @@ endif
 
 INSTALLED_PACKAGE_CONF=$(DESTDIR)$(topdir)/package.conf.d
 
+ifeq "$(BINDIST) $(CrossCompiling)" "NO YES"
+# when installing ghc-stage2 we can't run target's
+# 'ghc-pkg' and 'ghc-stage2' but those are needed for registration.
+INSTALLED_GHC_REAL=$(TOP)/inplace/bin/ghc-stage1
+INSTALLED_GHC_PKG_REAL=$(TOP)/$(ghc-pkg_DIST_BINARY)
+else # CrossCompiling
 # Install packages in the right order, so that ghc-pkg doesn't complain.
 # Also, install ghc-pkg first.
 ifeq "$(Windows_Host)" "NO"
@@ -969,6 +988,7 @@ else
 INSTALLED_GHC_REAL=$(DESTDIR)$(bindir)/ghc.exe
 INSTALLED_GHC_PKG_REAL=$(DESTDIR)$(bindir)/ghc-pkg.exe
 endif
+endif # CrossCompiling
 
 # Set the INSTALL_DISTDIR_p for each package; compiler is special
 $(foreach p,$(filter-out compiler,$(INSTALL_PACKAGES)),\
@@ -1012,6 +1032,10 @@ install_packages: rts/dist/package.conf.install
 # This means "sudo make install" does the right thing even if it runs
 # with an 077 umask.
 	for f in '$(INSTALLED_PACKAGE_CONF)'/*; do $(CREATE_DATA) "$$f"; done
+
+# Finally, update package.cache to ensure it's newer than the registration
+# files. This avoids #13375.
+	"$(INSTALLED_GHC_PKG_REAL)" --global-package-db "$(INSTALLED_PACKAGE_CONF)" recache
 
 # -----------------------------------------------------------------------------
 # Binary distributions
@@ -1071,6 +1095,17 @@ endif
 
 BIN_DIST_MK = $(BIN_DIST_PREP_DIR)/bindist.mk
 
+# Note [Persist CrossCompiling in binary distributions]
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+# The build system uses the CrossCompiling variable to decide whether or not we
+# should build various packages that must be built using the compiler.
+# Consequently, it is important that we persist its value in the binary
+# distribution so we know during `make install` not to go looking for files that
+# would have been built for these packages. Failing to do this causes #13325.
+#
+# See Note [No stage2 packages when CrossCompiling or Stage1Only].
+
 unix-binary-dist-prep:
 	$(call removeTrees,bindistprep/)
 	"$(MKDIRHIER)" $(BIN_DIST_PREP_DIR)
@@ -1081,11 +1116,14 @@ unix-binary-dist-prep:
 	echo "BUILD_MAN          = $(BUILD_MAN)"          >> $(BIN_DIST_MK)
 	echo "override ghc-cabal_INPLACE = utils/ghc-cabal/dist-install/build/tmp/ghc-cabal-bindist" >> $(BIN_DIST_MK)
 	echo "UseSystemLibFFI    = $(UseSystemLibFFI)"    >> $(BIN_DIST_MK)
+# See Note [Persist CrossCompiling in binary distributions]
+	echo "CrossCompiling     = $(CrossCompiling)"     >> $(BIN_DIST_MK)
 	cd $(BIN_DIST_PREP_DIR) && autoreconf
 	$(call removeFiles,$(BIN_DIST_PREP_TAR))
 # h means "follow symlinks", e.g. if aclocal.m4 is a symlink to a source
 # tree then we want to include the real file, not a symlink to it
-	cd bindistprep && "$(TAR_CMD)" hcf - -T ../bindist-list | $(TAR_COMP_CMD) -c > ../$(BIN_DIST_PREP_TAR_COMP)
+	sort bindist-list | uniq > bindist-list.uniq
+	cd bindistprep && "$(TAR_CMD)" hcf - -T ../bindist-list.uniq | $(TAR_COMP_CMD) -c > ../$(BIN_DIST_PREP_TAR_COMP)
 
 windows-binary-dist-prep:
 	$(call removeTrees,bindistprep/)
@@ -1223,6 +1261,7 @@ $(eval $(call sdist-ghc-file,compiler,stage2,parser,Parser,y))
 $(eval $(call sdist-ghc-file,utils/hpc,dist-install,,HpcParser,y))
 $(eval $(call sdist-ghc-file,utils/genprimopcode,dist,,Lexer,x))
 $(eval $(call sdist-ghc-file,utils/genprimopcode,dist,,Parser,y))
+$(eval $(call sdist-ghc-file2,libraries/Cabal/Cabal,dist-install,Distribution/Parsec,Lexer,x))
 
 .PHONY: sdist-ghc-prep
 sdist-ghc-prep : sdist-ghc-prep-tree
@@ -1318,6 +1357,8 @@ clean_files :
 	$(call removeTrees,inplace/bin)
 	$(call removeTrees,inplace/lib)
 	$(call removeTrees,libraries/bootstrapping.conf)
+# Clean the files that ./validate creates.
+	$(call removeFiles,mk/are-validating.mk)
 
 .PHONY: clean_libraries
 clean_libraries: $(patsubst %,clean_libraries/%_dist-install,$(PACKAGES_STAGE1) $(PACKAGES_STAGE2))
@@ -1350,9 +1391,6 @@ clean_bindistprep:
 	$(call removeTrees,bindistprep/)
 
 distclean : clean
-# Clean the files that ./validate creates.
-	$(call removeFiles,mk/are-validating.mk)
-
 # Clean the files that we ask ./configure to create.
 	$(call removeFiles,mk/config.mk)
 	$(call removeFiles,mk/install.mk)
@@ -1361,6 +1399,7 @@ distclean : clean
 	$(call removeFiles,ghc/ghc-bin.cabal)
 	$(call removeFiles,libraries/ghci/ghci.cabal)
 	$(call removeFiles,utils/runghc/runghc.cabal)
+	$(call removeFiles,utils/gen-dll/gen-dll.cabal)
 	$(call removeFiles,settings)
 	$(call removeFiles,docs/users_guide/ug-book.xml)
 	$(call removeFiles,docs/users_guide/ug-ent.xml)
@@ -1396,6 +1435,7 @@ distclean : clean
 
 # We make these when making or testing bindists
 	$(call removeFiles,bindist-list)
+	$(call removeFiles,bindist-list.uniq)
 	$(call removeTrees,bindisttest/a)
 
 # Not sure why this is being cleaned here.
@@ -1470,8 +1510,8 @@ endif
 #  - neither do we register the ghc library (compiler/stage1) that we build
 #    with stage0. TODO Why not? We do build it...
 #  - as a result, we need to a) use ghc-stage2 to build packages that depend on
-#    the ghc library (e.g. ghctags [4] and mkUserGuidePart) and b) exclude
-#    those packages when ghc-stage2 is not available.
+#    the ghc library (e.g. ghctags [4]) and b) exclude those packages when
+#    ghc-stage2 is not available.
 #  - when Stage1Only=YES, it's clear that ghc-stage2 is not available (we just
 #    said we didn't want it), so we have to exclude the stage2 packages from
 #    the build. This includes the case where Stage1Only=YES is combined with
@@ -1481,6 +1521,11 @@ endif
 #    run on the host platform at all; it is built to run on $(TARGETPLATFORM)"
 #    [5]. Therefore in this case we also have to exclude the stage2 packages
 #    from the build.
+#
+# Because we omit certain packages from the build when CrossCompiling=YES,
+# it is important that we remember the value of CrossCompiling in binary
+# distributions that we produce. See Note [Persist CrossCompiling in binary
+# distributions].
 #
 #  [1] find utils -name ghc.mk | xargs grep -l 'build-prog.*,2'
 #

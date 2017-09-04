@@ -90,7 +90,7 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
     StgPtr p;
     const StgInfoTable *info;
     uint32_t size;
-    rtsBool prim;
+    bool prim;
 
     for (; bd != NULL; bd = bd->link) {
 
@@ -102,7 +102,7 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
         p = bd->start;
         while (p < bd->free) {
             info = get_itbl((StgClosure *)p);
-            prim = rtsFalse;
+            prim = false;
 
             switch (info->type) {
 
@@ -122,13 +122,14 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
                 size = sizeofW(StgThunkHeader) + 1;
                 break;
 
-            case CONSTR:
             case FUN:
             case FUN_1_0:
             case FUN_0_1:
             case FUN_1_1:
             case FUN_0_2:
             case FUN_2_0:
+            case CONSTR:
+            case CONSTR_NOCAF:
             case CONSTR_1_0:
             case CONSTR_0_1:
             case CONSTR_1_1:
@@ -139,7 +140,7 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
 
             case BLACKHOLE:
             case BLOCKING_QUEUE:
-                prim = rtsTrue;
+                prim = true;
                 size = sizeW_fromITBL(info);
                 break;
 
@@ -151,12 +152,12 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
                 // blackholes when it calls raiseAsync() on the
                 // resurrected threads.  So we know that any IND will
                 // be the size of a BLACKHOLE.
-                prim = rtsTrue;
+                prim = true;
                 size = BLACKHOLE_sizeW();
                 break;
 
             case BCO:
-                prim = rtsTrue;
+                prim = true;
                 size = bco_sizeW((StgBCO *)p);
                 break;
 
@@ -168,24 +169,24 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
             case MUT_PRIM:
             case MUT_VAR_CLEAN:
             case MUT_VAR_DIRTY:
-                prim = rtsTrue;
+                prim = true;
                 size = sizeW_fromITBL(info);
                 break;
 
             case AP:
-                prim = rtsTrue;
+                prim = true;
                 size = ap_sizeW((StgAP *)p);
                 break;
 
             case PAP:
-                prim = rtsTrue;
+                prim = true;
                 size = pap_sizeW((StgPAP *)p);
                 break;
 
             case AP_STACK:
             {
                 StgAP_STACK *ap = (StgAP_STACK *)p;
-                prim = rtsTrue;
+                prim = true;
                 size = ap_stack_sizeW(ap);
                 searchStackChunk(addrs, (StgPtr)ap->payload,
                                  (StgPtr)ap->payload + ap->size);
@@ -193,7 +194,7 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
             }
 
             case ARR_WORDS:
-                prim = rtsTrue;
+                prim = true;
                 size = arr_words_sizeW((StgArrBytes*)p);
                 break;
 
@@ -201,7 +202,7 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
             case MUT_ARR_PTRS_DIRTY:
             case MUT_ARR_PTRS_FROZEN:
             case MUT_ARR_PTRS_FROZEN0:
-                prim = rtsTrue;
+                prim = true;
                 size = mut_arr_ptrs_sizeW((StgMutArrPtrs *)p);
                 break;
 
@@ -209,18 +210,18 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
             case SMALL_MUT_ARR_PTRS_DIRTY:
             case SMALL_MUT_ARR_PTRS_FROZEN:
             case SMALL_MUT_ARR_PTRS_FROZEN0:
-                prim = rtsTrue;
+                prim = true;
                 size = small_mut_arr_ptrs_sizeW((StgSmallMutArrPtrs *)p);
                 break;
 
             case TSO:
-                prim = rtsTrue;
+                prim = true;
                 size = sizeofW(StgTSO);
                 break;
 
             case STACK: {
                 StgStack *stack = (StgStack*)p;
-                prim = rtsTrue;
+                prim = true;
                 searchStackChunk(addrs, stack->sp,
                                  stack->stack + stack->stack_size);
                 size = stack_sizeW(stack);
@@ -228,7 +229,7 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
             }
 
             case TREC_CHUNK:
-                prim = rtsTrue;
+                prim = true;
                 size = sizeofW(StgTRecChunk);
                 break;
 
@@ -245,7 +246,7 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
     }
 }
 
-#ifdef PROFILING
+#if defined(PROFILING)
 //
 // Do not unload the object if the CCS tree refers to a CCS or CC which
 // originates in the object.
@@ -291,7 +292,7 @@ void checkUnload (StgClosure *static_objects)
   for (oc = unloaded_objects; oc; oc = oc->next) {
       IF_DEBUG(linker, debugBelch("Checking whether to unload %" PATH_FMT "\n",
                                   oc->fileName));
-      oc->referenced = rtsFalse;
+      oc->referenced = false;
   }
 
   addrs = allocHashTable();
@@ -323,7 +324,7 @@ void checkUnload (StgClosure *static_objects)
       }
   }
 
-#ifdef PROFILING
+#if defined(PROFILING)
   /* Traverse the cost centre tree, calling checkAddress on each CCS/CC */
   searchCostCentres(addrs, CCS_MAIN);
 

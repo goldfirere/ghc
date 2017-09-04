@@ -9,10 +9,10 @@ T6018Afail.hs:7:15: error:
       G Char Bool Int = Int -- Defined at T6018Afail.hs:7:15
       G Bool Int Char = Int -- Defined at T6018fail.hs:15:15
 
-T6018Dfail.hs:7:15: error:
+T6018Cfail.hs:8:15: error:
     Type family equations violate injectivity annotation:
-      T6018Bfail.H Bool Int Char = Int -- Defined at T6018Dfail.hs:7:15
       T6018Bfail.H Char Bool Int = Int -- Defined at T6018Cfail.hs:8:15
+      T6018Bfail.H Bool Int Char = Int -- Defined at T6018Dfail.hs:7:15
 
 T6018fail.hs:13:15: error:
     Type family equations violate injectivity annotation:
@@ -58,18 +58,15 @@ T6018fail.hs:51:15: error:
       L a = MaybeSyn a -- Defined at T6018fail.hs:51:15
 
 T6018fail.hs:59:10: error:
-    • Polymorphic type indexes of associated type ‘PolyKindVarsF’
-        (i.e. ones independent of the class type variables)
-        must be distinct type variables
-      Expected: PolyKindVarsF '[]
-        Actual: PolyKindVarsF '[]
-      Use -fprint-explicit-kinds to see the kind arguments
-    • In the type instance declaration for ‘PolyKindVarsF’
-      In the instance declaration for ‘PolyKindVarsC '[]’
+    Type family equation violates injectivity annotation.
+    Kind variable ‘k1’ cannot be inferred from the right-hand side.
+    Use -fprint-explicit-kinds to see the kind arguments
+    In the type family equation:
+      PolyKindVarsF '[] = '[] -- Defined at T6018fail.hs:59:10
 
 T6018fail.hs:62:15: error:
     Type family equation violates injectivity annotation.
-    Kind variable ‘k2’ cannot be inferred from the right-hand side.
+    Kind variable ‘k1’ cannot be inferred from the right-hand side.
     Use -fprint-explicit-kinds to see the kind arguments
     In the type family equation:
       PolyKindVars '[] = '[] -- Defined at T6018fail.hs:62:15
@@ -79,7 +76,7 @@ T6018fail.hs:66:15: error:
     Kind variable ‘k’ cannot be inferred from the right-hand side.
     Use -fprint-explicit-kinds to see the kind arguments
     In the type family equation:
-      forall k (b :: k) (a :: k).
+      forall k (a :: k) (b :: k).
         Fc a b = Int -- Defined at T6018fail.hs:66:15
 
 T6018fail.hs:70:15: error:
@@ -88,7 +85,7 @@ T6018fail.hs:70:15: error:
     cannot be inferred from the right-hand side.
     Use -fprint-explicit-kinds to see the kind arguments
     In the type family equation:
-      forall k (b :: k) (a :: k).
+      forall k (a :: k) (b :: k).
         Gc a b = Int -- Defined at T6018fail.hs:70:15
 
 T6018fail.hs:74:15: error:
@@ -145,7 +142,7 @@ T6018fail.hs:118:15: error:
     cannot be inferred from the right-hand side.
     Use -fprint-explicit-kinds to see the kind arguments
     In the type family equation:
-      forall k (c :: k) b a.
+      forall k a b (c :: k).
         G7 a b c = [G7a a b c] -- Defined at T6018fail.hs:118:15
 
 T6018fail.hs:129:1: error:

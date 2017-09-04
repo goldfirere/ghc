@@ -271,7 +271,7 @@ unpack !buf !r !w acc0
               -- Here, we are rather careful to only put an *evaluated* character
               -- in the output string. Due to pointer tagging, this allows the consumer
               -- to avoid ping-ponging between the actual consumer code and the thunk code
-#ifdef CHARBUF_UTF16
+#if defined(CHARBUF_UTF16)
               -- reverse-order decoding of UTF-16
               c2 <- peekElemOff pbuf i
               if (c2 < 0xdc00 || c2 > 0xdffff)
@@ -736,20 +736,40 @@ bufWrite h_@Handle__{..} ptr count can_block =
   old_buf@Buffer{ bufRaw=old_raw, bufR=w, bufSize=size }
      <- readIORef haByteBuffer
 
-  -- enough room in handle buffer?
-  if (size - w > count)
-        -- There's enough room in the buffer:
+  -- TODO: Possible optimisation:
+  --       If we know that `w + count > size`, we should write both the
+  --       handle buffer and the `ptr` in a single `writev()` syscall.
+
+  -- Need to buffer and enough room in handle buffer?
+  -- There's no need to buffer if the data to be written is larger than
+  -- the handle buffer (`count >= size`).
+  if (count < size && count <= size - w)
+        -- We need to buffer and there's enough room in the buffer:
         -- just copy the data in and update bufR.
         then do debugIO ("hPutBuf: copying to buffer, w=" ++ show w)
                 copyToRawBuffer old_raw w ptr count
-                writeIORef haByteBuffer old_buf{ bufR = w + count }
+                let copied_buf = old_buf{ bufR = w + count }
+                -- If the write filled the buffer completely, we need to flush,
+                -- to maintain the "INVARIANTS on Buffers" from
+                -- GHC.IO.Buffer.checkBuffer: "a write buffer is never full".
+                if (count == size - w)
+                  then do
+                    debugIO "hPutBuf: flushing full buffer after writing"
+                    flushed_buf <- Buffered.flushWriteBuffer haDevice copied_buf
+                            -- TODO: we should do a non-blocking flush here
+                    writeIORef haByteBuffer flushed_buf
+                  else do
+                    writeIORef haByteBuffer copied_buf
                 return count
 
-        -- else, we have to flush
-        else do debugIO "hPutBuf: flushing first"
-                old_buf' <- Buffered.flushWriteBuffer haDevice old_buf
-                        -- TODO: we should do a non-blocking flush here
-                writeIORef haByteBuffer old_buf'
+        -- else, we have to flush any existing handle buffer data
+        -- and can then write out the data in `ptr` directly.
+        else do -- No point flushing when there's nothing in the buffer.
+                when (w > 0) $ do
+                  debugIO "hPutBuf: flushing first"
+                  flushed_buf <- Buffered.flushWriteBuffer haDevice old_buf
+                          -- TODO: we should do a non-blocking flush here
+                  writeIORef haByteBuffer flushed_buf
                 -- if we can fit in the buffer, then just loop
                 if count < size
                    then bufWrite h_ ptr count can_block

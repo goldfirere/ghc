@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -32,7 +33,9 @@ import SMRep
 import CoreSyn (Tickish)
 import qualified Unique as U
 
-import Compiler.Hoopl
+import Hoopl.Block
+import Hoopl.Graph
+import Hoopl.Label
 import Data.Maybe
 import Data.List (tails,sortBy)
 import Prelude hiding (succ)
@@ -60,7 +63,9 @@ data CmmNode e x where
     -- the "old" value of a register if we want to navigate the stack
     -- up one frame. Having unwind information for @Sp@ will allow the
     -- debugger to "walk" the stack.
-  CmmUnwind :: !GlobalReg -> !CmmExpr -> CmmNode O O
+    --
+    -- See Note [What is this unwinding business?] in Debug
+  CmmUnwind :: [(GlobalReg, Maybe CmmExpr)] -> CmmNode O O
 
   CmmAssign :: !CmmReg -> !CmmExpr -> CmmNode O O
     -- Assign to register
@@ -308,7 +313,7 @@ foreignTargetHints target
 -- Instances of register and slot users / definers
 
 instance UserOfRegs LocalReg (CmmNode e x) where
-  foldRegsUsed dflags f z n = case n of
+  foldRegsUsed dflags f !z n = case n of
     CmmAssign _ expr -> fold f z expr
     CmmStore addr rval -> fold f (fold f z addr) rval
     CmmUnsafeForeignCall t _ args -> fold f (fold f z t) args
@@ -317,13 +322,12 @@ instance UserOfRegs LocalReg (CmmNode e x) where
     CmmCall {cml_target=tgt} -> fold f z tgt
     CmmForeignCall {tgt=tgt, args=args} -> fold f (fold f z tgt) args
     _ -> z
-    where fold :: forall a b.
-                       UserOfRegs LocalReg a =>
-                       (b -> LocalReg -> b) -> b -> a -> b
+    where fold :: forall a b. UserOfRegs LocalReg a
+               => (b -> LocalReg -> b) -> b -> a -> b
           fold f z n = foldRegsUsed dflags f z n
 
 instance UserOfRegs GlobalReg (CmmNode e x) where
-  foldRegsUsed dflags f z n = case n of
+  foldRegsUsed dflags f !z n = case n of
     CmmAssign _ expr -> fold f z expr
     CmmStore addr rval -> fold f (fold f z addr) rval
     CmmUnsafeForeignCall t _ args -> fold f (fold f z t) args
@@ -332,39 +336,36 @@ instance UserOfRegs GlobalReg (CmmNode e x) where
     CmmCall {cml_target=tgt, cml_args_regs=args} -> fold f (fold f z args) tgt
     CmmForeignCall {tgt=tgt, args=args} -> fold f (fold f z tgt) args
     _ -> z
-    where fold :: forall a b.
-                       UserOfRegs GlobalReg a =>
-                       (b -> GlobalReg -> b) -> b -> a -> b
+    where fold :: forall a b.  UserOfRegs GlobalReg a
+               => (b -> GlobalReg -> b) -> b -> a -> b
           fold f z n = foldRegsUsed dflags f z n
 
 instance (Ord r, UserOfRegs r CmmReg) => UserOfRegs r ForeignTarget where
   -- The (Ord r) in the context is necessary here
   -- See Note [Recursive superclasses] in TcInstDcls
-  foldRegsUsed _      _ z (PrimTarget _)      = z
-  foldRegsUsed dflags f z (ForeignTarget e _) = foldRegsUsed dflags f z e
+  foldRegsUsed _      _ !z (PrimTarget _)      = z
+  foldRegsUsed dflags f !z (ForeignTarget e _) = foldRegsUsed dflags f z e
 
 instance DefinerOfRegs LocalReg (CmmNode e x) where
-  foldRegsDefd dflags f z n = case n of
+  foldRegsDefd dflags f !z n = case n of
     CmmAssign lhs _ -> fold f z lhs
     CmmUnsafeForeignCall _ fs _ -> fold f z fs
     CmmForeignCall {res=res} -> fold f z res
     _ -> z
-    where fold :: forall a b.
-                   DefinerOfRegs LocalReg a =>
-                   (b -> LocalReg -> b) -> b -> a -> b
+    where fold :: forall a b. DefinerOfRegs LocalReg a
+               => (b -> LocalReg -> b) -> b -> a -> b
           fold f z n = foldRegsDefd dflags f z n
 
 instance DefinerOfRegs GlobalReg (CmmNode e x) where
-  foldRegsDefd dflags f z n = case n of
+  foldRegsDefd dflags f !z n = case n of
     CmmAssign lhs _ -> fold f z lhs
     CmmUnsafeForeignCall tgt _ _  -> fold f z (foreignTargetRegs tgt)
     CmmCall        {} -> fold f z activeRegs
     CmmForeignCall {} -> fold f z activeRegs
                       -- See Note [Safe foreign calls clobber STG registers]
     _ -> z
-    where fold :: forall a b.
-                   DefinerOfRegs GlobalReg a =>
-                   (b -> GlobalReg -> b) -> b -> a -> b
+    where fold :: forall a b. DefinerOfRegs GlobalReg a
+               => (b -> GlobalReg -> b) -> b -> a -> b
           fold f z n = foldRegsDefd dflags f z n
 
           platform = targetPlatform dflags
@@ -462,7 +463,7 @@ mapExp :: (CmmExpr -> CmmExpr) -> CmmNode e x -> CmmNode e x
 mapExp _ f@(CmmEntry{})                          = f
 mapExp _ m@(CmmComment _)                        = m
 mapExp _ m@(CmmTick _)                           = m
-mapExp f   (CmmUnwind r e)                       = CmmUnwind r (f e)
+mapExp f   (CmmUnwind regs)                      = CmmUnwind (map (fmap (fmap f)) regs)
 mapExp f   (CmmAssign r e)                       = CmmAssign r (f e)
 mapExp f   (CmmStore addr e)                     = CmmStore (f addr) (f e)
 mapExp f   (CmmUnsafeForeignCall tgt fs as)      = CmmUnsafeForeignCall (mapForeignTarget f tgt) fs (map f as)
@@ -493,7 +494,7 @@ mapExpM :: (CmmExpr -> Maybe CmmExpr) -> CmmNode e x -> Maybe (CmmNode e x)
 mapExpM _ (CmmEntry{})              = Nothing
 mapExpM _ (CmmComment _)            = Nothing
 mapExpM _ (CmmTick _)               = Nothing
-mapExpM f (CmmUnwind r e)           = CmmUnwind r `fmap` f e
+mapExpM f (CmmUnwind regs)          = CmmUnwind `fmap` mapM (\(r,e) -> mapM f e >>= \e' -> pure (r,e')) regs
 mapExpM f (CmmAssign r e)           = CmmAssign r `fmap` f e
 mapExpM f (CmmStore addr e)         = (\[addr', e'] -> CmmStore addr' e') `fmap` mapListM f [addr, e]
 mapExpM _ (CmmBranch _)             = Nothing
@@ -546,7 +547,7 @@ foldExp :: (CmmExpr -> z -> z) -> CmmNode e x -> z -> z
 foldExp _ (CmmEntry {}) z                         = z
 foldExp _ (CmmComment {}) z                       = z
 foldExp _ (CmmTick {}) z                          = z
-foldExp f (CmmUnwind _ e) z                       = f e z
+foldExp f (CmmUnwind xs) z                        = foldr (maybe id f) z (map snd xs)
 foldExp f (CmmAssign _ e) z                       = f e z
 foldExp f (CmmStore addr e) z                     = f addr $ f e z
 foldExp f (CmmUnsafeForeignCall t _ as) z         = foldr f (foldExpForeignTarget f t z) as

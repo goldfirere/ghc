@@ -9,7 +9,7 @@
 #include "PosixSource.h"
 #include "Rts.h"
 
-#ifdef TRACING
+#if defined(TRACING)
 
 #include "Trace.h"
 #include "Capability.h"
@@ -19,20 +19,14 @@
 
 #include <string.h>
 #include <stdio.h>
-#ifdef HAVE_SYS_TYPES_H
+#if defined(HAVE_SYS_TYPES_H)
 #include <sys/types.h>
 #endif
-#ifdef HAVE_UNISTD_H
+#if defined(HAVE_UNISTD_H)
 #include <unistd.h>
 #endif
 
-// PID of the process that writes to event_log_filename (#4512)
-static pid_t event_log_pid = -1;
-
-static char *event_log_filename = NULL;
-
-// File for logging events
-FILE *event_log_file = NULL;
+static const EventLogWriter *event_log_writer;
 
 #define EVENT_LOG_SIZE 2 * (1024 * 1024) // 2MB
 
@@ -50,7 +44,7 @@ typedef struct _EventsBuf {
 EventsBuf *capEventBuf; // one EventsBuf for each Capability
 
 EventsBuf eventBuf; // an EventsBuf not associated with any Capability
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
 Mutex eventBufMutex; // protected by this mutex
 #endif
 
@@ -176,7 +170,7 @@ static inline void postBuf(EventsBuf *eb, StgWord8 *buf, uint32_t size)
 static inline void postString(EventsBuf *eb, const char *buf)
 {
     if (buf) {
-        int len = strlen(buf);
+        const int len = strlen(buf);
         ASSERT(eb->begin + eb->size > eb->pos + len);
         memcpy(eb->pos, buf, len);
         eb->pos += len;
@@ -232,55 +226,54 @@ static inline void postInt32(EventsBuf *eb, StgInt32 i)
 
 #define EVENT_SIZE_DYNAMIC (-1)
 
-void
-initEventLogging(void)
+static void
+initEventLogWriter(void)
 {
-    StgWord8 t, c;
-    uint32_t n_caps;
-    char *prog;
-
-    prog = stgMallocBytes(strlen(prog_name) + 1, "initEventLogging");
-    strcpy(prog, prog_name);
-#ifdef mingw32_HOST_OS
-    // on Windows, drop the .exe suffix if there is one
-    {
-        char *suff;
-        suff = strrchr(prog,'.');
-        if (suff != NULL && !strcmp(suff,".exe")) {
-            *suff = '\0';
-        }
+    if (event_log_writer != NULL &&
+            event_log_writer->initEventLogWriter != NULL) {
+        event_log_writer->initEventLogWriter();
     }
-#endif
+}
 
-    event_log_filename = stgMallocBytes(strlen(prog)
-                                        + 10 /* .%d */
-                                        + 10 /* .eventlog */,
-                                        "initEventLogging");
+static bool
+writeEventLog(void *eventlog, size_t eventlog_size)
+{
+    if (event_log_writer != NULL &&
+            event_log_writer->writeEventLog != NULL) {
+        return event_log_writer->writeEventLog(eventlog, eventlog_size);
+    } else {
+        return false;
+    }
+}
+
+static void
+stopEventLogWriter(void)
+{
+    if (event_log_writer != NULL &&
+            event_log_writer->stopEventLogWriter != NULL) {
+        event_log_writer->stopEventLogWriter();
+    }
+}
+
+void
+flushEventLog(void)
+{
+    if (event_log_writer != NULL &&
+            event_log_writer->flushEventLog != NULL) {
+        event_log_writer->flushEventLog();
+    }
+}
+
+void
+initEventLogging(const EventLogWriter *ev_writer)
+{
+    uint32_t n_caps;
+
+    event_log_writer = ev_writer;
+    initEventLogWriter();
 
     if (sizeof(EventDesc) / sizeof(char*) != NUM_GHC_EVENT_TAGS) {
         barf("EventDesc array has the wrong number of elements");
-    }
-
-    if (event_log_pid == -1) { // #4512
-        // Single process
-        sprintf(event_log_filename, "%s.eventlog", prog);
-        event_log_pid = getpid();
-    } else {
-        // Forked process, eventlog already started by the parent
-        // before fork
-        event_log_pid = getpid();
-        // We don't have a FMT* symbol for pid_t, so we go via Word64
-        // to be sure of not losing range. It would be nicer to have a
-        // FMT* symbol or similar, though.
-        sprintf(event_log_filename, "%s.%" FMT_Word64 ".eventlog",
-                prog, (StgWord64)event_log_pid);
-    }
-    stgFree(prog);
-
-    /* Open event log file for writing. */
-    if ((event_log_file = fopen(event_log_filename, "wb")) == NULL) {
-        sysErrorBelch("initEventLogging: can't open %s", event_log_filename);
-        stg_exit(EXIT_FAILURE);
     }
 
     /*
@@ -293,13 +286,13 @@ initEventLogging(void)
      * Use a single buffer to store the header with event types, then flush
      * the buffer so all buffers are empty for writing events.
      */
-#ifdef THREADED_RTS
-    // XXX n_capabilities hasn't been initislised yet
+#if defined(THREADED_RTS)
+    // XXX n_capabilities hasn't been initialized yet
     n_caps = RtsFlags.ParFlags.nCapabilities;
 #else
     n_caps = 1;
 #endif
-    moreCapEventBufs(0,n_caps);
+    moreCapEventBufs(0, n_caps);
 
     initEventsBuf(&eventBuf, EVENT_LOG_SIZE, (EventCapNo)(-1));
 
@@ -308,7 +301,7 @@ initEventLogging(void)
 
     // Mark beginning of event types in the header.
     postInt32(&eventBuf, EVENT_HET_BEGIN);
-    for (t = 0; t < NUM_GHC_EVENT_TAGS; ++t) {
+    for (int t = 0; t < NUM_GHC_EVENT_TAGS; ++t) {
 
         eventTypes[t].etNum = t;
         eventTypes[t].desc = EventDesc[t];
@@ -419,12 +412,14 @@ initEventLogging(void)
         case EVENT_GC_STATS_GHC:      // (heap_capset, generation,
                                       //  copied_bytes, slop_bytes, frag_bytes,
                                       //  par_n_threads,
-                                      //  par_max_copied, par_tot_copied)
+                                      //  par_max_copied, par_tot_copied,
+                                      //  par_balanced_copied
+                                      //  )
             eventTypes[t].size = sizeof(EventCapsetID)
                                + sizeof(StgWord16)
                                + sizeof(StgWord64) * 3
                                + sizeof(StgWord32)
-                               + sizeof(StgWord64) * 2;
+                               + sizeof(StgWord64) * 3;
             break;
 
         case EVENT_TASK_CREATE:   // (taskId, cap, tid)
@@ -495,11 +490,11 @@ initEventLogging(void)
      */
     printAndClearEventBuf(&eventBuf);
 
-    for (c = 0; c < n_caps; ++c) {
+    for (uint32_t c = 0; c < n_caps; ++c) {
         postBlockMarker(&capEventBuf[c]);
     }
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     initMutex(&eventBufMutex);
 #endif
 }
@@ -507,10 +502,8 @@ initEventLogging(void)
 void
 endEventLogging(void)
 {
-    uint32_t c;
-
     // Flush all events remaining in the buffers.
-    for (c = 0; c < n_capabilities; ++c) {
+    for (uint32_t c = 0; c < n_capabilities; ++c) {
         printAndClearEventBuf(&capEventBuf[c]);
     }
     printAndClearEventBuf(&eventBuf);
@@ -522,16 +515,12 @@ endEventLogging(void)
     // Flush the end of data marker.
     printAndClearEventBuf(&eventBuf);
 
-    if (event_log_file != NULL) {
-        fclose(event_log_file);
-    }
+    stopEventLogWriter();
 }
 
 void
 moreCapEventBufs (uint32_t from, uint32_t to)
 {
-    uint32_t c;
-
     if (from > 0) {
         capEventBuf = stgReallocBytes(capEventBuf, to * sizeof(EventsBuf),
                                       "moreCapEventBufs");
@@ -540,44 +529,30 @@ moreCapEventBufs (uint32_t from, uint32_t to)
                                      "moreCapEventBufs");
     }
 
-    for (c = from; c < to; ++c) {
+    for (uint32_t c = from; c < to; ++c) {
         initEventsBuf(&capEventBuf[c], EVENT_LOG_SIZE, c);
     }
 
     // The from == 0 already covered in initEventLogging, so we are interested
     // only in case when we are increasing capabilities number
     if (from > 0) {
-        for (c = from; c < to; ++c) {
+        for (uint32_t c = from; c < to; ++c) {
            postBlockMarker(&capEventBuf[c]);
         }
     }
-
 }
 
 
 void
 freeEventLogging(void)
 {
-    StgWord8 c;
-
     // Free events buffer.
-    for (c = 0; c < n_capabilities; ++c) {
+    for (uint32_t c = 0; c < n_capabilities; ++c) {
         if (capEventBuf[c].begin != NULL)
             stgFree(capEventBuf[c].begin);
     }
     if (capEventBuf != NULL)  {
         stgFree(capEventBuf);
-    }
-    if (event_log_filename != NULL) {
-        stgFree(event_log_filename);
-    }
-}
-
-void
-flushEventLog(void)
-{
-    if (event_log_file != NULL) {
-        fflush(event_log_file);
     }
 }
 
@@ -585,9 +560,7 @@ void
 abortEventLogging(void)
 {
     freeEventLogging();
-    if (event_log_file != NULL) {
-        fclose(event_log_file);
-    }
+    stopEventLogWriter();
 }
 
 /*
@@ -601,9 +574,7 @@ postSchedEvent (Capability *cap,
                 StgWord info1,
                 StgWord info2)
 {
-    EventsBuf *eb;
-
-    eb = &capEventBuf[cap->no];
+    EventsBuf *eb = &capEventBuf[cap->no];
     ensureRoomForEvent(eb, tag);
 
     postEventHeader(eb, tag);
@@ -649,9 +620,7 @@ postSparkEvent (Capability *cap,
                 EventTypeNum tag,
                 StgWord info1)
 {
-    EventsBuf *eb;
-
-    eb = &capEventBuf[cap->no];
+    EventsBuf *eb = &capEventBuf[cap->no];
     ensureRoomForEvent(eb, tag);
 
     postEventHeader(eb, tag);
@@ -689,9 +658,7 @@ postSparkCountersEvent (Capability *cap,
                         SparkCounters counters,
                         StgWord remaining)
 {
-    EventsBuf *eb;
-
-    eb = &capEventBuf[cap->no];
+    EventsBuf *eb = &capEventBuf[cap->no];
     ensureRoomForEvent(eb, EVENT_SPARK_COUNTERS);
 
     postEventHeader(eb, EVENT_SPARK_COUNTERS);
@@ -805,9 +772,9 @@ void postCapsetVecEvent (EventTypeNum tag,
                          int argc,
                          char *argv[])
 {
-    int i, size = sizeof(EventCapsetID);
+    int size = sizeof(EventCapsetID);
 
-    for (i = 0; i < argc; i++) {
+    for (int i = 0; i < argc; i++) {
         // 1 + strlen to account for the trailing \0, used as separator
         size += 1 + strlen(argv[i]);
     }
@@ -828,7 +795,7 @@ void postCapsetVecEvent (EventTypeNum tag,
     postPayloadSize(&eventBuf, size);
     postCapsetID(&eventBuf, capset);
 
-    for( i = 0; i < argc; i++ ) {
+    for (int i = 0; i < argc; i++) {
         // again, 1 + to account for \0
         postBuf(&eventBuf, (StgWord8*) argv[i], 1 + strlen(argv[i]));
     }
@@ -886,9 +853,7 @@ void postHeapEvent (Capability    *cap,
                     EventCapsetID  heap_capset,
                     W_           info1)
 {
-    EventsBuf *eb;
-
-    eb = &capEventBuf[cap->no];
+    EventsBuf *eb = &capEventBuf[cap->no];
     ensureRoomForEvent(eb, tag);
 
     postEventHeader(eb, tag);
@@ -940,17 +905,17 @@ void postEventGcStats  (Capability    *cap,
                         W_           fragmentation,
                         uint32_t     par_n_threads,
                         W_           par_max_copied,
-                        W_           par_tot_copied)
+                        W_           par_tot_copied,
+                        W_           par_balanced_copied)
 {
-    EventsBuf *eb;
-
-    eb = &capEventBuf[cap->no];
+    EventsBuf *eb = &capEventBuf[cap->no];
     ensureRoomForEvent(eb, EVENT_GC_STATS_GHC);
 
     postEventHeader(eb, EVENT_GC_STATS_GHC);
     /* EVENT_GC_STATS_GHC (heap_capset, generation,
                            copied_bytes, slop_bytes, frag_bytes,
-                           par_n_threads, par_max_copied, par_tot_copied) */
+                           par_n_threads, par_max_copied,
+                           par_tot_copied, par_balanced_copied) */
     postCapsetID(eb, heap_capset);
     postWord16(eb, gen);
     postWord64(eb, copied);
@@ -959,6 +924,7 @@ void postEventGcStats  (Capability    *cap,
     postWord32(eb, par_n_threads);
     postWord64(eb, par_max_copied);
     postWord64(eb, par_tot_copied);
+    postWord64(eb, par_balanced_copied);
 }
 
 void postTaskCreateEvent (EventTaskId taskId,
@@ -1008,9 +974,7 @@ void postTaskDeleteEvent (EventTaskId taskId)
 void
 postEvent (Capability *cap, EventTypeNum tag)
 {
-    EventsBuf *eb;
-
-    eb = &capEventBuf[cap->no];
+    EventsBuf *eb = &capEventBuf[cap->no];
     ensureRoomForEvent(eb, tag);
     postEventHeader(eb, tag);
 }
@@ -1018,9 +982,7 @@ postEvent (Capability *cap, EventTypeNum tag)
 void
 postEventAtTimestamp (Capability *cap, EventTimestamp ts, EventTypeNum tag)
 {
-    EventsBuf *eb;
-
-    eb = &capEventBuf[cap->no];
+    EventsBuf *eb = &capEventBuf[cap->no];
     ensureRoomForEvent(eb, tag);
 
     /* Normally we'd call postEventHeader(), but that generates its own
@@ -1035,9 +997,7 @@ postEventAtTimestamp (Capability *cap, EventTimestamp ts, EventTypeNum tag)
 void postLogMsg(EventsBuf *eb, EventTypeNum type, char *msg, va_list ap)
 {
     char buf[BUF];
-    uint32_t size;
-
-    size = vsnprintf(buf,BUF,msg,ap);
+    uint32_t size = vsnprintf(buf, BUF, msg,ap);
     if (size > BUF) {
         buf[BUF-1] = '\0';
         size = BUF;
@@ -1064,10 +1024,8 @@ void postCapMsg(Capability *cap, char *msg, va_list ap)
 
 void postUserEvent(Capability *cap, EventTypeNum type, char *msg)
 {
-    EventsBuf *eb;
-    int size = strlen(msg);
-
-    eb = &capEventBuf[cap->no];
+    const int size = strlen(msg);
+    EventsBuf *eb = &capEventBuf[cap->no];
 
     if (!hasRoomForVariableEvent(eb, size)){
         printAndClearEventBuf(eb);
@@ -1087,11 +1045,9 @@ void postThreadLabel(Capability    *cap,
                      EventThreadID  id,
                      char          *label)
 {
-    EventsBuf *eb;
-    int strsize = strlen(label);
-    int size = strsize + sizeof(EventThreadID);
-
-    eb = &capEventBuf[cap->no];
+    const int strsize = strlen(label);
+    const int size = strsize + sizeof(EventThreadID);
+    EventsBuf *eb = &capEventBuf[cap->no];
 
     if (!hasRoomForVariableEvent(eb, size)){
         printAndClearEventBuf(eb);
@@ -1110,13 +1066,11 @@ void postThreadLabel(Capability    *cap,
 
 void closeBlockMarker (EventsBuf *ebuf)
 {
-    StgInt8* save_pos;
-
     if (ebuf->marker)
     {
         // (type:16, time:64, size:32, end_time:64)
 
-        save_pos = ebuf->pos;
+        StgInt8* save_pos = ebuf->pos;
         ebuf->pos = ebuf->marker + sizeof(EventTypeNum) +
                     sizeof(EventTimestamp);
         postWord32(ebuf, save_pos - ebuf->marker);
@@ -1232,7 +1186,7 @@ void postHeapProfSampleString(StgWord8 profile_id,
     RELEASE_LOCK(&eventBufMutex);
 }
 
-#ifdef PROFILING
+#if defined(PROFILING)
 void postHeapProfCostCentre(StgWord32 ccID,
                             const char *label,
                             const char *module,
@@ -1287,18 +1241,13 @@ void printAndClearEventBuf (EventsBuf *ebuf)
 
     if (ebuf->begin != NULL && ebuf->pos != ebuf->begin)
     {
-        StgInt8 *begin = ebuf->begin;
-        while (begin < ebuf->pos) {
-            StgWord64 remain = ebuf->pos - begin;
-            StgWord64 written = fwrite(begin, 1, remain, event_log_file);
-            if (written == 0) {
-                debugBelch(
-                    "printAndClearEventLog: fwrite() failed to write anything;"
-                    " tried to write numBytes=%" FMT_Word64, remain);
-                resetEventsBuf(ebuf);
-                return;
-            }
-            begin += written;
+        size_t elog_size = ebuf->pos - ebuf->begin;
+        if (!writeEventLog(ebuf->begin, elog_size)) {
+            debugBelch(
+                    "printAndClearEventLog: could not flush event log"
+                );
+            resetEventsBuf(ebuf);
+            return;
         }
 
         resetEventsBuf(ebuf);
@@ -1324,9 +1273,7 @@ void resetEventsBuf(EventsBuf* eb)
 
 StgBool hasRoomForEvent(EventsBuf *eb, EventTypeNum eNum)
 {
-  uint32_t size;
-
-  size = sizeof(EventTypeNum) + sizeof(EventTimestamp) + eventTypes[eNum].size;
+  uint32_t size = sizeof(EventTypeNum) + sizeof(EventTimestamp) + eventTypes[eNum].size;
 
   if (eb->pos + size > eb->begin + eb->size) {
       return 0; // Not enough space.
@@ -1337,9 +1284,7 @@ StgBool hasRoomForEvent(EventsBuf *eb, EventTypeNum eNum)
 
 StgBool hasRoomForVariableEvent(EventsBuf *eb, uint32_t payload_bytes)
 {
-  uint32_t size;
-
-  size = sizeof(EventTypeNum) + sizeof(EventTimestamp) +
+  uint32_t size = sizeof(EventTypeNum) + sizeof(EventTimestamp) +
       sizeof(EventPayloadSize) + payload_bytes;
 
   if (eb->pos + size > eb->begin + eb->size) {
@@ -1371,15 +1316,12 @@ int ensureRoomForVariableEvent(EventsBuf *eb, StgWord16 size)
 
 void postEventType(EventsBuf *eb, EventType *et)
 {
-    StgWord8 d;
-    uint32_t desclen;
-
     postInt32(eb, EVENT_ET_BEGIN);
     postEventTypeNum(eb, et->etNum);
     postWord16(eb, (StgWord16)et->size);
-    desclen = strlen(et->desc);
+    const int desclen = strlen(et->desc);
     postWord32(eb, desclen);
-    for (d = 0; d < desclen; ++d) {
+    for (int d = 0; d < desclen; ++d) {
         postInt8(eb, (StgInt8)et->desc[d]);
     }
     postWord32(eb, 0); // no extensions yet

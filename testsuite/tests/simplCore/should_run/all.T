@@ -40,17 +40,12 @@ test('T4814', normal, compile_and_run, [''])
 
 # Run this test *without* optimisation too
 test('T3959', only_ways(['normal','optasm']), compile_and_run, [''])
-test('T3983', [only_ways(['normal','optasm']),
-               extra_clean(['T3983_Foo.hi','T3983_Foo.o','T3983_Bar.hi','T3983_Bar.o',])], 
-              multimod_compile_and_run, 
-              ['T3983',''])
-test('T3972', extra_clean(['T3972A.hi', 'T3972A.o']),
-              compile_and_run,
-              [''])
+test('T3983', [only_ways(['normal', 'optasm'])], multimod_compile_and_run,
+     ['T3983', ''])
+test('T3972', [], compile_and_run, [''])
 test('T5315', normal, compile_and_run, [''])
 test('T5453', normal, compile_and_run, [''])
-test('T5441', extra_clean(['T5441a.o','T5441a.hi']), 
-              multimod_compile_and_run, ['T5441',''])
+test('T5441', [], multimod_compile_and_run, ['T5441', ''])
 test('T5603', normal, compile_and_run, [''])
 test('T2110', normal, compile_and_run, [''])
 test('AmapCoerce', normal, compile_and_run, [''])
@@ -73,6 +68,13 @@ test('T10830', extra_run_opts('+RTS -K100k -RTS'), compile_and_run, [''])
 test('T11172', normal, compile_and_run, [''])
 test('T11731', normal, compile_and_run, ['-fspec-constr'])
 test('T7611', normal, compile_and_run, [''])
-test('T12689', normal, compile_and_run, [''])
 test('T12689broken', expect_broken(12689), compile_and_run, [''])
 test('T12689a', normal, compile_and_run, [''])
+
+test('T13172', only_ways(['optasm']), compile_and_run, ['-dcore-lint'])
+test('T13227', normal, compile_and_run, [''])
+test('T13733', expect_broken(13733), compile_and_run, [''])
+test('T13429', normal, compile_and_run, [''])
+test('T13429_2', normal, compile_and_run, [''])
+test('T13750', normal, compile_and_run, [''])
+test('T14178', normal, compile_and_run, [''])

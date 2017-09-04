@@ -53,7 +53,8 @@ import Util
 import PprCore ()
 
 import BasicTypes
-import Compiler.Hoopl
+import Hoopl.Block
+import Hoopl.Graph
 import Data.List
 import Prelude hiding (succ)
 
@@ -186,18 +187,19 @@ pprNode node = pp_node <+> pp_debug
       -- label:
       CmmEntry id tscope -> ppr id <> colon <+>
          (sdocWithDynFlags $ \dflags ->
-           ppWhen (gopt Opt_PprShowTicks dflags) (text "//" <+> ppr tscope))
+           ppUnless (gopt Opt_SuppressTicks dflags) (text "//" <+> ppr tscope))
 
       -- // text
       CmmComment s -> text "//" <+> ftext s
 
       -- //tick bla<...>
-      CmmTick t -> if gopt Opt_PprShowTicks dflags
-                   then text "//tick" <+> ppr t
-                   else empty
+      CmmTick t -> ppUnless (gopt Opt_SuppressTicks dflags) $
+                   text "//tick" <+> ppr t
 
       -- unwind reg = expr;
-      CmmUnwind r e -> text "unwind " <> ppr r <+> char '=' <+> ppr e
+      CmmUnwind regs ->
+          text "unwind "
+          <> commafy (map (\(r,e) -> ppr r <+> char '=' <+> ppr e) regs) <> semi
 
       -- reg = expr;
       CmmAssign reg expr -> ppr reg <+> equals <+> ppr expr <> semi

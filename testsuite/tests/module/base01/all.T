@@ -1,6 +1,3 @@
-test('base01',
-     [normalise_slashes,
-      clean_cmd('$MAKE -s clean')],
-     run_command,
+test('base01', [extra_files(['GHC']),
+                normalise_slashes], run_command,
      ['$MAKE -s base01 --no-print-directory'])
-

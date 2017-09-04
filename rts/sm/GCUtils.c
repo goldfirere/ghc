@@ -22,11 +22,11 @@
 #include "GCUtils.h"
 #include "Printer.h"
 #include "Trace.h"
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
 #include "WSDeque.h"
 #endif
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
 SpinLock gc_alloc_block_sync;
 #endif
 
@@ -192,7 +192,7 @@ push_scanned_block (bdescr *bd, gen_workspace *ws)
 StgPtr
 todo_block_full (uint32_t size, gen_workspace *ws)
 {
-    rtsBool urgent_to_push, can_extend;
+    bool urgent_to_push, can_extend;
     StgPtr p;
     bdescr *bd;
 
@@ -346,7 +346,7 @@ alloc_todo_block (gen_workspace *ws, uint32_t size)
  * Debugging
  * -------------------------------------------------------------------------- */
 
-#if DEBUG
+#if defined(DEBUG)
 void
 printMutableList(bdescr *bd)
 {

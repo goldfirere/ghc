@@ -36,8 +36,9 @@ import StgCmmEnv
 
 import MkGraph
 
-import Hoopl
+import Hoopl.Label
 import SMRep
+import BlockId
 import Cmm
 import CmmUtils
 import CostCentre
@@ -386,7 +387,7 @@ entryHeapCheck' is_fastf node arity args code
 
        updfr_sz <- getUpdFrameOff
 
-       loop_id <- newLabelC
+       loop_id <- newBlockId
        emitLabel loop_id
        heapCheck True True (gc_call updfr_sz <*> mkBranch loop_id) code
 
@@ -417,9 +418,9 @@ altOrNoEscapeHeapCheck checkYield regs code = do
     case cannedGCEntryPoint dflags regs of
       Nothing -> genericGC checkYield code
       Just gc -> do
-        lret <- newLabelC
+        lret <- newBlockId
         let (off, _, copyin) = copyInOflow dflags NativeReturn (Young lret) regs []
-        lcont <- newLabelC
+        lcont <- newBlockId
         tscope <- getTickScope
         emitOutOfLine lret (copyin <*> mkBranch lcont, tscope)
         emitLabel lcont
@@ -462,7 +463,7 @@ cannedGCReturnsTo checkYield cont_on_stack gc regs lret off code
 genericGC :: Bool -> FCode a -> FCode a
 genericGC checkYield code
   = do updfr_sz <- getUpdFrameOff
-       lretry <- newLabelC
+       lretry <- newBlockId
        emitLabel lretry
        call <- mkCall generic_gc (GC, GC) [] [] updfr_sz []
        heapCheck False checkYield (call <*> mkBranch lretry) code
@@ -551,7 +552,7 @@ heapCheck checkStack checkYield do_gc code
 heapStackCheckGen :: Maybe CmmExpr -> Maybe CmmExpr -> FCode ()
 heapStackCheckGen stk_hwm mb_bytes
   = do updfr_sz <- getUpdFrameOff
-       lretry <- newLabelC
+       lretry <- newBlockId
        emitLabel lretry
        call <- mkCall generic_gc (GC, GC) [] [] updfr_sz []
        do_checks stk_hwm False mb_bytes (call <*> mkBranch lretry)
@@ -610,7 +611,7 @@ do_checks :: Maybe CmmExpr    -- Should we check the stack?
           -> FCode ()
 do_checks mb_stk_hwm checkYield mb_alloc_lit do_gc = do
   dflags <- getDynFlags
-  gc_id <- newLabelC
+  gc_id <- newBlockId
 
   let
     Just alloc_lit = mb_alloc_lit
@@ -636,7 +637,8 @@ do_checks mb_stk_hwm checkYield mb_alloc_lit do_gc = do
 
   case mb_stk_hwm of
     Nothing -> return ()
-    Just stk_hwm -> tickyStackCheck >> (emit =<< mkCmmIfGoto (sp_oflo stk_hwm) gc_id)
+    Just stk_hwm -> tickyStackCheck
+      >> (emit =<< mkCmmIfGoto' (sp_oflo stk_hwm) gc_id (Just False) )
 
   -- Emit new label that might potentially be a header
   -- of a self-recursive tail call.
@@ -651,14 +653,14 @@ do_checks mb_stk_hwm checkYield mb_alloc_lit do_gc = do
     then do
      tickyHeapCheck
      emitAssign hpReg bump_hp
-     emit =<< mkCmmIfThen hp_oflo (alloc_n <*> mkBranch gc_id)
+     emit =<< mkCmmIfThen' hp_oflo (alloc_n <*> mkBranch gc_id) (Just False)
     else do
       when (checkYield && not (gopt Opt_OmitYields dflags)) $ do
          -- Yielding if HpLim == 0
          let yielding = CmmMachOp (mo_wordEq dflags)
                                   [CmmReg (CmmGlobal HpLim),
                                    CmmLit (zeroCLit dflags)]
-         emit =<< mkCmmIfGoto yielding gc_id
+         emit =<< mkCmmIfGoto' yielding gc_id (Just False)
 
   tscope <- getTickScope
   emitOutOfLine gc_id

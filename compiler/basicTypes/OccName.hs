@@ -57,7 +57,7 @@ module OccName (
         isDerivedOccName,
         mkDataConWrapperOcc, mkWorkerOcc,
         mkMatcherOcc, mkBuilderOcc,
-        mkDefaultMethodOcc,
+        mkDefaultMethodOcc, isDefaultMethodOcc, isTypeableBindOcc,
         mkNewTyCoOcc, mkClassOpAuxOcc,
         mkCon2TagOcc, mkTag2ConOcc, mkMaxTagOcc,
         mkClassDataConOcc, mkDictOcc, mkIPOcc,
@@ -99,8 +99,7 @@ module OccName (
 
         -- * Tidying up
         TidyOccEnv, emptyTidyOccEnv, initTidyOccEnv,
-        tidyOccName,
-        tidyOccNames, avoidClashesOccEnv,
+        tidyOccName, avoidClashesOccEnv,
 
         -- FsEnv
         FastStringEnv, emptyFsEnv, lookupFsEnv, extendFsEnv, mkFsEnv
@@ -117,7 +116,6 @@ import Outputable
 import Lexeme
 import Binary
 import Control.DeepSeq
-import Data.List (mapAccumL)
 import Data.Char
 import Data.Data
 
@@ -595,6 +593,22 @@ isDerivedOccName occ =
      c:':':_ | isAlphaNum c -> True   -- E.g.  N:blah   newtype coercions
      _other                 -> False
 
+isDefaultMethodOcc :: OccName -> Bool
+isDefaultMethodOcc occ =
+   case occNameString occ of
+     '$':'d':'m':_ -> True
+     _ -> False
+
+-- | Is an 'OccName' one of a Typeable @TyCon@ or @Module@ binding?
+-- This is needed as these bindings are renamed differently.
+-- See Note [Grand plan for Typeable] in TcTypeable.
+isTypeableBindOcc :: OccName -> Bool
+isTypeableBindOcc occ =
+   case occNameString occ of
+     '$':'t':'c':_ -> True  -- mkTyConRepOcc
+     '$':'t':'r':_ -> True  -- Module binding
+     _ -> False
+
 mkDataConWrapperOcc, mkWorkerOcc,
         mkMatcherOcc, mkBuilderOcc,
         mkDefaultMethodOcc,
@@ -838,15 +852,13 @@ would like to see is
 
     (id,id,id) :: (a3 -> a3, a2 -> a2, a1 -> a1)
 
-This is achieved in tidyOccNames. It still uses tidyOccName to rename each name
-on its own, but it prepares the TidyEnv (using avoidClashesOccEnv), by “blocking” every
-name that occurs twice in the map. This way, none of the "a"s will get the
-priviledge of keeping this name, and all of them will get a suitable numbery by
-tidyOccName.
+To achieve this, the function avoidClashesOccEnv can be used to prepare the
+TidyEnv, by “blocking” every name that occurs twice in the map. This way, none
+of the "a"s will get the privilege of keeping this name, and all of them will
+get a suitable number by tidyOccName.
 
-It may be inappropriate to use tidyOccNames if the caller needs access to the
-intermediate environments (e.g. to tidy the tyVarKind of a type variable). In that
-case, avoidClashesOccEnv should be used directly, and tidyOccName afterwards.
+This prepared TidyEnv can then be used with tidyOccName. See tidyTyCoVarBndrs
+for an example where this is used.
 
 This is #12382.
 
@@ -864,11 +876,6 @@ initTidyOccEnv = foldl add emptyUFM
     add env (OccName _ fs) = addToUFM env fs 1
 
 -- see Note [Tidying multiple names at once]
-tidyOccNames :: TidyOccEnv -> [OccName] -> (TidyOccEnv, [OccName])
-tidyOccNames env occs = mapAccumL tidyOccName env' occs
-  where
-    env' = avoidClashesOccEnv env occs
-
 avoidClashesOccEnv :: TidyOccEnv -> [OccName] -> TidyOccEnv
 avoidClashesOccEnv env occs = go env emptyUFM occs
   where

@@ -41,7 +41,7 @@ import SMRep
 import Bitmap
 import Stream (Stream)
 import qualified Stream
-import Hoopl
+import Hoopl.Collections
 
 import Maybes
 import DynFlags
@@ -133,7 +133,7 @@ mkInfoTable dflags proc@(CmmProc infos entry_lbl live blocks)
         --
         return (top_decls ++
                 [CmmProc mapEmpty entry_lbl live blocks,
-                 mkDataLits (Section Data info_lbl) info_lbl
+                 mkRODataLits info_lbl
                     (CmmLabel entry_lbl : rel_std_info ++ rel_extra_bits)])
 
   --
@@ -400,7 +400,7 @@ mkProfLits _ (ProfilingInfo td cd)
 newStringLit :: [Word8] -> UniqSM (CmmLit, GenCmmDecl CmmStatics info stmt)
 newStringLit bytes
   = do { uniq <- getUniqueM
-       ; return (mkByteStringCLit uniq bytes) }
+       ; return (mkByteStringCLit (mkStringLitLabel uniq) bytes) }
 
 
 -- Misc utils

@@ -28,8 +28,13 @@ import GHC.Prim (coerce)
 infixr 9 .
 infixr 1 >>>, <<<
 
--- | A class for categories.
---   id and (.) must form a monoid.
+-- | A class for categories. Instances should satisfy the laws
+--
+-- @
+-- f '.' 'id'  =  f  -- (right identity)
+-- 'id' '.' f  =  f  -- (left identity)
+-- f '.' (g '.' h)  =  (f '.' g) '.' h  -- (associativity)
+-- @
 class Category cat where
     -- | the identity morphism
     id :: cat a a
@@ -55,6 +60,11 @@ instance Category (->) where
 instance Category (:~:) where
   id          = Refl
   Refl . Refl = Refl
+
+-- | @since 4.10.0.0
+instance Category (:~~:) where
+  id            = HRefl
+  HRefl . HRefl = HRefl
 
 -- | @since 4.7.0.0
 instance Category Coercion where

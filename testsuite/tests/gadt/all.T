@@ -19,10 +19,7 @@ test('gadt14', normal, compile, [''])
 test('gadt15', normal, compile, [''])
 test('gadt16', normal, compile, [''])
 
-test('gadt17',
-     extra_clean(['Gadt17_help.hi', 'Gadt17_help.o']),
-     run_command,
-     ['$MAKE -s --no-print-directory gadt17'])
+test('gadt17', [extra_files(['Gadt17_help.hs'])], run_command, ['$MAKE -s --no-print-directory gadt17'])
 
 test('gadt18', normal, compile, [''])
 test('gadt19', normal, compile, [''])
@@ -30,10 +27,7 @@ test('gadt20', normal, compile, [''])
 test('gadt21', normal, compile_fail, [''])
 test('gadt22', normal, compile, [''])
 
-test('gadt23',
-     extra_clean(['Gadt23_AST.hi', 'Gadt23_AST.o']),
-     run_command,
-     ['$MAKE -s --no-print-directory gadt23'])
+test('gadt23', [extra_files(['Gadt23_AST.hs'])], run_command, ['$MAKE -s --no-print-directory gadt23'])
 
 test('gadt24', normal, compile, [''])
 
@@ -62,7 +56,7 @@ test('records-fail1', normal, compile_fail, [''])
 test('doaitse', normal, compile, [''])
 test('josef', normal, compile, [''])
 
-# Interaction of fundeps with GADTs doesn't work well 
+# Interaction of fundeps with GADTs doesn't work well
 test('gadt-fd', expect_broken(345), compile, [''])
 
 test('karl1', normal, compile, [''])
@@ -107,20 +101,16 @@ test('gadtSyntaxFail001', normal, compile_fail, [''])
 test('gadtSyntaxFail002', normal, compile_fail, [''])
 test('gadtSyntaxFail003', normal, compile_fail, [''])
 test('T3169', normal, compile_fail, [''])
-test('T5424',
-     extra_clean(['T5424a.hi', 'T5424a.o']),
-     multimod_compile,
-     ['T5424', '-v0 -O0'])
+test('T5424', [], multimod_compile, ['T5424', '-v0 -O0'])
 
 test('FloatEq', normal, compile, [''])
 test('T7205', normal, compile, [''])
 test('T7293', normal, compile_fail, [''])
 test('T7294', normal, compile, [''])
-test('T7321',
-     extra_clean(['T7321a.hi', 'T7321a.o']),
-     run_command,
-     ['$MAKE -s --no-print-directory T7321'])
+test('T7321', [], run_command, ['$MAKE -s --no-print-directory T7321'])
 test('T7974', normal, compile, [''])
 test('T7558', normal, compile_fail, [''])
 test('T9096', normal, compile, [''])
 test('T9380', normal, compile_and_run, [''])
+test('T12087', normal, compile_fail, [''])
+test('T12468', normal, compile_fail, [''])

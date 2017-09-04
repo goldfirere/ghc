@@ -5,8 +5,7 @@
  * (c) sof, 2002-2003
  */
 
-#ifndef WIN32_IOMANAGER_H
-#define WIN32_IOMANAGER_H
+#pragma once
 
 #include <windows.h>
 
@@ -30,9 +29,9 @@
  */
 typedef void (*CompletionProc)(unsigned int requestID,
                                int   fd,
-                               int   len,
+                               HsInt len,
                                void* buf,
-                               int   errCode);
+                               HsInt errCode);
 
 /*
  * Asynchronous procedure calls executed by a worker thread
@@ -44,11 +43,11 @@ typedef int (*DoProcProc)(void *param);
 typedef union workData {
     struct {
         int   fd;
-        int   len;
+        HsInt len;
         char *buf;
     } ioData;
     struct {
-        int   usecs;
+        HsInt usecs;
     } delayData;
     struct {
         DoProcProc proc;
@@ -80,21 +79,21 @@ extern CompletionProc onComplete;
 /*
  * Starting up and shutting down.
  */
-extern BOOL StartIOManager     ( void );
-extern void ShutdownIOManager  ( rtsBool wait_threads );
+extern bool StartIOManager     ( void );
+extern void ShutdownIOManager  ( bool wait_threads );
 
 /*
  * Adding I/O and delay requests. With each request a
  * completion routine is supplied, which the worker thread
  * will invoke upon completion.
  */
-extern int AddDelayRequest ( unsigned int   usecs,
+extern int AddDelayRequest ( HsInt          usecs,
                              CompletionProc onCompletion);
 
 extern int AddIORequest ( int            fd,
-                          BOOL           forWriting,
-                          BOOL           isSocket,
-                          int            len,
+                          bool           forWriting,
+                          bool           isSocket,
+                          HsInt          len,
                           char*          buffer,
                           CompletionProc onCompletion);
 
@@ -103,5 +102,3 @@ extern int AddProcRequest ( void*          proc,
                             CompletionProc onCompletion);
 
 extern void abandonWorkRequest ( int reqID );
-
-#endif /* WIN32_IOMANAGER_H */

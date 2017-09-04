@@ -21,7 +21,7 @@ module GHC.ST (
         fixST, runST,
 
         -- * Unsafe functions
-        liftST, unsafeInterleaveST
+        liftST, unsafeInterleaveST, unsafeDupableInterleaveST
     ) where
 
 import GHC.Base
@@ -65,6 +65,7 @@ instance Applicative (ST s) where
     pure x = ST (\ s -> (# s, x #))
     m *> k = m >>= \ _ -> k
     (<*>) = ap
+    liftA2 = liftM2
 
 -- | @since 2.01
 instance Monad (ST s) where
@@ -76,6 +77,11 @@ instance Monad (ST s) where
         case (k r) of { ST k2 ->
         (k2 new_s) }})
 
+-- | @since 4.11.0.0
+instance Monoid a => Monoid (ST s a) where
+    mempty = pure mempty
+    mappend = liftA2 mappend
+
 data STret s a = STret (State# s) a
 
 -- liftST is useful when we want a lifted result from an ST computation.  See
@@ -83,9 +89,29 @@ data STret s a = STret (State# s) a
 liftST :: ST s a -> State# s -> STret s a
 liftST (ST m) = \s -> case m s of (# s', r #) -> STret s' r
 
-{-# NOINLINE unsafeInterleaveST #-}
+noDuplicateST :: ST s ()
+noDuplicateST = ST $ \s -> (# noDuplicate# s, () #)
+
+-- | 'unsafeInterleaveST' allows an 'ST' computation to be deferred
+-- lazily.  When passed a value of type @ST a@, the 'ST' computation will
+-- only be performed when the value of the @a@ is demanded.
+{-# INLINE unsafeInterleaveST #-}
 unsafeInterleaveST :: ST s a -> ST s a
-unsafeInterleaveST (ST m) = ST ( \ s ->
+unsafeInterleaveST m = unsafeDupableInterleaveST (noDuplicateST >> m)
+
+-- | 'unsafeDupableInterleaveST' allows an 'ST' computation to be deferred
+-- lazily.  When passed a value of type @ST a@, the 'ST' computation will
+-- only be performed when the value of the @a@ is demanded.
+--
+-- The computation may be performed multiple times by different threads,
+-- possibly at the same time. To prevent this, use 'unsafeInterleaveST' instead.
+--
+-- @since 4.11
+{-# NOINLINE unsafeDupableInterleaveST #-}
+-- See Note [unsafeDupableInterleaveIO should not be inlined]
+-- in GHC.IO.Unsafe
+unsafeDupableInterleaveST :: ST s a -> ST s a
+unsafeDupableInterleaveST (ST m) = ST ( \ s ->
     let
         r = case m s of (# _, res #) -> res
     in

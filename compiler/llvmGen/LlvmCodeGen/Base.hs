@@ -46,7 +46,6 @@ import DynFlags
 import FastString
 import Cmm              hiding ( succ )
 import Outputable as Outp
-import qualified Pretty as Prt
 import Platform
 import UniqFM
 import Unique
@@ -330,8 +329,8 @@ renderLlvm sdoc = do
     -- Write to output
     dflags <- getDynFlags
     out <- getEnv envOutput
-    let doc = Outp.withPprStyleDoc dflags (Outp.mkCodeStyle Outp.CStyle) sdoc
-    liftIO $ Prt.bufLeftRender out doc
+    liftIO $ Outp.bufLeftRenderSDoc dflags out
+               (Outp.mkCodeStyle Outp.CStyle) sdoc
 
     -- Dump, if requested
     dumpIfSetLlvm Opt_D_dump_llvm "LLVM Code" sdoc
@@ -401,7 +400,7 @@ strDisplayName_llvm lbl = do
     dflags <- getDynFlags
     let sdoc = pprCLabel platform lbl
         depth = Outp.PartWay 1
-        style = Outp.mkUserStyle Outp.reallyAlwaysQualify depth
+        style = Outp.mkUserStyle dflags Outp.reallyAlwaysQualify depth
         str = Outp.renderWithStyle dflags sdoc style
     return (fsLit (dropInfoSuffix str))
 
@@ -419,7 +418,7 @@ strProcedureName_llvm lbl = do
     dflags <- getDynFlags
     let sdoc = pprCLabel platform lbl
         depth = Outp.PartWay 1
-        style = Outp.mkUserStyle Outp.neverQualify depth
+        style = Outp.mkUserStyle dflags Outp.neverQualify depth
         str = Outp.renderWithStyle dflags sdoc style
     return (fsLit str)
 
@@ -448,7 +447,7 @@ getGlobalPtr llvmLbl = do
 -- will be generated anymore!
 generateExternDecls :: LlvmM ([LMGlobal], [LlvmType])
 generateExternDecls = do
-  delayed <- fmap nonDetEltsUFM $ getEnv envAliases
+  delayed <- fmap nonDetEltsUniqSet $ getEnv envAliases
   -- This is non-deterministic but we do not
   -- currently support deterministic code-generation.
   -- See Note [Unique Determinism and code generation]

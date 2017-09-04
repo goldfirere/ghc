@@ -6,7 +6,7 @@ module PipelineMonad (
     CompPipeline(..), evalP
   , PhasePlus(..)
   , PipeEnv(..), PipeState(..), PipelineOutput(..)
-  , getPipeEnv, getPipeState, setDynFlags, setModLocation, setStubO
+  , getPipeEnv, getPipeState, setDynFlags, setModLocation, setForeignOs
   ) where
 
 import MonadUtils
@@ -15,6 +15,7 @@ import DynFlags
 import DriverPhases
 import HscTypes
 import Module
+import FileCleanup (TempFileLifetime)
 
 import Control.Monad
 
@@ -65,14 +66,14 @@ data PipeState = PipeState {
        maybe_loc :: Maybe ModLocation,
           -- ^ the ModLocation.  This is discovered during compilation,
           -- in the Hsc phase where we read the module header.
-       maybe_stub_o :: Maybe FilePath
-          -- ^ the stub object.  This is set by the Hsc phase if a stub
-          -- object was created.  The stub object will be joined with
-          -- the main compilation object using "ld -r" at the end.
+       foreign_os :: [FilePath]
+         -- ^ additional object files resulting from compiling foreign
+         -- code. They come from two sources: foreign stubs, and
+         -- add{C,Cxx,Objc,Objcxx}File from template haskell
   }
 
 data PipelineOutput
-  = Temporary
+  = Temporary TempFileLifetime
         -- ^ Output should be to a temporary file: we're going to
         -- run more compilation steps on this output later.
   | Persistent
@@ -102,6 +103,6 @@ setModLocation :: ModLocation -> CompPipeline ()
 setModLocation loc = P $ \_env state ->
   return (state{ maybe_loc = Just loc }, ())
 
-setStubO :: FilePath -> CompPipeline ()
-setStubO stub_o = P $ \_env state ->
-  return (state{ maybe_stub_o = Just stub_o }, ())
+setForeignOs :: [FilePath] -> CompPipeline ()
+setForeignOs os = P $ \_env state ->
+  return (state{ foreign_os = os }, ())

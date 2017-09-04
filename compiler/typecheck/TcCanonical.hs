@@ -3,7 +3,7 @@
 module TcCanonical(
      canonicalize,
      unifyDerived,
-     makeSuperClasses,
+     makeSuperClasses, maybeSym,
      StopOrContinue(..), stopWith, continueWith
   ) where
 
@@ -23,9 +23,9 @@ import Coercion
 import FamInstEnv ( FamInstEnvs )
 import FamInst ( tcTopNormaliseNewTypeTF_maybe )
 import Var
+import VarEnv( mkInScopeSet )
 import Outputable
 import DynFlags( DynFlags )
-import VarSet
 import NameSet
 import RdrName
 
@@ -34,6 +34,7 @@ import Util
 import Bag
 import MonadUtils
 import Control.Monad
+import Data.Maybe ( isJust )
 import Data.List  ( zip4, foldl' )
 import BasicTypes
 
@@ -50,85 +51,23 @@ Note [Canonicalization]
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Canonicalization converts a simple constraint to a canonical form. It is
-unary (i.e. treats individual constraints one at a time), does not do
-any zonking, but lives in TcS monad because it needs to create fresh
-variables (for flattening) and consult the inerts (for efficiency).
+unary (i.e. treats individual constraints one at a time).
 
-The execution plan for canonicalization is the following:
+Constraints originating from user-written code come into being as
+CNonCanonicals (except for CHoleCans, arising from holes). We know nothing
+about these constraints. So, first:
 
-  1) Decomposition of equalities happens as necessary until we reach a
-     variable or type family in one side. There is no decomposition step
-     for other forms of constraints.
+     Classify CNonCanoncal constraints, depending on whether they
+     are equalities, class predicates, or other.
 
-  2) If, when we decompose, we discover a variable on the head then we
-     look at inert_eqs from the current inert for a substitution for this
-     variable and contine decomposing. Hence we lazily apply the inert
-     substitution if it is needed.
+Then proceed depending on the shape of the constraint. Generally speaking,
+each constraint gets flattened and then decomposed into one of several forms
+(see type Ct in TcRnTypes).
 
-  3) If no more decomposition is possible, we deeply apply the substitution
-     from the inert_eqs and continue with flattening.
+When an already-canonicalized constraint gets kicked out of the inert set,
+it must be recanonicalized. But we know a bit about its shape from the
+last time through, so we can skip the classification step.
 
-  4) During flattening, we examine whether we have already flattened some
-     function application by looking at all the CTyFunEqs with the same
-     function in the inert set. The reason for deeply applying the inert
-     substitution at step (3) is to maximise our chances of matching an
-     already flattened family application in the inert.
-
-The net result is that a constraint coming out of the canonicalization
-phase cannot be rewritten any further from the inerts (but maybe /it/ can
-rewrite an inert or still interact with an inert in a further phase in the
-simplifier.
-
-Note [Caching for canonicals]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Our plan with pre-canonicalization is to be able to solve a constraint
-really fast from existing bindings in TcEvBinds. So one may think that
-the condition (isCNonCanonical) is not necessary.  However consider
-the following setup:
-
-InertSet = { [W] d1 : Num t }
-WorkList = { [W] d2 : Num t, [W] c : t ~ Int}
-
-Now, we prioritize equalities, but in our concrete example
-(should_run/mc17.hs) the first (d2) constraint is dealt with first,
-because (t ~ Int) is an equality that only later appears in the
-worklist since it is pulled out from a nested implication
-constraint. So, let's examine what happens:
-
-   - We encounter work item (d2 : Num t)
-
-   - Nothing is yet in EvBinds, so we reach the interaction with inerts
-     and set:
-              d2 := d1
-    and we discard d2 from the worklist. The inert set remains unaffected.
-
-   - Now the equation ([W] c : t ~ Int) is encountered and kicks-out
-     (d1 : Num t) from the inerts.  Then that equation gets
-     spontaneously solved, perhaps. We end up with:
-        InertSet : { [G] c : t ~ Int }
-        WorkList : { [W] d1 : Num t}
-
-   - Now we examine (d1), we observe that there is a binding for (Num
-     t) in the evidence binds and we set:
-             d1 := d2
-     and end up in a loop!
-
-Now, the constraints that get kicked out from the inert set are always
-Canonical, so by restricting the use of the pre-canonicalizer to
-NonCanonical constraints we eliminate this danger. Moreover, for
-canonical constraints we already have good caching mechanisms
-(effectively the interaction solver) and we are interested in reducing
-things like superclasses of the same non-canonical constraint being
-generated hence I don't expect us to lose a lot by introducing the
-(isCNonCanonical) restriction.
-
-A similar situation can arise in TcSimplify, at the end of the
-solve_wanteds function, where constraints from the inert set are
-returned as new work -- our substCt ensures however that if they are
-not rewritten by subst, they remain canonical and hence we will not
-attempt to solve them from the EvBinds. If on the other hand they did
-get rewritten and are now non-canonical they will still not match the
-EvBinds, so we are again good.
 -}
 
 -- Top-level canonicalization
@@ -186,7 +125,7 @@ canEvNC ev
 
 canClassNC :: CtEvidence -> Class -> [Type] -> TcS (StopOrContinue Ct)
 -- "NC" means "non-canonical"; that is, we have got here
--- from a NonCanonical constrataint, not from a CDictCan
+-- from a NonCanonical constraint, not from a CDictCan
 -- Precondition: EvVar is class evidence
 canClassNC ev cls tys
   | isGiven ev  -- See Note [Eagerly expand given superclasses]
@@ -223,18 +162,19 @@ canClass ev cls tys pend_sc
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We need to add superclass constraints for two reasons:
 
-* For givens, they give us a route to to proof.  E.g.
+* For givens [G], they give us a route to to proof.  E.g.
     f :: Ord a => a -> Bool
     f x = x == x
   We get a Wanted (Eq a), which can only be solved from the superclass
   of the Given (Ord a).
 
-* For wanteds, they may give useful functional dependencies.  E.g.
+* For wanteds [W], and deriveds [WD], [D], they may give useful
+  functional dependencies.  E.g.
      class C a b | a -> b where ...
      class C a b => D a b where ...
-  Now a Wanted constraint (D Int beta) has (C Int beta) as a superclass
+  Now a [W] constraint (D Int beta) has (C Int beta) as a superclass
   and that might tell us about beta, via C's fundeps.  We can get this
-  by generateing a Derived (C Int beta) constraint.  It's derived because
+  by generating a [D] (C Int beta) constraint.  It's derived because
   we don't actually have to cough up any evidence for it; it's only there
   to generate fundep equalities.
 
@@ -289,11 +229,19 @@ So here's the plan:
 4. Go round to (2) again.  This loop (2,3,4) is implemented
    in TcSimplify.simpl_loop.
 
-We try to terminate the loop by flagging which class constraints
-(given or wanted) are potentially un-expanded.  This is what the
-cc_pend_sc flag is for in CDictCan.  So in Step 3 we only expand
-superclasses for constraints with cc_pend_sc set to true (i.e.
+The cc_pend_sc flag in a CDictCan records whether the superclasses of
+this constraint have been expanded.  Specifically, in Step 3 we only
+expand superclasses for constraints with cc_pend_sc set to true (i.e.
 isPendingScDict holds).
+
+Why do we do this?  Two reasons:
+
+* To avoid repeated work, by repeatedly expanding the superclasses of
+  same constraint,
+
+* To terminate the above loop, at least in the -XNoRecursiveSuperClasses
+  case.  If there are recursive superclasses we could, in principle,
+  expand forever, always encountering new constraints.
 
 When we take a CNonCanonical or CIrredCan, but end up classifying it
 as a CDictCan, we set the cc_pend_sc flag to False.
@@ -432,15 +380,20 @@ mk_superclasses_of :: NameSet -> CtEvidence -> Class -> [Type] -> TcS [Ct]
 -- Always return this class constraint,
 -- and expand its superclasses
 mk_superclasses_of rec_clss ev cls tys
-  | loop_found = return [this_ct]  -- cc_pend_sc of this_ct = True
-  | otherwise  = do { sc_cts <- mk_strict_superclasses rec_clss' ev cls tys
+  | loop_found = do { traceTcS "mk_superclasses_of: loop" (ppr cls <+> ppr tys)
+                    ; return [this_ct] }  -- cc_pend_sc of this_ct = True
+  | otherwise  = do { traceTcS "mk_superclasses_of" (vcat [ ppr cls <+> ppr tys
+                                                          , ppr (isCTupleClass cls)
+                                                          , ppr rec_clss
+                                                          ])
+                    ; sc_cts <- mk_strict_superclasses rec_clss' ev cls tys
                     ; return (this_ct : sc_cts) }
                                    -- cc_pend_sc of this_ct = False
   where
     cls_nm     = className cls
-    loop_found = cls_nm `elemNameSet` rec_clss
-    rec_clss'  | isCTupleClass cls = rec_clss  -- Never contribute to recursion
-               | otherwise         = rec_clss `extendNameSet` cls_nm
+    loop_found = not (isCTupleClass cls) && cls_nm `elemNameSet` rec_clss
+                 -- Tuples never contribute to recursion, and can be nested
+    rec_clss'  = rec_clss `extendNameSet` cls_nm
     this_ct    = CDictCan { cc_ev = ev, cc_class = cls, cc_tyargs = tys
                           , cc_pend_sc = loop_found }
                  -- NB: If there is a loop, we cut off, so we have not
@@ -456,11 +409,12 @@ mk_strict_superclasses rec_clss ev cls tys
                                   (mkEvScSelectors (EvId evar) cls tys)
        ; concatMapM (mk_superclasses rec_clss) sc_evs }
 
-  | isEmptyVarSet (tyCoVarsOfTypes tys)
+  | all noFreeVarsOfType tys
   = return [] -- Wanteds with no variables yield no deriveds.
               -- See Note [Improvement from Ground Wanteds]
 
-  | otherwise -- Wanted/Derived case, just add those SC that can lead to improvement.
+  | otherwise -- Wanted/Derived case, just add Derived superclasses
+              -- that can lead to improvement.
   = do { let loc = ctEvLoc ev
        ; sc_evs <- mapM (newDerivedNC loc) (immSuperClasses cls tys)
        ; concatMapM (mk_superclasses rec_clss) sc_evs }
@@ -535,6 +489,25 @@ track whether or not we've already flattened.
 
 It is conceivable to do a better job at tracking whether or not a type
 is flattened, but this is left as future work. (Mar '15)
+
+
+Note [FunTy and decomposing tycon applications]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When can_eq_nc' attempts to decompose a tycon application we haven't yet zonked.
+This means that we may very well have a FunTy containing a type of some unknown
+kind. For instance, we may have,
+
+    FunTy (a :: k) Int
+
+Where k is a unification variable. tcRepSplitTyConApp_maybe panics in the event
+that it sees such a type as it cannot determine the RuntimeReps which the (->)
+is applied to. Consequently, it is vital that we instead use
+tcRepSplitTyConApp_maybe', which simply returns Nothing in such a case.
+
+When this happens can_eq_nc' will fail to decompose, zonk, and try again.
+Zonking should fill the variable k, meaning that decomposition will succeed the
+second time around.
 -}
 
 canEqNC :: CtEvidence -> EqRel -> Type -> Type -> TcS (StopOrContinue Ct)
@@ -570,8 +543,8 @@ can_eq_nc'
 
 -- Expand synonyms first; see Note [Type synonyms and canonicalization]
 can_eq_nc' flat _rdr_env _envs ev eq_rel ty1 ps_ty1 ty2 ps_ty2
-  | Just ty1' <- coreView ty1 = can_eq_nc flat ev eq_rel ty1' ps_ty1 ty2  ps_ty2
-  | Just ty2' <- coreView ty2 = can_eq_nc flat ev eq_rel ty1  ps_ty1 ty2' ps_ty2
+  | Just ty1' <- tcView ty1 = can_eq_nc flat ev eq_rel ty1' ps_ty1 ty2  ps_ty2
+  | Just ty2' <- tcView ty2 = can_eq_nc flat ev eq_rel ty1  ps_ty1 ty2' ps_ty2
 
 -- need to check for reflexivity in the ReprEq case.
 -- See Note [Eager reflexivity check]
@@ -588,6 +561,22 @@ can_eq_nc' _flat rdr_env envs ev ReprEq ty1 _ ty2 ps_ty2
 can_eq_nc' _flat rdr_env envs ev ReprEq ty1 ps_ty1 ty2 _
   | Just stuff2 <- tcTopNormaliseNewTypeTF_maybe envs rdr_env ty2
   = can_eq_newtype_nc ev IsSwapped  ty2 stuff2 ty1 ps_ty1
+
+-- Now, check for tyvars. This must happen before CastTy because we need
+-- to catch casted tyvars, as the flattener might produce these,
+-- due to the fact that flattened types have flattened kinds.
+-- See Note [Flattening].
+-- Note that there can be only one cast on the tyvar because this will
+-- run after the "get rid of casts" case of can_eq_nc' function on the
+-- not-yet-flattened types.
+-- NB: pattern match on True: we want only flat types sent to canEqTyVar.
+-- See also Note [No top-level newtypes on RHS of representational equalities]
+can_eq_nc' True _rdr_env _envs ev eq_rel ty1 ps_ty1 ty2 ps_ty2
+  | Just (tv1, co1) <- getCastedTyVar_maybe ty1
+  = canEqTyVar ev eq_rel NotSwapped tv1 co1 ps_ty1 ty2 ps_ty2
+can_eq_nc' True _rdr_env _envs ev eq_rel ty1 ps_ty1 ty2 ps_ty2
+  | Just (tv2, co2) <- getCastedTyVar_maybe ty2
+  = canEqTyVar ev eq_rel IsSwapped tv2 co2 ps_ty2 ty1 ps_ty1
 
 -- Then, get rid of casts
 can_eq_nc' flat _rdr_env _envs ev eq_rel (CastTy ty1 co1) _ ty2 ps_ty2
@@ -608,35 +597,16 @@ can_eq_nc' _flat _rdr_env _envs ev eq_rel ty1@(LitTy l1) _ (LitTy l2) _
 -- Try to decompose type constructor applications
 -- Including FunTy (s -> t)
 can_eq_nc' _flat _rdr_env _envs ev eq_rel ty1 _ ty2 _
-  | Just (tc1, tys1) <- tcRepSplitTyConApp_maybe ty1
-  , Just (tc2, tys2) <- tcRepSplitTyConApp_maybe ty2
+    --- See Note [FunTy and decomposing type constructor applications].
+  | Just (tc1, tys1) <- tcRepSplitTyConApp_maybe' ty1
+  , Just (tc2, tys2) <- tcRepSplitTyConApp_maybe' ty2
   , not (isTypeFamilyTyCon tc1)
   , not (isTypeFamilyTyCon tc2)
   = canTyConApp ev eq_rel tc1 tys1 tc2 tys2
 
 can_eq_nc' _flat _rdr_env _envs ev eq_rel
            s1@(ForAllTy {}) _ s2@(ForAllTy {}) _
- | CtWanted { ctev_loc = loc, ctev_dest = orig_dest } <- ev
- = do { let (bndrs1,body1) = tcSplitForAllTyVarBndrs s1
-            (bndrs2,body2) = tcSplitForAllTyVarBndrs s2
-      ; if not (equalLength bndrs1 bndrs2)
-        then do { traceTcS "Forall failure" $
-                     vcat [ ppr s1, ppr s2, ppr bndrs1, ppr bndrs2
-                          , ppr (map binderArgFlag bndrs1)
-                          , ppr (map binderArgFlag bndrs2) ]
-                ; canEqHardFailure ev s1 s2 }
-        else
-          do { traceTcS "Creating implication for polytype equality" $ ppr ev
-             ; kind_cos <- zipWithM (unifyWanted loc Nominal)
-                             (map binderKind bndrs1) (map binderKind bndrs2)
-             ; all_co <- deferTcSForAllEq (eqRelRole eq_rel) loc
-                                           kind_cos (bndrs1,body1) (bndrs2,body2)
-             ; setWantedEq orig_dest all_co
-             ; stopWith ev "Deferred polytype equality" } }
- | otherwise
- = do { traceTcS "Omitting decomposition of given polytype equality" $
-        pprEq s1 s2    -- See Note [Do not decompose given polytype equalities]
-      ; stopWith ev "Discard given polytype equality" }
+  = can_eq_nc_forall ev eq_rel s1 s2
 
 -- See Note [Canonicalising type applications] about why we require flat types
 can_eq_nc' True _rdr_env _envs ev eq_rel (AppTy t1 s1) _ ty2 _
@@ -654,18 +624,79 @@ can_eq_nc' False rdr_env envs ev eq_rel _ ps_ty1 _ ps_ty2
          `andWhenContinue` \ new_ev ->
          can_eq_nc' True rdr_env envs new_ev eq_rel xi1 xi1 xi2 xi2 }
 
--- Type variable on LHS or RHS are last.
--- NB: pattern match on True: we want only flat types sent to canEqTyVar.
--- See also Note [No top-level newtypes on RHS of representational equalities]
-can_eq_nc' True _rdr_env _envs ev eq_rel (TyVarTy tv1) ps_ty1 ty2 ps_ty2
-  = canEqTyVar ev eq_rel NotSwapped tv1 ps_ty1 ty2 ps_ty2
-can_eq_nc' True _rdr_env _envs ev eq_rel ty1 ps_ty1 (TyVarTy tv2) ps_ty2
-  = canEqTyVar ev eq_rel IsSwapped tv2 ps_ty2 ty1 ps_ty1
-
 -- We've flattened and the types don't match. Give up.
 can_eq_nc' True _rdr_env _envs ev _eq_rel _ ps_ty1 _ ps_ty2
   = do { traceTcS "can_eq_nc' catch-all case" (ppr ps_ty1 $$ ppr ps_ty2)
        ; canEqHardFailure ev ps_ty1 ps_ty2 }
+
+---------------------------------
+can_eq_nc_forall :: CtEvidence -> EqRel
+                 -> Type -> Type    -- LHS and RHS
+                 -> TcS (StopOrContinue Ct)
+-- (forall as. phi1) ~ (forall bs. phi2)
+-- Check for length match of as, bs
+-- Then build an implication constraint: forall as. phi1 ~ phi2[as/bs]
+-- But remember also to unify the kinds of as and bs
+--  (this is the 'go' loop), and actually substitute phi2[as |> cos / bs]
+-- Remember also that we might have forall z (a:z). blah
+--  so we must proceed one binder at a time (Trac #13879)
+
+can_eq_nc_forall ev eq_rel s1 s2
+ | CtWanted { ctev_loc = loc, ctev_dest = orig_dest } <- ev
+ = do { let free_tvs       = tyCoVarsOfTypes [s1,s2]
+            (bndrs1, phi1) = tcSplitForAllTyVarBndrs s1
+            (bndrs2, phi2) = tcSplitForAllTyVarBndrs s2
+      ; if not (equalLength bndrs1 bndrs2)
+        then do { traceTcS "Forall failure" $
+                     vcat [ ppr s1, ppr s2, ppr bndrs1, ppr bndrs2
+                          , ppr (map binderArgFlag bndrs1)
+                          , ppr (map binderArgFlag bndrs2) ]
+                ; canEqHardFailure ev s1 s2 }
+        else
+   do { traceTcS "Creating implication for polytype equality" $ ppr ev
+      ; let empty_subst1 = mkEmptyTCvSubst $ mkInScopeSet free_tvs
+      ; (subst1, skol_tvs) <- tcInstSkolTyVarsX empty_subst1 $
+                              binderVars bndrs1
+
+      ; let skol_info = UnifyForAllSkol phi1
+            phi1' = substTy subst1 phi1
+
+            -- Unify the kinds, extend the substitution
+            go (skol_tv:skol_tvs) subst (bndr2:bndrs2)
+              = do { let tv2 = binderVar bndr2
+                   ; kind_co <- unifyWanted loc Nominal
+                                            (tyVarKind skol_tv)
+                                            (substTy subst (tyVarKind tv2))
+                   ; let subst' = extendTvSubst subst tv2
+                                       (mkCastTy (mkTyVarTy skol_tv) kind_co)
+                   ; co <- go skol_tvs subst' bndrs2
+                   ; return (mkForAllCo skol_tv kind_co co) }
+
+            -- Done: unify phi1 ~ phi2
+            go [] subst bndrs2
+              = ASSERT( null bndrs2 )
+                unifyWanted loc (eqRelRole eq_rel)
+                            phi1' (substTy subst phi2)
+
+            go _ _ _ = panic "cna_eq_nc_forall"  -- case (s:ss) []
+
+            empty_subst2 = mkEmptyTCvSubst (getTCvInScope subst1)
+
+      ; (implic, _ev_binds, all_co) <- buildImplication skol_info skol_tvs [] $
+                                       go skol_tvs empty_subst2 bndrs2
+           -- We have nowhere to put these bindings
+           -- but TcSimplify.setImplicationStatus
+           -- checks that we don't actually use them
+           -- when skol_info = UnifyForAllSkol
+
+      ; updWorkListTcS (extendWorkListImplic implic)
+      ; setWantedEq orig_dest all_co
+      ; stopWith ev "Deferred polytype equality" } }
+
+ | otherwise
+ = do { traceTcS "Omitting decomposition of given polytype equality" $
+        pprEq s1 s2    -- See Note [Do not decompose given polytype equalities]
+      ; stopWith ev "Discard given polytype equality" }
 
 ---------------------------------
 -- | Compare types for equality, while zonking as necessary. Gives up
@@ -691,11 +722,38 @@ zonk_eq_types = go
     go (TyVarTy tv1) ty2           = tyvar NotSwapped tv1 ty2
     go ty1 (TyVarTy tv2)           = tyvar IsSwapped  tv2 ty1
 
+    -- We handle FunTys explicitly here despite the fact that they could also be
+    -- treated as an application. Why? Well, for one it's cheaper to just look
+    -- at two types (the argument and result types) than four (the argument,
+    -- result, and their RuntimeReps). Also, we haven't completely zonked yet,
+    -- so we may run into an unzonked type variable while trying to compute the
+    -- RuntimeReps of the argument and result types. This can be observed in
+    -- testcase tc269.
+    go ty1 ty2
+      | Just (arg1, res1) <- split1
+      , Just (arg2, res2) <- split2
+      = do { res_a <- go arg1 arg2
+           ; res_b <- go res1 res2
+           ; return $ combine_rev mkFunTy res_b res_a
+           }
+      | isJust split1 || isJust split2
+      = bale_out ty1 ty2
+      where
+        split1 = tcSplitFunTy_maybe ty1
+        split2 = tcSplitFunTy_maybe ty2
+
     go ty1 ty2
       | Just (tc1, tys1) <- tcRepSplitTyConApp_maybe ty1
       , Just (tc2, tys2) <- tcRepSplitTyConApp_maybe ty2
-      , tc1 == tc2
-      = tycon tc1 tys1 tys2
+      = if tc1 == tc2 && tys1 `equalLength` tys2
+          -- Crucial to check for equal-length args, because
+          -- we cannot assume that the two args to 'go' have
+          -- the same kind.  E.g go (Proxy *      (Maybe Int))
+          --                        (Proxy (*->*) Maybe)
+          -- We'll call (go (Maybe Int) Maybe)
+          -- See Trac #13083
+        then tycon tc1 tys1 tys2
+        else bale_out ty1 ty2
 
     go ty1 ty2
       | Just (ty1a, ty1b) <- tcRepSplitAppTy_maybe ty1
@@ -708,12 +766,14 @@ zonk_eq_types = go
       | lit1 == lit2
       = return (Right ty1)
 
-    go ty1 ty2 = return $ Left (Pair ty1 ty2)
-      -- we don't handle more complex forms here
+    go ty1 ty2 = bale_out ty1 ty2
+      -- We don't handle more complex forms here
+
+    bale_out ty1 ty2 = return $ Left (Pair ty1 ty2)
 
     tyvar :: SwapFlag -> TcTyVar -> TcType
           -> TcS (Either (Pair TcType) TcType)
-      -- try to do as little as possible, as anything we do here is redundant
+      -- Try to do as little as possible, as anything we do here is redundant
       -- with flattening. In particular, no need to zonk kinds. That's why
       -- we don't use the already-defined zonking functions
     tyvar swapped tv ty
@@ -867,7 +927,10 @@ can_eq_app ev NomEq s1 t1 s2 t2
        ; stopWith ev "Decomposed [D] AppTy" }
   | CtWanted { ctev_dest = dest, ctev_loc = loc } <- ev
   = do { co_s <- unifyWanted loc Nominal s1 s2
-       ; co_t <- unifyWanted loc Nominal t1 t2
+       ; let arg_loc
+               | isNextArgVisible s1 = loc
+               | otherwise           = updateCtLocOrigin loc toInvisibleOrigin
+       ; co_t <- unifyWanted arg_loc Nominal t1 t2
        ; let co = mkAppCo co_s co_t
        ; setWantedEq dest co
        ; stopWith ev "Decomposed [W] AppTy" }
@@ -915,7 +978,7 @@ canTyConApp :: CtEvidence -> EqRel
 -- See Note [Decomposing TyConApps]
 canTyConApp ev eq_rel tc1 tys1 tc2 tys2
   | tc1 == tc2
-  , length tys1 == length tys2
+  , tys1 `equalLength` tys2
   = do { inerts <- getTcSInerts
        ; if can_decompose inerts
          then do { traceTcS "canTyConApp"
@@ -924,8 +987,8 @@ canTyConApp ev eq_rel tc1 tys1 tc2 tys2
                  ; stopWith ev "Decomposed TyConApp" }
          else canEqFailure ev eq_rel ty1 ty2 }
 
-  -- See Note [Skolem abstract data] (at SkolemAbstract)
-  | isSkolemAbstractTyCon tc1 || isSkolemAbstractTyCon tc2
+  -- See Note [Skolem abstract data] (at tyConSkolem)
+  | tyConSkolem tc1 || tyConSkolem tc2
   = do { traceTcS "canTyConApp: skolem abstract" (ppr tc1 $$ ppr tc2)
        ; continueWith (CIrredEvCan { cc_ev = ev }) }
 
@@ -1161,13 +1224,16 @@ canDecomposableTyConAppOK ev eq_rel tc tys1 tys2
       -- the following makes a better distinction between "kind" and "type"
       -- in error messages
     bndrs      = tyConBinders tc
-    kind_loc   = toKindLoc loc
     is_kinds   = map isNamedTyConBinder bndrs
-    new_locs | Just KindLevel <- ctLocTypeOrKind_maybe loc
-             = repeat loc
-             | otherwise
-             = map (\is_kind -> if is_kind then kind_loc else loc) is_kinds
+    is_viss    = map isVisibleTyConBinder bndrs
 
+    kind_xforms = map (\is_kind -> if is_kind then toKindLoc else id) is_kinds
+    vis_xforms  = map (\is_vis  -> if is_vis  then id
+                                   else flip updateCtLocOrigin toInvisibleOrigin)
+                      is_viss
+
+    -- zipWith3 (.) composes its first two arguments and applies it to the third
+    new_locs = zipWith3 (.) kind_xforms vis_xforms (repeat loc)
 
 -- | Call when canonicalizing an equality fails, but if the equality is
 -- representational, there is some hope for the future.
@@ -1244,7 +1310,7 @@ When an equality fails, we still want to rewrite the equality
 all the way down, so that it accurately reflects
  (a) the mutable reference substitution in force at start of solving
  (b) any ty-binds in force at this point in solving
-See Note [Kick out insolubles] in TcSMonad.
+See Note [Rewrite insolubles] in TcSMonad.
 And if we don't do this there is a bad danger that
 TcSimplify.applyTyVarDefaulting will find a variable
 that has in fact been substituted.
@@ -1295,25 +1361,11 @@ representational equality, this is a little subtler. Once again, (a ~R [a])
 is a bad thing, but (a ~R N a) for a newtype N might be just fine. This
 means also that (a ~ b a) might be fine, because `b` might become a newtype.
 
-So, we must check: does tv1 appear in xi2 under any type constructor that
-is generative w.r.t. representational equality? That's what isTyVarUnderDatatype
-does. (The other name I considered, isTyVarUnderTyConGenerativeWrtReprEq was
-a bit verbose. And the shorter name gets the point across.)
+So, we must check: does tv1 appear in xi2 under any type constructor
+that is generative w.r.t. representational equality? That's what
+isInsolubleOccursCheck does.
 
 See also #10715, which induced this addition.
-
-Note [No derived kind equalities]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-When we're working with a heterogeneous derived equality
-
-  [D] (t1 :: k1) ~ (t2 :: k2)
-
-we want to homogenise to establish the kind invariant on CTyEqCans.
-But we can't emit [D] k1 ~ k2 because we wouldn't then be able to
-use the evidence in the homogenised types. So we emit a wanted
-constraint, because we do really need the evidence here.
-
-Thus: no derived kind equalities.
 
 -}
 
@@ -1342,53 +1394,120 @@ canCFunEqCan ev fn tys fsk
 ---------------------
 canEqTyVar :: CtEvidence          -- ev :: lhs ~ rhs
            -> EqRel -> SwapFlag
-           -> TcTyVar -> TcType   -- lhs: already flat, not a cast
-           -> TcType -> TcType    -- rhs: already flat, not a cast
+           -> TcTyVar -> CoercionN  -- tv1 |> co1
+           -> TcType                -- lhs: pretty lhs, already flat
+           -> TcType -> TcType      -- rhs: already flat
            -> TcS (StopOrContinue Ct)
-canEqTyVar ev eq_rel swapped tv1 ps_ty1 (TyVarTy tv2) _
-  | tv1 == tv2
-  = canEqReflexive ev eq_rel ps_ty1
+canEqTyVar ev eq_rel swapped tv1 co1 ps_ty1 xi2 ps_xi2
+  | k1 `eqType` k2
+  = canEqTyVarHomo ev eq_rel swapped tv1 co1 ps_ty1 xi2 ps_xi2
 
-  | swapOverTyVars tv1 tv2
+  -- See Note [Equalities with incompatible kinds]
+  | CtGiven { ctev_evar = evar } <- ev
+    -- unswapped: tm :: (lhs :: k1) ~ (rhs :: k2)
+    -- swapped  : tm :: (rhs :: k2) ~ (lhs :: k1)
+  = do { kind_ev_id <- newBoundEvVarId kind_pty
+                                       (EvCoercion $
+                                        if isSwapped swapped
+                                        then mkTcSymCo $ mkTcKindCo $ mkTcCoVarCo evar
+                                        else             mkTcKindCo $ mkTcCoVarCo evar)
+           -- kind_ev_id :: (k1 :: *) ~ (k2 :: *)   (whether swapped or not)
+       ; let kind_ev = CtGiven { ctev_pred = kind_pty
+                               , ctev_evar = kind_ev_id
+                               , ctev_loc  = kind_loc }
+             homo_co = mkSymCo $ mkCoVarCo kind_ev_id
+             rhs'    = mkCastTy xi2 homo_co
+             ps_rhs' = mkCastTy ps_xi2 homo_co
+       ; traceTcS "Hetero equality gives rise to given kind equality"
+           (ppr kind_ev_id <+> dcolon <+> ppr kind_pty)
+       ; emitWorkNC [kind_ev]
+       ; type_ev <- newGivenEvVar loc $
+                    if isSwapped swapped
+                    then ( mkTcEqPredLikeEv ev rhs' lhs
+                         , EvCoercion $
+                           mkTcCoherenceLeftCo (mkTcCoVarCo evar) homo_co )
+                    else ( mkTcEqPredLikeEv ev lhs rhs'
+                         , EvCoercion $
+                           mkTcCoherenceRightCo (mkTcCoVarCo evar) homo_co )
+          -- unswapped: type_ev :: (lhs :: k1) ~ ((rhs |> sym kind_ev_id) :: k1)
+          -- swapped  : type_ev :: ((rhs |> sym kind_ev_id) :: k1) ~ (lhs :: k1)
+       ; canEqTyVarHomo type_ev eq_rel swapped tv1 co1 ps_ty1 rhs' ps_rhs' }
+
+  -- See Note [Equalities with incompatible kinds]
+  | otherwise   -- Wanted and Derived
+                  -- NB: all kind equalities are Nominal
+  = do { emitNewDerivedEq kind_loc Nominal k1 k2
+             -- kind_ev :: (k1 :: *) ~ (k2 :: *)
+       ; traceTcS "Hetero equality gives rise to derived kind equality" $
+           ppr ev
+       ; continueWith (CIrredEvCan { cc_ev = ev }) }
+
+  where
+    lhs = mkTyVarTy tv1 `mkCastTy` co1
+
+    Pair _ k1 = coercionKind co1
+    k2        = typeKind xi2
+
+    kind_pty = mkHeteroPrimEqPred liftedTypeKind liftedTypeKind k1 k2
+    kind_loc = mkKindLoc lhs xi2 loc
+
+    loc  = ctev_loc ev
+
+-- guaranteed that typeKind lhs == typeKind rhs
+canEqTyVarHomo :: CtEvidence
+               -> EqRel -> SwapFlag
+               -> TcTyVar -> CoercionN   -- lhs: tv1 |> co1
+               -> TcType                 -- pretty lhs
+               -> TcType -> TcType       -- rhs (might not be flat)
+               -> TcS (StopOrContinue Ct)
+canEqTyVarHomo ev eq_rel swapped tv1 co1 ps_ty1 ty2 _
+  | Just (tv2, _) <- tcGetCastedTyVar_maybe ty2
+  , tv1 == tv2
+  = canEqReflexive ev eq_rel (mkTyVarTy tv1 `mkCastTy` co1)
+    -- we don't need to check co2 because its type must match co1
+
+  | Just (tv2, co2) <- tcGetCastedTyVar_maybe ty2
+  , swapOverTyVars tv1 tv2
   = do { traceTcS "canEqTyVar" (ppr tv1 $$ ppr tv2 $$ ppr swapped)
          -- FM_Avoid commented out: see Note [Lazy flattening] in TcFlatten
          -- let fmode = FE { fe_ev = ev, fe_mode = FM_Avoid tv1' True }
          -- Flatten the RHS less vigorously, to avoid gratuitous flattening
          -- True <=> xi2 should not itself be a type-function application
        ; dflags <- getDynFlags
-       ; canEqTyVar2 dflags ev eq_rel (flipSwap swapped) tv2 ps_ty1 }
+       ; canEqTyVar2 dflags ev eq_rel (flipSwap swapped) tv2 co2 ps_ty1 }
 
-canEqTyVar ev eq_rel swapped tv1 _ _ ps_ty2
+canEqTyVarHomo ev eq_rel swapped tv1 co1 _ _ ps_ty2
   = do { dflags <- getDynFlags
-       ; canEqTyVar2 dflags ev eq_rel swapped tv1 ps_ty2 }
+       ; canEqTyVar2 dflags ev eq_rel swapped tv1 co1 ps_ty2 }
 
+-- The RHS here is either not a casted tyvar, or it's a tyvar but we want
+-- to rewrite the LHS to the RHS (as per swapOverTyVars)
 canEqTyVar2 :: DynFlags
             -> CtEvidence   -- lhs ~ rhs (or, if swapped, orhs ~ olhs)
             -> EqRel
             -> SwapFlag
-            -> TcTyVar      -- lhs, flat
-            -> TcType       -- rhs, flat
+            -> TcTyVar -> CoercionN     -- lhs = tv |> co, flat
+            -> TcType                   -- rhs
             -> TcS (StopOrContinue Ct)
 -- LHS is an inert type variable,
 -- and RHS is fully rewritten, but with type synonyms
 -- preserved as much as possible
-
-canEqTyVar2 dflags ev eq_rel swapped tv1 xi2
-  | Just xi2' <- metaTyVarUpdateOK dflags tv1 xi2  -- No occurs check
+canEqTyVar2 dflags ev eq_rel swapped tv1 co1 orhs
+  | Just nrhs' <- metaTyVarUpdateOK dflags tv1 nrhs  -- No occurs check
      -- Must do the occurs check even on tyvar/tyvar
      -- equalities, in case have  x ~ (y :: ..x...)
      -- Trac #12593
-  = rewriteEqEvidence ev swapped xi1 xi2' co1 co2
+  = rewriteEqEvidence ev swapped nlhs nrhs' rewrite_co1 rewrite_co2
     `andWhenContinue` \ new_ev ->
-    homogeniseRhsKind new_ev eq_rel xi1 xi2' $ \new_new_ev xi2'' ->
-    CTyEqCan { cc_ev = new_new_ev, cc_tyvar = tv1
-             , cc_rhs = xi2'', cc_eq_rel = eq_rel }
+    continueWith (CTyEqCan { cc_ev = new_ev, cc_tyvar = tv1
+                           , cc_rhs = nrhs', cc_eq_rel = eq_rel })
 
-  | otherwise  -- Occurs check error (or a forall)
-  = do { traceTcS "canEqTyVar2 occurs check error" (ppr tv1 $$ ppr xi2)
-       ; rewriteEqEvidence ev swapped xi1 xi2 co1 co2
+  | otherwise  -- For some reason (occurs check, or forall) we can't unify
+               -- We must not use it for further rewriting!
+  = do { traceTcS "canEqTyVar2 can't unify" (ppr tv1 $$ ppr nrhs)
+       ; rewriteEqEvidence ev swapped nlhs nrhs rewrite_co1 rewrite_co2
          `andWhenContinue` \ new_ev ->
-         if eq_rel == NomEq || isTyVarUnderDatatype tv1 xi2
+         if isInsolubleOccursCheck eq_rel tv1 nrhs
          then do { emitInsoluble (mkNonCanonical new_ev)
              -- If we have a ~ [a], it is not canonical, and in particular
              -- we don't want to rewrite existing inerts with it, otherwise
@@ -1401,14 +1520,19 @@ canEqTyVar2 dflags ev eq_rel swapped tv1 xi2
              -- We might learn that b is the newtype Id.
              -- But, the occurs-check certainly prevents the equality from being
              -- canonical, and we might loop if we were to use it in rewriting.
-         else do { traceTcS "Occurs-check in representational equality"
-                           (ppr xi1 $$ ppr xi2)
+         else do { traceTcS "Possibly-soluble occurs check"
+                           (ppr nlhs $$ ppr nrhs)
                  ; continueWith (CIrredEvCan { cc_ev = new_ev }) } }
   where
     role = eqRelRole eq_rel
-    xi1  = mkTyVarTy tv1
-    co1  = mkTcReflCo role xi1
-    co2  = mkTcReflCo role xi2
+
+    nlhs = mkTyVarTy tv1
+    nrhs = orhs `mkCastTy` mkTcSymCo co1
+
+    -- rewrite_co1 :: tv1 ~ (tv1 |> co1)
+    -- rewrite_co2 :: (rhs |> sym co1) ~ rhs
+    rewrite_co1  = mkTcReflCo role nlhs `mkTcCoherenceRightCo` co1
+    rewrite_co2  = mkTcReflCo role orhs `mkTcCoherenceLeftCo`  mkTcSymCo co1
 
 -- | Solve a reflexive equality constraint
 canEqReflexive :: CtEvidence    -- ty ~ ty
@@ -1419,75 +1543,6 @@ canEqReflexive ev eq_rel ty
   = do { setEvBindIfWanted ev (EvCoercion $
                                mkTcReflCo (eqRelRole eq_rel) ty)
        ; stopWith ev "Solved by reflexivity" }
-
--- See Note [Equalities with incompatible kinds]
-homogeniseRhsKind :: CtEvidence -- ^ the evidence to homogenise
-                  -> EqRel
-                  -> TcType              -- ^ original LHS
-                  -> Xi                  -- ^ original RHS
-                  -> (CtEvidence -> Xi -> Ct)
-                           -- ^ how to build the homogenised constraint;
-                           -- the 'Xi' is the new RHS
-                  -> TcS (StopOrContinue Ct)
-homogeniseRhsKind ev eq_rel lhs rhs build_ct
-  | k1 `tcEqType` k2
-  = continueWith (build_ct ev rhs)
-
-  | CtGiven { ctev_evar = evar } <- ev
-    -- tm :: (lhs :: k1) ~ (rhs :: k2)
-  = do { kind_ev_id <- newBoundEvVarId kind_pty
-                                       (EvCoercion $
-                                        mkTcKindCo $ mkTcCoVarCo evar)
-           -- kind_ev_id :: (k1 :: *) ~# (k2 :: *)
-       ; let kind_ev = CtGiven { ctev_pred = kind_pty
-                               , ctev_evar = kind_ev_id
-                               , ctev_loc  = kind_loc }
-             homo_co = mkSymCo $ mkCoVarCo kind_ev_id
-             rhs'    = mkCastTy rhs homo_co
-       ; traceTcS "Hetero equality gives rise to given kind equality"
-           (ppr kind_ev_id <+> dcolon <+> ppr kind_pty)
-       ; emitWorkNC [kind_ev]
-       ; type_ev <- newGivenEvVar loc
-                      ( mkTcEqPredLikeEv ev lhs rhs'
-                      , EvCoercion $
-                        mkTcCoherenceRightCo (mkTcCoVarCo evar) homo_co )
-          -- type_ev :: (lhs :: k1) ~ ((rhs |> sym kind_ev_id) :: k1)
-       ; continueWith (build_ct type_ev rhs') }
-
-  | otherwise   -- Wanted and Derived. See Note [No derived kind equalities]
-    -- evar :: (lhs :: k1) ~ (rhs :: k2)
-  = do { kind_co <- emitNewWantedEq kind_loc Nominal k1 k2
-             -- kind_ev :: (k1 :: *) ~ (k2 :: *)
-       ; traceTcS "Hetero equality gives rise to wanted kind equality" $
-           ppr (kind_co)
-       ; let homo_co   = mkSymCo kind_co
-           -- homo_co :: k2 ~ k1
-             rhs'      = mkCastTy rhs homo_co
-       ; case ev of
-           CtGiven {} -> panic "homogeniseRhsKind"
-           CtDerived {} -> continueWith (build_ct (ev { ctev_pred = homo_pred })
-                                                  rhs')
-             where homo_pred = mkTcEqPredLikeEv ev lhs rhs'
-           CtWanted { ctev_dest = dest } -> do
-             { (type_ev, hole_co) <- newWantedEq loc role lhs rhs'
-                  -- type_ev :: (lhs :: k1) ~ (rhs |> sym kind_co :: k1)
-             ; setWantedEq dest
-                           (hole_co `mkTransCo`
-                            (mkReflCo role rhs
-                             `mkCoherenceLeftCo` homo_co))
-
-                -- dest := hole ; <rhs> |> homo_co :: (lhs :: k1) ~ (rhs :: k2)
-             ; continueWith (build_ct type_ev rhs') }}
-
-  where
-    k1 = typeKind lhs
-    k2 = typeKind rhs
-
-    kind_pty = mkHeteroPrimEqPred liftedTypeKind liftedTypeKind k1 k2
-    kind_loc = mkKindLoc lhs rhs loc
-
-    loc  = ctev_loc ev
-    role = eqRelRole eq_rel
 
 {-
 Note [Canonical orientation for tyvar/tyvar equality constraints]
@@ -1536,7 +1591,7 @@ Suppose we have  [G] Num (F [a])
 then we flatten to
      [G] Num fsk
      [G] F [a] ~ fsk
-where fsk is a flatten-skolem (FlatSkol). Suppose we have
+where fsk is a flatten-skolem (FlatSkolTv). Suppose we have
       type instance F [a] = a
 then we'll reduce the second constraint to
      [G] a ~ fsk
@@ -1550,21 +1605,66 @@ the fsk.
 
 Note [Equalities with incompatible kinds]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-canEqLeaf is about to make a CTyEqCan or CFunEqCan; but both have the
-invariant that LHS and RHS satisfy the kind invariants for CTyEqCan,
-CFunEqCan.  What if we try to unify two things with incompatible
-kinds?
+What do we do when we have an equality
 
-eg    a ~ b  where a::*, b::*->*
-or    a ~ b  where a::*, b::k, k is a kind variable
+  (tv :: k1) ~ (rhs :: k2)
 
-The CTyEqCan compatKind invariant is important.  If we make a CTyEqCan
-for a~b, then we might well *substitute* 'b' for 'a', and that might make
-a well-kinded type ill-kinded; and that is bad (eg typeKind can crash, see
-Trac #7696).
+where k1 and k2 differ? This Note explores this treacherous area.
 
-So instead for these ill-kinded equalities we homogenise the RHS of the
-equality, emitting new constraints as necessary.
+First off, the question above is slightly the wrong question. Flattening
+a tyvar will flatten its kind (Note [Flattening] in TcFlatten); flattening
+the kind might introduce a cast. So we might have a casted tyvar on the
+left. We thus revise our test case to
+
+  (tv |> co :: k1) ~ (rhs :: k2)
+
+We must proceed differently here depending on whether we have a Wanted
+or a Given. Consider this:
+
+ [W] w :: (alpha :: k) ~ (Int :: Type)
+
+where k is a skolem. One possible way forward is this:
+
+ [W] co :: k ~ Type
+ [W] w :: (alpha :: k) ~ (Int |> sym co :: k)
+
+The next step will be to unify
+
+  alpha := Int |> sym co
+
+Now, consider what error we'll report if we can't solve the "co"
+wanted. Its CtOrigin is the w wanted... which now reads (after zonking)
+Int ~ Int. The user thus sees that GHC can't solve Int ~ Int, which
+is embarrassing. See #11198 for more tales of destruction.
+
+The reason for this odd behavior is much the same as
+Note [Wanteds do not rewrite Wanteds] in TcRnTypes: note that the
+new `co` is a Wanted. The solution is then not to use `co` to "rewrite"
+-- that is, cast -- `w`, but instead to keep `w` heterogeneous and irreducible.
+Given that we're not using `co`, there is no reason to collect evidence
+for it, so `co` is born a Derived. When the Derived is solved (by unification),
+the original wanted (`w`) will get kicked out.
+
+Note that, if we had [G] co1 :: k ~ Type available, then none of this code would
+trigger, because flattening would have rewritten k to Type. That is,
+`w` would look like [W] (alpha |> co1 :: Type) ~ (Int :: Type), and the tyvar
+case will trigger, correctly rewriting alpha to (Int |> sym co1).
+
+Successive canonicalizations of the same Wanted may produce
+duplicate Deriveds. Similar duplications can happen with fundeps, and there
+seems to be no easy way to avoid. I expect this case to be rare.
+
+For Givens, this problem doesn't bite, so a heterogeneous Given gives
+rise to a Given kind equality. No Deriveds here. We thus homogenise
+the Given (see the "homo_co" in the Given case in canEqTyVar) and
+carry on with a homogeneous equality constraint.
+
+Separately, I (Richard E) spent some time pondering what to do in the case
+that we have [W] (tv |> co1 :: k1) ~ (tv |> co2 :: k2) where k1 and k2
+differ. Note that the tv is the same. (This case is handled as the first
+case in canEqTyVarHomo.) At one point, I thought we could solve this limited
+form of heterogeneous Wanted, but I then reconsidered and now treat this case
+just like any other heterogeneous Wanted.
 
 Note [Type synonyms and canonicalization]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1683,7 +1783,7 @@ may reflect the result of unification alpha := ty, so new_pred might
 not _look_ the same as old_pred, and it's vital to proceed from now on
 using new_pred.
 
-The flattener preserves type synonyms, so they should appear in new_pred
+qThe flattener preserves type synonyms, so they should appear in new_pred
 as well as in old_pred; that is important for good error messages.
  -}
 
@@ -1810,13 +1910,13 @@ unifyWanted loc Phantom ty1 ty2
 unifyWanted loc role orig_ty1 orig_ty2
   = go orig_ty1 orig_ty2
   where
-    go ty1 ty2 | Just ty1' <- coreView ty1 = go ty1' ty2
-    go ty1 ty2 | Just ty2' <- coreView ty2 = go ty1 ty2'
+    go ty1 ty2 | Just ty1' <- tcView ty1 = go ty1' ty2
+    go ty1 ty2 | Just ty2' <- tcView ty2 = go ty1 ty2'
 
     go (FunTy s1 t1) (FunTy s2 t2)
       = do { co_s <- unifyWanted loc role s1 s2
            ; co_t <- unifyWanted loc role t1 t2
-           ; return (mkTyConAppCo role funTyCon [co_s,co_t]) }
+           ; return (mkFunCo role co_s co_t) }
     go (TyConApp tc1 tys1) (TyConApp tc2 tys2)
       | tc1 == tc2, tys1 `equalLength` tys2
       , isInjectiveTyCon tc1 role -- don't look under newtypes at Rep equality
@@ -1861,8 +1961,8 @@ unify_derived _   Phantom _        _        = return ()
 unify_derived loc role    orig_ty1 orig_ty2
   = go orig_ty1 orig_ty2
   where
-    go ty1 ty2 | Just ty1' <- coreView ty1 = go ty1' ty2
-    go ty1 ty2 | Just ty2' <- coreView ty2 = go ty1 ty2'
+    go ty1 ty2 | Just ty1' <- tcView ty1 = go ty1' ty2
+    go ty1 ty2 | Just ty2' <- tcView ty2 = go ty1 ty2'
 
     go (FunTy s1 t1) (FunTy s2 t2)
       = do { unify_derived loc role s1 s2

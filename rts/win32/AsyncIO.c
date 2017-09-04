@@ -40,8 +40,8 @@
 
 typedef struct CompletedReq {
     unsigned int   reqID;
-    int            len;
-    int            errCode;
+    HsInt          len;
+    HsInt          errCode;
 } CompletedReq;
 
 #define MAX_REQUESTS 200
@@ -58,9 +58,9 @@ static int              issued_reqs;
 static void
 onIOComplete(unsigned int reqID,
              int   fd STG_UNUSED,
-             int   len,
+             HsInt len,
              void* buf STG_UNUSED,
-             int   errCode)
+             HsInt errCode)
 {
     DWORD dwRes;
     /* Deposit result of request in queue/table..when there's room. */
@@ -106,9 +106,9 @@ onIOComplete(unsigned int reqID,
 
 unsigned int
 addIORequest(int   fd,
-             int   forWriting,
-             int   isSock,
-             int   len,
+             bool  forWriting,
+             bool  isSock,
+             HsInt len,
              char* buf)
 {
     EnterCriticalSection(&queue_lock);
@@ -122,7 +122,7 @@ addIORequest(int   fd,
 }
 
 unsigned int
-addDelayRequest(int usecs)
+addDelayRequest(HsInt usecs)
 {
     EnterCriticalSection(&queue_lock);
     issued_reqs++;
@@ -181,7 +181,7 @@ startupAsyncIO()
 }
 
 void
-shutdownAsyncIO(rtsBool wait_threads)
+shutdownAsyncIO(bool wait_threads)
 {
     ShutdownIOManager(wait_threads);
     if (completed_req_event != INVALID_HANDLE_VALUE) {
@@ -216,9 +216,9 @@ shutdownAsyncIO(rtsBool wait_threads)
  * to complete if the 'completedTable' is empty.
  */
 int
-awaitRequests(rtsBool wait)
+awaitRequests(bool wait)
 {
-#ifndef THREADED_RTS
+#if !defined(THREADED_RTS)
   // none of this is actually used in the threaded RTS
 
 start:
@@ -231,7 +231,7 @@ start:
     // Nothing immediately available & we won't wait
     if ((!wait && completed_hw == 0)
 #if 0
-        // If we just return when wait==rtsFalse, we'll go into a busy
+        // If we just return when wait==false, we'll go into a busy
         // wait loop, so I disabled this condition --SDM 18/12/2003
         (issued_reqs == 0 && completed_hw == 0)
 #endif

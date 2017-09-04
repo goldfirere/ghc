@@ -143,7 +143,7 @@ group is generalised (`Haskell Report, Section
 4.5.2 <http://www.haskell.org/onlinereport/decls.html#sect4.5.2>`__).
 
 Following a suggestion of Mark Jones, in his paper `Typing Haskell in
-Haskell <http://citeseer.ist.psu.edu/424440.html>`__, GHC implements a
+Haskell <https://web.cecs.pdx.edu/~mpj/thih/>`__, GHC implements a
 more general scheme. In GHC *the dependency analysis ignores references to
 variables that have an explicit type signature*. As a result of this refined
 dependency analysis, the dependency groups are smaller, and more bindings will
@@ -213,8 +213,8 @@ Numbers, basic types, and built-in classes
     -  Whenever you give a function, instance or class a ``Num t``
         constraint, also give it ``Show t`` and ``Eq t`` constraints.
 
-``Bits`` superclasses
-    The ``Bits`` class does not have a ``Num`` superclasses. It
+``Bits`` superclass
+    The ``Bits`` class does not have a ``Num`` superclass. It
     therefore does not have default methods for the ``bit``, ``testBit``
     and ``popCount`` methods.
 
@@ -238,6 +238,11 @@ Numbers, basic types, and built-in classes
     ``readsPrec`` that is defined in terms of ``readPrec``. GHC adds these two
     extra methods simply because ``ReadPrec`` is more efficient than ``ReadS``
     (the type on which ``readsPrec`` is based).
+
+``Monad`` superclass
+    The ``Monad`` class has an ``Applicative`` superclass. You cannot write
+    ``Monad`` instances that work for GHC and also for a Haskell 2010
+    implementation that does not define ``Applicative``.
 
 Extra instances
     The following extra instances are defined: ::
@@ -337,11 +342,34 @@ The Foreign Function Interface
 ``hs_init()``, ``hs_exit()``
     The FFI spec requires the implementation to support re-initialising
     itself after being shut down with ``hs_exit()``, but GHC does not
-    currently support that.
+    currently support that. See :ghc-ticket:`13693`.
 
     .. index::
         single: hs_init
         single: hs_exit
+
+.. _infelicities-operator-sections:
+
+Operator sections
+^^^^^^^^^^^^^^^^^
+
+The Haskell Report demands that, for infix operators ``%``, the following
+identities hold:
+
+::
+    (% expr) = \x -> x % expr
+    (expr %) = \x -> expr % x
+
+However, the second law is violated in the presence of undefined operators,
+
+::
+    (%) = error "urk"
+    (() %)         `seq` () -- urk
+    (\x -> () % x) `seq` () -- OK, result ()
+
+The operator section is treated like function application of an undefined
+function, while the lambda form is in WHNF that contains an application of an
+undefined function.
 
 .. _haskell-98-2010-undefined:
 
@@ -472,7 +500,7 @@ Bugs in GHC
    .. code-block:: none
 
        ghc: panic! (the 'impossible' happened)
-         (GHC version 7.10.1 for x86_64-unknown-linux):
+         (GHC version 8.2.1 for x86_64-unknown-linux):
            Simplifier ticks exhausted
          When trying UnfoldingDone x_alB
          To increase the limit, use -fsimpl-tick-factor=N (default 100)
@@ -539,6 +567,9 @@ Bugs in GHC
 -  Despite appearances ``*`` and ``Constraint`` aren't really distinct kinds
    in the compiler's internal representation and can be unified producing
    unexpected results. See :ghc-ticket:`11715` for one example.
+
+-  Because of a toolchain limitation we are unable to support full Unicode paths
+   on Windows. On Windows we support up to Latin-1. See :ghc-ticket:`12971` for more.
 
 .. _bugs-ghci:
 

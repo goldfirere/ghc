@@ -1,5 +1,4 @@
-#ifndef HSVERSIONS_H
-#define HSVERSIONS_H
+#pragma once
 
 #if 0
 
@@ -32,6 +31,22 @@ name = Util.global (value);
 name :: IORef (ty);                 \
 name = Util.globalM (value);
 
+
+#define SHARED_GLOBAL_VAR(name,accessor,saccessor,value,ty) \
+{-# NOINLINE name #-};                                      \
+name :: IORef (ty);                                         \
+name = Util.sharedGlobal (value) (accessor);                \
+foreign import ccall unsafe saccessor                       \
+  accessor :: Ptr (IORef a) -> IO (Ptr (IORef a));
+
+#define SHARED_GLOBAL_VAR_M(name,accessor,saccessor,value,ty)  \
+{-# NOINLINE name #-};                                         \
+name :: IORef (ty);                                            \
+name = Util.sharedGlobalM (value) (accessor);                  \
+foreign import ccall unsafe saccessor                          \
+  accessor :: Ptr (IORef a) -> IO (Ptr (IORef a));
+
+
 #define ASSERT(e)      if debugIsOn && not (e) then (assertPanic __FILE__ __LINE__) else
 #define ASSERT2(e,msg) if debugIsOn && not (e) then (assertPprPanic __FILE__ __LINE__ (msg)) else
 #define WARN( e, msg ) (warnPprTrace (e) __FILE__ __LINE__ (msg)) $
@@ -48,6 +63,3 @@ name = Util.globalM (value);
 #define ASSERTM(e)      do { bool <- e; MASSERT(bool) }
 #define ASSERTM2(e,msg) do { bool <- e; MASSERT2(bool,msg) }
 #define WARNM2(e,msg)   do { bool <- e; WARN(bool, msg) return () }
-
-#endif /* HsVersions.h */
-

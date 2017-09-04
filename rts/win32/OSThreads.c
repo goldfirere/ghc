@@ -63,31 +63,31 @@ closeCondition( Condition* pCond )
   return;
 }
 
-rtsBool
+bool
 broadcastCondition ( Condition* pCond )
 {
   PulseEvent(*pCond);
-  return rtsTrue;
+  return true;
 }
 
-rtsBool
+bool
 signalCondition ( Condition* pCond )
 {
     if (SetEvent(*pCond) == 0) {
         sysErrorBelch("SetEvent");
         stg_exit(EXIT_FAILURE);
     }
-    return rtsTrue;
+    return true;
 }
 
-rtsBool
+bool
 waitCondition ( Condition* pCond, Mutex* pMut )
 {
   RELEASE_LOCK(pMut);
   WaitForSingleObject(*pCond, INFINITE);
   /* Hmm..use WaitForMultipleObjects() ? */
   ACQUIRE_LOCK(pMut);
-  return rtsTrue;
+  return true;
 }
 
 void
@@ -133,7 +133,7 @@ osThreadId()
   return GetCurrentThreadId();
 }
 
-rtsBool
+bool
 osThreadIsAlive(OSThreadId id)
 {
     DWORD exit_code;
@@ -150,7 +150,7 @@ osThreadIsAlive(OSThreadId id)
     return (exit_code == STILL_ACTIVE);
 }
 
-#ifdef USE_CRITICAL_SECTIONS
+#if defined(USE_CRITICAL_SECTIONS)
 void
 initMutex (Mutex* pMut)
 {
@@ -166,7 +166,7 @@ void
 initMutex (Mutex* pMut)
 {
   HANDLE h = CreateMutex ( NULL,  /* default sec. attributes */
-                           FALSE, /* not owned => initially signalled */
+                           TRUE, /* not owned => initially signalled */
                            NULL
                            );
   *pMut = h;
@@ -195,7 +195,7 @@ getThreadLocalVar (ThreadLocalKey *key)
 {
     void *r;
     r = TlsGetValue(*key);
-#ifdef DEBUG
+#if defined(DEBUG)
     // r is allowed to be NULL - it can mean that either there was an
     // error or the stored value is in fact NULL.
     if (GetLastError() != NO_ERROR) {
@@ -251,13 +251,13 @@ forkOS_createThread ( HsStablePtr entry )
                            (unsigned*)&pId) == 0);
 }
 
-#if x86_64_HOST_ARCH
+#if defined(x86_64_HOST_ARCH)
 /* We still support Windows Vista, so we can't depend on it
    and must manually resolve these. */
 typedef DWORD(WINAPI *GetItemCountProc)(WORD);
 typedef DWORD(WINAPI *GetGroupCountProc)(void);
 typedef BOOL(WINAPI *SetThreadGroupAffinityProc)(HANDLE, const GROUP_AFFINITY*, PGROUP_AFFINITY);
-#ifndef ALL_PROCESSOR_GROUPS
+#if !defined(ALL_PROCESSOR_GROUPS)
 #define ALL_PROCESSOR_GROUPS 0xffff
 #endif
 #endif
@@ -306,7 +306,7 @@ getNumberOfProcessorsGroups (void)
     static uint8_t n_groups = 0;
 
 
-#if x86_64_HOST_ARCH
+#if defined(x86_64_HOST_ARCH)
     if (!n_groups)
     {
         /* We still support Windows Vista. Which means we can't rely
@@ -328,6 +328,7 @@ getNumberOfProcessorsGroups (void)
     return n_groups;
 }
 
+#if defined(x86_64_HOST_ARCH)
 static uint8_t*
 getProcessorsDistribution (void)
 {
@@ -342,7 +343,6 @@ getProcessorsDistribution (void)
         cpuGroupDistCache = malloc(n_groups * sizeof(uint8_t));
         memset(cpuGroupDistCache, MAXIMUM_PROCESSORS, n_groups * sizeof(uint8_t));
 
-#if x86_64_HOST_ARCH
         /* We still support Windows Vista. Which means we can't rely
         on the API being available. So we'll have to resolve manually.  */
         HMODULE kernel = GetModuleHandleW(L"kernel32");
@@ -357,11 +357,11 @@ getProcessorsDistribution (void)
                 IF_DEBUG(scheduler, debugBelch("[*] Number of active processors in group %u detected: %u\n", i, cpuGroupDistCache[i]));
             }
         }
-#endif
     }
 
     return cpuGroupDistCache;
 }
+#endif
 
 static uint32_t*
 getProcessorsCumulativeSum(void)
@@ -376,10 +376,10 @@ getProcessorsCumulativeSum(void)
         uint8_t n_groups = getNumberOfProcessorsGroups();
         cpuGroupCumulativeCache = malloc(n_groups * sizeof(uint32_t));
         memset(cpuGroupCumulativeCache, 0, n_groups * sizeof(uint32_t));
+
+#if defined(x86_64_HOST_ARCH)
         uint8_t* proc_dist = getProcessorsDistribution();
         uint32_t cum_num_proc = 0;
-
-#if x86_64_HOST_ARCH
         for (int i = 0; i < n_groups; i++)
         {
             cpuGroupCumulativeCache[i] = cum_num_proc;
@@ -419,7 +419,7 @@ createProcessorGroupMap (void)
     /* For 32bit Windows and 64bit older than Windows 7, create a default mapping. */
     memset(cpuGroupCache, 0, numProcs * sizeof(uint8_t));
 
-#if x86_64_HOST_ARCH
+#if defined(x86_64_HOST_ARCH)
     uint8_t* proc_dist = getProcessorsDistribution();
 
     int totalProcs = 0;
@@ -443,7 +443,7 @@ getNumberOfProcessors (void)
 {
     static uint32_t nproc = 0;
 
-#if x86_64_HOST_ARCH
+#if defined(x86_64_HOST_ARCH)
     /* We still support Windows Vista. Which means we can't rely
        on the API being available. So we'll have to resolve manually.  */
     HMODULE kernel = GetModuleHandleW(L"kernel32");
@@ -510,7 +510,7 @@ setThreadAffinity (uint32_t n, uint32_t m) // cap N of M
         mask[group] |= 1 << ix;
     }
 
-#if x86_64_HOST_ARCH
+#if defined(x86_64_HOST_ARCH)
     /* We still support Windows Vista. Which means we can't rely
        on the API being available. So we'll have to resolve manually.  */
     HMODULE kernel = GetModuleHandleW(L"kernel32");
@@ -520,7 +520,7 @@ setThreadAffinity (uint32_t n, uint32_t m) // cap N of M
 
     for (i = 0; i < n_groups; i++)
     {
-#if x86_64_HOST_ARCH
+#if defined(x86_64_HOST_ARCH)
         // If we support the new API, use it.
         if (mask[i] > 0 && SetThreadGroupAffinity)
         {
@@ -593,11 +593,11 @@ void releaseThreadNode (void)
 {
     if (osNumaAvailable())
     {
-        StgWord processMask;
-        StgWord systemMask;
+        PDWORD_PTR processMask = NULL;
+        PDWORD_PTR systemMask = NULL;
         if (!GetProcessAffinityMask(GetCurrentProcess(),
-                                   &processMask,
-                                   &systemMask))
+                                    processMask,
+                                    systemMask))
         {
             sysErrorBelch(
                 "releaseThreadNode: Error resetting affinity of thread: %lu",
@@ -605,7 +605,7 @@ void releaseThreadNode (void)
             stg_exit(EXIT_FAILURE);
         }
 
-        if (!SetThreadAffinityMask(GetCurrentThread(), processMask))
+        if (!SetThreadAffinityMask(GetCurrentThread(), *processMask))
         {
             sysErrorBelch(
                 "releaseThreadNode: Error reseting NUMA affinity mask of thread: %lu.",

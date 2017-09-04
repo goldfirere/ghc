@@ -51,6 +51,7 @@ import Util
 
 import qualified GHC.LanguageExtensions as LangExt
 
+import Panic
 import Data.List
 import System.Exit
 import Control.Monad
@@ -63,8 +64,8 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 
 -- | Entry point to compile a Backpack file.
-doBackpack :: FilePath -> Ghc ()
-doBackpack src_filename = do
+doBackpack :: [FilePath] -> Ghc ()
+doBackpack [src_filename] = do
     -- Apply options from file to dflags
     dflags0 <- getDynFlags
     let dflags1 = dflags0
@@ -79,7 +80,7 @@ doBackpack src_filename = do
     buf <- liftIO $ hGetStringBuffer src_filename
     let loc = mkRealSrcLoc (mkFastString src_filename) 1 1 -- TODO: not great
     case unP parseBackpack (mkPState dflags buf loc) of
-        PFailed span err -> do
+        PFailed _ span err -> do
             liftIO $ throwOneError (mkPlainErrMsg dflags span err)
         POk _ pkgname_bkp -> do
             -- OK, so we have an LHsUnit PackageName, but we want an
@@ -96,6 +97,8 @@ doBackpack src_filename = do
                                     then compileExe lunit
                                     else compileUnit cid []
                             else typecheckUnit cid insts
+doBackpack _ =
+    throwGhcException (CmdLineError "--backpack can only process a single file")
 
 computeUnitId :: LHsUnit HsComponentId -> (ComponentId, [(ModuleName, Module)])
 computeUnitId (L _ unit) = (cid, [ (r, mkHoleModule r) | r <- reqs ])
@@ -104,11 +107,20 @@ computeUnitId (L _ unit) = (cid, [ (r, mkHoleModule r) | r <- reqs ])
     reqs = uniqDSetToList (unionManyUniqDSets (map (get_reqs . unLoc) (hsunitBody unit)))
     get_reqs (DeclD SignatureD (L _ modname) _) = unitUniqDSet modname
     get_reqs (DeclD ModuleD _ _) = emptyUniqDSet
-    get_reqs (IncludeD (IncludeDecl (L _ hsuid) _)) =
+    get_reqs (IncludeD (IncludeDecl (L _ hsuid) _ _)) =
         unitIdFreeHoles (convertHsUnitId hsuid)
 
 -- | Tiny enum for all types of Backpack operations we may do.
-data SessionType = ExeSession | TcSession | CompSession
+data SessionType
+    -- | A compilation operation which will result in a
+    -- runnable executable being produced.
+    = ExeSession
+    -- | A type-checking operation which produces only
+    -- interface files, no object files.
+    | TcSession
+    -- | A compilation operation which produces both
+    -- interface files and object files.
+    | CompSession
     deriving (Eq)
 
 -- | Create a temporary Session to do some sort of type checking or
@@ -143,6 +155,7 @@ withBkpSession cid insts deps session_type do_this = do
       -- turn on interface writing.  However, if the user also
       -- explicitly passed in `-fno-code`, we DON'T want to write
       -- interfaces unless the user also asked for `-fwrite-interface`.
+      -- See Note [-fno-code mode]
       (case session_type of
         -- Make sure to write interfaces when we are type-checking
         -- indefinite packages.
@@ -171,6 +184,8 @@ withBkpSession cid insts deps session_type do_this = do
         outputFile  = if session_type == ExeSession
                         then outputFile dflags
                         else Nothing,
+        -- Clear the import path so we don't accidentally grab anything
+        importPaths = [],
         -- Synthesized the flags
         packageFlags = packageFlags dflags ++ map (\(uid0, rn) ->
           let uid = unwireUnitId dflags (improveUnitId (getPackageConfigMap dflags) $ renameHoleUnitId dflags (listToUFM insts) uid0)
@@ -208,11 +223,19 @@ compileUnit cid insts = do
     lunit <- getSource cid
     buildUnit CompSession cid insts lunit
 
--- Invariant: this NEVER returns InstalledUnitId
-hsunitDeps :: HsUnit HsComponentId -> [(UnitId, ModRenaming)]
-hsunitDeps unit = concatMap get_dep (hsunitBody unit)
+-- | Compute the dependencies with instantiations of a syntactic
+-- HsUnit; e.g., wherever you see @dependency p[A=<A>]@ in a
+-- unit file, return the 'UnitId' corresponding to @p[A=<A>]@.
+-- The @include_sigs@ parameter controls whether or not we also
+-- include @dependency signature@ declarations in this calculation.
+--
+-- Invariant: this NEVER returns InstalledUnitId.
+hsunitDeps :: Bool {- include sigs -} -> HsUnit HsComponentId -> [(UnitId, ModRenaming)]
+hsunitDeps include_sigs unit = concatMap get_dep (hsunitBody unit)
   where
-    get_dep (L _ (IncludeD (IncludeDecl (L _ hsuid) mb_lrn))) = [(convertHsUnitId hsuid, go mb_lrn)]
+    get_dep (L _ (IncludeD (IncludeDecl (L _ hsuid) mb_lrn is_sig)))
+        | include_sigs || not is_sig = [(convertHsUnitId hsuid, go mb_lrn)]
+        | otherwise = []
       where
         go Nothing = ModRenaming True []
         go (Just lrns) = ModRenaming False (map convRn lrns)
@@ -223,7 +246,11 @@ hsunitDeps unit = concatMap get_dep (hsunitBody unit)
 
 buildUnit :: SessionType -> ComponentId -> [(ModuleName, Module)] -> LHsUnit HsComponentId -> BkpM ()
 buildUnit session cid insts lunit = do
-    let deps_w_rns = hsunitDeps (unLoc lunit)
+    -- NB: include signature dependencies ONLY when typechecking.
+    -- If we're compiling, it's not necessary to recursively
+    -- compile a signature since it isn't going to produce
+    -- any object files.
+    let deps_w_rns = hsunitDeps (session == TcSession) (unLoc lunit)
         raw_deps = map fst deps_w_rns
     dflags <- getDynFlags
     -- The compilation dependencies are just the appropriately filled
@@ -261,7 +288,8 @@ buildUnit session cid insts lunit = do
         let hi_dir = expectJust (panic "hiDir Backpack") $ hiDir dflags
             export_mod ms = (ms_mod_name ms, ms_mod ms)
             -- Export everything!
-            mods = [ export_mod ms | ms <- mod_graph, ms_hsc_src ms == HsSrcFile ]
+            mods = [ export_mod ms | ms <- mgModSummaries mod_graph
+                                   , ms_hsc_src ms == HsSrcFile ]
 
         -- Compile relevant only
         hsc_env <- getSession
@@ -273,11 +301,7 @@ buildUnit session cid insts lunit = do
             obj_files = concatMap getOfiles linkables
 
         let compat_fs = (case cid of ComponentId fs -> fs)
-            cand_compat_pn = PackageName compat_fs
-            compat_pn = case session of
-                            TcSession -> cand_compat_pn
-                            _ | [] <- insts -> cand_compat_pn
-                              | otherwise -> PackageName compat_fs
+            compat_pn = PackageName compat_fs
 
         return InstalledPackageInfo {
             -- Stub data
@@ -286,6 +310,7 @@ buildUnit session cid insts lunit = do
             packageName = compat_pn,
             packageVersion = makeVersion [0],
             unitId = toInstalledUnitId (thisPackage dflags),
+            sourceLibName = Nothing,
             componentId = cid,
             instantiatedWith = insts,
             -- Slight inefficiency here haha
@@ -302,6 +327,7 @@ buildUnit session cid insts lunit = do
                                 $ deps ++ [ moduleUnitId mod
                                           | (_, mod) <- insts
                                           , not (isHoleModule mod) ],
+            abiDepends = [],
             ldOptions = case session of
                             TcSession -> []
                             _ -> obj_files,
@@ -335,7 +361,7 @@ buildUnit session cid insts lunit = do
 compileExe :: LHsUnit HsComponentId -> BkpM ()
 compileExe lunit = do
     msgUnitId mainUnitId
-    let deps_w_rns = hsunitDeps (unLoc lunit)
+    let deps_w_rns = hsunitDeps False (unLoc lunit)
         deps = map fst deps_w_rns
         -- no renaming necessary
     forM_ (zip [1..] deps) $ \(i, dep) ->
@@ -490,9 +516,9 @@ mkBackpackMsg = do
 -- | 'PprStyle' for Backpack messages; here we usually want the module to
 -- be qualified (so we can tell how it was instantiated.) But we try not
 -- to qualify packages so we can use simple names for them.
-backpackStyle :: PprStyle
-backpackStyle =
-    mkUserStyle
+backpackStyle :: DynFlags -> PprStyle
+backpackStyle dflags =
+    mkUserStyle dflags
         (QueryQualify neverQualifyNames
                       alwaysQualifyModules
                       neverQualifyPackages) AllTheWay
@@ -511,7 +537,8 @@ msgUnitId pk = do
     dflags <- getDynFlags
     level <- getBkpLevel
     liftIO . backpackProgressMsg level dflags
-        $ "Instantiating " ++ renderWithStyle dflags (ppr pk) backpackStyle
+        $ "Instantiating " ++ renderWithStyle dflags (ppr pk)
+                                (backpackStyle dflags)
 
 -- | Message when we include a Backpack unit.
 msgInclude :: (Int,Int) -> UnitId -> BkpM ()
@@ -520,7 +547,7 @@ msgInclude (i,n) uid = do
     level <- getBkpLevel
     liftIO . backpackProgressMsg level dflags
         $ showModuleIndex (i, n) ++ "Including " ++
-          renderWithStyle dflags (ppr uid) backpackStyle
+          renderWithStyle dflags (ppr uid) (backpackStyle dflags)
 
 -- ----------------------------------------------------------------------------
 -- Conversion from PackageName to HsComponentId
@@ -561,7 +588,8 @@ renameHsUnits dflags m units = map (fmap renameHsUnit) units
     renameHsUnitDecl (IncludeD idecl) =
         IncludeD IncludeDecl {
             idUnitId = fmap renameHsUnitId (idUnitId idecl),
-            idModRenaming = idModRenaming idecl
+            idModRenaming = idModRenaming idecl,
+            idSignatureInclude = idSignatureInclude idecl
         }
 
     renameHsUnitId :: HsUnitId PackageName -> HsUnitId HsComponentId
@@ -633,7 +661,7 @@ hsunitModuleGraph dflags unit = do
             else fmap Just $ summariseRequirement pn mod_name
 
     -- 3. Return the kaboodle
-    return (nodes ++ req_nodes)
+    return $ mkModuleGraph $ nodes ++ req_nodes
 
 summariseRequirement :: PackageName -> ModuleName -> BkpM ModSummary
 summariseRequirement pn mod_name = do
@@ -682,7 +710,7 @@ summariseRequirement pn mod_name = do
 summariseDecl :: PackageName
               -> HscSource
               -> Located ModuleName
-              -> Maybe (Located (HsModule RdrName))
+              -> Maybe (Located (HsModule GhcPs))
               -> BkpM ModSummary
 summariseDecl pn hsc_src (L _ modname) (Just hsmod) = hsModuleToModSummary pn hsc_src modname hsmod
 summariseDecl _pn hsc_src lmodname@(L loc modname) Nothing
@@ -709,10 +737,12 @@ summariseDecl _pn hsc_src lmodname@(L loc modname) Nothing
 hsModuleToModSummary :: PackageName
                      -> HscSource
                      -> ModuleName
-                     -> Located (HsModule RdrName)
+                     -> Located (HsModule GhcPs)
                      -> BkpM ModSummary
 hsModuleToModSummary pn hsc_src modname
-                     hsmod@(L loc (HsModule _ _ imps _ _ _)) = do
+                     hsmod = do
+    let imps = hsmodImports (unLoc hsmod)
+        loc  = getLoc hsmod
     hsc_env <- getSession
     -- Sort of the same deal as in DriverPipeline's getLocation
     -- Use the PACKAGE NAME to find the location

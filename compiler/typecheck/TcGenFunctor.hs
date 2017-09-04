@@ -7,6 +7,7 @@ The deriving code for the Functor, Foldable, and Traversable classes
 -}
 
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module TcGenFunctor (
         FFoldType(..), functorLikeTraverse,
@@ -32,6 +33,8 @@ import Type
 import Util
 import Var
 import VarSet
+import MkId (coerceId)
+import TysWiredIn (true_RDR, false_RDR)
 
 import Data.Maybe (catMaybes, isJust)
 
@@ -122,24 +125,38 @@ so it was eta expanded to `\x -> [| f $x |]`. This resulted in too much eta expa
 It is better to produce too many lambdas than to eta expand, see ticket #7436.
 -}
 
-gen_Functor_binds :: SrcSpan -> TyCon -> (LHsBinds RdrName, BagDerivStuff)
+gen_Functor_binds :: SrcSpan -> TyCon -> (LHsBinds GhcPs, BagDerivStuff)
+-- When the argument is phantom, we can use  fmap _ = coerce
+-- See Note [Phantom types with Functor, Foldable, and Traversable]
 gen_Functor_binds loc tycon
+  | Phantom <- last (tyConRoles tycon)
   = (unitBag fmap_bind, emptyBag)
   where
-    data_cons = tyConDataCons tycon
-    fun_name = L loc fmap_RDR
-    fmap_bind = mkRdrFunBind fun_name eqns
+    fmap_name = L loc fmap_RDR
+    fmap_bind = mkRdrFunBind fmap_name fmap_eqns
+    fmap_eqns = [mkSimpleMatch fmap_match_ctxt
+                               [nlWildPat]
+                               coerce_Expr]
+    fmap_match_ctxt = mkPrefixFunRhs fmap_name
 
-    fmap_eqn con = evalState (match_for_con [f_Pat] con =<< parts) bs_RDRs
+gen_Functor_binds loc tycon
+  = (listToBag [fmap_bind, replace_bind], emptyBag)
+  where
+    data_cons = tyConDataCons tycon
+    fmap_name = L loc fmap_RDR
+
+    -- See Note [EmptyDataDecls with Functor, Foldable, and Traversable]
+    fmap_bind = mkRdrFunBindEC 2 id fmap_name fmap_eqns
+    fmap_match_ctxt = mkPrefixFunRhs fmap_name
+
+    fmap_eqn con = flip evalState bs_RDRs $
+                     match_for_con fmap_match_ctxt [f_Pat] con =<< parts
       where
         parts = sequence $ foldDataConArgs ft_fmap con
 
-    eqns | null data_cons = [mkSimpleMatch (FunRhs fun_name Prefix)
-                                           [nlWildPat, nlWildPat]
-                                           (error_Expr "Void fmap")]
-         | otherwise      = map fmap_eqn data_cons
+    fmap_eqns = map fmap_eqn data_cons
 
-    ft_fmap :: FFoldType (State [RdrName] (LHsExpr RdrName))
+    ft_fmap :: FFoldType (State [RdrName] (LHsExpr GhcPs))
     ft_fmap = FT { ft_triv = mkSimpleLam $ \x -> return x
                    -- fmap f = \x -> x
                  , ft_var  = return f_Expr
@@ -152,19 +169,155 @@ gen_Functor_binds loc tycon
                    -- fmap f = \x b -> h (x (g b))
                  , ft_tup = \t gs -> do
                      gg <- sequence gs
-                     mkSimpleLam $ mkSimpleTupleCase match_for_con t gg
+                     mkSimpleLam $ mkSimpleTupleCase (match_for_con CaseAlt) t gg
                    -- fmap f = \x -> case x of (a1,a2,..) -> (g1 a1,g2 a2,..)
                  , ft_ty_app = \_ g -> nlHsApp fmap_Expr <$> g
                    -- fmap f = fmap g
                  , ft_forall = \_ g -> g
-                 , ft_bad_app = panic "in other argument"
-                 , ft_co_var = panic "contravariant" }
+                 , ft_bad_app = panic "in other argument in ft_fmap"
+                 , ft_co_var = panic "contravariant in ft_fmap" }
+
+    -- See Note [Deriving <$]
+    replace_name = L loc replace_RDR
+
+    -- See Note [EmptyDataDecls with Functor, Foldable, and Traversable]
+    replace_bind = mkRdrFunBindEC 2 id replace_name replace_eqns
+    replace_match_ctxt = mkPrefixFunRhs replace_name
+
+    replace_eqn con = flip evalState bs_RDRs $
+        match_for_con replace_match_ctxt [z_Pat] con =<< parts
+      where
+        parts = traverse (fmap replace) $ foldDataConArgs ft_replace con
+
+    replace_eqns = map replace_eqn data_cons
+
+    ft_replace :: FFoldType (State [RdrName] Replacer)
+    ft_replace = FT { ft_triv = fmap Nested $ mkSimpleLam $ \x -> return x
+                   -- (p <$) = \x -> x
+                 , ft_var  = fmap Immediate $ mkSimpleLam $ \_ -> return z_Expr
+                   -- (p <$) = const p
+                 , ft_fun  = \g h -> do
+                     gg <- replace <$> g
+                     hh <- replace <$> h
+                     fmap Nested $ mkSimpleLam2 $ \x b -> return $
+                       nlHsApp hh (nlHsApp x (nlHsApp gg b))
+                   -- (<$) p = \x b -> h (x (g b))
+                 , ft_tup = \t gs -> do
+                     gg <- traverse (fmap replace) gs
+                     fmap Nested . mkSimpleLam $
+                          mkSimpleTupleCase (match_for_con CaseAlt) t gg
+                   -- (p <$) = \x -> case x of (a1,a2,..) -> (g1 a1,g2 a2,..)
+                 , ft_ty_app = \_ gm -> do
+                       g <- gm
+                       case g of
+                         Nested g' -> pure . Nested $
+                                          nlHsApp fmap_Expr $ g'
+                         Immediate _ -> pure . Nested $
+                                          nlHsApp replace_Expr z_Expr
+                   -- (p <$) = fmap (p <$)
+                 , ft_forall = \_ g -> g
+                 , ft_bad_app = panic "in other argument in ft_replace"
+                 , ft_co_var = panic "contravariant in ft_replace" }
 
     -- Con a1 a2 ... -> Con (f1 a1) (f2 a2) ...
-    match_for_con :: [LPat RdrName] -> DataCon -> [LHsExpr RdrName]
-                  -> State [RdrName] (LMatch RdrName (LHsExpr RdrName))
-    match_for_con = mkSimpleConMatch CaseAlt $
+    match_for_con :: HsMatchContext RdrName
+                  -> [LPat GhcPs] -> DataCon -> [LHsExpr GhcPs]
+                  -> State [RdrName] (LMatch GhcPs (LHsExpr GhcPs))
+    match_for_con ctxt = mkSimpleConMatch ctxt $
         \con_name xs -> return $ nlHsApps con_name xs  -- Con x1 x2 ..
+
+-- See Note [Deriving <$]
+data Replacer = Immediate {replace :: LHsExpr GhcPs}
+              | Nested {replace :: LHsExpr GhcPs}
+
+{- Note [Deriving <$]
+   ~~~~~~~~~~~~~~~~~~
+
+We derive the definition of <$. Allowing this to take the default definition
+can lead to memory leaks: mapping over a structure with a constant function can
+fill the result structure with trivial thunks that retain the values from the
+original structure. The simplifier seems to handle this all right for simple
+types, but not for recursive ones. Consider
+
+data Tree a = Bin !(Tree a) a !(Tree a) | Tip deriving Functor
+
+-- fmap _ Tip = Tip
+-- fmap f (Bin l v r) = Bin (fmap f l) (f v) (fmap f r)
+
+Using the default definition of <$, we get (<$) x = fmap (\_ -> x) and that
+simplifies no further. Why is that? `fmap` is defined recursively, so GHC
+cannot inline it. The static argument transformation would turn the definition
+into a non-recursive one
+
+-- fmap f = go where
+--   go Tip = Tip
+--   go (Bin l v r) = Bin (go l) (f v) (go r)
+
+which GHC could inline, producing an efficient definion of `<$`. But there are
+several problems. First, GHC does not perform the static argument transformation
+by default, even with -O2. Second, even when it does perform the static argument
+transformation, it does so only when there are at least two static arguments,
+which is not the case for fmap. Finally, when the type in question is
+non-regular, such as
+
+data Nesty a = Z a | S (Nesty a) (Nest (a, a))
+
+the function argument is no longer (entirely) static, so the static argument
+transformation will do nothing for us.
+
+Applying the default definition of `<$` will produce a tree full of thunks that
+look like ((\_ -> x) x0), which represents unnecessary thunk allocation and
+also retention of the previous value, potentially leaking memory. Instead, we
+derive <$ separately. Two aspects are different from fmap: the case of the
+sought type variable (ft_var) and the case of a type application (ft_ty_app).
+The interesting one is ft_ty_app. We have to distinguish two cases: the
+"immediate" case where the type argument *is* the sought type variable, and
+the "nested" case where the type argument *contains* the sought type variable.
+
+The immediate case:
+
+Suppose we have
+
+data Imm a = Imm (F ... a)
+
+Then we want to define
+
+x <$ Imm q = Imm (x <$ q)
+
+The nested case:
+
+Suppose we have
+
+data Nes a = Nes (F ... (G a))
+
+Then we want to define
+
+x <$ Nes q = Nes (fmap (x <$) q)
+
+We use the Replacer type to tag whether the expression derived for applying
+<$ to the last type variable was the ft_var case (immediate) or one of the
+others (letting ft_forall pass through as usual).
+
+We could, but do not, give tuples special treatment to improve efficiency
+in some cases. Suppose we have
+
+data Nest a = Z a | S (Nest (a,a))
+
+The optimal definition would be
+
+x <$ Z _ = Z x
+x <$ S t = S ((x, x) <$ t)
+
+which produces a result with maximal internal sharing. The reason we do not
+attempt to treat this case specially is that we have no way to give
+user-provided tuple-like types similar treatment. If the user changed the
+definition to
+
+data Pair a = Pair a a
+data Nest a = Z a | S (Nest (Pair a))
+
+they would experience a surprising degradation in performance. -}
+
 
 {-
 Utility functions related to Functor deriving.
@@ -210,7 +363,7 @@ functorLikeTraverse var (FT { ft_triv = caseTrivial,     ft_var = caseVar
        -> Type
        -> (a, Bool)   -- (result of type a, does type contain var)
 
-    go co ty | Just ty' <- coreView ty = go co ty'
+    go co ty | Just ty' <- tcView ty = go co ty'
     go co (TyVarTy    v) | v == var = (if co then caseCoVar else caseVar,True)
     go co (FunTy x y)  | isPredTy x = go co y
                        | xc || yc   = (caseFun xr yr,True)
@@ -252,8 +405,8 @@ deepSubtypesContaining tv
             , ft_fun = (++)
             , ft_tup = \_ xs -> concat xs
             , ft_ty_app = (:)
-            , ft_bad_app = panic "in other argument"
-            , ft_co_var = panic "contravariant"
+            , ft_bad_app = panic "in other argument in deepSubtypesContaining"
+            , ft_co_var = panic "contravariant in deepSubtypesContaining"
             , ft_forall = \v xs -> filterOut ((v `elemVarSet`) . tyCoVarsOfType) xs })
 
 
@@ -276,8 +429,8 @@ foldDataConArgs ft con
     -- The kind checks have ensured the last type parameter is of kind *.
 
 -- Make a HsLam using a fresh variable from a State monad
-mkSimpleLam :: (LHsExpr RdrName -> State [RdrName] (LHsExpr RdrName))
-            -> State [RdrName] (LHsExpr RdrName)
+mkSimpleLam :: (LHsExpr GhcPs -> State [RdrName] (LHsExpr GhcPs))
+            -> State [RdrName] (LHsExpr GhcPs)
 -- (mkSimpleLam fn) returns (\x. fn(x))
 mkSimpleLam lam = do
     (n:names) <- get
@@ -285,9 +438,9 @@ mkSimpleLam lam = do
     body <- lam (nlHsVar n)
     return (mkHsLam [nlVarPat n] body)
 
-mkSimpleLam2 :: (LHsExpr RdrName -> LHsExpr RdrName
-             -> State [RdrName] (LHsExpr RdrName))
-             -> State [RdrName] (LHsExpr RdrName)
+mkSimpleLam2 :: (LHsExpr GhcPs -> LHsExpr GhcPs
+             -> State [RdrName] (LHsExpr GhcPs))
+             -> State [RdrName] (LHsExpr GhcPs)
 mkSimpleLam2 lam = do
     (n1:n2:names) <- get
     put names
@@ -302,16 +455,20 @@ mkSimpleLam2 lam = do
 -- and its arguments, applying an expression (from @insides@) to each of the
 -- respective arguments of @con@.
 mkSimpleConMatch :: Monad m => HsMatchContext RdrName
-                 -> (RdrName -> [LHsExpr RdrName] -> m (LHsExpr RdrName))
-                 -> [LPat RdrName]
+                 -> (RdrName -> [LHsExpr GhcPs] -> m (LHsExpr GhcPs))
+                 -> [LPat GhcPs]
                  -> DataCon
-                 -> [LHsExpr RdrName]
-                 -> m (LMatch RdrName (LHsExpr RdrName))
+                 -> [LHsExpr GhcPs]
+                 -> m (LMatch GhcPs (LHsExpr GhcPs))
 mkSimpleConMatch ctxt fold extra_pats con insides = do
     let con_name = getRdrName con
     let vars_needed = takeList insides as_RDRs
-    let pat = nlConVarPat con_name vars_needed
-    rhs <- fold con_name (zipWith nlHsApp insides (map nlHsVar vars_needed))
+    let bare_pat = nlConVarPat con_name vars_needed
+    let pat = if null vars_needed
+          then bare_pat
+          else nlParPat bare_pat
+    rhs <- fold con_name
+                (zipWith (\i v -> i `nlHsApp` nlHsVar v) insides vars_needed)
     return $ mkMatch ctxt (extra_pats ++ [pat]) rhs
                      (noLoc emptyLocalBinds)
 
@@ -334,12 +491,12 @@ mkSimpleConMatch ctxt fold extra_pats con insides = do
 -- See Note [Generated code for DeriveFoldable and DeriveTraversable]
 mkSimpleConMatch2 :: Monad m
                   => HsMatchContext RdrName
-                  -> (LHsExpr RdrName -> [LHsExpr RdrName]
-                                      -> m (LHsExpr RdrName))
-                  -> [LPat RdrName]
+                  -> (LHsExpr GhcPs -> [LHsExpr GhcPs]
+                                      -> m (LHsExpr GhcPs))
+                  -> [LPat GhcPs]
                   -> DataCon
-                  -> [Maybe (LHsExpr RdrName)]
-                  -> m (LMatch RdrName (LHsExpr RdrName))
+                  -> [Maybe (LHsExpr GhcPs)]
+                  -> m (LMatch GhcPs (LHsExpr GhcPs))
 mkSimpleConMatch2 ctxt fold extra_pats con insides = do
     let con_name = getRdrName con
         vars_needed = takeList insides as_RDRs
@@ -347,21 +504,19 @@ mkSimpleConMatch2 ctxt fold extra_pats con insides = do
         -- Make sure to zip BEFORE invoking catMaybes. We want the variable
         -- indicies in each expression to match up with the argument indices
         -- in con_expr (defined below).
-        exps = catMaybes $ zipWith (\i v -> (`nlHsApp` v) <$> i)
-                                   insides (map nlHsVar vars_needed)
+        exps = catMaybes $ zipWith (\i v -> (`nlHsApp` nlHsVar v) <$> i)
+                                   insides vars_needed
         -- An element of argTysTyVarInfo is True if the constructor argument
         -- with the same index has a type which mentions the last type
         -- variable.
         argTysTyVarInfo = map isJust insides
-        (asWithTyVar, asWithoutTyVar) = partitionByList argTysTyVarInfo as_RDRs
+        (asWithTyVar, asWithoutTyVar) = partitionByList argTysTyVarInfo as_Vars
 
         con_expr
-          | null asWithTyVar = nlHsApps con_name $ map nlHsVar asWithoutTyVar
+          | null asWithTyVar = nlHsApps con_name asWithoutTyVar
           | otherwise =
               let bs   = filterByList  argTysTyVarInfo bs_RDRs
-                  vars = filterByLists argTysTyVarInfo
-                                       (map nlHsVar bs_RDRs)
-                                       (map nlHsVar as_RDRs)
+                  vars = filterByLists argTysTyVarInfo bs_Vars as_Vars
               in mkHsLam (map nlVarPat bs) (nlHsApps con_name vars)
 
     rhs <- fold con_expr exps
@@ -369,9 +524,9 @@ mkSimpleConMatch2 ctxt fold extra_pats con insides = do
                      (noLoc emptyLocalBinds)
 
 -- "case x of (a1,a2,a3) -> fold [x1 a1, x2 a2, x3 a3]"
-mkSimpleTupleCase :: Monad m => ([LPat RdrName] -> DataCon -> [a]
-                                 -> m (LMatch RdrName (LHsExpr RdrName)))
-                  -> TyCon -> [a] -> LHsExpr RdrName -> m (LHsExpr RdrName)
+mkSimpleTupleCase :: Monad m => ([LPat GhcPs] -> DataCon -> [a]
+                                 -> m (LMatch GhcPs (LHsExpr GhcPs)))
+                  -> TyCon -> [a] -> LHsExpr GhcPs -> m (LHsExpr GhcPs)
 mkSimpleTupleCase match_for_con tc insides x
   = do { let data_con = tyConSingleDataCon tc
        ; match <- match_for_con [] data_con insides
@@ -442,11 +597,69 @@ derived Foldable instance for GADT is:
 
 See Note [DeriveFoldable with ExistentialQuantification].
 
+Note [Deriving null]
+~~~~~~~~~~~~~~~~~~~~
+
+In some cases, deriving the definition of 'null' can produce much better
+results than the default definition. For example, with
+
+  data SnocList a = Nil | Snoc (SnocList a) a
+
+the default definition of 'null' would walk the entire spine of a
+nonempty snoc-list before concluding that it is not null. But looking at
+the Snoc constructor, we can immediately see that it contains an 'a', and
+so 'null' can return False immediately if it matches on Snoc. When we
+derive 'null', we keep track of things that cannot be null. The interesting
+case is type application. Given
+
+  data Wrap a = Wrap (Foo (Bar a))
+
+we use
+
+  null (Wrap fba) = all null fba
+
+but if we see
+
+  data Wrap a = Wrap (Foo a)
+
+we can just use
+
+  null (Wrap fa) = null fa
+
+Indeed, we allow this to happen even for tuples:
+
+  data Wrap a = Wrap (Foo (a, Int))
+
+produces
+
+  null (Wrap fa) = null fa
+
+As explained in Note [Deriving <$], giving tuples special performance treatment
+could surprise users if they switch to other types, but Ryan Scott seems to
+think it's okay to do it for now.
 -}
 
-gen_Foldable_binds :: SrcSpan -> TyCon -> (LHsBinds RdrName, BagDerivStuff)
+gen_Foldable_binds :: SrcSpan -> TyCon -> (LHsBinds GhcPs, BagDerivStuff)
+-- When the parameter is phantom, we can use foldMap _ _ = mempty
+-- See Note [Phantom types with Functor, Foldable, and Traversable]
 gen_Foldable_binds loc tycon
-  = (listToBag [foldr_bind, foldMap_bind], emptyBag)
+  | Phantom <- last (tyConRoles tycon)
+  = (unitBag foldMap_bind, emptyBag)
+  where
+    foldMap_name = L loc foldMap_RDR
+    foldMap_bind = mkRdrFunBind foldMap_name foldMap_eqns
+    foldMap_eqns = [mkSimpleMatch foldMap_match_ctxt
+                                  [nlWildPat, nlWildPat]
+                                  mempty_Expr]
+    foldMap_match_ctxt = mkPrefixFunRhs foldMap_name
+
+gen_Foldable_binds loc tycon
+  | null data_cons  -- There's no real point producing anything but
+                    -- foldMap for a type with no constructors.
+  = (unitBag foldMap_bind, emptyBag)
+
+  | otherwise
+  = (listToBag [foldr_bind, foldMap_bind, null_bind], emptyBag)
   where
     data_cons = tyConDataCons tycon
 
@@ -457,16 +670,46 @@ gen_Foldable_binds loc tycon
       where
         parts = sequence $ foldDataConArgs ft_foldr con
 
-    foldMap_bind = mkRdrFunBind (L loc foldMap_RDR) (map foldMap_eqn data_cons)
+    foldMap_name = L loc foldMap_RDR
+
+    -- See Note [EmptyDataDecls with Functor, Foldable, and Traversable]
+    foldMap_bind = mkRdrFunBindEC 2 (const mempty_Expr)
+                      foldMap_name foldMap_eqns
+
+    foldMap_eqns = map foldMap_eqn data_cons
+
     foldMap_eqn con
       = evalState (match_foldMap [f_Pat] con =<< parts) bs_RDRs
       where
         parts = sequence $ foldDataConArgs ft_foldMap con
 
+    -- Given a list of NullM results, produce Nothing if any of
+    -- them is NotNull, and otherwise produce a list of Maybes
+    -- with Justs representing unknowns and Nothings representing
+    -- things that are definitely null.
+    convert :: [NullM a] -> Maybe [Maybe a]
+    convert = traverse go where
+      go IsNull = Just Nothing
+      go NotNull = Nothing
+      go (NullM a) = Just (Just a)
+
+    null_name = L loc null_RDR
+    null_match_ctxt = mkPrefixFunRhs null_name
+    null_bind = mkRdrFunBind null_name null_eqns
+    null_eqns = map null_eqn data_cons
+    null_eqn con
+      = flip evalState bs_RDRs $ do
+          parts <- sequence $ foldDataConArgs ft_null con
+          case convert parts of
+            Nothing -> return $
+              mkMatch null_match_ctxt [nlParPat (nlWildConPat con)]
+                false_Expr (noLoc emptyLocalBinds)
+            Just cp -> match_null [] con cp
+
     -- Yields 'Just' an expression if we're folding over a type that mentions
     -- the last type parameter of the datatype. Otherwise, yields 'Nothing'.
     -- See Note [FFoldType and functorLikeTraverse]
-    ft_foldr :: FFoldType (State [RdrName] (Maybe (LHsExpr RdrName)))
+    ft_foldr :: FFoldType (State [RdrName] (Maybe (LHsExpr GhcPs)))
     ft_foldr
       = FT { ft_triv    = return Nothing
              -- foldr f = \x z -> z
@@ -484,23 +727,23 @@ gen_Foldable_binds loc tycon
                  nlHsApps foldable_foldr_RDR [gg',z,x]) gg
              -- foldr f = (\x z -> foldr g z x)
            , ft_forall  = \_ g -> g
-           , ft_co_var  = panic "contravariant"
-           , ft_fun     = panic "function"
-           , ft_bad_app = panic "in other argument" }
+           , ft_co_var  = panic "contravariant in ft_foldr"
+           , ft_fun     = panic "function in ft_foldr"
+           , ft_bad_app = panic "in other argument in ft_foldr" }
 
-    match_foldr :: LHsExpr RdrName
-                -> [LPat RdrName]
+    match_foldr :: LHsExpr GhcPs
+                -> [LPat GhcPs]
                 -> DataCon
-                -> [Maybe (LHsExpr RdrName)]
-                -> State [RdrName] (LMatch RdrName (LHsExpr RdrName))
+                -> [Maybe (LHsExpr GhcPs)]
+                -> State [RdrName] (LMatch GhcPs (LHsExpr GhcPs))
     match_foldr z = mkSimpleConMatch2 LambdaExpr $ \_ xs -> return (mkFoldr xs)
       where
         -- g1 v1 (g2 v2 (.. z))
-        mkFoldr :: [LHsExpr RdrName] -> LHsExpr RdrName
+        mkFoldr :: [LHsExpr GhcPs] -> LHsExpr GhcPs
         mkFoldr = foldr nlHsApp z
 
     -- See Note [FFoldType and functorLikeTraverse]
-    ft_foldMap :: FFoldType (State [RdrName] (Maybe (LHsExpr RdrName)))
+    ft_foldMap :: FFoldType (State [RdrName] (Maybe (LHsExpr GhcPs)))
     ft_foldMap
       = FT { ft_triv = return Nothing
              -- foldMap f = \x -> mempty
@@ -514,20 +757,73 @@ gen_Foldable_binds loc tycon
            , ft_ty_app = \_ g -> fmap (nlHsApp foldMap_Expr) <$> g
              -- foldMap f = foldMap g
            , ft_forall = \_ g -> g
-           , ft_co_var = panic "contravariant"
-           , ft_fun = panic "function"
-           , ft_bad_app = panic "in other argument" }
+           , ft_co_var = panic "contravariant in ft_foldMap"
+           , ft_fun = panic "function in ft_foldMap"
+           , ft_bad_app = panic "in other argument in ft_foldMap" }
 
-    match_foldMap :: [LPat RdrName]
+    match_foldMap :: [LPat GhcPs]
                   -> DataCon
-                  -> [Maybe (LHsExpr RdrName)]
-                  -> State [RdrName] (LMatch RdrName (LHsExpr RdrName))
+                  -> [Maybe (LHsExpr GhcPs)]
+                  -> State [RdrName] (LMatch GhcPs (LHsExpr GhcPs))
     match_foldMap = mkSimpleConMatch2 CaseAlt $ \_ xs -> return (mkFoldMap xs)
       where
         -- mappend v1 (mappend v2 ..)
-        mkFoldMap :: [LHsExpr RdrName] -> LHsExpr RdrName
+        mkFoldMap :: [LHsExpr GhcPs] -> LHsExpr GhcPs
         mkFoldMap [] = mempty_Expr
         mkFoldMap xs = foldr1 (\x y -> nlHsApps mappend_RDR [x,y]) xs
+
+    -- See Note [FFoldType and functorLikeTraverse]
+    -- Yields NullM an expression if we're folding over an expression
+    -- that may or may not be null. Yields IsNull if it's certainly
+    -- null, and yields NotNull if it's certainly not null.
+    -- See Note [Deriving null]
+    ft_null :: FFoldType (State [RdrName] (NullM (LHsExpr GhcPs)))
+    ft_null
+      = FT { ft_triv = return IsNull
+             -- null = \_ -> True
+           , ft_var  = return NotNull
+             -- null = \_ -> False
+           , ft_tup  = \t g -> do
+               gg  <- sequence g
+               case convert gg of
+                 Nothing -> pure NotNull
+                 Just ggg ->
+                   NullM <$> (mkSimpleLam $ mkSimpleTupleCase match_null t ggg)
+             -- null = \x -> case x of (..,)
+           , ft_ty_app = \_ g -> flip fmap g $ \nestedResult ->
+                              case nestedResult of
+                                -- If e definitely contains the parameter,
+                                -- then we can test if (G e) contains it by
+                                -- simply checking if (G e) is null
+                                NotNull -> NullM null_Expr
+                                -- This case is unreachable--it will actually be
+                                -- caught by ft_triv
+                                IsNull -> IsNull
+                                -- The general case uses (all null),
+                                -- (all (all null)), etc.
+                                NullM nestedTest -> NullM $
+                                                    nlHsApp all_Expr nestedTest
+             -- null fa = null fa, or null fa = all null fa, or null fa = True
+           , ft_forall = \_ g -> g
+           , ft_co_var = panic "contravariant in ft_null"
+           , ft_fun = panic "function in ft_null"
+           , ft_bad_app = panic "in other argument in ft_null" }
+
+    match_null :: [LPat GhcPs]
+                  -> DataCon
+                  -> [Maybe (LHsExpr GhcPs)]
+                  -> State [RdrName] (LMatch GhcPs (LHsExpr GhcPs))
+    match_null = mkSimpleConMatch2 CaseAlt $ \_ xs -> return (mkNull xs)
+      where
+        -- v1 && v2 && ..
+        mkNull :: [LHsExpr GhcPs] -> LHsExpr GhcPs
+        mkNull [] = true_Expr
+        mkNull xs = foldr1 (\x y -> nlHsApps and_RDR [x,y]) xs
+
+data NullM a =
+    IsNull   -- Definitely null
+  | NotNull  -- Definitely not null
+  | NullM a  -- Unknown
 
 {-
 ************************************************************************
@@ -543,7 +839,8 @@ Again, Traversable is much like Functor and Foldable.
 The cases are:
 
   $(traverse 'a 'a)          =  f
-  $(traverse 'a '(b1,b2))    =  \x -> case x of (x1,x2) -> (,) <$> $(traverse 'a 'b1) x1 <*> $(traverse 'a 'b2) x2
+  $(traverse 'a '(b1,b2))    =  \x -> case x of (x1,x2) ->
+     liftA2 (,) ($(traverse 'a 'b1) x1) ($(traverse 'a 'b2) x2)
   $(traverse 'a '(T b1 b2))  =  traverse $(traverse 'a 'b2)  -- when a only occurs in the last parameter, b2
 
 Like -XDeriveFoldable, -XDeriveTraversable filters out arguments whose types
@@ -568,14 +865,32 @@ removes all such types from consideration.
 See Note [Generated code for DeriveFoldable and DeriveTraversable].
 -}
 
-gen_Traversable_binds :: SrcSpan -> TyCon -> (LHsBinds RdrName, BagDerivStuff)
+gen_Traversable_binds :: SrcSpan -> TyCon -> (LHsBinds GhcPs, BagDerivStuff)
+-- When the argument is phantom, we can use traverse = pure . coerce
+-- See Note [Phantom types with Functor, Foldable, and Traversable]
+gen_Traversable_binds loc tycon
+  | Phantom <- last (tyConRoles tycon)
+  = (unitBag traverse_bind, emptyBag)
+  where
+    traverse_name = L loc traverse_RDR
+    traverse_bind = mkRdrFunBind traverse_name traverse_eqns
+    traverse_eqns =
+        [mkSimpleMatch traverse_match_ctxt
+                       [nlWildPat, z_Pat]
+                       (nlHsApps pure_RDR [nlHsApp coerce_Expr z_Expr])]
+    traverse_match_ctxt = mkPrefixFunRhs traverse_name
+
 gen_Traversable_binds loc tycon
   = (unitBag traverse_bind, emptyBag)
   where
     data_cons = tyConDataCons tycon
 
-    traverse_bind = mkRdrFunBind (L loc traverse_RDR) eqns
-    eqns = map traverse_eqn data_cons
+    traverse_name = L loc traverse_RDR
+
+    -- See Note [EmptyDataDecls with Functor, Foldable, and Traversable]
+    traverse_bind = mkRdrFunBindEC 2 (nlHsApp pure_Expr)
+                                   traverse_name traverse_eqns
+    traverse_eqns = map traverse_eqn data_cons
     traverse_eqn con
       = evalState (match_for_con [f_Pat] con =<< parts) bs_RDRs
       where
@@ -584,7 +899,7 @@ gen_Traversable_binds loc tycon
     -- Yields 'Just' an expression if we're folding over a type that mentions
     -- the last type parameter of the datatype. Otherwise, yields 'Nothing'.
     -- See Note [FFoldType and functorLikeTraverse]
-    ft_trav :: FFoldType (State [RdrName] (Maybe (LHsExpr RdrName)))
+    ft_trav :: FFoldType (State [RdrName] (Maybe (LHsExpr GhcPs)))
     ft_trav
       = FT { ft_triv    = return Nothing
              -- traverse f = pure x
@@ -595,39 +910,49 @@ gen_Traversable_binds loc tycon
                lam <- mkSimpleLam $ mkSimpleTupleCase match_for_con t gg
                return (Just lam)
              -- traverse f = \x -> case x of (a1,a2,..) ->
-             --                           (,,) <$> g1 a1 <*> g2 a2 <*> ..
+             --                           liftA2 (,,) (g1 a1) (g2 a2) <*> ..
            , ft_ty_app  = \_ g -> fmap (nlHsApp traverse_Expr) <$> g
              -- traverse f = traverse g
            , ft_forall  = \_ g -> g
-           , ft_co_var  = panic "contravariant"
-           , ft_fun     = panic "function"
-           , ft_bad_app = panic "in other argument" }
+           , ft_co_var  = panic "contravariant in ft_trav"
+           , ft_fun     = panic "function in ft_trav"
+           , ft_bad_app = panic "in other argument in ft_trav" }
 
-    -- Con a1 a2 ... -> fmap (\b1 b2 ... -> Con b1 b2 ...) (g1 a1)
-    --                    <*> g2 a2 <*> ...
-    match_for_con :: [LPat RdrName]
+    -- Con a1 a2 ... -> liftA2 (\b1 b2 ... -> Con b1 b2 ...) (g1 a1)
+    --                    (g2 a2) <*> ...
+    match_for_con :: [LPat GhcPs]
                   -> DataCon
-                  -> [Maybe (LHsExpr RdrName)]
-                  -> State [RdrName] (LMatch RdrName (LHsExpr RdrName))
+                  -> [Maybe (LHsExpr GhcPs)]
+                  -> State [RdrName] (LMatch GhcPs (LHsExpr GhcPs))
     match_for_con = mkSimpleConMatch2 CaseAlt $
                                              \con xs -> return (mkApCon con xs)
       where
-        -- fmap (\b1 b2 ... -> Con b1 b2 ...) x1 <*> x2 <*> ..
-        mkApCon :: LHsExpr RdrName -> [LHsExpr RdrName] -> LHsExpr RdrName
+        -- liftA2 (\b1 b2 ... -> Con b1 b2 ...) x1 x2 <*> ..
+        mkApCon :: LHsExpr GhcPs -> [LHsExpr GhcPs] -> LHsExpr GhcPs
         mkApCon con [] = nlHsApps pure_RDR [con]
-        mkApCon con (x:xs) = foldl appAp (nlHsApps fmap_RDR [con,x]) xs
+        mkApCon con [x] = nlHsApps fmap_RDR [con,x]
+        mkApCon con (x1:x2:xs) =
+            foldl appAp (nlHsApps liftA2_RDR [con,x1,x2]) xs
           where appAp x y = nlHsApps ap_RDR [x,y]
 
 -----------------------------------------------------------------------
 
-f_Expr, z_Expr, fmap_Expr, mempty_Expr, foldMap_Expr,
-    traverse_Expr :: LHsExpr RdrName
+f_Expr, z_Expr, fmap_Expr, replace_Expr, mempty_Expr, foldMap_Expr,
+    traverse_Expr, coerce_Expr, pure_Expr, true_Expr, false_Expr,
+    all_Expr, null_Expr :: LHsExpr GhcPs
 f_Expr        = nlHsVar f_RDR
 z_Expr        = nlHsVar z_RDR
 fmap_Expr     = nlHsVar fmap_RDR
+replace_Expr  = nlHsVar replace_RDR
 mempty_Expr   = nlHsVar mempty_RDR
 foldMap_Expr  = nlHsVar foldMap_RDR
 traverse_Expr = nlHsVar traverse_RDR
+coerce_Expr   = nlHsVar (getRdrName coerceId)
+pure_Expr     = nlHsVar pure_RDR
+true_Expr     = nlHsVar true_RDR
+false_Expr    = nlHsVar false_RDR
+all_Expr      = nlHsVar all_RDR
+null_Expr     = nlHsVar null_RDR
 
 f_RDR, z_RDR :: RdrName
 f_RDR = mkVarUnqual (fsLit "f")
@@ -637,7 +962,11 @@ as_RDRs, bs_RDRs :: [RdrName]
 as_RDRs = [ mkVarUnqual (mkFastString ("a"++show i)) | i <- [(1::Int) .. ] ]
 bs_RDRs = [ mkVarUnqual (mkFastString ("b"++show i)) | i <- [(1::Int) .. ] ]
 
-f_Pat, z_Pat :: LPat RdrName
+as_Vars, bs_Vars :: [LHsExpr GhcPs]
+as_Vars = map nlHsVar as_RDRs
+bs_Vars = map nlHsVar bs_RDRs
+
+f_Pat, z_Pat :: LPat GhcPs
 f_Pat = nlVarPat f_RDR
 z_Pat = nlVarPat z_RDR
 
@@ -711,7 +1040,7 @@ constructor has the same type as the last type parameter:
 
 Only E1's argument is an occurrence of a universally quantified type variable
 that is syntactically equivalent to the last type parameter, so only E1's
-argument will be be folded over in a derived Foldable instance.
+argument will be folded over in a derived Foldable instance.
 
 See Trac #10447 for the original discussion on this feature. Also see
 https://ghc.haskell.org/trac/ghc/wiki/Commentary/Compiler/DeriveFunctor
@@ -723,7 +1052,7 @@ Deriving Functor, Foldable, and Traversable all require generating expressions
 which perform an operation on each argument of a data constructor depending
 on the argument's type. In particular, a generated operation can be different
 depending on whether the type mentions the last type variable of the datatype
-(e.g., if you have data T a = MkT a Int, then a generated foldr expresion would
+(e.g., if you have data T a = MkT a Int, then a generated foldr expression would
 fold over the first argument of MkT, but not the second).
 
 This pattern is abstracted with the FFoldType datatype, which provides hooks
@@ -736,7 +1065,7 @@ a is the last type variable in a given datatype):
 
 * ft_var:     The type is syntactically equal to the last type variable.
               Moreover, the type appears in a covariant position (see
-              the Deriving Functor instances section of the users' guide
+              the Deriving Functor instances section of the user's guide
               for an in-depth explanation of covariance vs. contravariance).
               Example: a (covariantly)
 
@@ -872,4 +1201,84 @@ decide not to do so because:
 
    which does not typecheck, since GHC cannot unify the rank-2 type variables
    in the types of b and (fmap f a).
+
+Note [Phantom types with Functor, Foldable, and Traversable]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Given a type F :: * -> * whose type argument has a phantom role, we can always
+produce lawful Functor and Traversable instances using
+
+    fmap _ = coerce
+    traverse _ = pure . coerce
+
+Indeed, these are equivalent to any *strictly lawful* instances one could
+write, except that this definition of 'traverse' may be lazier.  That is, if
+instances obey the laws under true equality (rather than up to some equivalence
+relation), then they will be essentially equivalent to these. These definitions
+are incredibly cheap, so we want to use them even if it means ignoring some
+non-strictly-lawful instance in an embedded type.
+
+Foldable has far fewer laws to work with, which leaves us unwelcome
+freedom in implementing it. At a minimum, we would like to ensure that
+a derived foldMap is always at least as good as foldMapDefault with a
+derived traverse. To accomplish that, we must define
+
+   foldMap _ _ = mempty
+
+in these cases.
+
+This may have different strictness properties from a standard derivation.
+Consider
+
+   data NotAList a = Nil | Cons (NotAList a) deriving Foldable
+
+The usual deriving mechanism would produce
+
+   foldMap _ Nil = mempty
+   foldMap f (Cons x) = foldMap f x
+
+which is strict in the entire spine of the NotAList.
+
+Final point: why do we even care about such types? Users will rarely if ever
+map, fold, or traverse over such things themselves, but other derived
+instances may:
+
+   data Hasn'tAList a = NotHere a (NotAList a) deriving Foldable
+
+Note [EmptyDataDecls with Functor, Foldable, and Traversable]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+There are some slightly tricky decisions to make about how to handle
+Functor, Foldable, and Traversable instances for types with no constructors.
+For fmap, the two basic options are
+
+   fmap _ _ = error "Sorry, no constructors"
+
+or
+
+   fmap _ z = case z of
+
+In most cases, the latter is more helpful: if the thunk passed to fmap
+throws an exception, we're generally going to be much more interested in
+that exception than in the fact that there aren't any constructors.
+
+In order to match the semantics for phantoms (see note above), we need to
+be a bit careful about 'traverse'. The obvious definition would be
+
+   traverse _ z = case z of
+
+but this is stricter than the one for phantoms. We instead use
+
+   traverse _ z = pure $ case z of
+
+For foldMap, the obvious choices are
+
+   foldMap _ _ = mempty
+
+or
+
+   foldMap _ z = case z of
+
+We choose the first one to be consistent with what foldMapDefault does for
+a derived Traversable instance.
 -}

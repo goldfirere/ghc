@@ -20,11 +20,12 @@ import RegClass
 import TargetReg
 
 import Cmm hiding (topInfoTable)
-import BlockId
+import Hoopl.Collections
+import Hoopl.Label
 
 import CLabel
 
-import Unique                ( pprUnique, Uniquable(..) )
+import Unique                ( pprUniqueAlways, Uniquable(..) )
 import Platform
 import FastString
 import Outputable
@@ -68,7 +69,7 @@ pprNatCmmDecl proc@(CmmProc top_info lbl _ (ListGraph blocks)) =
       -- elimination, it might be the target of a goto.
       (if platformHasSubsectionsViaSymbols platform
        then
-       -- See Note [Subsections Via Symbols]
+       -- See Note [Subsections Via Symbols] in X86/Ppr.hs
                 text "\t.long "
             <+> ppr info_lbl
             <+> char '-'
@@ -104,7 +105,7 @@ pprFunctionPrologue lab =  pprGloblDecl lab
                         $$ text "\t.localentry\t" <> ppr lab
                         <> text ",.-" <> ppr lab
 
-pprBasicBlock :: BlockEnv CmmStatics -> NatBasicBlock Instr -> SDoc
+pprBasicBlock :: LabelMap CmmStatics -> NatBasicBlock Instr -> SDoc
 pprBasicBlock info_env (BasicBlock blockid instrs)
   = maybe_infotable $$
     pprLabel (mkAsmTempLabel (getUnique blockid)) $$
@@ -172,11 +173,11 @@ pprReg r
   = case r of
       RegReal    (RealRegSingle i) -> ppr_reg_no i
       RegReal    (RealRegPair{})   -> panic "PPC.pprReg: no reg pairs on this arch"
-      RegVirtual (VirtualRegI  u)  -> text "%vI_" <> pprUnique u
-      RegVirtual (VirtualRegHi u)  -> text "%vHi_" <> pprUnique u
-      RegVirtual (VirtualRegF  u)  -> text "%vF_" <> pprUnique u
-      RegVirtual (VirtualRegD  u)  -> text "%vD_" <> pprUnique u
-      RegVirtual (VirtualRegSSE  u) -> text "%vSSE_" <> pprUnique u
+      RegVirtual (VirtualRegI  u)  -> text "%vI_"   <> pprUniqueAlways u
+      RegVirtual (VirtualRegHi u)  -> text "%vHi_"  <> pprUniqueAlways u
+      RegVirtual (VirtualRegF  u)  -> text "%vF_"   <> pprUniqueAlways u
+      RegVirtual (VirtualRegD  u)  -> text "%vD_"   <> pprUniqueAlways u
+      RegVirtual (VirtualRegSSE u) -> text "%vSSE_" <> pprUniqueAlways u
   where
     ppr_reg_no :: Int -> SDoc
     ppr_reg_no i =
@@ -229,20 +230,20 @@ pprReg r
 pprFormat :: Format -> SDoc
 pprFormat x
  = ptext (case x of
-                II8        -> sLit "b"
-                II16        -> sLit "h"
-                II32        -> sLit "w"
-                II64        -> sLit "d"
-                FF32        -> sLit "fs"
-                FF64        -> sLit "fd"
-                _        -> panic "PPC.Ppr.pprFormat: no match")
+                II8  -> sLit "b"
+                II16 -> sLit "h"
+                II32 -> sLit "w"
+                II64 -> sLit "d"
+                FF32 -> sLit "fs"
+                FF64 -> sLit "fd"
+                _    -> panic "PPC.Ppr.pprFormat: no match")
 
 
 pprCond :: Cond -> SDoc
 pprCond c
  = ptext (case c of {
                 ALWAYS  -> sLit "";
-                EQQ        -> sLit "eq";        NE    -> sLit "ne";
+                EQQ     -> sLit "eq";  NE    -> sLit "ne";
                 LTT     -> sLit "lt";  GE    -> sLit "ge";
                 GTT     -> sLit "gt";  LE    -> sLit "le";
                 LU      -> sLit "lt";  GEU   -> sLit "ge";
@@ -348,6 +349,12 @@ pprAlignForSection seg =
        ReadOnlyData16
         | osDarwin       -> sLit ".align 4"
         | otherwise      -> sLit ".align 4"
+       -- TODO: This is copied from the ReadOnlyData case, but it can likely be
+       -- made more efficient.
+       CString
+        | osDarwin       -> sLit ".align 2"
+        | ppc64          -> sLit ".align 3"
+        | otherwise      -> sLit ".align 2"
        OtherSection _    -> panic "PprMach.pprSectionAlign: unknown section"
 
 pprDataItem :: CmmLit -> SDoc
@@ -487,7 +494,6 @@ pprInstr (STFAR fmt reg (AddrRegImm source off)) =
          pprInstr (ADDIS (tmpReg platform) source (HA off)),
          pprInstr (ST fmt reg (AddrRegImm (tmpReg platform) (LO off)))
     ]
-
 pprInstr (STFAR _ _ _) =
    panic "PPC.Ppr.pprInstr STFAR: no match"
 pprInstr (STU fmt reg addr) = hcat [
@@ -632,16 +638,6 @@ pprInstr (BCTRL _) = hcat [
         text "bctrl"
     ]
 pprInstr (ADD reg1 reg2 ri) = pprLogic (sLit "add") reg1 reg2 ri
-pprInstr (ADDI reg1 reg2 imm) = hcat [
-        char '\t',
-        text "addi",
-        char '\t',
-        pprReg reg1,
-        text ", ",
-        pprReg reg2,
-        text ", ",
-        pprImm imm
-    ]
 pprInstr (ADDIS reg1 reg2 imm) = hcat [
         char '\t',
         text "addis",
@@ -653,38 +649,83 @@ pprInstr (ADDIS reg1 reg2 imm) = hcat [
         pprImm imm
     ]
 
+pprInstr (ADDO reg1 reg2 reg3) = pprLogic (sLit "addo") reg1 reg2 (RIReg reg3)
 pprInstr (ADDC reg1 reg2 reg3) = pprLogic (sLit "addc") reg1 reg2 (RIReg reg3)
 pprInstr (ADDE reg1 reg2 reg3) = pprLogic (sLit "adde") reg1 reg2 (RIReg reg3)
+pprInstr (ADDZE reg1 reg2) = pprUnary (sLit "addze") reg1 reg2
 pprInstr (SUBF reg1 reg2 reg3) = pprLogic (sLit "subf") reg1 reg2 (RIReg reg3)
-pprInstr (SUBFC reg1 reg2 reg3) = pprLogic (sLit "subfc") reg1 reg2 (RIReg reg3)
+pprInstr (SUBFO reg1 reg2 reg3) = pprLogic (sLit "subfo") reg1 reg2 (RIReg reg3)
+pprInstr (SUBFC reg1 reg2 ri) = hcat [
+        char '\t',
+        text "subf",
+        case ri of
+            RIReg _ -> empty
+            RIImm _ -> char 'i',
+        text "c\t",
+        pprReg reg1,
+        text ", ",
+        pprReg reg2,
+        text ", ",
+        pprRI ri
+    ]
 pprInstr (SUBFE reg1 reg2 reg3) = pprLogic (sLit "subfe") reg1 reg2 (RIReg reg3)
-pprInstr (MULLD reg1 reg2 ri@(RIReg _)) = pprLogic (sLit "mulld") reg1 reg2 ri
-pprInstr (MULLW reg1 reg2 ri@(RIReg _)) = pprLogic (sLit "mullw") reg1 reg2 ri
-pprInstr (MULLD reg1 reg2 ri@(RIImm _)) = pprLogic (sLit "mull") reg1 reg2 ri
-pprInstr (MULLW reg1 reg2 ri@(RIImm _)) = pprLogic (sLit "mull") reg1 reg2 ri
-pprInstr (DIVW reg1 reg2 reg3) = pprLogic (sLit "divw") reg1 reg2 (RIReg reg3)
-pprInstr (DIVD reg1 reg2 reg3) = pprLogic (sLit "divd") reg1 reg2 (RIReg reg3)
-pprInstr (DIVWU reg1 reg2 reg3) = pprLogic (sLit "divwu") reg1 reg2 (RIReg reg3)
-pprInstr (DIVDU reg1 reg2 reg3) = pprLogic (sLit "divdu") reg1 reg2 (RIReg reg3)
+pprInstr (MULL fmt reg1 reg2 ri) = pprMul fmt reg1 reg2 ri
+pprInstr (MULLO fmt reg1 reg2 reg3) = hcat [
+        char '\t',
+        text "mull",
+        case fmt of
+          II32 -> char 'w'
+          II64 -> char 'd'
+          _    -> panic "PPC: illegal format",
+        text "o\t",
+        pprReg reg1,
+        text ", ",
+        pprReg reg2,
+        text ", ",
+        pprReg reg3
+    ]
+pprInstr (MFOV fmt reg) = vcat [
+        hcat [
+            char '\t',
+            text "mfxer",
+            char '\t',
+            pprReg reg
+            ],
+        hcat [
+            char '\t',
+            text "extr",
+            case fmt of
+              II32 -> char 'w'
+              II64 -> char 'd'
+              _    -> panic "PPC: illegal format",
+            text "i\t",
+            pprReg reg,
+            text ", ",
+            pprReg reg,
+            text ", 1, ",
+            case fmt of
+              II32 -> text "1"
+              II64 -> text "33"
+              _    -> panic "PPC: illegal format"
+            ]
+        ]
 
-pprInstr (MULLW_MayOflo reg1 reg2 reg3) = vcat [
-         hcat [ text "\tmullwo\t", pprReg reg1, ptext (sLit ", "),
-                                          pprReg reg2, text ", ",
-                                          pprReg reg3 ],
-         hcat [ text "\tmfxer\t",  pprReg reg1 ],
-         hcat [ text "\trlwinm\t", pprReg reg1, ptext (sLit ", "),
-                                          pprReg reg1, text ", ",
-                                          text "2, 31, 31" ]
+pprInstr (MULHU fmt reg1 reg2 reg3) = hcat [
+        char '\t',
+        text "mulh",
+        case fmt of
+          II32 -> char 'w'
+          II64 -> char 'd'
+          _    -> panic "PPC: illegal format",
+        text "u\t",
+        pprReg reg1,
+        text ", ",
+        pprReg reg2,
+        text ", ",
+        pprReg reg3
     ]
-pprInstr (MULLD_MayOflo reg1 reg2 reg3) = vcat [
-         hcat [ text "\tmulldo\t", pprReg reg1, ptext (sLit ", "),
-                                          pprReg reg2, text ", ",
-                                          pprReg reg3 ],
-         hcat [ text "\tmfxer\t",  pprReg reg1 ],
-         hcat [ text "\trlwinm\t", pprReg reg1, ptext (sLit ", "),
-                                          pprReg reg1, text ", ",
-                                          text "2, 31, 31" ]
-    ]
+
+pprInstr (DIV fmt sgn reg1 reg2 reg3) = pprDiv fmt sgn reg1 reg2 reg3
 
         -- for some reason, "andi" doesn't exist.
         -- we'll use "andi." instead.
@@ -699,6 +740,7 @@ pprInstr (AND reg1 reg2 (RIImm imm)) = hcat [
         pprImm imm
     ]
 pprInstr (AND reg1 reg2 ri) = pprLogic (sLit "and") reg1 reg2 ri
+pprInstr (ANDC reg1 reg2 reg3) = pprLogic (sLit "andc") reg1 reg2 (RIReg reg3)
 
 pprInstr (OR reg1 reg2 ri) = pprLogic (sLit "or") reg1 reg2 ri
 pprInstr (XOR reg1 reg2 ri) = pprLogic (sLit "xor") reg1 reg2 ri
@@ -729,6 +771,18 @@ pprInstr (EXTS fmt reg1 reg2) = hcat [
         char '\t',
         text "exts",
         pprFormat fmt,
+        char '\t',
+        pprReg reg1,
+        text ", ",
+        pprReg reg2
+    ]
+pprInstr (CNTLZ fmt reg1 reg2) = hcat [
+        char '\t',
+        text "cntlz",
+        case fmt of
+          II32 -> char 'w'
+          II64 -> char 'd'
+          _    -> panic "PPC: illegal format",
         char '\t',
         pprReg reg1,
         text ", ",
@@ -792,6 +846,16 @@ pprInstr (RLWINM reg1 reg2 sh mb me) = hcat [
         int me
     ]
 
+pprInstr (CLRLI fmt reg1 reg2 n) = hcat [
+        text "\tclrl",
+        pprFormat fmt,
+        text "i ",
+        pprReg reg1,
+        text ", ",
+        pprReg reg2,
+        text ", ",
+        int n
+    ]
 pprInstr (CLRRI fmt reg1 reg2 n) = hcat [
         text "\tclrr",
         pprFormat fmt,
@@ -807,6 +871,7 @@ pprInstr (FADD fmt reg1 reg2 reg3) = pprBinaryF (sLit "fadd") fmt reg1 reg2 reg3
 pprInstr (FSUB fmt reg1 reg2 reg3) = pprBinaryF (sLit "fsub") fmt reg1 reg2 reg3
 pprInstr (FMUL fmt reg1 reg2 reg3) = pprBinaryF (sLit "fmul") fmt reg1 reg2 reg3
 pprInstr (FDIV fmt reg1 reg2 reg3) = pprBinaryF (sLit "fdiv") fmt reg1 reg2 reg3
+pprInstr (FABS reg1 reg2) = pprUnary (sLit "fabs") reg1 reg2
 pprInstr (FNEG reg1 reg2) = pprUnary (sLit "fneg") reg1 reg2
 
 pprInstr (FCMP reg1 reg2) = hcat [
@@ -857,18 +922,6 @@ pprInstr (FETCHPC reg) = vcat [
         hcat [ text "1:\tmflr\t", pprReg reg ]
     ]
 
-pprInstr (FETCHTOC reg lab) = vcat [
-        hcat [ text "0:\taddis\t", pprReg reg,
-               text ",12,.TOC.-0b@ha" ],
-        hcat [ text "\taddi\t", pprReg reg,
-               char ',', pprReg reg,
-               text ",.TOC.-0b@l" ],
-        hcat [ text "\t.localentry\t",
-               ppr lab,
-               text ",.-",
-               ppr lab]
-    ]
-
 pprInstr LWSYNC = text "\tlwsync"
 
 pprInstr NOP = text "\tnop"
@@ -905,6 +958,43 @@ pprLogic op reg1 reg2 ri = hcat [
         pprReg reg2,
         text ", ",
         pprRI ri
+    ]
+
+
+pprMul :: Format -> Reg -> Reg -> RI -> SDoc
+pprMul fmt reg1 reg2 ri = hcat [
+        char '\t',
+        text "mull",
+        case ri of
+            RIReg _ -> case fmt of
+              II32 -> char 'w'
+              II64 -> char 'd'
+              _    -> panic "PPC: illegal format"
+            RIImm _ -> char 'i',
+        char '\t',
+        pprReg reg1,
+        text ", ",
+        pprReg reg2,
+        text ", ",
+        pprRI ri
+    ]
+
+
+pprDiv :: Format -> Bool -> Reg -> Reg -> Reg -> SDoc
+pprDiv fmt sgn reg1 reg2 reg3 = hcat [
+        char '\t',
+        text "div",
+        case fmt of
+          II32 -> char 'w'
+          II64 -> char 'd'
+          _    -> panic "PPC: illegal format",
+        if sgn then empty else char 'u',
+        char '\t',
+        pprReg reg1,
+        text ", ",
+        pprReg reg2,
+        text ", ",
+        pprReg reg3
     ]
 
 

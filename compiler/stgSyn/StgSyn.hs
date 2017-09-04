@@ -14,7 +14,7 @@ generation.
 module StgSyn (
         GenStgArg(..),
 
-        GenStgBinding(..), GenStgExpr(..), GenStgRhs(..),
+        GenStgTopBinding(..), GenStgBinding(..), GenStgExpr(..), GenStgRhs(..),
         GenStgAlt, AltType(..),
 
         UpdateFlag(..), isUpdatable,
@@ -25,7 +25,11 @@ module StgSyn (
 
         -- a set of synonyms for the most common (only :-) parameterisation
         StgArg,
-        StgBinding, StgExpr, StgRhs, StgAlt,
+        StgTopBinding, StgBinding, StgExpr, StgRhs, StgAlt,
+
+        -- a set of synonyms to distinguish in- and out variants
+        InStgArg,  InStgTopBinding,  InStgBinding,  InStgExpr,  InStgRhs,  InStgAlt,
+        OutStgArg, OutStgTopBinding, OutStgBinding, OutStgExpr, OutStgRhs, OutStgAlt,
 
         -- StgOp
         StgOp(..),
@@ -36,13 +40,14 @@ module StgSyn (
         stgArgType,
         stripStgTicksTop,
 
-        pprStgBinding, pprStgBindings
+        pprStgBinding, pprStgTopBindings
     ) where
 
 #include "HsVersions.h"
 
 import CoreSyn     ( AltCon, Tickish )
 import CostCentre  ( CostCentreStack )
+import Data.ByteString ( ByteString )
 import Data.List   ( intersperse )
 import DataCon
 import DynFlags
@@ -59,7 +64,7 @@ import PprCore     ( {- instances -} )
 import PrimOp      ( PrimOp, PrimCall )
 import TyCon       ( PrimRep(..), TyCon )
 import Type        ( Type )
-import RepType     ( typePrimRep )
+import RepType     ( typePrimRep1 )
 import Unique      ( Unique )
 import Util
 
@@ -75,6 +80,12 @@ are the boring things [except note the @GenStgRhs@], parameterised
 with respect to binder and occurrence information (just as in
 @CoreSyn@):
 -}
+
+-- | A top-level binding.
+data GenStgTopBinding bndr occ
+-- See Note [CoreSyn top-level string literals]
+  = StgTopLifted (GenStgBinding bndr occ)
+  | StgTopStringLit bndr ByteString
 
 data GenStgBinding bndr occ
   = StgNonRec bndr (GenStgRhs bndr occ)
@@ -98,17 +109,15 @@ data GenStgArg occ
 isDllConApp :: DynFlags -> Module -> DataCon -> [StgArg] -> Bool
 isDllConApp dflags this_mod con args
  | platformOS (targetPlatform dflags) == OSMinGW32
-    = isDllName dflags this_pkg this_mod (dataConName con) || any is_dll_arg args
+    = isDllName dflags this_mod (dataConName con) || any is_dll_arg args
  | otherwise = False
   where
-    -- NB: typePrimRep is legit because any free variables won't have
+    -- NB: typePrimRep1 is legit because any free variables won't have
     -- unlifted type (there are no unlifted things at top level)
     is_dll_arg :: StgArg -> Bool
-    is_dll_arg (StgVarArg v) =  isAddrRep (typePrimRep (idType v))
-                             && isDllName dflags this_pkg this_mod (idName v)
+    is_dll_arg (StgVarArg v) =  isAddrRep (typePrimRep1 (idType v))
+                             && isDllName dflags this_mod (idName v)
     is_dll_arg _             = False
-
-    this_pkg = thisPackage dflags
 
 -- True of machine addresses; these are the things that don't
 -- work across DLLs. The key point here is that VoidRep comes
@@ -123,9 +132,10 @@ isDllConApp dflags this_mod con args
 --    $WT1 = T1 Int (Coercion (Refl Int))
 -- The coercion argument here gets VoidRep
 isAddrRep :: PrimRep -> Bool
-isAddrRep AddrRep = True
-isAddrRep PtrRep  = True
-isAddrRep _       = False
+isAddrRep AddrRep     = True
+isAddrRep LiftedRep   = True
+isAddrRep UnliftedRep = True
+isAddrRep _           = False
 
 -- | Type of an @StgArg@
 --
@@ -419,11 +429,13 @@ stgRhsArity (StgRhsCon _ _ _) = 0
 -- is that `TidyPgm` computed the CAF info on the `Id` but some transformations
 -- have taken place since then.
 
-topStgBindHasCafRefs :: GenStgBinding bndr Id -> Bool
-topStgBindHasCafRefs (StgNonRec _ rhs)
+topStgBindHasCafRefs :: GenStgTopBinding bndr Id -> Bool
+topStgBindHasCafRefs (StgTopLifted (StgNonRec _ rhs))
   = topRhsHasCafRefs rhs
-topStgBindHasCafRefs (StgRec binds)
+topStgBindHasCafRefs (StgTopLifted (StgRec binds))
   = any topRhsHasCafRefs (map snd binds)
+topStgBindHasCafRefs StgTopStringLit{}
+  = False
 
 topRhsHasCafRefs :: GenStgRhs bndr Id -> Bool
 topRhsHasCafRefs (StgRhsClosure _ _ _ upd _ body)
@@ -532,10 +544,11 @@ type GenStgAlt bndr occ
      GenStgExpr bndr occ)       -- ...right-hand side.
 
 data AltType
-  = PolyAlt             -- Polymorphic (a type variable)
+  = PolyAlt             -- Polymorphic (a lifted type variable)
   | MultiValAlt Int     -- Multi value of this arity (unboxed tuple or sum)
+                        -- the arity could indeed be 1 for unary unboxed tuple
   | AlgAlt      TyCon   -- Algebraic data type; the AltCons will be DataAlts
-  | PrimAlt     TyCon   -- Primitive data type; the AltCons will be LitAlts
+  | PrimAlt     PrimRep -- Primitive data type; the AltCons (if any) will be LitAlts
 
 {-
 ************************************************************************
@@ -547,13 +560,33 @@ data AltType
 This happens to be the only one we use at the moment.
 -}
 
+type StgTopBinding = GenStgTopBinding Id Id
 type StgBinding  = GenStgBinding  Id Id
 type StgArg      = GenStgArg      Id
 type StgExpr     = GenStgExpr     Id Id
 type StgRhs      = GenStgRhs      Id Id
 type StgAlt      = GenStgAlt      Id Id
 
+{- Many passes apply a substitution, and it's very handy to have type
+   synonyms to remind us whether or not the substitution has been applied.
+   See CoreSyn for precedence in Core land
+-}
+
+type InStgTopBinding  = StgTopBinding
+type InStgBinding     = StgBinding
+type InStgArg         = StgArg
+type InStgExpr        = StgExpr
+type InStgRhs         = StgRhs
+type InStgAlt         = StgAlt
+type OutStgTopBinding = StgTopBinding
+type OutStgBinding    = StgBinding
+type OutStgArg        = StgArg
+type OutStgExpr       = StgExpr
+type OutStgRhs        = StgRhs
+type OutStgAlt        = StgAlt
+
 {-
+
 ************************************************************************
 *                                                                      *
 \subsubsection[UpdateFlag-datatype]{@UpdateFlag@}
@@ -615,6 +648,15 @@ Robin Popplestone asked for semi-colon separators on STG binds; here's
 hoping he likes terminators instead...  Ditto for case alternatives.
 -}
 
+pprGenStgTopBinding :: (OutputableBndr bndr, Outputable bdee, Ord bdee)
+                 => GenStgTopBinding bndr bdee -> SDoc
+
+pprGenStgTopBinding (StgTopStringLit bndr str)
+  = hang (hsep [pprBndr LetBind bndr, equals])
+        4 (pprHsBytes str <> semi)
+pprGenStgTopBinding (StgTopLifted bind)
+  = pprGenStgBinding bind
+
 pprGenStgBinding :: (OutputableBndr bndr, Outputable bdee, Ord bdee)
                  => GenStgBinding bndr bdee -> SDoc
 
@@ -623,8 +665,8 @@ pprGenStgBinding (StgNonRec bndr rhs)
         4 (ppr rhs <> semi)
 
 pprGenStgBinding (StgRec pairs)
-  = vcat $ ifPprDebug (text "{- StgRec (begin) -}") :
-           map (ppr_bind) pairs ++ [ifPprDebug (text "{- StgRec (end) -}")]
+  = vcat $ whenPprDebug (text "{- StgRec (begin) -}") :
+           map (ppr_bind) pairs ++ [whenPprDebug (text "{- StgRec (end) -}")]
   where
     ppr_bind (bndr, expr)
       = hang (hsep [pprBndr LetBind bndr, equals])
@@ -633,11 +675,16 @@ pprGenStgBinding (StgRec pairs)
 pprStgBinding :: StgBinding -> SDoc
 pprStgBinding  bind  = pprGenStgBinding bind
 
-pprStgBindings :: [StgBinding] -> SDoc
-pprStgBindings binds = vcat $ intersperse blankLine (map pprGenStgBinding binds)
+pprStgTopBindings :: [StgTopBinding] -> SDoc
+pprStgTopBindings binds
+  = vcat $ intersperse blankLine (map pprGenStgTopBinding binds)
 
 instance (Outputable bdee) => Outputable (GenStgArg bdee) where
     ppr = pprStgArg
+
+instance (OutputableBndr bndr, Outputable bdee, Ord bdee)
+                => Outputable (GenStgTopBinding bndr bdee) where
+    ppr = pprGenStgTopBinding
 
 instance (OutputableBndr bndr, Outputable bdee, Ord bdee)
                 => Outputable (GenStgBinding bndr bdee) where
@@ -691,7 +738,7 @@ pprStgExpr (StgLet srt (StgNonRec bndr (StgRhsClosure cc bi free_vars upd_flag a
       (hang (hcat [text "let { ", ppr bndr, ptext (sLit " = "),
                           ppr cc,
                           pp_binder_info bi,
-                          text " [", ifPprDebug (interppSP free_vars), ptext (sLit "] \\"),
+                          text " [", whenPprDebug (interppSP free_vars), ptext (sLit "] \\"),
                           ppr upd_flag, text " [",
                           interppSP args, char ']'])
             8 (sep [hsep [ppr rhs, text "} in"]]))
@@ -719,15 +766,15 @@ pprStgExpr (StgLetNoEscape bind expr)
 
 pprStgExpr (StgTick tickish expr)
   = sdocWithDynFlags $ \dflags ->
-    if gopt Opt_PprShowTicks dflags
-    then sep [ ppr tickish, pprStgExpr expr ]
-    else pprStgExpr expr
+    if gopt Opt_SuppressTicks dflags
+    then pprStgExpr expr
+    else sep [ ppr tickish, pprStgExpr expr ]
 
 
 pprStgExpr (StgCase expr bndr alt_type alts)
   = sep [sep [text "case",
            nest 4 (hsep [pprStgExpr expr,
-             ifPprDebug (dcolon <+> ppr alt_type)]),
+             whenPprDebug (dcolon <+> ppr alt_type)]),
            text "of", pprBndr CaseBind bndr, char '{'],
            nest 2 (vcat (map pprStgAlt alts)),
            char '}']
@@ -756,7 +803,7 @@ pprStgRhs :: (OutputableBndr bndr, Outputable bdee, Ord bdee)
 pprStgRhs (StgRhsClosure cc bi [free_var] upd_flag [{-no args-}] (StgApp func []))
   = hsep [ ppr cc,
            pp_binder_info bi,
-           brackets (ifPprDebug (ppr free_var)),
+           brackets (whenPprDebug (ppr free_var)),
            text " \\", ppr upd_flag, ptext (sLit " [] "), ppr func ]
 
 -- general case
@@ -764,7 +811,7 @@ pprStgRhs (StgRhsClosure cc bi free_vars upd_flag args body)
   = sdocWithDynFlags $ \dflags ->
     hang (hsep [if gopt Opt_SccProfilingOn dflags then ppr cc else empty,
                 pp_binder_info bi,
-                ifPprDebug (brackets (interppSP free_vars)),
+                whenPprDebug (brackets (interppSP free_vars)),
                 char '\\' <> ppr upd_flag, brackets (interppSP args)])
          4 (ppr body)
 

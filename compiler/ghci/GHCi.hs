@@ -14,6 +14,7 @@ module GHCi
   , evalStringToIOString
   , mallocData
   , createBCOs
+  , addSptEntry
   , mkCostCentres
   , costCentreStackInfo
   , newBreakArray
@@ -46,10 +47,13 @@ module GHCi
   ) where
 
 import GHCi.Message
+#if defined(GHCI)
 import GHCi.Run
+#endif
 import GHCi.RemoteTypes
 import GHCi.ResolvedBCO
 import GHCi.BreakArray (BreakArray)
+import Fingerprint
 import HscTypes
 import UniqFM
 import Panic
@@ -75,12 +79,13 @@ import GHC.Stack.CCS (CostCentre,CostCentreStack)
 import System.Exit
 import Data.Maybe
 import GHC.IO.Handle.Types (Handle)
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 import Foreign.C
 import GHC.IO.Handle.FD (fdToHandle)
 #else
 import System.Posix as Posix
 #endif
+import System.Directory
 import System.Process
 import GHC.Conc (getNumProcessors, pseq, par)
 
@@ -147,6 +152,12 @@ Other Notes on Remote GHCi
   * Note [Remote Template Haskell] in libraries/ghci/GHCi/TH.hs
 -}
 
+#if !defined(GHCI)
+needExtInt :: IO a
+needExtInt = throwIO
+  (InstallationError "this operation requires -fexternal-interpreter")
+#endif
+
 -- | Run a command in the interpreter's context.  With
 -- @-fexternal-interpreter@, the command is serialized and sent to an
 -- external iserv process, and the response is deserialized (hence the
@@ -159,8 +170,11 @@ iservCmd hsc_env@HscEnv{..} msg
        uninterruptibleMask_ $ do -- Note [uninterruptibleMask_]
          iservCall iserv msg
  | otherwise = -- Just run it directly
+#if defined(GHCI)
    run msg
-
+#else
+   needExtInt
+#endif
 
 -- Note [uninterruptibleMask_ and iservCmd]
 --
@@ -304,6 +318,11 @@ createBCOs hsc_env rbcos = do
   parMap f (x:xs) = fx `par` (fxs `pseq` (fx : fxs))
     where fx = f x; fxs = parMap f xs
 
+addSptEntry :: HscEnv -> Fingerprint -> ForeignHValue -> IO ()
+addSptEntry hsc_env fpr ref =
+  withForeignRef ref $ \val ->
+    iservCmd hsc_env (AddSptEntry fpr val)
+
 costCentreStackInfo :: HscEnv -> RemotePtr CostCentreStack -> IO [String]
 costCentreStackInfo hsc_env ccs =
   iservCmd hsc_env (CostCentreStackInfo ccs)
@@ -356,7 +375,11 @@ lookupSymbol hsc_env@HscEnv{..} str
                writeIORef iservLookupSymbolCache $! addToUFM cache str p
                return (Just p)
  | otherwise =
+#if defined(GHCI)
    fmap fromRemotePtr <$> run (LookupSymbol (unpackFS str))
+#else
+   needExtInt
+#endif
 
 lookupClosure :: HscEnv -> String -> IO (Maybe HValueRef)
 lookupClosure hsc_env str =
@@ -383,13 +406,24 @@ loadDLL :: HscEnv -> String -> IO (Maybe String)
 loadDLL hsc_env str = iservCmd hsc_env (LoadDLL str)
 
 loadArchive :: HscEnv -> String -> IO ()
-loadArchive hsc_env str = iservCmd hsc_env (LoadArchive str)
+loadArchive hsc_env path = do
+  path' <- canonicalizePath path -- Note [loadObj and relative paths]
+  iservCmd hsc_env (LoadArchive path')
 
 loadObj :: HscEnv -> String -> IO ()
-loadObj hsc_env str = iservCmd hsc_env (LoadObj str)
+loadObj hsc_env path = do
+  path' <- canonicalizePath path -- Note [loadObj and relative paths]
+  iservCmd hsc_env (LoadObj path')
 
 unloadObj :: HscEnv -> String -> IO ()
-unloadObj hsc_env str = iservCmd hsc_env (UnloadObj str)
+unloadObj hsc_env path = do
+  path' <- canonicalizePath path -- Note [loadObj and relative paths]
+  iservCmd hsc_env (UnloadObj path')
+
+-- Note [loadObj and relative paths]
+-- the iserv process might have a different current directory from the
+-- GHC process, so we must make paths absolute before sending them
+-- over.
 
 addLibrarySearchPath :: HscEnv -> String -> IO (Ptr ())
 addLibrarySearchPath hsc_env str =
@@ -481,7 +515,7 @@ stopIServ HscEnv{..} =
 
 runWithPipes :: (CreateProcess -> IO ProcessHandle)
              -> FilePath -> [String] -> IO (ProcessHandle, Handle, Handle)
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 foreign import ccall "io.h _close"
    c__close :: CInt -> IO CInt
 
@@ -500,6 +534,7 @@ runWithPipes createProc prog opts = do
     return (ph, rh, wh)
       where mkHandle :: CInt -> IO Handle
             mkHandle fd = (fdToHandle fd) `onException` (c__close fd)
+
 #else
 runWithPipes createProc prog opts = do
     (rfd1, wfd1) <- Posix.createPipe -- we read on rfd1
@@ -545,7 +580,7 @@ ForeignRef
 ----------
 
 A ForeignRef is a RemoteRef with a finalizer that will free the
-'RemoteRef' when it is gargabe collected.  We mostly use ForeignHValue
+'RemoteRef' when it is garbage collected.  We mostly use ForeignHValue
 on the GHC side.
 
 The finalizer adds the RemoteRef to the iservPendingFrees list in the
@@ -587,12 +622,18 @@ wormhole dflags r = wormholeRef dflags (unsafeForeignRefToRemoteRef r)
 -- only works when the interpreter is running in the same process as
 -- the compiler, so it fails when @-fexternal-interpreter@ is on.
 wormholeRef :: DynFlags -> RemoteRef a -> IO a
-wormholeRef dflags r
+wormholeRef dflags _r
   | gopt Opt_ExternalInterpreter dflags
   = throwIO (InstallationError
       "this operation requires -fno-external-interpreter")
+#if defined(GHCI)
   | otherwise
-  = localRef r
+  = localRef _r
+#else
+  | otherwise
+  = throwIO (InstallationError
+      "can't wormhole a value in a stage1 compiler")
+#endif
 
 -- -----------------------------------------------------------------------------
 -- Misc utils

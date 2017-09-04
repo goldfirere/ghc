@@ -27,7 +27,7 @@ import GHC.Enum
 import GHC.Show
 import {-# SOURCE #-} GHC.Exception( divZeroException, overflowException, ratioZeroDenomException )
 
-#ifdef OPTIMISE_INTEGER_GCD_LCM
+#if defined(OPTIMISE_INTEGER_GCD_LCM)
 # if defined(MIN_VERSION_integer_gmp)
 import GHC.Integer.GMP.Internals
 # else
@@ -329,7 +329,7 @@ instance  Real Integer  where
 --
 -- Constant folding of quot, rem, div, mod, divMod and quotRem for
 -- Integer arguments depends crucially on inlining. Constant folding
--- rules defined in compiler/prelude/PrelRules.lhs trigger for
+-- rules defined in compiler/prelude/PrelRules.hs trigger for
 -- quotInteger, remInteger and so on. So if calls to quot, rem and so on
 -- were not inlined the rules would not fire. The rules would also not
 -- fire if calls to quotInteger and so on were inlined, but this does not
@@ -636,7 +636,7 @@ lcm _ 0         =  0
 lcm 0 _         =  0
 lcm x y         =  abs ((x `quot` (gcd x y)) * y)
 
-#ifdef OPTIMISE_INTEGER_GCD_LCM
+#if defined(OPTIMISE_INTEGER_GCD_LCM)
 {-# RULES
 "gcd/Int->Int->Int"             gcd = gcdInt'
 "gcd/Integer->Integer->Integer" gcd = gcdInteger
@@ -646,14 +646,12 @@ lcm x y         =  abs ((x `quot` (gcd x y)) * y)
 gcdInt' :: Int -> Int -> Int
 gcdInt' (I# x) (I# y) = I# (gcdInt x y)
 
-#if MIN_VERSION_integer_gmp(1,0,0)
 {-# RULES
 "gcd/Word->Word->Word"          gcd = gcdWord'
  #-}
 
 gcdWord' :: Word -> Word -> Word
 gcdWord' (W# x) (W# y) = W# (gcdWord x y)
-#endif
 #endif
 
 integralEnumFrom :: (Integral a, Bounded a) => a -> [a]

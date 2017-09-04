@@ -39,7 +39,7 @@ module GHC.Show
 
         -- Show support code
         shows, showChar, showString, showMultiLineString,
-        showParen, showList__, showSpace,
+        showParen, showList__, showCommaSpace, showSpace,
         showLitChar, showLitString, protectEsc,
         intToDigit, showSignedInt,
         appPrec, appPrec1,
@@ -201,7 +201,7 @@ deriving instance Show a => Show (Maybe a)
 
 -- | @since 2.01
 instance Show TyCon where
-  showsPrec p (TyCon _ _ _ tc_name) = showsPrec p tc_name
+  showsPrec p (TyCon _ _ _ tc_name _ _) = showsPrec p tc_name
 
 -- | @since 4.9.0.0
 instance Show TrName where
@@ -344,6 +344,8 @@ showParen b p   =  if b then showChar '(' . p . showChar ')' else p
 showSpace :: ShowS
 showSpace = {-showChar ' '-} \ xs -> ' ' : xs
 
+showCommaSpace :: ShowS
+showCommaSpace = showString ", "
 -- Code specific for characters
 
 -- | Convert a character to a string using only printable characters,

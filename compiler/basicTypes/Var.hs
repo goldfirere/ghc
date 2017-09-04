@@ -5,7 +5,7 @@
 \section{@Vars@: Variables}
 -}
 
-{-# LANGUAGE CPP, MultiWayIf, FlexibleInstances, DeriveDataTypeable #-}
+{-# LANGUAGE CPP, FlexibleContexts, MultiWayIf, FlexibleInstances, DeriveDataTypeable #-}
 
 -- |
 -- #name_types#
@@ -34,8 +34,12 @@
 
 module Var (
         -- * The main data type and synonyms
-        Var, CoVar, Id, NcId, DictId, DFunId, EvVar, EqVar, EvId, IpId,
+        Var, CoVar, Id, NcId, DictId, DFunId, EvVar, EqVar, EvId, IpId, JoinId,
         TyVar, TypeVar, KindVar, TKVar, TyCoVar,
+
+        -- * In and Out variants
+        InVar,  InCoVar,  InId,  InTyVar,
+        OutVar, OutCoVar, OutId, OutTyVar,
 
         -- ** Taking 'Var's apart
         varName, varUnique, varType,
@@ -51,7 +55,7 @@ module Var (
         setIdExported, setIdNotExported,
 
         -- ** Predicates
-        isId, isTKVar, isTyVar, isTcTyVar,
+        isId, isTyVar, isTcTyVar,
         isLocalVar, isLocalId, isCoVar, isNonCoVarId, isTyCoVar,
         isGlobalId, isExportedId,
         mustHaveLocalBinding,
@@ -60,6 +64,7 @@ module Var (
         TyVarBndr(..), ArgFlag(..), TyVarBinder,
         binderVar, binderVars, binderArgFlag, binderKind,
         isVisibleArgFlag, isInvisibleArgFlag, sameVis,
+        mkTyVarBinder, mkTyVarBinders,
 
         -- ** Constructing TyVar's
         mkTyVar, mkTcTyVar,
@@ -79,7 +84,8 @@ module Var (
 
 import {-# SOURCE #-}   TyCoRep( Type, Kind, pprKind )
 import {-# SOURCE #-}   TcType( TcTyVarDetails, pprTcTyVarDetails, vanillaSkolemTv )
-import {-# SOURCE #-}   IdInfo( IdDetails, IdInfo, coVarDetails, isCoVarDetails, vanillaIdInfo, pprIdDetails )
+import {-# SOURCE #-}   IdInfo( IdDetails, IdInfo, coVarDetails, isCoVarDetails,
+                                vanillaIdInfo, pprIdDetails )
 
 import Name hiding (varName)
 import Unique ( Uniquable, Unique, getKey, getUnique
@@ -145,10 +151,26 @@ type IpId   = EvId      -- A term-level implicit parameter
 
 -- | Equality Variable
 type EqVar  = EvId      -- Boxed equality evidence
+type JoinId = Id        -- A join variable
 
 -- | Type or Coercion Variable
 type TyCoVar = Id       -- Type, *or* coercion variable
                         --   predicate: isTyCoVar
+
+
+{- Many passes apply a substitution, and it's very handy to have type
+   synonyms to remind us whether or not the substitution has been applied -}
+
+type InVar      = Var
+type InTyVar    = TyVar
+type InCoVar    = CoVar
+type InId       = Id
+type OutVar     = Var
+type OutTyVar   = TyVar
+type OutCoVar   = CoVar
+type OutId      = Id
+
+
 
 {- Note [Evidence: EvIds and CoVars]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -316,6 +338,9 @@ instance Data Var where
   gunfold _ _  = error "gunfold"
   dataTypeOf _ = mkNoRepType "Var"
 
+instance HasOccName Var where
+  occName = nameOccName . varName
+
 varUnique :: Var -> Unique
 varUnique var = mkUniqueGrimily (realUnique var)
 
@@ -350,7 +375,7 @@ updateVarTypeM f id = do { ty' <- f (varType id)
 -- Is something required to appear in source Haskell ('Required'),
 -- permitted by request ('Specified') (visible type application), or
 -- prohibited entirely from appearing in source Haskell ('Inferred')?
--- See Note [TyBinders and ArgFlags] in TyCoRep
+-- See Note [TyVarBndrs, TyVarBinders, TyConBinders, and visibility] in TyCoRep
 data ArgFlag = Required | Specified | Inferred
   deriving (Eq, Data)
 
@@ -380,7 +405,7 @@ sameVis _        _        = True
 
 -- Type Variable Binder
 --
--- TyVarBndr is polymorphic in both tyvar and visiblity fields:
+-- TyVarBndr is polymorphic in both tyvar and visibility fields:
 --   * tyvar can be TyVar or IfaceTv
 --   * argf  can be ArgFlag or TyConBndrVis
 data TyVarBndr tyvar argf = TvBndr tyvar argf
@@ -404,6 +429,14 @@ binderArgFlag (TvBndr _ argf) = argf
 
 binderKind :: TyVarBndr TyVar argf -> Kind
 binderKind (TvBndr tv _) = tyVarKind tv
+
+-- | Make a named binder
+mkTyVarBinder :: ArgFlag -> Var -> TyVarBinder
+mkTyVarBinder vis var = TvBndr var vis
+
+-- | Make many named binders
+mkTyVarBinders :: ArgFlag -> [TyVar] -> [TyVarBinder]
+mkTyVarBinders vis = map (mkTyVarBinder vis)
 
 {-
 ************************************************************************
@@ -452,6 +485,7 @@ mkTcTyVar name kind details
         }
 
 tcTyVarDetails :: TyVar -> TcTyVarDetails
+-- See Note [TcTyVars in the typechecker] in TcType
 tcTyVarDetails (TcTyVar { tc_tv_details = details }) = details
 tcTyVarDetails (TyVar {})                            = vanillaSkolemTv
 tcTyVarDetails var = pprPanic "tcTyVarDetails" (ppr var <+> dcolon <+> pprKind (tyVarKind var))
@@ -496,7 +530,7 @@ instance Binary ArgFlag where
 ************************************************************************
 -}
 
-idInfo :: Id -> IdInfo
+idInfo :: HasDebugCallStack => Id -> IdInfo
 idInfo (Id { id_info = info }) = info
 idInfo other                   = pprPanic "idInfo" (ppr other)
 
@@ -563,15 +597,12 @@ setIdNotExported id = ASSERT( isLocalId id )
 ************************************************************************
 -}
 
-isTyVar :: Var -> Bool
-isTyVar = isTKVar     -- Historical
+isTyVar :: Var -> Bool        -- True of both TyVar and TcTyVar
+isTyVar (TyVar {})   = True
+isTyVar (TcTyVar {}) = True
+isTyVar _            = False
 
-isTKVar :: Var -> Bool  -- True of both type and kind variables
-isTKVar (TyVar {})   = True
-isTKVar (TcTyVar {}) = True
-isTKVar _            = False
-
-isTcTyVar :: Var -> Bool
+isTcTyVar :: Var -> Bool      -- True of TcTyVar only
 isTcTyVar (TcTyVar {}) = True
 isTcTyVar _            = False
 

@@ -33,6 +33,7 @@ test('numrun011', normal, compile_and_run, [''])
 test('numrun012', normal, compile_and_run, [''])
 test('numrun013', normal, compile_and_run, [''])
 test('numrun014', normal, compile_and_run, [''])
+test('numrun015', normal, compile_and_run, [''])
 test('arith016', normal, compile_and_run, [''])
 test('arith017', normal, compile_and_run, [''])
 test('arith018', normal, compile_and_run, [''])
@@ -49,10 +50,7 @@ test('mul2', normal, compile_and_run, ['-fobject-code'])
 test('quotRem2', normal, compile_and_run, ['-fobject-code'])
 test('T5863', normal, compile_and_run, [''])
 
-test('T7014',
-     extra_clean(['T7014.simpl']),
-     run_command,
-     ['$MAKE -s --no-print-directory T7014'])
+test('T7014', [], run_command, ['$MAKE -s --no-print-directory T7014'])
 
 test('T7233', normal, compile_and_run, [''])
 test('NumDecimals', normal, compile_and_run, [''])
@@ -63,3 +61,4 @@ test('T9810', normal, compile_and_run, [''])
 test('T10011', normal, compile_and_run, [''])
 test('T10962', omit_ways(['ghci']), compile_and_run, [''])
 test('T11702', extra_ways(['optasm']), compile_and_run, [''])
+test('T12136', normal, compile_and_run, [''])

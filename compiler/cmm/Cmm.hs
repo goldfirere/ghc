@@ -9,13 +9,11 @@ module Cmm (
      CmmBlock,
      RawCmmDecl, RawCmmGroup,
      Section(..), SectionType(..), CmmStatics(..), CmmStatic(..),
+     isSecConstant,
 
      -- ** Blocks containing lists
      GenBasicBlock(..), blockId,
      ListGraph(..), pprBBlock,
-
-     -- * Cmm graphs
-     CmmReplGraph, GenCmmReplGraph, CmmFwdRewrite, CmmBwdRewrite,
 
      -- * Info Tables
      CmmTopInfo(..), CmmStackInfo(..), CmmInfoTable(..), topInfoTable,
@@ -33,8 +31,10 @@ import BlockId
 import CmmNode
 import SMRep
 import CmmExpr
-import UniqSupply
-import Compiler.Hoopl
+import Hoopl.Block
+import Hoopl.Collections
+import Hoopl.Graph
+import Hoopl.Label
 import Outputable
 
 import Data.Word        ( Word8 )
@@ -57,7 +57,7 @@ type CmmProgram = [CmmGroup]
 
 type GenCmmGroup d h g = [GenCmmDecl d h g]
 type CmmGroup = GenCmmGroup CmmStatics CmmTopInfo CmmGraph
-type RawCmmGroup = GenCmmGroup CmmStatics (BlockEnv CmmStatics) CmmGraph
+type RawCmmGroup = GenCmmGroup CmmStatics (LabelMap CmmStatics) CmmGraph
 
 -----------------------------------------------------------------------------
 --  CmmDecl, GenCmmDecl
@@ -94,7 +94,7 @@ type CmmDecl = GenCmmDecl CmmStatics CmmTopInfo CmmGraph
 type RawCmmDecl
    = GenCmmDecl
         CmmStatics
-        (BlockEnv CmmStatics)
+        (LabelMap CmmStatics)
         CmmGraph
 
 -----------------------------------------------------------------------------
@@ -105,16 +105,11 @@ type CmmGraph = GenCmmGraph CmmNode
 data GenCmmGraph n = CmmGraph { g_entry :: BlockId, g_graph :: Graph n C C }
 type CmmBlock = Block CmmNode C C
 
-type CmmReplGraph e x = GenCmmReplGraph CmmNode e x
-type GenCmmReplGraph n e x = UniqSM (Maybe (Graph n e x))
-type CmmFwdRewrite f = FwdRewrite UniqSM CmmNode f
-type CmmBwdRewrite f = BwdRewrite UniqSM CmmNode f
-
 -----------------------------------------------------------------------------
 --     Info Tables
 -----------------------------------------------------------------------------
 
-data CmmTopInfo   = TopInfo { info_tbls  :: BlockEnv CmmInfoTable
+data CmmTopInfo   = TopInfo { info_tbls  :: LabelMap CmmInfoTable
                             , stack_info :: CmmStackInfo }
 
 topInfoTable :: GenCmmDecl a CmmTopInfo (GenCmmGraph n) -> Maybe CmmInfoTable
@@ -172,8 +167,21 @@ data SectionType
   | RelocatableReadOnlyData
   | UninitialisedData
   | ReadOnlyData16      -- .rodata.cst16 on x86_64, 16-byte aligned
+  | CString
   | OtherSection String
   deriving (Show)
+
+-- | Should a data in this section be considered constant
+isSecConstant :: Section -> Bool
+isSecConstant (Section t _) = case t of
+    Text                    -> True
+    ReadOnlyData            -> True
+    RelocatableReadOnlyData -> True
+    ReadOnlyData16          -> True
+    CString                 -> True
+    Data                    -> False
+    UninitialisedData       -> False
+    (OtherSection _)        -> False
 
 data Section = Section SectionType CLabel
 

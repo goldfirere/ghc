@@ -1,14 +1,4 @@
 
-test('andy_cherry',
-     [when(fast(), skip),
-      extra_clean(['DataTypes.hi',   'DataTypes.o',
-                   'GenUtils.hi',    'GenUtils.o',
-                   'Interp.hi',      'Interp.o',
-                   'InterpUtils.hi', 'InterpUtils.o',
-                   'Main.hi',        'Main.o',
-                   'Parser.hi',      'Parser.o',
-                   'PrintTEX.hi',    'PrintTEX.o']),
-      extra_run_opts('.')],
-     multimod_compile_and_run,
-     ['Main', '-cpp'])
-
+test('andy_cherry', [extra_files(['DataTypes.hs', 'GenUtils.hs', 'Interp.hs', 'InterpUtils.hs', 'Main.hs', 'Parser.hs', 'PrintTEX.hs', 'mygames.pgn']),
+                     when(fast(), skip), extra_run_opts('.')],
+     multimod_compile_and_run, ['Main', '-cpp'])

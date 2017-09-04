@@ -30,6 +30,7 @@ import StgCmmUtils
 import StgCmmClosure
 import StgCmmLayout
 
+import BlockId (newBlockId)
 import Cmm
 import CmmUtils
 import MkGraph
@@ -223,7 +224,7 @@ emitForeignCall safety results target args
     updfr_off <- getUpdFrameOff
     target' <- load_target_into_temp target
     args' <- mapM maybe_assign_temp args
-    k <- newLabelC
+    k <- newBlockId
     let (off, _, copyout) = copyInOflow dflags NativeReturn (Young k) results []
        -- see Note [safe foreign call convention]
     tscope <- getTickScope
@@ -524,16 +525,16 @@ getFCallArgs args
   = do  { mb_cmms <- mapM get args
         ; return (catMaybes mb_cmms) }
   where
-    get arg | isVoidRep arg_rep
+    get arg | null arg_reps
             = return Nothing
             | otherwise
             = do { cmm <- getArgAmode (NonVoid arg)
                  ; dflags <- getDynFlags
                  ; return (Just (add_shim dflags arg_ty cmm, hint)) }
             where
-              arg_ty  = stgArgType arg
-              arg_rep = typePrimRep arg_ty
-              hint    = typeForeignHint arg_ty
+              arg_ty   = stgArgType arg
+              arg_reps = typePrimRep arg_ty
+              hint     = typeForeignHint arg_ty
 
 add_shim :: DynFlags -> Type -> CmmExpr -> CmmExpr
 add_shim dflags arg_ty expr
@@ -548,6 +549,5 @@ add_shim dflags arg_ty expr
 
   | otherwise = expr
   where
-    UnaryRep rep_ty = repType arg_ty
-    tycon           = tyConAppTyCon rep_ty
+    tycon           = tyConAppTyCon (unwrapType arg_ty)
         -- should be a tycon app, since this is a foreign call

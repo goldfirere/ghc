@@ -35,19 +35,19 @@ module DsUtils (
         mkSelectorBinds,
 
         selectSimpleMatchVarL, selectMatchVars, selectMatchVar,
-        mkOptTickBox, mkBinaryTickBox, decideBangHood
+        mkOptTickBox, mkBinaryTickBox, decideBangHood, addBang
     ) where
 
 #include "HsVersions.h"
 
-import {-# SOURCE #-}   Match ( matchSimply )
+import {-# SOURCE #-} Match  ( matchSimply )
+import {-# SOURCE #-} DsExpr ( dsLExpr )
 
 import HsSyn
 import TcHsSyn
 import TcType( tcSplitTyConApp )
 import CoreSyn
 import DsMonad
-import {-# SOURCE #-} DsExpr ( dsLExpr )
 
 import CoreUtils
 import MkCore
@@ -55,7 +55,6 @@ import MkId
 import Id
 import Literal
 import TyCon
--- import ConLike
 import DataCon
 import PatSyn
 import Type
@@ -68,6 +67,7 @@ import UniqSet
 import UniqSupply
 import Module
 import PrelNames
+import Name( isInternalName )
 import Outputable
 import SrcLoc
 import Util
@@ -92,7 +92,7 @@ hand, which should indeed be bound to the pattern as a whole, then use it;
 otherwise, make one up.
 -}
 
-selectSimpleMatchVarL :: LPat Id -> DsM Id
+selectSimpleMatchVarL :: LPat GhcTc -> DsM Id
 selectSimpleMatchVarL pat = selectMatchVar (unLoc pat)
 
 -- (selectMatchVars ps tys) chooses variables of type tys
@@ -111,17 +111,17 @@ selectSimpleMatchVarL pat = selectMatchVar (unLoc pat)
 --    Then we must not choose (x::Int) as the matching variable!
 -- And nowadays we won't, because the (x::Int) will be wrapped in a CoPat
 
-selectMatchVars :: [Pat Id] -> DsM [Id]
+selectMatchVars :: [Pat GhcTc] -> DsM [Id]
 selectMatchVars ps = mapM selectMatchVar ps
 
-selectMatchVar :: Pat Id -> DsM Id
+selectMatchVar :: Pat GhcTc -> DsM Id
 selectMatchVar (BangPat pat) = selectMatchVar (unLoc pat)
 selectMatchVar (LazyPat pat) = selectMatchVar (unLoc pat)
 selectMatchVar (ParPat pat)  = selectMatchVar (unLoc pat)
 selectMatchVar (VarPat var)  = return (localiseId (unLoc var))
                                   -- Note [Localise pattern binders]
 selectMatchVar (AsPat var _) = return (unLoc var)
-selectMatchVar other_pat     = newSysLocalDs (hsPatType other_pat)
+selectMatchVar other_pat     = newSysLocalDsNoLP (hsPatType other_pat)
                                   -- OK, better make up one...
 
 {-
@@ -174,7 +174,7 @@ The ``equation info'' used by @match@ is relatively complicated and
 worthy of a type synonym and a few handy functions.
 -}
 
-firstPat :: EquationInfo -> Pat Id
+firstPat :: EquationInfo -> Pat GhcTc
 firstPat eqn = ASSERT( notNull (eqn_pats eqn) ) head (eqn_pats eqn)
 
 shiftEqns :: [EquationInfo] -> [EquationInfo]
@@ -255,7 +255,7 @@ mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
   = MatchResult CanFail (\fail -> do body <- body_fn fail
                                      return (mkIfThenElse pred_expr body fail))
 
-mkCoPrimCaseMatchResult :: Id                        -- Scrutinee
+mkCoPrimCaseMatchResult :: Id                  -- Scrutinee
                         -> Type                      -- Type of the case
                         -> [(Literal, MatchResult)]  -- Alternatives
                         -> MatchResult               -- Literals are all unlifted
@@ -344,7 +344,7 @@ sort_alts = sortWith (dataConTag . alt_pat)
 mkPatSynCase :: Id -> Type -> CaseAlt PatSyn -> CoreExpr -> DsM CoreExpr
 mkPatSynCase var ty alt fail = do
     matcher <- dsLExpr $ mkLHsWrap wrapper $
-                         nlHsTyApp matcher [getRuntimeRep "mkPatSynCase" ty, ty]
+                         nlHsTyApp matcher [getRuntimeRep ty, ty]
     let MatchResult _ mkCont = match_result
     cont <- mkCoreLams bndrs <$> mkCont fail
     return $ mkCoreAppsDs (text "patsyn" <+> ppr var) matcher [Var var, ensure_unstrict cont, Lam voidArgId fail]
@@ -414,7 +414,8 @@ mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
 --   parallel arrays, which are introduced by `tidy1' in the `PArrPat'
 --   case
 --
-mkPArrCase :: DynFlags -> Id -> Type -> [CaseAlt DataCon] -> CoreExpr -> DsM CoreExpr
+mkPArrCase :: DynFlags -> Id -> Type -> [CaseAlt DataCon] -> CoreExpr
+           -> DsM CoreExpr
 mkPArrCase dflags var ty sorted_alts fail = do
     lengthP <- dsDPHBuiltin lengthPVar
     alt <- unboxAlt
@@ -470,7 +471,7 @@ mkErrorAppDs err_id ty msg = do
         full_msg = showSDoc dflags (hcat [ppr src_loc, vbar, msg])
         core_msg = Lit (mkMachString full_msg)
         -- mkMachString returns a result of type String#
-    return (mkApps (Var err_id) [Type (getRuntimeRep "mkErrorAppDs" ty), Type ty, core_msg])
+    return (mkApps (Var err_id) [Type (getRuntimeRep ty), Type ty, core_msg])
 
 {-
 'mkCoreAppDs' and 'mkCoreAppsDs' hand the special-case desugaring of 'seq'.
@@ -540,17 +541,20 @@ into
 which stupidly tries to bind the datacon 'True'.
 -}
 
+-- NB: Make sure the argument is not levity polymorphic
 mkCoreAppDs  :: SDoc -> CoreExpr -> CoreExpr -> CoreExpr
 mkCoreAppDs _ (Var f `App` Type ty1 `App` Type ty2 `App` arg1) arg2
   | f `hasKey` seqIdKey            -- Note [Desugaring seq (1), (2)]
   = Case arg1 case_bndr ty2 [(DEFAULT,[],arg2)]
   where
     case_bndr = case arg1 of
-                   Var v1 | isLocalId v1 -> v1        -- Note [Desugaring seq (2) and (3)]
-                   _                     -> mkWildValBinder ty1
+                   Var v1 | isInternalName (idName v1)
+                          -> v1        -- Note [Desugaring seq (2) and (3)]
+                   _      -> mkWildValBinder ty1
 
 mkCoreAppDs s fun arg = mkCoreApp s fun arg  -- The rest is done in MkCore
 
+-- NB: No argument can be levity polymorphic
 mkCoreAppsDs :: SDoc -> CoreExpr -> [CoreExpr] -> CoreExpr
 mkCoreAppsDs s fun args = foldl (mkCoreAppDs s) fun args
 
@@ -722,7 +726,7 @@ work out well:
 -}
 
 mkSelectorBinds :: [[Tickish Id]] -- ^ ticks to add, possibly
-                -> LPat Id        -- ^ The pattern
+                -> LPat GhcTc     -- ^ The pattern
                 -> CoreExpr       -- ^ Expression to which the pattern is bound
                 -> DsM (Id,[(Id,CoreExpr)])
                 -- ^ Id the rhs is bound to, for desugaring strict
@@ -735,7 +739,7 @@ mkSelectorBinds ticks pat val_expr
 
   | is_flat_prod_lpat pat'           -- Special case (B)
   = do { let pat_ty = hsLPatType pat'
-       ; val_var <- newSysLocalDs pat_ty
+       ; val_var <- newSysLocalDsNoLP pat_ty
 
        ; let mk_bind tick bndr_var
                -- (mk_bind sv bv)  generates  bv = case sv of { pat -> bv }
@@ -811,31 +815,31 @@ is_triv_pat _           = False
 *                                                                      *
 ********************************************************************* -}
 
-mkLHsPatTup :: [LPat Id] -> LPat Id
+mkLHsPatTup :: [LPat GhcTc] -> LPat GhcTc
 mkLHsPatTup []     = noLoc $ mkVanillaTuplePat [] Boxed
 mkLHsPatTup [lpat] = lpat
 mkLHsPatTup lpats  = L (getLoc (head lpats)) $
                      mkVanillaTuplePat lpats Boxed
 
-mkLHsVarPatTup :: [Id] -> LPat Id
+mkLHsVarPatTup :: [Id] -> LPat GhcTc
 mkLHsVarPatTup bs  = mkLHsPatTup (map nlVarPat bs)
 
-mkVanillaTuplePat :: [OutPat Id] -> Boxity -> Pat Id
+mkVanillaTuplePat :: [OutPat GhcTc] -> Boxity -> Pat GhcTc
 -- A vanilla tuple pattern simply gets its type from its sub-patterns
 mkVanillaTuplePat pats box = TuplePat pats box (map hsLPatType pats)
 
 -- The Big equivalents for the source tuple expressions
-mkBigLHsVarTupId :: [Id] -> LHsExpr Id
+mkBigLHsVarTupId :: [Id] -> LHsExpr GhcTc
 mkBigLHsVarTupId ids = mkBigLHsTupId (map nlHsVar ids)
 
-mkBigLHsTupId :: [LHsExpr Id] -> LHsExpr Id
+mkBigLHsTupId :: [LHsExpr GhcTc] -> LHsExpr GhcTc
 mkBigLHsTupId = mkChunkified mkLHsTupleExpr
 
 -- The Big equivalents for the source tuple patterns
-mkBigLHsVarPatTupId :: [Id] -> LPat Id
+mkBigLHsVarPatTupId :: [Id] -> LPat GhcTc
 mkBigLHsVarPatTupId bs = mkBigLHsPatTupId (map nlVarPat bs)
 
-mkBigLHsPatTupId :: [LPat Id] -> LPat Id
+mkBigLHsPatTupId :: [LPat GhcTc] -> LPat GhcTc
 mkBigLHsPatTupId = mkChunkified mkLHsPatTup
 
 {-
@@ -892,6 +896,15 @@ for the primitive case:
 \end{verbatim}
 
 Now @fail.33@ is a function, so it can be let-bound.
+
+We would *like* to use join points here; in fact, these "fail variables" are
+paradigmatic join points! Sadly, this breaks pattern synonyms, which desugar as
+CPS functions - i.e. they take "join points" as parameters. It's not impossible
+to imagine extending our type system to allow passing join points around (very
+carefully), but we certainly don't support it now.
+
+99.99% of the time, the fail variables wind up as join points in short order
+anyway, and the Void# doesn't do much harm.
 -}
 
 mkFailurePair :: CoreExpr       -- Result type of the whole case expression
@@ -911,6 +924,11 @@ mkFailurePair expr
 {-
 Note [Failure thunks and CPR]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+(This note predates join points as formal entities (hence the quotation marks).
+We can't use actual join points here (see above); if we did, this would also
+solve the CPR problem, since join points don't get CPR'd. See Note [Don't CPR
+join points] in WorkWrap.)
+
 When we make a failure point we ensure that it
 does not look like a thunk. Example:
 
@@ -975,5 +993,17 @@ decideBangHood dflags lpat
       = case p of
            ParPat p    -> L l (ParPat (go p))
            LazyPat lp' -> lp'
+           BangPat _   -> lp
+           _           -> L l (BangPat lp)
+
+-- | Unconditionally make a 'Pat' strict.
+addBang :: LPat id -- ^ Original pattern
+        -> LPat id -- ^ Banged pattern
+addBang = go
+  where
+    go lp@(L l p)
+      = case p of
+           ParPat p    -> L l (ParPat (go p))
+           LazyPat lp' -> L l (BangPat lp')
            BangPat _   -> lp
            _           -> L l (BangPat lp)

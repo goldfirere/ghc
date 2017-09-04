@@ -1,5 +1,5 @@
 {-# LANGUAGE Trustworthy #-}
-{-# LANGUAGE NoImplicitPrelude, StandaloneDeriving, ScopedTypeVariables #-}
+{-# LANGUAGE CPP, NoImplicitPrelude, StandaloneDeriving, ScopedTypeVariables #-}
 {-# OPTIONS_HADDOCK hide #-}
 
 -----------------------------------------------------------------------------
@@ -42,6 +42,8 @@ module GHC.Read
   )
  where
 
+#include "MachDeps.h"
+
 import qualified Text.ParserCombinators.ReadP as P
 
 import Text.ParserCombinators.ReadP
@@ -66,6 +68,7 @@ import GHC.Float
 import GHC.Show
 import GHC.Base
 import GHC.Arr
+import GHC.Word
 
 
 -- | @'readParen' 'True' p@ parses what @p@ parses, but surrounded with
@@ -287,22 +290,39 @@ lexP = lift L.lex
 expectP :: L.Lexeme -> ReadPrec ()
 expectP lexeme = lift (L.expect lexeme)
 
+expectCharP :: Char -> ReadPrec a -> ReadPrec a
+expectCharP c a = do
+  q <- get
+  if q == c
+    then a
+    else pfail
+{-# INLINE expectCharP #-}
+
+skipSpacesThenP :: ReadPrec a -> ReadPrec a
+skipSpacesThenP m =
+  do s <- look
+     skip s
+ where
+   skip (c:s) | isSpace c = get *> skip s
+   skip _ = m
+
 paren :: ReadPrec a -> ReadPrec a
 -- ^ @(paren p)@ parses \"(P0)\"
 --      where @p@ parses \"P0\" in precedence context zero
-paren p = do expectP (L.Punc "(")
-             x <- reset p
-             expectP (L.Punc ")")
-             return x
+paren p = skipSpacesThenP (paren' p)
+
+paren' :: ReadPrec a -> ReadPrec a
+paren' p = expectCharP '(' $ reset p >>= \x ->
+              skipSpacesThenP (expectCharP ')' (pure x))
 
 parens :: ReadPrec a -> ReadPrec a
 -- ^ @(parens p)@ parses \"P\", \"(P0)\", \"((P0))\", etc,
 --      where @p@ parses \"P\"  in the current precedence context
 --          and parses \"P0\" in precedence context zero
 parens p = optional
- where
-  optional  = p +++ mandatory
-  mandatory = paren optional
+  where
+    optional = skipSpacesThenP (p +++ mandatory)
+    mandatory = paren' optional
 
 list :: ReadPrec a -> ReadPrec [a]
 -- ^ @(list p)@ parses a list of things parsed by @p@,
@@ -501,6 +521,26 @@ instance Read Int where
 
 -- | @since 4.5.0.0
 instance Read Word where
+    readsPrec p s = [(fromInteger x, r) | (x, r) <- readsPrec p s]
+
+-- | @since 2.01
+instance Read Word8 where
+    readsPrec p s = [(fromIntegral (x::Int), r) | (x, r) <- readsPrec p s]
+
+-- | @since 2.01
+instance Read Word16 where
+    readsPrec p s = [(fromIntegral (x::Int), r) | (x, r) <- readsPrec p s]
+
+-- | @since 2.01
+instance Read Word32 where
+#if WORD_SIZE_IN_BITS < 33
+    readsPrec p s = [(fromInteger x, r) | (x, r) <- readsPrec p s]
+#else
+    readsPrec p s = [(fromIntegral (x::Int), r) | (x, r) <- readsPrec p s]
+#endif
+
+-- | @since 2.01
+instance Read Word64 where
     readsPrec p s = [(fromInteger x, r) | (x, r) <- readsPrec p s]
 
 -- | @since 2.01

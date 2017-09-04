@@ -167,23 +167,17 @@ test('tc163', normal, compile, [''])
 test('tc164', normal, compile, [''])
 test('tc165', expect_broken_for(10181, ['optasm', 'optllvm']), compile, [''])
 test('tc166', normal, compile, [''])
-test('tc167', normal, compile_fail, [''])
+test('tc167', normal, compile, [''])
 test('tc168', normal, compile_fail, [''])
 test('tc169', normal, compile, [''])
 
-test('tc170',
-     extra_clean(['Tc170_Aux.hi', 'Tc170_Aux.o']),
-     run_command,
-     ['$MAKE -s --no-print-directory tc170'])
+test('tc170', [extra_files(['Tc170_Aux.hs'])], run_command, ['$MAKE -s --no-print-directory tc170'])
 
 test('tc171', normal, compile, [''])
 test('tc172', normal, compile, [''])
 
 # The point about this test is that it compiles Tc173a and Tc173b *separately*
-test('tc173',
-     extra_clean(['Tc173a.hi', 'Tc173a.o', 'Tc173b.hi', 'Tc173b.o']),
-     run_command,
-     ['$MAKE -s --no-print-directory tc173'])
+test('tc173', [extra_files(['Tc173a.hs', 'Tc173b.hs'])], run_command, ['$MAKE -s --no-print-directory tc173'])
 
 test('tc174', normal, compile, [''])
 test('tc175', normal, compile, [''])
@@ -194,7 +188,7 @@ test('tc179', normal, compile, [''])
 test('tc180', normal, compile, [''])
 test('tc181', normal, compile, [''])
 test('tc182', normal, compile, [''])
-test('tc183', reqlib('mtl'), compile, [''])
+test('tc183', normal, compile, [''])
 test('tc184', normal, compile, [''])
 test('tc185', normal, compile, [''])
 test('tc186', normal, compile, [''])
@@ -231,13 +225,13 @@ test('tc215', normal, compile, [''])
 # This one is very delicate, but I don't think the result really matters
 test('tc216', normal, compile, [''])
 
-test('tc217', reqlib('mtl'), compile, [''])
+test('tc217', normal, compile, [''])
 test('tc218', normal, compile, [''])
 test('tc219', normal, compile, [''])
-test('tc220', [reqlib('mtl'), reqlib('syb')], compile, [''])
+test('tc220', [reqlib('syb')], compile, [''])
 test('tc221', normal, compile, [''])
 test('tc222', normal, compile, [''])
-test('tc223', reqlib('mtl'), compile, [''])
+test('tc223', normal, compile, [''])
 test('tc224', normal, compile, [''])
 test('tc225', normal, compile, [''])
 test('tc226', normal, compile, [''])
@@ -246,7 +240,7 @@ test('tc228', normal, compile, [''])
 test('tc229', normal, compile, [''])
 test('tc230', normal, compile, [''])
 test('tc231', normal, compile, [''])
-test('tc232', reqlib('mtl'), compile, [''])
+test('tc232', normal, compile, [''])
 test('tc233', normal, compile, [''])
 test('tc234', normal, compile, [''])
 test('tc235', normal, compile, [''])
@@ -254,18 +248,14 @@ test('tc236', normal, compile, [''])
 test('tc237', normal, compile, [''])
 test('tc238', normal, compile, [''])
 
-test('tc239', extra_clean(['Tc239_Help.hi', 'Tc239_Help.o']),
-     multimod_compile, ['tc239', '-v0'])
+test('tc239', [extra_files(['Tc239_Help.hs'])], multimod_compile, ['tc239', '-v0'])
 
 test('tc240', normal, compile, [''])
 test('tc241', normal, compile, [''])
 test('tc242', normal, compile, [''])
 test('tc243', normal, compile, [''])
 test('tc244', normal, compile, [''])
-test('tc245',
-     extra_clean(['Tc245_A.hi', 'Tc245_A.o', 'tc245.hi', 'tc245.o']),
-     run_command,
-     ['$MAKE -s --no-print-directory tc245'])
+test('tc245', [extra_files(['Tc245_A.hs'])], run_command, ['$MAKE -s --no-print-directory tc245'])
 test('tc246', normal, compile, [''])
 test('tc247', normal, compile, [''])
 test('tc248', normal, compile, [''])
@@ -279,8 +269,7 @@ test('faxen', normal, compile, [''])
 test('T1495', normal, compile, [''])
 test('T2045', normal, compile, [''])   # Needs -fhpc
 test('T2478', normal, compile, [''])
-test('T2433', extra_clean(['T2433_Help.hi', 'T2433_Help.o']),
-     multimod_compile, ['T2433', '-v0'])
+test('T2433', [], multimod_compile, ['T2433', '-v0'])
 test('T2494', normal, compile_fail, [''])
 test('T2494-2', normal, compile, [''])
 test('T2497', normal, compile, [''])
@@ -306,12 +295,7 @@ test('T3955', normal, compile, [''])
 test('PolyRec', normal, compile, [''])
 test('twins', normal, compile, [''])
 
-test('T2412',
-     extra_clean(['T2412.hi-boot', 'T2412.o-boot',
-                  'T2412A.hi', 'T2412A.o',
-                  'T2412.hi', 'T2412.o']),
-     run_command,
-     ['$MAKE --no-print-directory -s T2412'])
+test('T2412', [], run_command, ['$MAKE --no-print-directory -s T2412'])
 
 test('T2846', normal, compile, [''])
 test('T4284', normal, compile, [''])
@@ -321,7 +305,7 @@ test('T1123', normal, compile, [''])
 test('T3692', normal, compile, [''])
 test('T700',  normal, compile, [''])
 test('T4361', normal, compile, [''])
-test('T4355', reqlib('mtl'), compile, [''])
+test('T4355', normal, compile, [''])
 test('T1634', normal, compile, [''])
 test('T4401', normal, compile, [''])
 test('T4404', normal, compile, ['-Wall'])
@@ -332,8 +316,7 @@ test('T4498', normal, compile, [''])
 test('T4524', normal, compile, [''])
 test('T4917', normal, compile, [''])
 
-test('T4912', extra_clean(['T4912a.hi', 'T4912a.o']),
-     multimod_compile, ['T4912', '-v0'])
+test('T4912', [], multimod_compile, ['T4912', '-v0'])
 
 test('T4952', normal, compile, [''])
 test('T4969', normal, compile, [''])
@@ -341,8 +324,7 @@ test('T5120', normal, compile, [''])
 test('mc18', normal, compile, [''])
 test('tc249', normal, compile, [''])
 test('tc250', normal, compile, [''])
-test('tc251', extra_clean(['Tc251_Help.hi', 'Tc251_Help.o']),
-              multi_compile, ['tc251', [('Tc251_Help.hs', '')], '-v0'])
+test('tc251', [extra_files(['Tc251_Help.hs'])], multi_compile, ['tc251', [('Tc251_Help.hs', '')], '-v0'])
 test('tc252', normal, compile, [''])
 test('tc253', normal, compile, [''])
 test('tc254', normal, compile, [''])
@@ -354,18 +336,14 @@ test('tc259', normal, compile, [''])
 test('tc260', normal, compile, [''])
 test('tc261', normal, compile, [''])
 test('tc262', normal, compile, [''])
-test('tc263',
-    extra_clean(['Tc263_Help.o','Tc263_Help.hi']),
-    multimod_compile, ['tc263','-v0'])
+test('tc263', [extra_files(['Tc263_Help.hs'])], multimod_compile, ['tc263', '-v0'])
 test('tc265', compile_timeout_multiplier(0.01), compile, [''])
-test('tc266',
-     [extra_clean(['Tc266.hi-boot', 'Tc266.o-boot', 'Tc266a.hi', 'Tc266a.o', 'Tc266.hi', 'Tc266.o'])] ,
-     run_command,
-     ['$MAKE -s --no-print-directory tc266'])
-test('Tc267',
-     extra_clean(['Tc267a.hi-boot', 'Tc267a.o-boot', 'Tc267b.hi-boot', 'Tc267b.o-boot', 'Tc267a.hi', 'Tc267a.o', 'Tc267b.hi', 'Tc267b.o']),
-     run_command,
-     ['$MAKE -s --no-print-directory Tc267'])
+test('tc266', [extra_files(['Tc266.hs', 'Tc266a.hs', 'Tc266.hs-boot'])], run_command, ['$MAKE -s --no-print-directory tc266'])
+test('Tc267', [extra_files(['Tc267a.hs', 'Tc267b.hs', 'Tc267a.hs-boot', 'Tc267b.hs-boot'])], run_command, ['$MAKE -s --no-print-directory Tc267'])
+test('tc268', normal, compile, [''])
+test('tc269', normal, compile, [''])
+test('tc270', normal, compile, [''])
+test('Tc271', [extra_files(['Tc271a.hs', 'Tc271.hs', 'Tc271.hs-boot'])], run_command, ['$MAKE -s --no-print-directory Tc271'])
 
 test('GivenOverlapping', normal, compile, [''])
 test('GivenTypeSynonym', normal, compile, [''])
@@ -394,9 +372,7 @@ test('DfltProb1', normal, compile, ['-O'])
 # Add -O for DfltProb1 to expose Trac #11291
 test('DfltProb2', normal, compile, [''])
 test('T6134', normal, compile, [''])
-test('T6018', extra_clean(['T6018.hi' , 'T6018.o'
-                          ,'T6018A.hi', 'T6018A.o'])
-            , multimod_compile, ['T6018', ''])
+test('T6018', [], multimod_compile, ['T6018', ''])
 test('TcLambdaCase', [], compile, [''])
 test('T7147', normal, compile, [''])
 test('T7171',normal,run_command,
@@ -410,6 +386,10 @@ test('T7451', normal, compile, [''])
 test('holes', normal, compile, ['-fdefer-type-errors'])
 test('holes2', normal, compile, ['-fdefer-type-errors'])
 test('holes3', normal, compile_fail, [''])
+test('hole_constraints', normal, compile, ['-fdefer-type-errors'])
+test('hole_constraints_nested', normal, compile, ['-fdefer-type-errors'])
+test('valid_substitutions', [extra_files(['ValidSubs.hs'])],
+    multimod_compile, ['valid_substitutions','-fdefer-type-errors'])
 test('T7408', normal, compile, [''])
 test('UnboxStrictPrimitiveFields', normal, compile, [''])
 test('T7541', normal, compile, [''])
@@ -422,6 +402,7 @@ test('T7888', normal, compile, [''])
 test('T7891', normal, compile, [''])
 test('T7903', normal, compile, [''])
 test('TcTypeNatSimple', normal, compile, [''])
+test('TcTypeSymbolSimple', normal, compile, [''])
 test('TcCoercibleCompile', [], compile, [''])
 test('T8392', normal, compile, [''])
 test('T8474', normal, compile, [''])
@@ -492,17 +473,14 @@ test('T10770a', expect_broken(10770), compile, [''])
 test('T10770b', expect_broken(10770), compile, [''])
 test('T10935', normal, compile, [''])
 test('T10971a', normal, compile, [''])
+test('T11062', [extra_files(['T11062.hs', 'T11062.hs-boot', 'T11062a.hs'])], multimod_compile, ['T11062', '-v0'])
 test('T11237', normal, compile, [''])
 test('T10592', normal, compile, [''])
 test('T11305', normal, compile, [''])
 test('T11254', normal, compile, [''])
 test('T11379', normal, compile, [''])
-test('T11462',
-     [extra_clean(['T11462_Plugin.hi', 'T11462_Plugin.o']),
-      unless(have_dynamic(), expect_broken(10301))],
-     multi_compile,
-     ['', [('T11462_Plugin.hs', '-package ghc'),
-           ('T11462.hs', '')],
+test('T11462', [unless(have_dynamic(), expect_broken(10301))], multi_compile,
+     ['', [('T11462_Plugin.hs', '-package ghc'), ('T11462.hs', '')],
       '-dynamic'])
 test('T11480', normal, compile, [''])
 test('RebindHR', normal, compile, [''])
@@ -522,8 +500,7 @@ test('T11811', normal, compile, [''])
 test('T11793', normal, compile, [''])
 test('T11348', normal, compile, [''])
 test('T11947', normal, compile, [''])
-test('T12064', extra_clean(['T12064.hi-boot', 'T12064.o-boot', 'T11062a.hi', 'T11062a.o']),
-     multimod_compile, ['T12064', '-v0'])
+test('T12064', [], multimod_compile, ['T12064', '-v0'])
 test('ExPat', normal, compile, [''])
 test('ExPatFail', normal, compile_fail, [''])
 test('SigTyVars', normal, compile, [''])
@@ -534,8 +511,8 @@ test('T11339b', normal, compile, [''])
 test('T11339c', normal, compile, [''])
 test('T11339d', normal, compile, [''])
 test('T11974', normal, compile, [''])
-test('T12067', extra_clean(['T12067a.hi', 'T12067a.o']),
-     multimod_compile, ['T12067', '-v0'])
+test('T12067', [], multimod_compile, ['T12067', '-v0'])
+test('T12104', normal, compile, ['-fdefer-type-errors'])
 test('T12185', normal, compile, [''])
 test('T12133', normal, compile, [''])
 test('T12381', normal, compile, [''])
@@ -551,4 +528,50 @@ test('T12507', normal, compile, [''])
 test('T12734', normal, compile, [''])
 test('T12734a', normal, compile_fail, [''])
 test('T12763', normal, compile, [''])
+test('T12785a', normal, compile, [''])
 test('T12797', normal, compile, [''])
+test('T12850', normal, compile, [''])
+test('T12911', normal, compile, [''])
+test('T12925', normal, compile, [''])
+test('T12919', expect_broken(12919), compile, [''])
+test('T12936', normal, compile, [''])
+test('T13050', normal, compile, ['-fdefer-type-errors'])
+test('T13083', normal, compile, [''])
+test('T11723', normal, compile, [''])
+test('T12987', normal, compile, [''])
+test('T11736', normal, compile, [''])
+test('T13248', expect_broken(13248), compile, [''])
+test('T11525', [unless(have_dynamic(), expect_broken(10301))], multi_compile,
+     ['', [('T11525_Plugin.hs', '-package ghc'), ('T11525.hs', '')],
+      '-dynamic'])
+test('T12923', normal, compile, [''])
+test('T12924', normal, compile, [''])
+test('T12926', normal, compile, [''])
+test('T13381', normal, compile_fail, [''])
+test('T13337', normal, compile, [''])
+test('T13343', normal, compile, [''])
+test('T13458', normal, compile, [''])
+test('T13490', normal, compile, [''])
+test('T13474', normal, compile, [''])
+test('T13524', normal, compile, [''])
+test('T13509', normal, compile, [''])
+test('T13526', normal, compile, [''])
+test('T13594', normal, compile_fail, [''])
+test('T13603', normal, compile, [''])
+test('T13333', normal, compile, [''])
+test('T13585', [extra_files(['T13585.hs', 'T13585a.hs', 'T13585b.hs'])], run_command, ['$MAKE -s --no-print-directory T13585'])
+test('T13651', normal, compile, [''])
+test('T13680', normal, compile, [''])
+test('T13785', normal, compile, [''])
+test('T13804', normal, compile, [''])
+test('T13822', normal, compile, [''])
+test('T13871', normal, compile, [''])
+test('T13879', normal, compile, [''])
+test('T13881', normal, compile, [''])
+test('T13915a', normal, multimod_compile, ['T13915a', '-v0'])
+test('T13915b', normal, compile, [''])
+test('T13984', normal, compile, [''])
+test('T14128', normal, multimod_compile, ['T14128Main', '-v0'])
+test('T14149', normal, compile, [''])
+test('T14154', normal, compile, [''])
+test('T14158', normal, compile, [''])

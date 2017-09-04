@@ -6,14 +6,13 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef WEAK_H
-#define WEAK_H
+#pragma once
 
 #include "Capability.h"
 
 #include "BeginPrivate.h"
 
-extern rtsBool running_finalizers;
+extern bool running_finalizers;
 extern StgWeak * dead_weak_ptr_list;
 
 void runCFinalizers(StgCFinalizerList *list);
@@ -22,6 +21,3 @@ void scheduleFinalizers(Capability *cap, StgWeak *w);
 void markWeakList(void);
 
 #include "EndPrivate.h"
-
-#endif /* WEAK_H */
-

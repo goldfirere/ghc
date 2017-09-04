@@ -30,13 +30,22 @@ define distdir-way-opts # args: $1 = dir, $2 = distdir, $3 = way, $4 = stage
 #  Variable              Purpose                           Defined by
 #  --------------        ------------------------------    --------------
 #  $1_PACKAGE            Package name for this dir,        $1/$2/ghc.mk
-#                        if it is a package   
-#   
+#                        if it is a package
+#
 #  CONF_HC_OPTS          GHC options from ./configure      mk/config.mk.in
-#   
+#
+#  CONF_CPP_OPTS_STAGE$4 CPP options from ./configure      mk/config.mk.in
+#
+#  CONF_CC_OPTS_STAGE$4  C compiler options from           mk/config.mk.in
+#                        ./configure
+#
 #  CONF_HC_OPTS_STAGE$4  GHC options from ./configure      mk/config.mk.in
-#                        specific to stage $4   
-#   
+#                        specific to stage $4
+#
+#  CONF_LD_LINKER_OPTS_STAGE$4
+#                        GHC options from ./configure      mk/config.mk.in
+#                        specific to stage $4
+#
 #  WAY_$3_HC_OPTS        GHC options specific to way $3    mk/ways.mk
 #   
 #  SRC_HC_OPTS           source-tree-wide GHC options      mk/config.mk.in
@@ -82,7 +91,7 @@ define distdir-way-opts # args: $1 = dir, $2 = distdir, $3 = way, $4 = stage
 #                        source files   
 #   
 #  $1_$2_CPP_OPTS        CPP options                       $1/$2/package-data.mk
-#  
+#
 #  <file>_HC_OPTS        GHC options for this source       $1/$2/ghc.mk
 #                        file (without the extension)
 
@@ -136,6 +145,7 @@ $1_$2_$3_MOST_HC_OPTS = \
  $$($1_$2_HC_OPTS) \
  $$(CONF_HC_OPTS_STAGE$4) \
  $$($1_$2_MORE_HC_OPTS) \
+ $$($1_EXTRA_HC_OPTS) \
  $$($1_$2_EXTRA_HC_OPTS) \
  $$($1_$2_$3_HC_OPTS) \
  $$($$(basename $$(subst ./,,$$<))_HC_OPTS) \
@@ -167,33 +177,28 @@ $1_$2_$3_ALL_HC_OPTS = \
  $$(if $$(findstring YES,$$($1_$2_SplitSections)),$$(if $$(findstring dyn,$3),,-split-sections),) \
  $$(if $$(findstring YES,$$($1_$2_DYNAMIC_TOO)),$$(if $$(findstring v,$3),-dynamic-too))
 
-ifeq "$3" "dyn"
-ifeq "$$(HostOS_CPP)" "mingw32"
-ifneq "$$($1_$2_dll0_MODULES)" ""
-$1_$2_$3_ALL_HC_OPTS += -dll-split $1/$2/dll-split
-endif
-endif
-endif
-
 $1_$2_$3_ALL_CC_OPTS = \
  $$(WAY_$3_CC_OPTS) \
  $$($1_$2_DIST_GCC_CC_OPTS) \
  $$($1_$2_$3_CC_OPTS) \
  $$($$(basename $$<)_CC_OPTS) \
  $$($1_$2_EXTRA_CC_OPTS) \
- $$(EXTRA_CC_OPTS)
+ $$(EXTRA_CC_OPTS) \
+ $$(if $$(findstring YES,$$($1_$2_SplitSections)),-ffunction-sections -fdata-sections)
 
 $1_$2_$3_GHC_CC_OPTS = \
  $$(addprefix -optc, $$($1_$2_$3_ALL_CC_OPTS)) \
  $$($1_$2_$3_MOST_HC_OPTS)
 
-# Options for passing to plain ld
+# Options for passing to gcc for linking
 $1_$2_$3_ALL_LD_OPTS = \
  $$(WAY_$3_LD_OPTS) \
  $$($1_$2_DIST_LD_OPTS) \
  $$($1_$2_$3_LD_OPTS) \
  $$($1_$2_EXTRA_LD_OPTS) \
- $$(EXTRA_LD_OPTS)
+ $$(EXTRA_LD_OPTS) \
+ $$(foreach o,$$(EXTRA_LD_LINKER_OPTS),-optl-Wl$$(comma)$$o) \
+ $$(foreach o,$$(CONF_LD_LINKER_OPTS_STAGE$4),-optl-Wl$$(comma)$$o)
 
 # Options for passing to GHC when we use it for linking
 $1_$2_$3_GHC_LD_OPTS = \

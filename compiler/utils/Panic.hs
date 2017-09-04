@@ -38,7 +38,7 @@ import Debug.Trace        ( trace )
 import System.IO.Unsafe
 import System.Environment
 
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
 import System.Posix.Signals as S
 #endif
 
@@ -290,7 +290,7 @@ withSignalHandlers act = do
   -- uninstall handlers if necessary
   let mayUninstallHandlers = liftIO $ modifyMVar_ signalHandlersRefCount $ \case
         (1,Just hdls)   -> do
-          uninstallHandlers hdls
+          _ <- uninstallHandlers hdls
           return (0,Nothing)
         (c,oldHandlers) -> return (c-1,oldHandlers)
 

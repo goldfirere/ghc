@@ -1,4 +1,5 @@
-{-# LANGUAGE Safe #-}
+{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -28,6 +29,7 @@ module Data.Bitraversable
 import Control.Applicative
 import Data.Bifunctor
 import Data.Bifoldable
+import Data.Coerce
 import Data.Functor.Identity (Identity(..))
 import Data.Functor.Utils (StateL(..), StateR(..))
 import GHC.Generics (K1(..))
@@ -142,27 +144,28 @@ bisequence = bitraverse id id
 
 -- | @since 4.10.0.0
 instance Bitraversable (,) where
-  bitraverse f g ~(a, b) = (,) <$> f a <*> g b
+  bitraverse f g ~(a, b) = liftA2 (,) (f a) (g b)
 
 -- | @since 4.10.0.0
 instance Bitraversable ((,,) x) where
-  bitraverse f g ~(x, a, b) = (,,) x <$> f a <*> g b
+  bitraverse f g ~(x, a, b) = liftA2 ((,,) x) (f a) (g b)
 
 -- | @since 4.10.0.0
 instance Bitraversable ((,,,) x y) where
-  bitraverse f g ~(x, y, a, b) = (,,,) x y <$> f a <*> g b
+  bitraverse f g ~(x, y, a, b) = liftA2 ((,,,) x y) (f a) (g b)
 
 -- | @since 4.10.0.0
 instance Bitraversable ((,,,,) x y z) where
-  bitraverse f g ~(x, y, z, a, b) = (,,,,) x y z <$> f a <*> g b
+  bitraverse f g ~(x, y, z, a, b) = liftA2 ((,,,,) x y z) (f a) (g b)
 
 -- | @since 4.10.0.0
 instance Bitraversable ((,,,,,) x y z w) where
-  bitraverse f g ~(x, y, z, w, a, b) = (,,,,,) x y z w <$> f a <*> g b
+  bitraverse f g ~(x, y, z, w, a, b) = liftA2 ((,,,,,) x y z w) (f a) (g b)
 
 -- | @since 4.10.0.0
 instance Bitraversable ((,,,,,,) x y z w v) where
-  bitraverse f g ~(x, y, z, w, v, a, b) = (,,,,,,) x y z w v <$> f a <*> g b
+  bitraverse f g ~(x, y, z, w, v, a, b) =
+    liftA2 ((,,,,,,) x y z w v) (f a) (g b)
 
 -- | @since 4.10.0.0
 instance Bitraversable Either where
@@ -217,14 +220,29 @@ bimapAccumR f g s t
 -- | A default definition of 'bimap' in terms of the 'Bitraversable'
 -- operations.
 --
+-- @'bimapDefault' f g ≡
+--     'runIdentity' . 'bitraverse' ('Identity' . f) ('Identity' . g)@
+--
 -- @since 4.10.0.0
-bimapDefault :: Bitraversable t => (a -> b) -> (c -> d) -> t a c -> t b d
-bimapDefault f g = runIdentity . bitraverse (Identity . f) (Identity . g)
+bimapDefault :: forall t a b c d . Bitraversable t
+             => (a -> b) -> (c -> d) -> t a c -> t b d
+-- See Note [Function coercion] in Data.Functor.Utils.
+bimapDefault = coerce
+  (bitraverse :: (a -> Identity b)
+              -> (c -> Identity d) -> t a c -> Identity (t b d))
+{-# INLINE bimapDefault #-}
 
 -- | A default definition of 'bifoldMap' in terms of the 'Bitraversable'
 -- operations.
 --
+-- @'bifoldMapDefault' f g ≡
+--    'getConst' . 'bitraverse' ('Const' . f) ('Const' . g)@
+--
 -- @since 4.10.0.0
-bifoldMapDefault :: (Bitraversable t, Monoid m)
+bifoldMapDefault :: forall t m a b . (Bitraversable t, Monoid m)
                  => (a -> m) -> (b -> m) -> t a b -> m
-bifoldMapDefault f g = getConst . bitraverse (Const . f) (Const . g)
+-- See Note [Function coercion] in Data.Functor.Utils.
+bifoldMapDefault = coerce
+  (bitraverse :: (a -> Const m ())
+              -> (b -> Const m ()) -> t a b -> Const m (t () ()))
+{-# INLINE bifoldMapDefault #-}

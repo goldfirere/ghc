@@ -10,13 +10,11 @@
 -- -----------------------------------------------------------------------------
 
 module InteractiveEval (
-#ifdef GHCI
         Resume(..), History(..),
         execStmt, ExecOptions(..), execOptions, ExecResult(..), resumeExec,
         runDecls, runDeclsWithLocation,
         isStmt, hasImport, isImport, isDecl,
         parseImportDecl, SingleStep(..),
-        resume,
         abandon, abandonAll,
         getResumeContext,
         getHistorySpan,
@@ -33,24 +31,19 @@ module InteractiveEval (
         typeKind,
         parseName,
         showModule,
-        isModuleInterpreted,
+        moduleIsBootOrNotObjectLinkable,
         parseExpr, compileParsedExpr,
         compileExpr, dynCompileExpr,
         compileExprRemote, compileParsedExprRemote,
-        Term(..), obtainTermFromId, obtainTermFromVal, reconstructType,
-        -- * Depcreated API (remove in GHC 7.14)
-        RunResult(..), runStmt, runStmtWithLocation,
-#endif
+        Term(..), obtainTermFromId, obtainTermFromVal, reconstructType
         ) where
-
-#ifdef GHCI
 
 #include "HsVersions.h"
 
 import InteractiveEvalTypes
 
 import GHCi
-import GHCi.Run
+import GHCi.Message
 import GHCi.RemoteTypes
 import GhcMonad
 import HscMain
@@ -70,7 +63,6 @@ import Name             hiding ( varName )
 import NameSet
 import Avail
 import RdrName
-import VarSet
 import VarEnv
 import ByteCodeTypes
 import Linker
@@ -88,6 +80,7 @@ import RtClosureInspect
 import Outputable
 import FastString
 import Bag
+import Util
 import qualified Lexer (P (..), ParseResult(..), unP, mkPState)
 import qualified Parser (parseStmt, parseModule, parseDeclaration, parseImport)
 
@@ -101,7 +94,6 @@ import Control.Monad
 import GHC.Exts
 import Data.Array
 import Exception
-import Control.Concurrent
 
 -- -----------------------------------------------------------------------------
 -- running a statement interactively
@@ -125,7 +117,7 @@ getHistorySpan hsc_env History{..} =
 getModBreaks :: HomeModInfo -> ModBreaks
 getModBreaks hmi
   | Just linkable <- hm_linkable hmi,
-    [BCOs cbc] <- linkableUnlinked linkable
+    [BCOs cbc _] <- linkableUnlinked linkable
   = fromMaybe emptyModBreaks (bc_breaks cbc)
   | otherwise
   = emptyModBreaks -- probably object code
@@ -199,38 +191,6 @@ execStmt stmt ExecOptions{..} = do
         handleRunStatus execSingleStep stmt bindings ids
                         status (emptyHistory size)
 
--- | The type returned by the deprecated 'runStmt' and
--- 'runStmtWithLocation' API
-data RunResult
-  = RunOk [Name]                -- ^ names bound by this evaluation
-  | RunException SomeException  -- ^ statement raised an exception
-  | RunBreak ThreadId [Name] (Maybe BreakInfo)
-
--- | Conver the old result type to the new result type
-execResultToRunResult :: ExecResult -> RunResult
-execResultToRunResult r =
-  case r of
-    ExecComplete{ execResult = Left ex } -> RunException ex
-    ExecComplete{ execResult = Right names } -> RunOk names
-    ExecBreak{..} -> RunBreak (error "no breakThreadId") breakNames breakInfo
-
--- Remove in GHC 7.14
-{-# DEPRECATED runStmt "use execStmt" #-}
--- | Run a statement in the current interactive context.  Statement
--- may bind multple values.
-runStmt :: GhcMonad m => String -> SingleStep -> m RunResult
-runStmt stmt step =
-  execResultToRunResult <$> execStmt stmt execOptions { execSingleStep = step }
-
--- Remove in GHC 7.14
-{-# DEPRECATED runStmtWithLocation "use execStmtWithLocation" #-}
-runStmtWithLocation :: GhcMonad m => String -> Int ->
-                       String -> SingleStep -> m RunResult
-runStmtWithLocation source linenumber expr step = do
-  execResultToRunResult <$>
-     execStmt expr execOptions { execSingleStep = step
-                               , execSourceFile = source
-                               , execLineNumber = linenumber }
 
 runDecls :: GhcMonad m => String -> m [Name]
 runDecls = runDeclsWithLocation "<interactive>" 1
@@ -286,7 +246,7 @@ withVirtualCWD m = do
 
   gbracket set_cwd reset_cwd $ \_ -> m
 
-parseImportDecl :: GhcMonad m => String -> m (ImportDecl RdrName)
+parseImportDecl :: GhcMonad m => String -> m (ImportDecl GhcPs)
 parseImportDecl expr = withSession $ \hsc_env -> liftIO $ hscImport hsc_env expr
 
 emptyHistory :: Int -> BoundedList History
@@ -379,9 +339,6 @@ handleRunStatus step expr bindings final_ids status history
     = panic "not_tracing" -- actually exhaustive, but GHC can't tell
 
 
-resume :: GhcMonad m => (SrcSpan->Bool) -> SingleStep -> m RunResult
-resume canLogSpan step = execResultToRunResult <$> resumeExec canLogSpan step
-
 resumeExec :: GhcMonad m => (SrcSpan->Bool) -> SingleStep -> m ExecResult
 resumeExec canLogSpan step
  = do
@@ -444,7 +401,7 @@ moveHist fn = do
             history = resumeHistory r
             new_ix = fn ix
         --
-        when (new_ix > length history) $ liftIO $
+        when (history `lengthLessThan` new_ix) $ liftIO $
            throwGhcExceptionIO (ProgramError "no more logged breakpoints")
         when (new_ix < 0) $ liftIO $
            throwGhcExceptionIO (ProgramError "already at the beginning of the history")
@@ -524,9 +481,9 @@ bindLocalsAtBreakpoint hsc_env apStack_fhv (Just BreakInfo{..}) = do
            -- Filter out any unboxed ids;
            -- we can't bind these at the prompt
        pointers = filter (\(id,_) -> isPointer id) vars
-       isPointer id | UnaryRep ty <- repType (idType id)
-                    , PtrRep <- typePrimRep ty = True
-                    | otherwise                = False
+       isPointer id | [rep] <- typePrimRep (idType id)
+                    , isGcPtrRep rep                   = True
+                    | otherwise                        = False
 
        (ids, offsets) = unzip pointers
 
@@ -594,7 +551,7 @@ rttiEnvironment hsc_env@HscEnv{hsc_IC=ic} = do
    hsc_env' <- foldM improveTypes hsc_env (map idName incompletelyTypedIds)
    return hsc_env'
     where
-     noSkolems = isEmptyVarSet . tyCoVarsOfType . idType
+     noSkolems = noFreeVarsOfType . idType
      improveTypes hsc_env@HscEnv{hsc_IC=ic} name = do
       let tmp_ids = [id | AnId id <- ic_tythings ic]
           Just id = find (\i -> idName i == name) tmp_ids
@@ -717,7 +674,7 @@ findGlobalRdrEnv hsc_env imports
            ([], imods_env) -> Right (foldr plusGlobalRdrEnv idecls_env imods_env)
            (err : _, _)    -> Left err }
   where
-    idecls :: [LImportDecl RdrName]
+    idecls :: [LImportDecl GhcPs]
     idecls = [noLoc d | IIDecl d <- imports]
 
     imods :: [ModuleName]
@@ -769,20 +726,21 @@ moduleIsInterpreted modl = withSession $ \h ->
 -- are in scope (qualified or otherwise).  Otherwise we list a whole lot too many!
 -- The exact choice of which ones to show, and which to hide, is a judgement call.
 --      (see Trac #1581)
-getInfo :: GhcMonad m => Bool -> Name -> m (Maybe (TyThing,Fixity,[ClsInst],[FamInst]))
+getInfo :: GhcMonad m => Bool -> Name
+        -> m (Maybe (TyThing,Fixity,[ClsInst],[FamInst], SDoc))
 getInfo allInfo name
   = withSession $ \hsc_env ->
     do mb_stuff <- liftIO $ hscTcRnGetInfo hsc_env name
        case mb_stuff of
          Nothing -> return Nothing
-         Just (thing, fixity, cls_insts, fam_insts) -> do
+         Just (thing, fixity, cls_insts, fam_insts, docs) -> do
            let rdr_env = ic_rn_gbl_env (hsc_IC hsc_env)
 
            -- Filter the instances based on whether the constituent names of their
            -- instance heads are all in scope.
            let cls_insts' = filter (plausible rdr_env . orphNamesOfClsInst) cls_insts
                fam_insts' = filter (plausible rdr_env . orphNamesOfFamInst) fam_insts
-           return (Just (thing, fixity, cls_insts', fam_insts'))
+           return (Just (thing, fixity, cls_insts', fam_insts', docs))
   where
     plausible rdr_env names
           -- Dfun involving only names that are in ic_rn_glb_env
@@ -826,14 +784,14 @@ isStmt :: DynFlags -> String -> Bool
 isStmt dflags stmt =
   case parseThing Parser.parseStmt dflags stmt of
     Lexer.POk _ _ -> True
-    Lexer.PFailed _ _ -> False
+    Lexer.PFailed _ _ _ -> False
 
 -- | Returns @True@ if passed string has an import declaration.
 hasImport :: DynFlags -> String -> Bool
 hasImport dflags stmt =
   case parseThing Parser.parseModule dflags stmt of
     Lexer.POk _ thing -> hasImports thing
-    Lexer.PFailed _ _ -> False
+    Lexer.PFailed _ _ _ -> False
   where
     hasImports = not . null . hsmodImports . unLoc
 
@@ -842,7 +800,7 @@ isImport :: DynFlags -> String -> Bool
 isImport dflags stmt =
   case parseThing Parser.parseImport dflags stmt of
     Lexer.POk _ _ -> True
-    Lexer.PFailed _ _ -> False
+    Lexer.PFailed _ _ _ -> False
 
 -- | Returns @True@ if passed string is a declaration but __/not a splice/__.
 isDecl :: DynFlags -> String -> Bool
@@ -852,7 +810,7 @@ isDecl dflags stmt = do
       case unLoc thing of
         SpliceD _ -> False
         _ -> True
-    Lexer.PFailed _ _ -> False
+    Lexer.PFailed _ _ _ -> False
 
 parseThing :: Lexer.P thing -> DynFlags -> String -> Lexer.ParseResult thing
 parseThing parser dflags stmt = do
@@ -884,7 +842,7 @@ typeKind normalise str = withSession $ \hsc_env -> do
 
 -- | Parse an expression, the parsed expression can be further processed and
 -- passed to compileParsedExpr.
-parseExpr :: GhcMonad m => String -> m (LHsExpr RdrName)
+parseExpr :: GhcMonad m => String -> m (LHsExpr GhcPs)
 parseExpr expr = withSession $ \hsc_env -> do
   liftIO $ runInteractiveHsc hsc_env $ hscParseExpr expr
 
@@ -902,7 +860,7 @@ compileExprRemote expr = do
 
 -- | Compile an parsed expression (before renaming), run it and deliver
 -- the resulting HValue.
-compileParsedExprRemote :: GhcMonad m => LHsExpr RdrName -> m ForeignHValue
+compileParsedExprRemote :: GhcMonad m => LHsExpr GhcPs -> m ForeignHValue
 compileParsedExprRemote expr@(L loc _) = withSession $ \hsc_env -> do
   -- > let _compileParsedExpr = expr
   -- Create let stmt from expr to make hscParsedStmt happy.
@@ -922,7 +880,7 @@ compileParsedExprRemote expr@(L loc _) = withSession $ \hsc_env -> do
       liftIO $ throwIO (fromSerializableException e)
     _ -> panic "compileParsedExpr"
 
-compileParsedExpr :: GhcMonad m => LHsExpr RdrName -> m HValue
+compileParsedExpr :: GhcMonad m => LHsExpr GhcPs -> m HValue
 compileParsedExpr expr = do
    fhv <- compileParsedExprRemote expr
    dflags <- getDynFlags
@@ -945,17 +903,17 @@ dynCompileExpr expr = do
 showModule :: GhcMonad m => ModSummary -> m String
 showModule mod_summary =
     withSession $ \hsc_env -> do
-        interpreted <- isModuleInterpreted mod_summary
+        interpreted <- moduleIsBootOrNotObjectLinkable mod_summary
         let dflags = hsc_dflags hsc_env
         return (showModMsg dflags (hscTarget dflags) interpreted mod_summary)
 
-isModuleInterpreted :: GhcMonad m => ModSummary -> m Bool
-isModuleInterpreted mod_summary = withSession $ \hsc_env ->
+moduleIsBootOrNotObjectLinkable :: GhcMonad m => ModSummary -> m Bool
+moduleIsBootOrNotObjectLinkable mod_summary = withSession $ \hsc_env ->
   case lookupHpt (hsc_HPT hsc_env) (ms_mod_name mod_summary) of
         Nothing       -> panic "missing linkable"
-        Just mod_info -> return (not obj_linkable)
-                      where
-                         obj_linkable = isObjectLinkable (expectJust "showModule" (hm_linkable mod_info))
+        Just mod_info -> return $ case hm_linkable mod_info of
+          Nothing       -> True
+          Just linkable -> not (isObjectLinkable linkable)
 
 ----------------------------------------------------------------------------
 -- RTTI primitives
@@ -979,4 +937,3 @@ reconstructType hsc_env bound id = do
 
 mkRuntimeUnkTyVar :: Name -> Kind -> TyVar
 mkRuntimeUnkTyVar name kind = mkTcTyVar name kind RuntimeUnk
-#endif /* GHCI */

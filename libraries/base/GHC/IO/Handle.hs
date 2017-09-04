@@ -26,11 +26,13 @@ module GHC.IO.Handle (
 
    mkFileHandle, mkDuplexHandle,
 
-   hFileSize, hSetFileSize, hIsEOF, hLookAhead,
+   hFileSize, hSetFileSize, hIsEOF, isEOF, hLookAhead,
    hSetBuffering, hSetBinaryMode, hSetEncoding, hGetEncoding,
    hFlush, hFlushAll, hDuplicate, hDuplicateTo,
 
    hClose, hClose_help,
+
+   LockMode(..), hLock, hTryLock,
 
    HandlePosition, HandlePosn(..), hGetPosn, hSetPosn,
    SeekMode(..), hSeek, hTell,
@@ -54,6 +56,8 @@ import GHC.IO.Encoding
 import GHC.IO.Buffer
 import GHC.IO.BufferedIO ( BufferedIO )
 import GHC.IO.Device as IODevice
+import GHC.IO.Handle.FD
+import GHC.IO.Handle.Lock
 import GHC.IO.Handle.Types
 import GHC.IO.Handle.Internals
 import GHC.IO.Handle.Text
@@ -162,6 +166,15 @@ hIsEOF handle = wantReadableHandle_ "hIsEOF" handle $ \Handle__{..} -> do
              return False
 
 -- ---------------------------------------------------------------------------
+-- isEOF
+
+-- | The computation 'isEOF' is identical to 'hIsEOF',
+-- except that it works only on 'stdin'.
+
+isEOF :: IO Bool
+isEOF = hIsEOF stdin
+
+-- ---------------------------------------------------------------------------
 -- Looking ahead
 
 -- | Computation 'hLookAhead' returns the next character from the handle
@@ -219,7 +232,7 @@ hSetBuffering handle mode =
           is_tty <- IODevice.isTerminal haDevice
           when (is_tty && isReadableHandleType haType) $
                 case mode of
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
         -- 'raw' mode under win32 is a bit too specialised (and troublesome
         -- for most common uses), so simply disable its use here.
                   NoBuffering -> IODevice.setRaw haDevice True

@@ -1,8 +1,8 @@
-.. GHC Users Guide documentation master file, created by
+.. GHC User's Guide documentation master file, created by
 
 
-Welcome to the GHC Users Guide
-==============================
+Welcome to the GHC User's Guide
+===============================
 
 Contents:
 
@@ -13,6 +13,7 @@ Contents:
    license
    intro
    8.2.1-notes
+   8.4.1-notes
    ghci
    runghc
    usage

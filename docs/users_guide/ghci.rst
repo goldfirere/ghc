@@ -37,7 +37,7 @@ command ``ghci``:
 .. code-block:: none
 
     $ ghci
-    GHCi, version 8.0.1: http://www.haskell.org/ghc/  :? for help
+    GHCi, version 8.y.z: http://www.haskell.org/ghc/  :? for help
     Prelude>
 
 There may be a short pause while GHCi loads the prelude and standard
@@ -68,6 +68,15 @@ In Haskell, a ``let`` expression is followed by ``in``. However, in
 GHCi, since the expression can also be interpreted in the ``IO`` monad,
 a ``let`` binding with no accompanying ``in`` statement can be signalled
 by an empty line, as in the above example.
+
+Since GHC 8.0.1, you can bind values and functions to names without ``let`` statement:
+
+.. code-block:: none
+
+    Prelude> x = 42
+    Prelude> x
+    42
+    Prelude>
 
 .. _loading-source-files:
 
@@ -425,6 +434,10 @@ The statement ``x <- return 42`` means “execute ``return 42`` in the
 future statements, for example to print it as we did above.
 
 .. ghc-flag:: -fprint-bind-result
+    :shortdesc: :ref:`Turn on printing of binding results in GHCi <ghci-stmts>`
+    :type: dynamic
+    :reverse: -fno-print-bind-result
+    :category:
 
     If :ghc-flag:`-fprint-bind-result` is set then GHCi will print the result of a
     statement if and only if:
@@ -480,6 +493,11 @@ instead of layout:
     6
     Prelude>
 
+.. ghci-cmd:: :{
+              :}
+
+    Begin or end a multi-line GHCi command block.
+
 To alleviate this issue, GHCi commands can be split over multiple lines,
 by wrapping them in ``:{`` and ``:}`` (each on a single line of its
 own):
@@ -500,8 +518,8 @@ not to replace module loading but to make definitions in .ghci-files
 
 Any exceptions raised during the evaluation or execution of the
 statement are caught and printed by the GHCi command line interface (for
-more information on exceptions, see the module ``Control.Exception`` in
-the libraries :base-ref:`documentation <Control-Exception.html>`).
+more information on exceptions, see the module :base-ref:`Control.Exception.` in
+the libraries documentation.
 
 Every new binding shadows any existing bindings of the same name,
 including entities that are in scope in the current module context.
@@ -655,11 +673,39 @@ The old, shadowed, version of ``T`` is displayed as
 ``main::Interactive.T`` by GHCi in an attempt to distinguish it from the
 new ``T``, which is displayed as simply ``T``.
 
-Class and type-family instance declarations are simply added to the list
-of available instances, with one exception. Since you might want to
-re-define one, a class or type-family instance *replaces* any earlier
-instance with an identical head or left hand side (respectively). (See
-:ref:`type-families`.)
+Class and type-family instance declarations are simply added to the
+list of available instances, with one exception. Since you might want
+to re-define one, a class instance *replaces* any earlier instance
+with an identical head. You aren't allowed to re-define a type family
+instance, since it might not be type safe to do so. Instead, re-define
+the whole type-family. (See :ref:`type-families`.) For example:
+
+.. code-block:: none
+
+    Prelude> type family T a b
+    Prelude> type instance T a b = a
+    Prelude> let uc :: a -> T a b; uc = id
+
+    Prelude> type instance T a b = b
+
+    <interactive>:3:15: error:
+        Conflicting family instance declarations:
+          T a b = a -- Defined at <interactive>:3:15
+          T a b = b -- Defined at <interactive>:5:15
+
+    -- Darn! We have to re-declare T.
+
+    Prelude> type family T a b
+    -- This is a brand-new T, unrelated to the old one
+    Prelude> type instance T a b = b
+    Prelude> uc 'a' :: Int
+
+    <interactive>:8:1: error:
+        • Couldn't match type ‘Char’ with ‘Int’
+          Expected type: Int
+            Actual type: Ghci1.T Char b0
+        • In the expression: uc 'a' :: Int
+          In an equation for ‘it’: it = uc 'a' :: Int
 
 .. _ghci-scope:
 
@@ -954,10 +1000,10 @@ of type ``a``. eg.:
 
 .. code-block:: none
 
-    Prelude> Time.getClockTime
-    Wed Mar 14 12:23:13 GMT 2001
+    Prelude> Data.Time.getZonedTime
+    2017-04-10 12:34:56.93213581 UTC
     Prelude> print it
-    Wed Mar 14 12:23:13 GMT 2001
+    2017-04-10 12:34:56.93213581 UTC
 
 The corresponding translation for an IO-typed ``e`` is
 
@@ -978,6 +1024,14 @@ Type defaulting in GHCi
    single: Show class
 
 .. ghc-flag:: -XExtendedDefaultRules
+    :shortdesc: Use GHCi's
+        :ref:`extended default rules <extended-default-rules>` in a normal
+        module.
+    :type: dynamic
+    :reverse: -XNoExtendedDefaultRules
+    :category: language
+
+    :since: 6.8.1
 
     Allow defaulting to take place for more than just numeric classes.
 
@@ -1012,16 +1066,26 @@ and defaults the type variable if
 3. At least one of the classes ``Ci`` is numeric.
 
 At the GHCi prompt, or with GHC if the :ghc-flag:`-XExtendedDefaultRules` flag
-is given, the following additional differences apply:
+is given, the types are instead resolved with the following method:
 
--  Rule 2 above is relaxed thus: *All* of the classes ``Ci`` are
-   single-parameter type classes.
+Find all the unsolved constraints. Then:
 
--  Rule 3 above is relaxed this: At least one of the classes ``Ci`` is
-   an *interactive class* (defined below).
+-  Find those that are of form ``(C a)`` where ``a`` is a type variable, and
+   partition those constraints into groups that share a common type variable ``a``.
+
+-  Keep only the groups in which at least one of the classes is an
+   **interactive class** (defined below).
+
+-  Now, for each remaining group G, try each type ``ty`` from the default-type list
+   in turn; if setting ``a = ty`` would allow the constraints in G to be completely
+   solved. If so, default ``a`` to ``ty``.
 
 -  The unit type ``()`` and the list type ``[]`` are added to the start of
    the standard list of types which are tried when doing type defaulting.
+
+Note that any multi-parameter constraints ``(D a b)`` or ``(D [a] Int)`` do not
+participate in the process (either to help or to hinder); but they must of course
+be soluble once the defaulting process is complete.
 
 The last point means that, for example, this program: ::
 
@@ -1095,14 +1159,18 @@ IO ()``, and it works by converting the value to ``String`` using ``show``.
 This is not ideal in certain cases, like when the output is long, or
 contains strings with non-ascii characters.
 
-The :ghc-flag:`-interactive-print` flag allows to specify any function of type
-``C a => a -> IO ()``, for some constraint ``C``, as the function for
-printing evaluated expressions. The function can reside in any loaded
-module or any registered package, but only when it resides in a registered
-package will it survive a :ghci-cmd:`:cd`, :ghci-cmd:`:add`, :ghci-cmd:`:load`,
+The :ghc-flag:`-interactive-print ⟨expr⟩` flag allows to specify any function
+of type ``C a => a -> IO ()``, for some constraint ``C``, as the function for
+printing evaluated expressions. The function can reside in any loaded module or
+any registered package, but only when it resides in a registered package will
+it survive a :ghci-cmd:`:cd`, :ghci-cmd:`:add`, :ghci-cmd:`:load`,
 :ghci-cmd:`:reload` or, :ghci-cmd:`:set`.
 
-.. ghc-flag:: -interactive-print <expr>
+.. ghc-flag:: -interactive-print ⟨expr⟩
+    :shortdesc: :ref:`Select the function to use for printing evaluated
+        expressions in GHCi <ghci-interactive-print>`
+    :type: dynamic
+    :category:
 
     Set the function used by GHCi to print evaluation results. Expression
     must be of type ``C a => a -> IO ()``.
@@ -1119,7 +1187,7 @@ printed value. Running GHCi with the command:
 
 .. code-block:: none
 
-    ghci -interactive-print=SpecPrinter.sprinter SpecPrinter
+    ghci -interactive-print=SpecPrinter.sprint SpecPrinter
 
 will start an interactive session where values with be printed using
 ``sprint``:
@@ -1134,8 +1202,8 @@ will start an interactive session where values with be printed using
 A custom pretty printing function can be used, for example, to format
 tree-like and nested structures in a more readable way.
 
-The :ghc-flag:`-interactive-print` flag can also be used when running GHC in
-``-e mode``:
+The :ghc-flag:`-interactive-print ⟨expr⟩` flag can also be used when running
+GHC in ``-e mode``:
 
 .. code-block:: none
 
@@ -1691,7 +1759,11 @@ The history is only available when using :ghci-cmd:`:trace`; the reason for this
 is we found that logging each breakpoint in the history cuts performance
 by a factor of 2 or more.
 
-.. ghc-flag:: -fghci-hist-size
+.. ghc-flag:: -fghci-hist-size=⟨n⟩
+    :shortdesc: Set the number of entries GHCi keeps for ``:history``.
+        See :ref:`ghci-debugger`.
+    :type: dynamic
+    :category:
 
     :default: 50
 
@@ -1756,12 +1828,26 @@ program was doing when it was in an infinite loop. Just hit Control-C,
 and examine the history to find out what was going on.
 
 .. ghc-flag:: -fbreak-on-exception
-              -fbreak-on-error
+    :shortdesc: :ref:`Break on any exception thrown <ghci-debugger-exceptions>`
+    :type: dynamic
+    :reverse: -fno-break-on-exception
+    :category:
 
     Causes GHCi to halt evaluation and return to the interactive prompt
-    in the event of an exception. While :ghc-flag:`-fbreak-on-exception` breaks
-    on all exceptions, :ghc-flag:`-fbreak-on-error` breaks on only those which
-    would otherwise be uncaught.
+    in the event of an exception. :ghc-flag:`-fbreak-on-exception` breaks
+    on all exceptions.
+
+.. ghc-flag:: -fbreak-on-error
+    :shortdesc: :ref:`Break on uncaught exceptions and errors
+        <ghci-debugger-exceptions>`
+    :type: dynamic
+    :reverse: -fno-break-on-error
+    :category:
+
+    Causes GHCi to halt evaluation and return to the interactive prompt in the
+    event of an exception.  :ghc-flag:`-fbreak-on-error` breaks on only those
+    exceptions which would otherwise be uncaught.
+
 
 Example: inspecting functions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1902,15 +1988,20 @@ also make sense in interactive mode. The ones that don't make sense are
 mostly obvious.
 
 .. ghc-flag:: -flocal-ghci-history
+    :shortdesc: Use current directory for the GHCi command history
+        file ``.ghci-history``.
+    :type: dynamic
+    :reverse: -fno-local-ghci-history
+    :category:
 
-  By default, GHCi keeps global history in ``~/.ghc/ghci_history`` or
-  ``%APPDATA%/<app>/ghci_history``, but you can use current directory, e.g.:
+    By default, GHCi keeps global history in ``~/.ghc/ghci_history`` or
+    ``%APPDATA%/<app>/ghci_history``, but you can use current directory, e.g.:
 
-  .. code-block:: none
+    .. code-block:: none
 
-      $ ghci -flocal-ghci-history
+        $ ghci -flocal-ghci-history
 
-  It will create ``.ghci-history`` in current folder where GHCi is launched.
+    It will create ``.ghci-history`` in current folder where GHCi is launched.
 
 Packages
 ~~~~~~~~
@@ -1923,12 +2014,12 @@ to specify any extra flags at all: they will be automatically loaded the
 first time they are needed.
 
 For hidden packages, however, you need to request the package be loaded
-by using the :ghc-flag:`-package` flag:
+by using the :ghc-flag:`-package ⟨pkg⟩` flag:
 
 .. code-block:: none
 
     $ ghci -package readline
-    GHCi, version 6.8.1: http://www.haskell.org/ghc/  :? for help
+    GHCi, version 8.y.z: http://www.haskell.org/ghc/  :? for help
     Loading package base ... linking ... done.
     Loading package readline-1.0 ... linking ... done.
     Prelude>
@@ -1961,7 +2052,7 @@ On systems with ``.so``-style shared libraries, the actual library
 loaded will the ``liblib.so``. GHCi searches the following places for
 libraries, in this order:
 
--  Paths specified using the :ghc-flag:`-L` command-line option,
+-  Paths specified using the :ghc-flag:`-L ⟨dir⟩` command-line option,
 
 -  the standard library search path for your system, which on some
    systems may be overridden by setting the :envvar:`LD_LIBRARY_PATH`
@@ -2006,6 +2097,10 @@ commonly used commands.
     Normally pre-compiled code for the module will be loaded if
     available, or otherwise the module will be compiled to byte-code.
     Using the ``*`` prefix forces the module to be loaded as byte-code.
+
+    ⟨module⟩ may be a file path. A "``~``" symbol at the beginning of
+    ⟨module⟩  will be replaced by the contents of the environment variable
+    :envvar:`HOME`.
 
 .. ghci-cmd:: :all-types
 
@@ -2115,7 +2210,7 @@ commonly used commands.
     If omitted, ⟨n⟩ and ⟨m⟩ default to the first or last available
     completion candidate respectively. If there are less candidates than
     requested via the range argument, ⟨n⟩ and ⟨m⟩ are implicitly capped
-    to the number of available completition candidates.
+    to the number of available completion candidates.
 
     The output of :ghci-cmd:`:complete` begins with a header line containing
     three space-delimited fields:
@@ -2191,17 +2286,17 @@ commonly used commands.
 
     .. code-block:: none
 
-        Prelude> let date _ = Time.getClockTime >>= print >> return ""
+        Prelude> let date _ = Data.Time.getZonedTime >>= print >> return ""
         Prelude> :def date date
         Prelude> :date
-        Fri Mar 23 15:16:40 GMT 2001
+        2017-04-10 12:34:56.93213581 UTC
 
     Here's an example of a command that takes an argument. It's a
     re-implementation of :ghci-cmd:`:cd`:
 
     .. code-block:: none
 
-        Prelude> let mycd d = Directory.setCurrentDirectory d >> return ""
+        Prelude> let mycd d = System.Directory.setCurrentDirectory d >> return ""
         Prelude> :def mycd mycd
         Prelude> :mycd ..
 
@@ -2279,7 +2374,7 @@ commonly used commands.
     Display the history of evaluation steps. With a number, displays
     that many steps (default: 20). For use with :ghci-cmd:`:trace`; see
     :ref:`tracing`. To set the number of history entries stored by GHCi,
-    use the :ghc-flag:`-fghci-hist-size` flag.
+    use the :ghc-flag:`-fghci-hist-size=⟨n⟩` flag.
 
 .. ghci-cmd:: :info;[!] ⟨name⟩
 
@@ -2517,23 +2612,23 @@ commonly used commands.
 
     Sets the string to be used as the prompt in GHCi. Inside ⟨prompt⟩,
     the next sequences are replaced:
-    
-    - ``%s`` by the names of the modules currently in scope.     
+
+    - ``%s`` by the names of the modules currently in scope.
     - ``%l`` by the line number (as referenced in compiler messages) of the
       current prompt.
     - ``%d`` by the date in "Weekday Month Date" format (e.g., "Tue May 26") .
     - ``%t`` by the current time in 24-hour HH:MM:SS format.
-    - ``%T`` by the current time in 12-hour HH:MM:SS format. 
-    - ``%@`` by the current time in 12-hour am/pm format. 
-    - ``%A`` by the current time in 24-hour HH:MM format. 
-    - ``%u`` by the username of the current user. 
+    - ``%T`` by the current time in 12-hour HH:MM:SS format.
+    - ``%@`` by the current time in 12-hour am/pm format.
+    - ``%A`` by the current time in 24-hour HH:MM format.
+    - ``%u`` by the username of the current user.
     - ``%w`` by the current working directory.
     - ``%o`` by the operating system.
-    - ``%a`` by the machine architecture. 
+    - ``%a`` by the machine architecture.
     - ``%N`` by the compiler name.
     - ``%V`` by the compiler version.
-    - ``%call(cmd [args])`` by the result of calling ``cmd args``.     
-    - ``%%`` by ``%``. 
+    - ``%call(cmd [args])`` by the result of calling ``cmd args``.
+    - ``%%`` by ``%``.
 
     If ⟨prompt⟩ starts with ``"`` then it is parsed as a Haskell String;
     otherwise it is treated as a literal string.
@@ -2543,20 +2638,20 @@ commonly used commands.
     Sets the string to be used as the continuation prompt (used when
     using the :ghci-cmd:`:{` command) in GHCi.
 
-.. ghci-cmd:: :set prompt-function; <prompt-function>
+.. ghci-cmd:: :set prompt-function; ⟨prompt-function⟩
 
     .. index::
        single: GHCi prompt function; setting
 
-    Sets the function to be used for the prompt displaying in GHCi. The 
-    function should be of the type ``[String] -> Int -> IO String``. This 
+    Sets the function to be used for the prompt displaying in GHCi. The
+    function should be of the type ``[String] -> Int -> IO String``. This
     function is called each time the prompt is being made. The first argument
-    stands for the names of the modules currently in scope(the name of the 
-    "topmost" module  will begin with a ``*``; see  :ref:`ghci-scope` for 
+    stands for the names of the modules currently in scope(the name of the
+    "topmost" module  will begin with a ``*``; see  :ref:`ghci-scope` for
     more information). The second arguments is the line number (as referenced
     in compiler  messages) of the current prompt.
 
-.. ghci-cmd:: :set prompt-cont-function; <prompt-function>
+.. ghci-cmd:: :set prompt-cont-function; ⟨prompt-function⟩
 
    Sets the function to be used for the continuation prompt (used when
    using the :ghci-cmd:`:{` command) displaying in GHCi.
@@ -2682,7 +2777,7 @@ commonly used commands.
 	*X> :type length
 	length :: Foldable t => t a -> Int
 
-.. ghci-cmd:: :type +v ⟨expression⟩
+.. ghci-cmd:: :type +v; ⟨expression⟩
 
     Infers and prints the type of ⟨expression⟩, but without fiddling
     with type variables or class constraints. This is useful when you
@@ -2697,8 +2792,8 @@ commonly used commands.
 	*X> :set -fprint-explicit-foralls
 	*X> :type +v length
 	length :: forall (t :: * -> *). Foldable t => forall a. t a -> Int
-    
-.. ghci-cmd:: :type +d ⟨expression⟩
+
+.. ghci-cmd:: :type +d; ⟨expression⟩
 
     Infers and prints the type of ⟨expression⟩, defaulting type variables
     if possible. In this mode, if the inferred type is constrained by
@@ -2713,7 +2808,7 @@ commonly used commands.
 
 	*X> :type +d length
 	length :: [a] -> Int
-	      
+
 .. ghci-cmd:: :type-at; ⟨module⟩ ⟨line⟩ ⟨col⟩ ⟨end-line⟩ ⟨end-col⟩ [⟨name⟩]
 
     Reports the inferred type at the given span/position in the module, e.g.:
@@ -2869,9 +2964,9 @@ option, you can set the reverse option:
 :ref:`flag-reference` lists the reverse for each option where
 applicable.
 
-Certain static options (:ghc-flag:`-package`, :ghc-flag:`-I`, :ghc-flag:`-i`,
-and :ghc-flag:`-l` in particular) will also work, but some may not take effect
-until the next reload.
+Certain static options (:ghc-flag:`-package ⟨pkg⟩`, :ghc-flag:`-I⟨dir⟩`,
+:ghc-flag:`-i⟨dir⟩[:⟨dir⟩]*`, and :ghc-flag:`-l ⟨lib⟩` in particular) will also
+work, but some may not take effect until the next reload.
 
 .. index::
    single: static; options
@@ -3007,11 +3102,17 @@ Two command-line options control whether the startup files files are
 read:
 
 .. ghc-flag:: -ignore-dot-ghci
+    :shortdesc: Disable reading of ``.ghci`` files
+    :type: dynamic
+    :category:
 
     Don't read either :file:`./.ghci` or the other startup files when
     starting up.
 
 .. ghc-flag:: -ghci-script
+    :shortdesc: Read additional ``.ghci`` files
+    :type: dynamic
+    :category:
 
     Read a specific file after the usual startup files. Maybe be
     specified repeatedly for multiple inputs.
@@ -3100,6 +3201,9 @@ separate process for running interpreted code, and communicate with it
 using messages over a pipe.
 
 .. ghc-flag:: -fexternal-interpreter
+    :shortdesc: Run interpreted code in a separate process
+    :type: dynamic
+    :category: misc
 
     :since: 8.0.1
 
@@ -3114,8 +3218,8 @@ using messages over a pipe.
     GHCi debugger, so breakpoints and single-stepping don't work with
     :ghc-flag:`-fexternal-interpreter`.
 
-    See also the :ghc-flag:`-pgmi` (:ref:`replacing-phases`) and :ghc-flag:`-opti`
-    (:ref:`forcing-options-through`) flags.
+    See also the :ghc-flag:`-pgmi ⟨cmd⟩` (:ref:`replacing-phases`) and
+    :ghc-flag:`-opti ⟨option⟩` (:ref:`forcing-options-through`) flags.
 
 Why might we want to do this?  The main reason is that the RTS running
 the interpreted code can be a different flavour (profiling or

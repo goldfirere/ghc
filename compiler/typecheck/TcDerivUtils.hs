@@ -6,15 +6,16 @@
 Error-checking and other utilities for @deriving@ clauses or declarations.
 -}
 
-{-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module TcDerivUtils (
+        DerivM, DerivEnv(..),
         DerivSpec(..), pprDerivSpec,
         DerivSpecMechanism(..), isDerivSpecStock,
         isDerivSpecNewtype, isDerivSpecAnyClass,
         DerivContext, DerivStatus(..),
-        PredOrigin(..), ThetaOrigin, mkPredOrigin,
-        mkThetaOrigin, substPredOrigin, substThetaOrigin,
+        PredOrigin(..), ThetaOrigin(..), mkPredOrigin,
+        mkThetaOrigin, mkThetaOriginFromPreds, substPredOrigin,
         checkSideConditions, hasStockDeriving,
         canDeriveAnyClass,
         std_class_via_coercible, non_coercible_class,
@@ -36,7 +37,6 @@ import Module (getModule)
 import Name
 import Outputable
 import PrelNames
-import RdrName
 import SrcLoc
 import TcGenDeriv
 import TcGenFunctor
@@ -49,8 +49,67 @@ import Type
 import Util
 import VarSet
 
+import Control.Monad.Trans.Reader
 import qualified GHC.LanguageExtensions as LangExt
 import ListSetOps (assocMaybe)
+
+-- | To avoid having to manually plumb everything in 'DerivEnv' throughout
+-- various functions in @TcDeriv@ and @TcDerivInfer@, we use 'DerivM', which
+-- is a simple reader around 'TcRn'.
+type DerivM = ReaderT DerivEnv TcRn
+
+-- | Contains all of the information known about a derived instance when
+-- determining what its @EarlyDerivSpec@ should be.
+data DerivEnv = DerivEnv
+  { denv_overlap_mode :: Maybe OverlapMode
+    -- ^ Is this an overlapping instance?
+  , denv_tvs          :: [TyVar]
+    -- ^ Universally quantified type variables in the instance
+  , denv_cls          :: Class
+    -- ^ Class for which we need to derive an instance
+  , denv_cls_tys      :: [Type]
+    -- ^ Other arguments to the class except the last
+  , denv_tc           :: TyCon
+    -- ^ Type constructor for which the instance is requested
+    --   (last arguments to the type class)
+  , denv_tc_args      :: [Type]
+    -- ^ Arguments to the type constructor
+  , denv_rep_tc       :: TyCon
+    -- ^ The representation tycon for 'denv_tc'
+    --   (for data family instances)
+  , denv_rep_tc_args  :: [Type]
+    -- ^ The representation types for 'denv_tc_args'
+    --   (for data family instances)
+  , denv_mtheta       :: DerivContext
+    -- ^ 'Just' the context of the instance, for standalone deriving.
+    --   'Nothing' for @deriving@ clauses.
+  , denv_strat        :: Maybe DerivStrategy
+    -- ^ 'Just' if user requests a particular deriving strategy.
+    --   Otherwise, 'Nothing'.
+  }
+
+instance Outputable DerivEnv where
+  ppr (DerivEnv { denv_overlap_mode = overlap_mode
+                , denv_tvs          = tvs
+                , denv_cls          = cls
+                , denv_cls_tys      = cls_tys
+                , denv_tc           = tc
+                , denv_tc_args      = tc_args
+                , denv_rep_tc       = rep_tc
+                , denv_rep_tc_args  = rep_tc_args
+                , denv_mtheta       = mtheta
+                , denv_strat        = mb_strat })
+    = hang (text "DerivEnv")
+         2 (vcat [ text "denv_overlap_mode" <+> ppr overlap_mode
+                 , text "denv_tvs"          <+> ppr tvs
+                 , text "denv_cls"          <+> ppr cls
+                 , text "denv_cls_tys"      <+> ppr cls_tys
+                 , text "denv_tc"           <+> ppr tc
+                 , text "denv_tc_args"      <+> ppr tc_args
+                 , text "denv_rep_tc"       <+> ppr rep_tc
+                 , text "denv_rep_tc_args"  <+> ppr rep_tc_args
+                 , text "denv_mtheta"       <+> ppr mtheta
+                 , text "denv_strat"        <+> ppr mb_strat ])
 
 data DerivSpec theta = DS { ds_loc       :: SrcSpan
                           , ds_name      :: Name         -- DFun name
@@ -105,13 +164,27 @@ instance Outputable theta => Outputable (DerivSpec theta) where
 
 -- What action to take in order to derive a class instance.
 -- See Note [Deriving strategies] in TcDeriv
--- NB: DerivSpecMechanism is purely local to this module
 data DerivSpecMechanism
   = DerivSpecStock   -- "Standard" classes
-      (SrcSpan -> TyCon -> [Type] -> TcM (LHsBinds RdrName, BagDerivStuff))
+      (SrcSpan -> TyCon
+               -> [Type]
+               -> TcM (LHsBinds GhcPs, BagDerivStuff, [Name]))
+      -- This function returns three things:
+      --
+      -- 1. @LHsBinds GhcPs@: The derived instance's function bindings
+      --    (e.g., @compare (T x) (T y) = compare x y@)
+      -- 2. @BagDerivStuff@: Auxiliary bindings needed to support the derived
+      --    instance. As examples, derived 'Generic' instances require
+      --    associated type family instances, and derived 'Eq' and 'Ord'
+      --    instances require top-level @con2tag@ functions.
+      --    See Note [Auxiliary binders] in TcGenDeriv.
+      -- 3. @[Name]@: A list of Names for which @-Wunused-binds@ should be
+      --    suppressed. This is used to suppress unused warnings for record
+      --    selectors when deriving 'Read', 'Show', or 'Generic'.
+      --    See Note [Deriving and unused record selectors].
 
   | DerivSpecNewtype -- -XGeneralizedNewtypeDeriving
-      Type -- ^ The newtype rep type
+      Type -- The newtype rep type
 
   | DerivSpecAnyClass -- -XDeriveAnyClass
 
@@ -128,9 +201,9 @@ isDerivSpecAnyClass _                     = False
 
 -- A DerivSpecMechanism can be losslessly converted to a DerivStrategy.
 mechanismToStrategy :: DerivSpecMechanism -> DerivStrategy
-mechanismToStrategy (DerivSpecStock{})    = DerivStock
-mechanismToStrategy (DerivSpecNewtype{})  = DerivNewtype
-mechanismToStrategy (DerivSpecAnyClass{}) = DerivAnyclass
+mechanismToStrategy (DerivSpecStock{})    = StockStrategy
+mechanismToStrategy (DerivSpecNewtype{})  = NewtypeStrategy
+mechanismToStrategy (DerivSpecAnyClass{}) = AnyclassStrategy
 
 instance Outputable DerivSpecMechanism where
   ppr = ppr . mechanismToStrategy
@@ -151,23 +224,72 @@ data DerivStatus = CanDerive                 -- Stock class, can derive
 -- | A 'PredType' annotated with the origin of the constraint 'CtOrigin',
 -- and whether or the constraint deals in types or kinds.
 data PredOrigin = PredOrigin PredType CtOrigin TypeOrKind
-type ThetaOrigin = [PredOrigin]
+
+-- | A list of wanted 'PredOrigin' constraints ('to_wanted_origins') alongside
+-- any corresponding given constraints ('to_givens') and locally quantified
+-- type variables ('to_tvs').
+--
+-- In most cases, 'to_givens' will be empty, as most deriving mechanisms (e.g.,
+-- stock and newtype deriving) do not require given constraints. The exception
+-- is @DeriveAnyClass@, which can involve given constraints. For example,
+-- if you tried to derive an instance for the following class using
+-- @DeriveAnyClass@:
+--
+-- @
+-- class Foo a where
+--   bar :: a -> b -> String
+--   default bar :: (Show a, Ix b) => a -> b -> String
+--   bar = show
+--
+--   baz :: Eq a => a -> a -> Bool
+--   default baz :: Ord a => a -> a -> Bool
+--   baz x y = compare x y == EQ
+-- @
+--
+-- Then it would generate two 'ThetaOrigin's, one for each method:
+--
+-- @
+-- [ ThetaOrigin { to_tvs            = [b]
+--               , to_givens         = []
+--               , to_wanted_origins = [Show a, Ix b] }
+-- , ThetaOrigin { to_tvs            = []
+--               , to_givens         = [Eq a]
+--               , to_wanted_origins = [Ord a] }
+-- ]
+-- @
+data ThetaOrigin
+  = ThetaOrigin { to_tvs            :: [TyVar]
+                , to_givens         :: ThetaType
+                , to_wanted_origins :: [PredOrigin] }
 
 instance Outputable PredOrigin where
   ppr (PredOrigin ty _ _) = ppr ty -- The origin is not so interesting when debugging
 
+instance Outputable ThetaOrigin where
+  ppr (ThetaOrigin { to_tvs = tvs
+                   , to_givens = givens
+                   , to_wanted_origins = wanted_origins })
+    = hang (text "ThetaOrigin")
+         2 (vcat [ text "to_tvs            =" <+> ppr tvs
+                 , text "to_givens         =" <+> ppr givens
+                 , text "to_wanted_origins =" <+> ppr wanted_origins ])
+
 mkPredOrigin :: CtOrigin -> TypeOrKind -> PredType -> PredOrigin
 mkPredOrigin origin t_or_k pred = PredOrigin pred origin t_or_k
 
-mkThetaOrigin :: CtOrigin -> TypeOrKind -> ThetaType -> ThetaOrigin
-mkThetaOrigin origin t_or_k = map (mkPredOrigin origin t_or_k)
+mkThetaOrigin :: CtOrigin -> TypeOrKind -> [TyVar] -> ThetaType -> ThetaType
+              -> ThetaOrigin
+mkThetaOrigin origin t_or_k tvs givens
+  = ThetaOrigin tvs givens . map (mkPredOrigin origin t_or_k)
+
+-- A common case where the ThetaOrigin only contains wanted constraints, with
+-- no givens or locally scoped type variables.
+mkThetaOriginFromPreds :: [PredOrigin] -> ThetaOrigin
+mkThetaOriginFromPreds = ThetaOrigin [] []
 
 substPredOrigin :: HasCallStack => TCvSubst -> PredOrigin -> PredOrigin
 substPredOrigin subst (PredOrigin pred origin t_or_k)
   = PredOrigin (substTy subst pred) origin t_or_k
-
-substThetaOrigin :: HasCallStack => TCvSubst -> ThetaOrigin -> ThetaOrigin
-substThetaOrigin subst = map (substPredOrigin subst)
 
 {-
 ************************************************************************
@@ -187,25 +309,26 @@ is willing to support it. The canDeriveAnyClass function checks if this is the
 case.
 -}
 
-hasStockDeriving :: Class
-                   -> Maybe (SrcSpan
-                             -> TyCon
-                             -> [Type]
-                             -> TcM (LHsBinds RdrName, BagDerivStuff))
+hasStockDeriving
+  :: Class -> Maybe (SrcSpan
+                     -> TyCon
+                     -> [Type]
+                     -> TcM (LHsBinds GhcPs, BagDerivStuff, [Name]))
 hasStockDeriving clas
   = assocMaybe gen_list (getUnique clas)
   where
-    gen_list :: [(Unique, SrcSpan
-                          -> TyCon
-                          -> [Type]
-                          -> TcM (LHsBinds RdrName, BagDerivStuff))]
-    gen_list = [ (eqClassKey,          simple gen_Eq_binds)
-               , (ordClassKey,         simple gen_Ord_binds)
-               , (enumClassKey,        simple gen_Enum_binds)
+    gen_list
+      :: [(Unique, SrcSpan
+                   -> TyCon
+                   -> [Type]
+                   -> TcM (LHsBinds GhcPs, BagDerivStuff, [Name]))]
+    gen_list = [ (eqClassKey,          simpleM gen_Eq_binds)
+               , (ordClassKey,         simpleM gen_Ord_binds)
+               , (enumClassKey,        simpleM gen_Enum_binds)
                , (boundedClassKey,     simple gen_Bounded_binds)
-               , (ixClassKey,          simple gen_Ix_binds)
-               , (showClassKey,        with_fix_env gen_Show_binds)
-               , (readClassKey,        with_fix_env gen_Read_binds)
+               , (ixClassKey,          simpleM gen_Ix_binds)
+               , (showClassKey,        read_or_show gen_Show_binds)
+               , (readClassKey,        read_or_show gen_Read_binds)
                , (dataClassKey,        simpleM gen_Data_binds)
                , (functorClassKey,     simple gen_Functor_binds)
                , (foldableClassKey,    simple gen_Foldable_binds)
@@ -215,18 +338,57 @@ hasStockDeriving clas
                , (gen1ClassKey,        generic (gen_Generic_binds Gen1)) ]
 
     simple gen_fn loc tc _
-      = return (gen_fn loc tc)
+      = let (binds, deriv_stuff) = gen_fn loc tc
+        in return (binds, deriv_stuff, [])
 
     simpleM gen_fn loc tc _
-      = gen_fn loc tc
+      = do { (binds, deriv_stuff) <- gen_fn loc tc
+           ; return (binds, deriv_stuff, []) }
 
-    with_fix_env gen_fn loc tc _
+    read_or_show gen_fn loc tc _
       = do { fix_env <- getDataConFixityFun tc
-           ; return (gen_fn fix_env loc tc) }
+           ; let (binds, deriv_stuff) = gen_fn fix_env loc tc
+                 field_names          = all_field_names tc
+           ; return (binds, deriv_stuff, field_names) }
 
     generic gen_fn _ tc inst_tys
       = do { (binds, faminst) <- gen_fn tc inst_tys
-           ; return (binds, unitBag (DerivFamInst faminst)) }
+           ; let field_names = all_field_names tc
+           ; return (binds, unitBag (DerivFamInst faminst), field_names) }
+
+    -- See Note [Deriving and unused record selectors]
+    all_field_names = map flSelector . concatMap dataConFieldLabels
+                                     . tyConDataCons
+
+{-
+Note [Deriving and unused record selectors]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider this (see Trac #13919):
+
+  module Main (main) where
+
+  data Foo = MkFoo {bar :: String} deriving Show
+
+  main :: IO ()
+  main = print (Foo "hello")
+
+Strictly speaking, the record selector `bar` is unused in this module, since
+neither `main` nor the derived `Show` instance for `Foo` mention `bar`.
+However, the behavior of `main` is affected by the presence of `bar`, since
+it will print different output depending on whether `MkFoo` is defined using
+record selectors or not. Therefore, we do not to issue a
+"Defined but not used: ‘bar’" warning for this module, since removing `bar`
+changes the program's behavior. This is the reason behind the [Name] part of
+the return type of `hasStockDeriving`—it tracks all of the record selector
+`Name`s for which -Wunused-binds should be suppressed.
+
+Currently, the only three stock derived classes that require this are Read,
+Show, and Generic, as their derived code all depend on the record selectors
+of the derived data type's constructors.
+
+See also Note [Newtype deriving and unused constructors] in TcDeriv for
+another example of a similar trick.
+-}
 
 getDataConFixityFun :: TyCon -> TcM (Name -> Fixity)
 -- If the TyCon is locally defined, we want the local fixity env;
@@ -270,7 +432,7 @@ checkSideConditions dflags mtheta cls cls_tys rep_tc
                  | otherwise -> DerivableClassError (classArgsErr cls cls_tys)
                    -- e.g. deriving( Eq s )
 
-  | Just err <- canDeriveAnyClass dflags rep_tc cls
+  | NotValid err <- canDeriveAnyClass dflags
   = NonDerivableClass err  -- DeriveAnyClass does not work
 
   | otherwise
@@ -324,27 +486,14 @@ sideConditions mtheta cls
     cond_vanilla = cond_stdOK mtheta True   -- Vanilla data constructors but
                                             --   allow no data cons or polytype arguments
 
-canDeriveAnyClass :: DynFlags -> TyCon -> Class -> Maybe SDoc
--- Nothing: we can (try to) derive it via an empty instance declaration
--- Just s:  we can't, reason s
--- Precondition: the class is not one of the standard ones
-canDeriveAnyClass dflags _tycon clas
+canDeriveAnyClass :: DynFlags -> Validity
+-- IsValid: we can (try to) derive it via an empty instance declaration
+-- NotValid s:  we can't, reason s
+canDeriveAnyClass dflags
   | not (xopt LangExt.DeriveAnyClass dflags)
-  = Just (text "Try enabling DeriveAnyClass")
-  | not (any (target_kind `tcEqKind`) [ liftedTypeKind, typeToTypeKind ])
-  = Just (text "The last argument of class" <+> quotes (ppr clas)
-          <+> text "does not have kind * or (* -> *)")
+  = NotValid (text "Try enabling DeriveAnyClass")
   | otherwise
-  = Nothing   -- OK!
-  where
-    -- We are making an instance  (C t1 .. tn (T s1 .. sm))
-    -- and we can only do so if the kind of C's last argument
-    -- is * or (* -> *).  Because only then can we make a reasonable
-    -- guess at the instance context
-    target_kind = tyVarKind (last (classTyVars clas))
-
-typeToTypeKind :: Kind
-typeToTypeKind = liftedTypeKind `mkFunTy` liftedTypeKind
+  = IsValid   -- OK!
 
 type Condition = DynFlags -> TyCon -> Validity
         -- TyCon is the *representation* tycon if the data type is an indexed one
@@ -476,7 +625,8 @@ cond_functorOK allowFunctions allowExQuantifiedLastTyVar _ rep_tc
     tc_tvs            = tyConTyVars rep_tc
     Just (_, last_tv) = snocView tc_tvs
     bad_stupid_theta  = filter is_bad (tyConStupidTheta rep_tc)
-    is_bad pred       = last_tv `elemVarSet` tyCoVarsOfType pred
+    is_bad pred       = last_tv `elemVarSet` exactTyCoVarsOfType pred
+      -- See Note [Check that the type variable is truly universal]
 
     data_cons = tyConDataCons rep_tc
     check_con con = allValid (check_universal con : foldDataConArgs (ft_check con) con)
@@ -488,7 +638,7 @@ cond_functorOK allowFunctions allowExQuantifiedLastTyVar _ rep_tc
                 -- in TcGenFunctor
       | Just tv <- getTyVar_maybe (last (tyConAppArgs (dataConOrigResTy con)))
       , tv `elem` dataConUnivTyVars con
-      , not (tv `elemVarSet` tyCoVarsOfTypes (dataConTheta con))
+      , not (tv `elemVarSet` exactTyCoVarsOfTypes (dataConTheta con))
       = IsValid   -- See Note [Check that the type variable is truly universal]
       | otherwise
       = NotValid (badCon con existential)
@@ -630,4 +780,17 @@ As a result, T can have a derived Foldable instance:
     foldr _ z T6       = z
 
 See Note [DeriveFoldable with ExistentialQuantification] in TcGenFunctor.
+
+For Functor and Traversable, we must take care not to let type synonyms
+unfairly reject a type for not being truly universally quantified. An
+example of this is:
+
+    type C (a :: Constraint) b = a
+    data T a b = C (Show a) b => MkT b
+
+Here, the existential context (C (Show a) b) does technically mention the last
+type variable b. But this is OK, because expanding the type synonym C would
+give us the context (Show a), which doesn't mention b. Therefore, we must make
+sure to expand type synonyms before performing this check. Not doing so led to
+Trac #13813.
 -}
