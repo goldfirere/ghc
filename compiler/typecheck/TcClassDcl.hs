@@ -144,11 +144,15 @@ tcClassSigs clas sigs def_methods
     dm_bind_names :: [Name] -- These ones have a value binding in the class decl
     dm_bind_names = [op | L _ (FunBind {fun_id = L _ op}) <- bagToList def_methods]
 
+    skol_info = TyConSkol ClassFlavour clas
+
     tc_sig :: NameEnv (SrcSpan, Type) -> ([Located Name], LHsSigType GhcRn)
            -> TcM [TcMethInfo]
     tc_sig gen_dm_env (op_names, op_hs_ty)
       = do { traceTc "ClsSig 1" (ppr op_names)
-           ; op_ty <- tcClassSigType op_names op_hs_ty   -- Class tyvars already in scope
+           ; op_ty <- tcClassSigType skol_info op_names op_hs_ty
+                   -- Class tyvars already in scope
+
            ; traceTc "ClsSig 2" (ppr op_names)
            ; return [ (op_name, op_ty, f op_name) | L _ op_name <- op_names ] }
            where
@@ -157,7 +161,7 @@ tcClassSigs clas sigs def_methods
                   | otherwise                               = Nothing
 
     tc_gen_sig (op_names, gen_hs_ty)
-      = do { gen_op_ty <- tcClassSigType op_names gen_hs_ty
+      = do { gen_op_ty <- tcClassSigType skol_info op_names gen_hs_ty
            ; return [ (op_name, (loc, gen_op_ty)) | L loc op_name <- op_names ] }
 
 {-
@@ -279,7 +283,7 @@ tcDefMeth clas tyvars this_dict binds_in hs_sig_fn prag_fn
                                         , sig_loc   = getLoc (hsSigType hs_ty) }
 
        ; (ev_binds, (tc_bind, _))
-               <- checkConstraints (ClsSkol clas) tyvars [this_dict] $
+               <- checkConstraints (TyConSkol ClassFlavour (getName clas)) tyvars [this_dict] $
                   tcPolyCheck no_prag_fn local_dm_sig
                               (L bind_loc lm_bind)
 

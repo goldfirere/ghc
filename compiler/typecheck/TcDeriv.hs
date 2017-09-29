@@ -675,8 +675,8 @@ deriveTyData :: [TyVar] -> TyCon -> [Type]   -- LHS of data or data instance
 -- a no-op nowadays.
 deriveTyData tvs tc tc_args deriv_strat deriv_pred
   = setSrcSpan (getLoc (hsSigType deriv_pred)) $  -- Use loc of the 'deriving' item
-    do  { (_, (deriv_tvs, cls, cls_tys, cls_arg_kinds))
-                <- scopeTyVars DataSkol tvs $
+    do  { (deriv_tvs, cls, cls_tys, cls_arg_kinds)
+                <- scopeTyVars (TyConSkol DataTypeFlavour (getName tc)) tvs $
                    tcHsDeriv deriv_pred
                 -- Deriving preds may (now) mention
                 -- the type variables for the type constructor, hence tcExtendTyVarenv

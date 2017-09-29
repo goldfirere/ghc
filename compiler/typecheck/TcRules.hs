@@ -73,22 +73,26 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
               -- the RULE.  c.f. Trac #10072
 
        ; let (id_bndrs, tv_bndrs) = partition isId vars
-       ; (lhs', lhs_wanted, rhs', rhs_wanted, rule_ty)
+       ; ((lhs', lhs_evs, residual_lhs_wanted, rhs', rhs_wanted, rule_ty), tclvl')
             <- tcExtendTyVarEnv tv_bndrs $
                tcExtendIdEnv    id_bndrs $
+               pushTcLevelM              $ -- so that the kinds of the tyvars introduced
+                                           -- don't unify with any tyvar brought into
+                                           -- scope in the RULE
                do { -- See Note [Solve order for RULES]
                     ((lhs', rule_ty), lhs_wanted) <- captureConstraints (tcInferRho lhs)
                   ; (rhs', rhs_wanted) <- captureConstraints $
                                           tcMonoExpr rhs (mkCheckExpType rule_ty)
-                  ; return (lhs', lhs_wanted, rhs', rhs_wanted, rule_ty) }
 
-       ; traceTc "tcRule 1" (vcat [ pprFullRuleName name
-                                  , ppr lhs_wanted
-                                  , ppr rhs_wanted ])
-       ; let all_lhs_wanted = bndr_wanted `andWC` lhs_wanted
-       ; (lhs_evs, residual_lhs_wanted) <- simplifyRule (snd $ unLoc name)
-                                              all_lhs_wanted
-                                              rhs_wanted
+                  ; traceTc "tcRule 1" (vcat [ pprFullRuleName name
+                                             , ppr lhs_wanted
+                                             , ppr rhs_wanted ])
+                  ; let all_lhs_wanted = bndr_wanted `andWC` lhs_wanted
+                  ; (lhs_evs, residual_lhs_wanted) <- simplifyRule (snd $ unLoc name)
+                                                                   all_lhs_wanted
+                                                                   rhs_wanted
+
+                  ; return (lhs', lhs_evs, residual_lhs_wanted, rhs', rhs_wanted, rule_ty) }
 
        -- SimplfyRule Plan, step 4
        -- Now figure out what to quantify over
@@ -122,9 +126,9 @@ tcRule (HsRule name act hs_bndrs lhs fv_lhs rhs fv_rhs)
        -- (a) so that we report insoluble ones
        -- (b) so that we bind any soluble ones
        ; let skol_info = RuleSkol (snd (unLoc name))
-       ; (lhs_implic, lhs_binds) <- buildImplicationFor topTcLevel skol_info qtkvs
+       ; (lhs_implic, lhs_binds) <- buildImplicationFor tclvl' skol_info qtkvs
                                          lhs_evs residual_lhs_wanted
-       ; (rhs_implic, rhs_binds) <- buildImplicationFor topTcLevel skol_info qtkvs
+       ; (rhs_implic, rhs_binds) <- buildImplicationFor tclvl' skol_info qtkvs
                                          lhs_evs rhs_wanted
 
        ; emitImplications (lhs_implic `unionBags` rhs_implic)

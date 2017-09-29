@@ -2256,7 +2256,7 @@ tcRnType hsc_env normalise rdr_type
         -- First bring into scope any wildcards
        ; traceTc "tcRnType" (vcat [ppr wcs, ppr rn_type])
        ; (ty, kind) <- solveEqualities $
-                       tcWildCardBinders wcs  $ \ _ ->
+                       tcWildCardBinders (SigTypeSkol GhciCtxt) wcs $ \ _ ->
                        tcLHsTypeUnsaturated rn_type
 
        -- Do kind generalisation; see Note [Kind-generalise in tcRnType]

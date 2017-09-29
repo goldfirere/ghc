@@ -498,16 +498,12 @@ getInitialKind decl@(DataDecl { tcdLName = L _ name
                               , tcdDataDefn = HsDataDefn { dd_kindSig = m_sig
                                                          , dd_ND = new_or_data } })
   = do  { (tycon, _) <-
-           kcHsTyVarBndrs name flav (hsDeclHasCusk decl) True ktvs $
+           kcHsTyVarBndrs name (newOrDataToFlavour new_or_data) (hsDeclHasCusk decl) True ktvs $
            do { res_k <- case m_sig of
                            Just ksig -> tcLHsKindSig ksig
                            Nothing   -> return liftedTypeKind
               ; return (res_k, ()) }
         ; return (mkTcTyConEnv tycon) }
-  where
-    flav = case new_or_data of
-             NewType  -> NewtypeFlavour
-             DataType -> DataTypeFlavour
 
 getInitialKind (FamDecl { tcdFam = decl })
   = getFamDeclInitialKind Nothing decl
@@ -590,13 +586,13 @@ kcTyClDecl (DataDecl { tcdLName = L _ name, tcdDataDefn = defn })
     --        ConDecls bind all their own variables
     --    (b) dd_ctxt is not allowed for GADT-style decls, so we can ignore it
 
-  | HsDataDefn { dd_ctxt = ctxt, dd_cons = cons } <- defn
-  = kcTyClTyVars name $
+  | HsDataDefn { dd_ctxt = ctxt, dd_cons = cons, dd_ND = nd } <- defn
+  = kcTyClTyVars name (newOrDataToFlavour nd) $
     do  { _ <- tcHsContext ctxt
         ; mapM_ (wrapLocM kcConDecl) cons }
 
 kcTyClDecl (SynDecl { tcdLName = L _ name, tcdRhs = lrhs })
-  = kcTyClTyVars name $
+  = kcTyClTyVars name TypeSynonymFlavour $
     do  { syn_tc <- kcLookupTcTyCon name
         -- NB: check against the result kind that we allocated
         -- in getInitialKinds.
@@ -604,11 +600,11 @@ kcTyClDecl (SynDecl { tcdLName = L _ name, tcdRhs = lrhs })
 
 kcTyClDecl (ClassDecl { tcdLName = L _ name
                       , tcdCtxt = ctxt, tcdSigs = sigs })
-  = kcTyClTyVars name $
+  = kcTyClTyVars name ClassFlavour $
     do  { _ <- tcHsContext ctxt
         ; mapM_ (wrapLocM kc_sig)     sigs }
   where
-    kc_sig (ClassOpSig _ nms op_ty) = kcHsSigType nms op_ty
+    kc_sig (ClassOpSig _ nms op_ty) = kcHsSigType (TyConSkol ClassFlavour name) nms op_ty
     kc_sig _                        = return ()
 
 kcTyClDecl (FamDecl (FamilyDecl { fdLName  = L _ fam_tc_name
@@ -773,14 +769,15 @@ tcTyClDecl1 parent _roles_info (FamDecl { tcdFam = fd })
 tcTyClDecl1 _parent roles_info
             (SynDecl { tcdLName = L _ tc_name, tcdRhs = rhs })
   = ASSERT( isNothing _parent )
-    tcTyClTyVars tc_name $ \ binders res_kind ->
+    tcTyClTyVars tc_name TypeSynonymFlavour $ \ binders res_kind ->
     tcTySynRhs roles_info tc_name binders res_kind rhs
 
   -- "data/newtype" declaration
 tcTyClDecl1 _parent roles_info
-            (DataDecl { tcdLName = L _ tc_name, tcdDataDefn = defn })
+            (DataDecl { tcdLName = L _ tc_name
+                      , tcdDataDefn = defn@(HsDataDefn { dd_ND = nd }) })
   = ASSERT( isNothing _parent )
-    tcTyClTyVars tc_name $ \ tycon_binders res_kind ->
+    tcTyClTyVars tc_name (newOrDataToFlavour nd) $ \ tycon_binders res_kind ->
     tcDataDefn roles_info tc_name tycon_binders res_kind defn
 
 tcTyClDecl1 _parent roles_info
@@ -791,7 +788,7 @@ tcTyClDecl1 _parent roles_info
   = ASSERT( isNothing _parent )
     do { clas <- fixM $ \ clas ->
             -- We need the knot because 'clas' is passed into tcClassATs
-            tcTyClTyVars class_name $ \ binders res_kind ->
+            tcTyClTyVars class_name ClassFlavour $ \ binders res_kind ->
             do { MASSERT( isConstraintKind res_kind )
                ; traceTc "tcClassDecl 1" (ppr class_name $$ ppr binders)
                ; let tycon_name = class_name        -- We use the same name
@@ -828,7 +825,7 @@ tcFamDecl1 parent (FamilyDecl { fdInfo = fam_info, fdLName = tc_lname@(L _ tc_na
                               , fdResultSig = L _ sig
                               , fdInjectivityAnn = inj })
   | DataFamily <- fam_info
-  = tcTyClTyVars tc_name $ \ binders res_kind -> do
+  = tcTyClTyVars tc_name DataFamilyFlavour $ \ binders res_kind -> do
   { traceTc "data family:" (ppr tc_name)
   ; checkFamFlag tc_name
   ; (extra_binders, real_res_kind) <- tcDataKindSig False res_kind
@@ -841,7 +838,7 @@ tcFamDecl1 parent (FamilyDecl { fdInfo = fam_info, fdLName = tc_lname@(L _ tc_na
   ; return tycon }
 
   | OpenTypeFamily <- fam_info
-  = tcTyClTyVars tc_name $ \ binders res_kind -> do
+  = tcTyClTyVars tc_name OpenTypeFamilyFlavour $ \ binders res_kind -> do
   { traceTc "open type family:" (ppr tc_name)
   ; checkFamFlag tc_name
   ; inj' <- tcInjectivity binders inj
@@ -857,7 +854,7 @@ tcFamDecl1 parent (FamilyDecl { fdInfo = fam_info, fdLName = tc_lname@(L _ tc_na
          -- the variables in the header scope only over the injectivity
          -- declaration but this is not involved here
        ; (inj', binders, res_kind)
-            <- tcTyClTyVars tc_name
+            <- tcTyClTyVars tc_name ClosedTypeFamilyFlavour
                $ \ binders res_kind ->
                do { inj' <- tcInjectivity binders inj
                   ; return (inj', binders, res_kind) }
@@ -1392,7 +1389,7 @@ tc_fam_ty_pats tc_fam_tc mb_clsinfo tv_names arg_pats
 
          -- Kind-check and quantify
          -- See Note [Quantifying over family patterns]
-       ; (arg_tvs, (args, stuff)) <- tcImplicitTKBndrs tv_names $
+       ; (arg_tvs, (args, stuff)) <- tcImplicitTKBndrs FamInstSkol tv_names $
          do { let loc          = nameSrcSpan name
                   lhs_fun      = L loc (HsTyVar NotPromoted (L loc name))
                   fun_ty       = mkTyConApp tc_fam_tc []
@@ -1480,7 +1477,7 @@ tcFamTyPats tc_fam_tc mb_clsinfo
        ; checkNoErrs $ reportFloatingKvs (getName tc_fam_tc) tc_flav
                                          qtkvs unmentioned_tvs
 
-       ; tcExtendTyVarEnv qtkvs $
+       ; scopeTyVars FamInstSkol qtkvs $
             -- Extend envt with TcTyVars not TyVars, because the
             -- kind checking etc done by thing_inside does not expect
             -- to encounter TyVars; it expects TcTyVars
@@ -1649,8 +1646,8 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
 
        ; (imp_tvs, (exp_tvs, ctxt, arg_tys, field_lbls, stricts))
            <- solveEqualities $
-              tcImplicitTKBndrs hs_kvs $
-              tcExplicitTKBndrs hs_tvs $ \ exp_tvs ->
+              tcImplicitTKBndrs skol_info hs_kvs $
+              tcExplicitTKBndrs skol_info hs_tvs $ \ exp_tvs ->
               do { traceTc "tcConDecl" (ppr name <+> text "tvs:" <+> ppr hs_tvs)
                  ; ctxt <- tcHsContext (fromMaybe (noLoc []) hs_ctxt)
                  ; btys <- tcConArgs hs_details
@@ -1711,6 +1708,8 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
        ; traceTc "tcConDecl 2" (ppr name)
        ; mapM buildOneDataCon [name]
        }
+  where
+    skol_info = SigTypeSkol (ConArgCtxt (unLoc name))
 
 tcConDecl rep_tycon tmpl_bndrs res_tmpl
           (ConDeclGADT { con_names = names, con_type = ty })
@@ -1776,8 +1775,8 @@ tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
        ; (hs_details, res_ty) <- updateGadtResult failWithTc doc hs_details' res_ty'
        ; (imp_tvs, (exp_tvs, ctxt, arg_tys, res_ty, field_lbls, stricts))
            <- solveEqualities $
-              tcImplicitTKBndrs vars $
-              tcExplicitTKBndrs gtvs $ \ exp_tvs ->
+              tcImplicitTKBndrs skol_info vars $
+              tcExplicitTKBndrs skol_info gtvs $ \ exp_tvs ->
               do { ctxt <- tcHsContext cxt
                  ; btys <- tcConArgs hs_details
                  ; ty' <- tcHsLiftedType res_ty
@@ -1790,6 +1789,8 @@ tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
                  }
        ; return (imp_tvs ++ exp_tvs, ctxt, stricts, field_lbls, arg_tys, res_ty, hs_details)
        }
+  where
+    skol_info = SigTypeSkol (ConArgCtxt name)
 
 tcConIsInfixH98 :: Name
              -> HsConDetails (LHsType GhcRn) (Located [LConDeclField GhcRn])

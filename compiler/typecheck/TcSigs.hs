@@ -347,9 +347,9 @@ tcPatSynSig name sig_ty
   , (ex_hs_tvs,   hs_prov, hs_body_ty) <- splitLHsSigmaTy hs_ty1
   = do { (implicit_tvs, (univ_tvs, req, ex_tvs, prov, body_ty))
            <- solveEqualities $
-              tcImplicitTKBndrs implicit_hs_tvs $
-              tcExplicitTKBndrs univ_hs_tvs  $ \ univ_tvs ->
-              tcExplicitTKBndrs ex_hs_tvs    $ \ ex_tvs   ->
+              tcImplicitTKBndrs skol_info implicit_hs_tvs $
+              tcExplicitTKBndrs skol_info univ_hs_tvs     $ \ univ_tvs ->
+              tcExplicitTKBndrs skol_info ex_hs_tvs       $ \ ex_tvs   ->
               do { req     <- tcHsContext hs_req
                  ; prov    <- tcHsContext hs_prov
                  ; body_ty <- tcHsOpenType hs_body_ty
@@ -406,6 +406,7 @@ tcPatSynSig name sig_ty
                       , patsig_body_ty        = body_ty }) }
   where
     ctxt = PatSynCtxt name
+    skol_info = SigTypeSkol ctxt
 
     build_patsyn_type kvs imp univ req ex prov body
       = mkInvForAllTys kvs $

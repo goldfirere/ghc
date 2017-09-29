@@ -915,6 +915,7 @@ okIPCtxt (InstDeclCtxt {}) = False
 okIPCtxt (SpecInstCtxt {}) = False
 okIPCtxt (RuleSigCtxt {})  = False
 okIPCtxt DefaultDeclCtxt   = False
+okIPCtxt DerivCtxt         = False
 
 {-
 Note [Kind polymorphic type classes]
