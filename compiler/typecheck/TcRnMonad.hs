@@ -88,7 +88,7 @@ module TcRnMonad(
   mkErrInfo,
 
   -- * Type constraints
-  newTcEvBinds,
+  newTcEvBinds, newNoTcEvBinds,
   addTcEvBind,
   getTcEvTyCoVars, getTcEvBindsMap,
   chooseUniqueOccTc,
@@ -1365,13 +1365,26 @@ newTcEvBinds = do { binds_ref <- newTcRef emptyEvBindMap
                                        , ebv_tcvs = tcvs_ref
                                        , ebv_uniq = uniq }) }
 
+-- | Creates an EvBindsVar incapable of holding any bindings. It still
+-- tracks covar usages (see comments on ebv_tcvs in TcEvidence), thus
+-- must be made monadically
+newNoTcEvBinds :: TcM EvBindsVar
+newNoTcEvBinds
+  = do { tcvs_ref  <- newTcRef emptyVarSet
+       ; uniq <- newUnique
+       ; traceTc "newNoTcEvBinds" (text "unique =" <+> ppr uniq)
+       ; return (NoEvBindsVar { ebv_tcvs = tcvs_ref
+                              , ebv_uniq = uniq }) }
+
 getTcEvTyCoVars :: EvBindsVar -> TcM TyCoVarSet
-getTcEvTyCoVars (EvBindsVar { ebv_tcvs = ev_ref })
-  = readTcRef ev_ref
+getTcEvTyCoVars ev_binds_var
+  = readTcRef (ebv_tcvs ev_binds_var)
 
 getTcEvBindsMap :: EvBindsVar -> TcM EvBindMap
 getTcEvBindsMap (EvBindsVar { ebv_binds = ev_ref })
   = readTcRef ev_ref
+getTcEvBindsMap (NoEvBindsVar {})
+  = return emptyEvBindMap
 
 addTcEvBind :: EvBindsVar -> EvBind -> TcM ()
 -- Add a binding to the TcEvBinds by side effect
@@ -1380,6 +1393,8 @@ addTcEvBind (EvBindsVar { ebv_binds = ev_ref, ebv_uniq = u }) ev_bind
                                  ppr ev_bind
        ; bnds <- readTcRef ev_ref
        ; writeTcRef ev_ref (extendEvBinds bnds ev_bind) }
+addTcEvBind (NoEvBindsVar { ebv_uniq = u }) ev_bind
+  = pprPanic "addTcEvBind NoEvBindsVar" (ppr ev_bind $$ ppr u)
 
 chooseUniqueOccTc :: (OccSet -> OccName) -> TcM OccName
 chooseUniqueOccTc fn =

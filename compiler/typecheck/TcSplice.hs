@@ -768,6 +768,7 @@ runMeta' show_code ppr_hs run_and_convert expr
             Right v -> return v
             Left se -> case fromException se of
                          Just IOEnvFailure -> failM -- Error already in Tc monad
+                         Just (IOEnvFailureMsg msg) -> fail msg
                          _ -> fail_with_exn "run" se -- Exception
         }}}
   where
@@ -1167,7 +1168,7 @@ reifyInstances th_nm th_tys
                   ; return ((tv_names, rn_ty), fvs) }
         ; (_tvs, ty)
             <- solveEqualities $
-               tcImplicitTKBndrsType ReifySkol tv_names $
+               tcImplicitTKBndrs ReifySkol tv_names $
                fst <$> tcLHsType rn_ty
         ; ty <- zonkTcTypeToType emptyZonkEnv ty
                 -- Substitute out the meta type variables

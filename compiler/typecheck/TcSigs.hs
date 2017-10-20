@@ -49,7 +49,6 @@ import Bag( foldrBag )
 import Module( getModule )
 import Name
 import NameEnv
-import VarSet
 import Outputable
 import SrcLoc
 import Util( singleton )
@@ -355,13 +354,8 @@ tcPatSynSig name sig_ty
                  ; body_ty <- tcHsOpenType hs_body_ty
                      -- A (literal) pattern can be unlifted;
                      -- e.g. pattern Zero <- 0#   (Trac #12094)
-                 ; let bound_tvs
-                         = unionVarSets [ allBoundVariabless req
-                                        , allBoundVariabless prov
-                                        , allBoundVariables body_ty
-                                        ]
-                 ; return ( (univ_tvs, req, ex_tvs, prov, body_ty)
-                          , bound_tvs) }
+                 ; return (univ_tvs, req, ex_tvs, prov, body_ty) }
+
 
        -- Kind generalisation
        ; kvs <- kindGeneralize $

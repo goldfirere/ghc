@@ -1849,6 +1849,7 @@ it's really a telescope check. It works because all tycons are kind-generalized.
 If there is a bad telescope, the kind-generalization will end up generalizing
 over a variable bound later in the telescope.
 
+-- TODO (RAE): Update Note.
 For non-tycons, we do scope checking when we bring tyvars into scope,
 in tcImplicitTKBndrs and tcExplicitTKBndrs. Note that we also have to
 sort implicit binders into a well-scoped order whenever we have implicit

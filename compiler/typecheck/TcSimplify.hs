@@ -6,10 +6,12 @@ module TcSimplify(
        simplifyAmbiguityCheck,
        simplifyDefault,
        simplifyTop, simplifyTopImplic, captureTopConstraints,
-       simplifyInteractive, solveEqualities,
+       simplifyInteractive, solveEqualityWanteds, solveEqualities,
        simplifyWantedsTcM,
        tcCheckSatisfiability,
        tcSubsumes,
+
+       promoteTyVar, -- TcHsType.tcImplicitTKBndrsX needs to promote
 
        -- For Rules we need these
        solveWanteds, solveWantedsAndDrop,
@@ -134,6 +136,14 @@ simplifyTop wanteds
        ; traceTc "reportUnsolved (unsafe overlapping) }" empty
 
        ; return (evBindMapBinds binds1 `unionBags` binds2) }
+
+-- Like solveWanteds, but works only for equalities (no evidence) and
+-- in the TcM monad
+solveEqualityWanteds :: WantedConstraints -> TcM WantedConstraints
+solveEqualityWanteds wc = runTcSEqualities (solveWantedsAndDrop wc)
+  -- NB: Don't use simpl_top here, because we don't want to default tyvars.
+  -- Instead, tyvars that can't get solved should float out, which is
+  -- handled by the caller of this function.
 
 -- | Type-check a thing that emits only equality constraints, then
 -- solve those constraints. Fails outright if there is trouble.

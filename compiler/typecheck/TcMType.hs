@@ -45,7 +45,7 @@ module TcMType (
   newEvVar, newEvVars, newDict,
   newWanted, newWanteds, cloneWanted, cloneWC,
   emitWanted, emitWantedEq, emitWantedEvVar, emitWantedEvVars,
-  newTcEvBinds, addTcEvBind,
+  newTcEvBinds, newNoTcEvBinds, addTcEvBind,
 
   newCoercionHole, fillCoercionHole, isFilledCoercionHole,
   unpackCoercionHole, unpackCoercionHole_maybe,
@@ -144,6 +144,7 @@ newMetaKindVar :: TcM TcKind
 newMetaKindVar = do { uniq <- newUnique
                     ; details <- newMetaDetails TauTv
                     ; let kv = mkTcTyVar (mkKindName uniq) liftedTypeKind details
+                    ; traceTc "RAE2 newMetaKindVar" (ppr kv)
                     ; return (mkTyVarTy kv) }
 
 newMetaKindVars :: Int -> TcM [TcKind]
@@ -811,6 +812,7 @@ newFlexiTyVarTys n kind = mapM newFlexiTyVarTy (nOfThem n kind)
 newOpenTypeKind :: TcM TcKind
 newOpenTypeKind
   = do { rr <- newFlexiTyVarTy runtimeRepTy
+       ; traceTc "RAE1 newOpenTypeKind" (ppr rr)
        ; return (tYPE rr) }
 
 -- | Create a tyvar that can be a lifted or unlifted type.

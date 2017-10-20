@@ -1402,7 +1402,7 @@ tc_fam_ty_pats tc_fam_tc mb_clsinfo tv_names arg_pats
 
             ; stuff <- kind_checker res_kind_out
 
-            ; return ((args, stuff), emptyVarSet) }
+            ; return (args, stuff) }
 
        ; return (arg_tvs, args, stuff) }
   where
@@ -1653,9 +1653,7 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
                  ; btys <- tcConArgs hs_details
                  ; field_lbls <- lookupConstructorFields (unLoc name)
                  ; let (arg_tys, stricts) = unzip btys
-                       bound_vars  = allBoundVariabless ctxt `unionVarSet`
-                                     allBoundVariabless arg_tys
-                 ; return ((exp_tvs, ctxt, arg_tys, field_lbls, stricts), bound_vars)
+                 ; return (exp_tvs, ctxt, arg_tys, field_lbls, stricts)
                  }
 
          -- exp_tvs have explicit, user-written binding sites
@@ -1782,10 +1780,7 @@ tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
                  ; ty' <- tcHsLiftedType res_ty
                  ; field_lbls <- lookupConstructorFields name
                  ; let (arg_tys, stricts) = unzip btys
-                       bound_vars = allBoundVariabless ctxt `unionVarSet`
-                                    allBoundVariabless arg_tys
-
-                 ; return ((exp_tvs, ctxt, arg_tys, ty', field_lbls, stricts), bound_vars)
+                 ; return (exp_tvs, ctxt, arg_tys, ty', field_lbls, stricts)
                  }
        ; return (imp_tvs ++ exp_tvs, ctxt, stricts, field_lbls, arg_tys, res_ty, hs_details)
        }

@@ -126,7 +126,7 @@ reportUnsolved wanted
        ; defer_errors <- goptM Opt_DeferTypeErrors
        ; warn_errors <- woptM Opt_WarnDeferredTypeErrors -- implement #10283
        ; let type_errors | not defer_errors = TypeError
-                         | warn_errors      = TypeWarn
+                         | warn_errors      = TypeWarn (Reason Opt_WarnDeferredTypeErrors)
                          | otherwise        = TypeDefer
 
        ; defer_holes <- goptM Opt_DeferTypedHoles
@@ -147,7 +147,7 @@ reportUnsolved wanted
                                 | warn_out_of_scope      = HoleWarn
                                 | otherwise              = HoleDefer
 
-       ; report_unsolved binds_var False type_errors expr_holes
+       ; report_unsolved binds_var type_errors expr_holes
           type_holes out_of_scope_holes wanted
 
        ; ev_binds <- getTcEvBindsMap binds_var
@@ -162,8 +162,8 @@ reportUnsolved wanted
 -- and for simplifyDefault.
 reportAllUnsolved :: WantedConstraints -> TcM ()
 reportAllUnsolved wanted
-  = do { ev_binds <- newTcEvBinds
-       ; report_unsolved ev_binds False TypeError
+  = do { ev_binds <- newNoTcEvBinds
+       ; report_unsolved ev_binds TypeError
                          HoleError HoleError HoleError wanted }
 
 -- | Report all unsolved goals as warnings (but without deferring any errors to
@@ -172,18 +172,17 @@ reportAllUnsolved wanted
 warnAllUnsolved :: WantedConstraints -> TcM ()
 warnAllUnsolved wanted
   = do { ev_binds <- newTcEvBinds
-       ; report_unsolved ev_binds True TypeWarn
+       ; report_unsolved ev_binds (TypeWarn NoReason)
                          HoleWarn HoleWarn HoleWarn wanted }
 
 -- | Report unsolved goals as errors or warnings.
 report_unsolved :: EvBindsVar        -- cec_binds
-                -> Bool              -- Errors as warnings
                 -> TypeErrorChoice   -- Deferred type errors
                 -> HoleChoice        -- Expression holes
                 -> HoleChoice        -- Type holes
                 -> HoleChoice        -- Out of scope holes
                 -> WantedConstraints -> TcM ()
-report_unsolved mb_binds_var err_as_warn type_errors expr_holes
+report_unsolved mb_binds_var type_errors expr_holes
     type_holes out_of_scope_holes wanted
   | isEmptyWC wanted
   = return ()
@@ -206,7 +205,6 @@ report_unsolved mb_binds_var err_as_warn type_errors expr_holes
        ; let err_ctxt = CEC { cec_encl  = []
                             , cec_tidy  = tidy_env
                             , cec_defer_type_errors = type_errors
-                            , cec_errors_as_warns = err_as_warn
                             , cec_expr_holes = expr_holes
                             , cec_type_holes = type_holes
                             , cec_out_of_scope_holes = out_of_scope_holes
@@ -271,7 +269,11 @@ valid_substitutions docs = mempty { report_valid_substitutions = [docs] }
 
 data TypeErrorChoice   -- What to do for type errors found by the type checker
   = TypeError     -- A type error aborts compilation with an error message
-  | TypeWarn      -- A type error is deferred to runtime, plus a compile-time warning
+  | TypeWarn WarnReason
+                  -- A type error is deferred to runtime, plus a compile-time warning
+                  -- The WarnReason should usually be (Reason Opt_WarnDeferredTypeErrors)
+                  -- but it isn't for the Safe Haskell Overlapping Instances warnings
+                  -- see warnAllUnsolved
   | TypeDefer     -- A type error is deferred to runtime; no error or warning at compile time
 
 data HoleChoice
@@ -285,9 +287,9 @@ instance Outputable HoleChoice where
   ppr HoleDefer = text "HoleDefer"
 
 instance Outputable TypeErrorChoice  where
-  ppr TypeError = text "TypeError"
-  ppr TypeWarn  = text "TypeWarn"
-  ppr TypeDefer = text "TypeDefer"
+  ppr TypeError         = text "TypeError"
+  ppr (TypeWarn reason) = text "TypeWarn" <+> ppr reason
+  ppr TypeDefer         = text "TypeDefer"
 
 data ReportErrCtxt
     = CEC { cec_encl :: [Implication]  -- Enclosing implications
@@ -299,10 +301,6 @@ data ReportErrCtxt
                                        -- into warnings, and emit evidence bindings
                                        -- into 'cec_binds' for unsolved constraints
 
-          , cec_errors_as_warns :: Bool   -- Turn all errors into warnings
-                                          -- (except for Holes, which are
-                                          -- controlled by cec_type_holes and
-                                          -- cec_expr_holes)
           , cec_defer_type_errors :: TypeErrorChoice -- Defer type errors until runtime
 
           -- cec_expr_holes is a union of:
@@ -323,7 +321,6 @@ data ReportErrCtxt
 
 instance Outputable ReportErrCtxt where
   ppr (CEC { cec_binds              = bvar
-           , cec_errors_as_warns    = ew
            , cec_defer_type_errors  = dte
            , cec_expr_holes         = eh
            , cec_type_holes         = th
@@ -332,13 +329,20 @@ instance Outputable ReportErrCtxt where
            , cec_suppress           = sup })
     = text "CEC" <+> braces (vcat
          [ text "cec_binds"              <+> equals <+> ppr bvar
-         , text "cec_errors_as_warns"    <+> equals <+> ppr ew
          , text "cec_defer_type_errors"  <+> equals <+> ppr dte
          , text "cec_expr_holes"         <+> equals <+> ppr eh
          , text "cec_type_holes"         <+> equals <+> ppr th
          , text "cec_out_of_scope_holes" <+> equals <+> ppr osh
          , text "cec_warn_redundant"     <+> equals <+> ppr wr
          , text "cec_suppress"           <+> equals <+> ppr sup ])
+
+-- | Returns True <=> the ReportErrCtxt indicates that something is deferred
+deferringAnyBindings :: ReportErrCtxt -> Bool
+deferringAnyBindings (CEC { cec_defer_type_errors  = TypeError
+                          , cec_expr_holes         = HoleError
+                          , cec_type_holes         = HoleError
+                          , cec_out_of_scope_holes = HoleError }) = False
+deferringAnyBindings _                                            = True
 
 {-
 Note [Suppressing error messages]
@@ -780,19 +784,17 @@ maybeReportError ctxt err
   | cec_suppress ctxt    -- Some worse error has occurred;
   = return ()            -- so suppress this error/warning
 
-  | cec_errors_as_warns ctxt
-  = reportWarning NoReason err
-
   | otherwise
   = case cec_defer_type_errors ctxt of
-      TypeDefer -> return ()
-      TypeWarn  -> reportWarning (Reason Opt_WarnDeferredTypeErrors) err
-      TypeError -> reportError err
+      TypeDefer       -> return ()
+      TypeWarn reason -> reportWarning reason err
+      TypeError       -> reportError err
 
 addDeferredBinding :: ReportErrCtxt -> ErrMsg -> Ct -> TcM ()
 -- See Note [Deferring coercion errors to runtime]
 addDeferredBinding ctxt err ct
-  | CtWanted { ctev_pred = pred, ctev_dest = dest } <- ctEvidence ct
+  | deferringAnyBindings ctxt
+  , CtWanted { ctev_pred = pred, ctev_dest = dest } <- ctEvidence ct
     -- Only add deferred bindings for Wanted constraints
   = do { dflags <- getDynFlags
        ; let err_msg = pprLocErrMsg err

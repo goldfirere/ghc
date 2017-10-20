@@ -107,9 +107,6 @@ module TcType (
   candidateQTyVarsOfType, candidateQTyVarsOfTypes, CandidatesQTvs(..),
   anyRewritableTyVar,
 
-  -- * Extracting bound variables
-  allBoundVariables, allBoundVariabless,
-
   ---------------------------------
   -- Foreign import and export
   isFFIArgumentTy,     -- :: DynFlags -> Safety -> Type -> Bool
@@ -230,7 +227,6 @@ import ListSetOps ( getNth )
 import Outputable
 import FastString
 import ErrUtils( Validity(..), MsgDoc, isValid )
-import FV
 import qualified GHC.LanguageExtensions as LangExt
 
 import Data.IORef
@@ -779,13 +775,31 @@ tcTyVarLevel tv
           RuntimeUnk                    -> topTcLevel
 
 tcTypeLevel :: TcType -> TcLevel
--- Max level of any free var of the type
-tcTypeLevel ty
-  = foldDVarSet add topTcLevel (tyCoVarsOfTypeDSet ty)
+-- Maximum TcLevel of any metavar not within any foralls.
+-- Why not within foralls? Because GHC bumps the TcLevel at a forall.
+-- Why can't we just take that into account here? Because GHC bumps an arbitrary number
+-- of TcLevels at a forall. For example, tcExplicitTKBndrs bumps one level per variable,
+-- while tcImplicitTKBndrs bumps just once for all the variables.
+--
+-- This function is used only in error checking, and so a lower bound for the maximum
+-- TcLevel is good enough
+tcTypeLevel = go topTcLevel
   where
-    add v lvl
-      | isTcTyVar v = lvl `maxTcLevel` tcTyVarLevel v
-      | otherwise   = lvl
+    go acc (TyVarTy tv)     = acc `go_tyvar` tv
+    go acc (AppTy t1 t2)    = acc `go` t1 `go` t2
+    go acc (TyConApp _ tys) = acc `gos` tys
+    go acc (ForAllTy tvb _) = acc `go` binderKind tvb
+    go acc (FunTy t1 t2)    = acc `go` t1 `go` t2
+    go acc (LitTy {})       = acc
+    go acc (CastTy ty _)    = acc `go` ty
+    go acc (CoercionTy _)   = acc
+
+    gos acc [] = acc
+    gos acc (ty:tys) = acc `go` ty `gos` tys
+
+    go_tyvar acc tv
+      | isTcTyVar tv = acc `maxTcLevel` tcTyVarLevel tv `go` tyVarKind tv
+      | otherwise    = acc `go` tyVarKind tv
 
 instance Outputable TcLevel where
   ppr (TcLevel us) = ppr us
@@ -941,33 +955,6 @@ to decide if, given a new equality (a ~ ty), we should kick out
 a constraint C.  Rather than gather free variables and see if 'a'
 is among them, we instead pass in a predicate; this is just efficiency.
 -}
-
-{- *********************************************************************
-*                                                                      *
-          Bound variables in a type
-*                                                                      *
-********************************************************************* -}
-
--- | Find all variables bound anywhere in a type.
--- See also Note [Scope-check inferred kinds] in TcHsType
-allBoundVariables :: Type -> TyVarSet
-allBoundVariables ty = fvVarSet $ go ty
-  where
-    go :: Type -> FV
-    go (TyVarTy tv)     = go (tyVarKind tv)
-    go (TyConApp _ tys) = mapUnionFV go tys
-    go (AppTy t1 t2)    = go t1 `unionFV` go t2
-    go (FunTy t1 t2)    = go t1 `unionFV` go t2
-    go (ForAllTy (TvBndr tv _) t2) = FV.unitFV tv `unionFV`
-                                    go (tyVarKind tv) `unionFV` go t2
-    go (LitTy {})       = emptyFV
-    go (CastTy ty _)    = go ty
-    go (CoercionTy {})  = emptyFV
-      -- any types mentioned in a coercion should also be mentioned in
-      -- a type.
-
-allBoundVariabless :: [Type] -> TyVarSet
-allBoundVariabless = mapUnionVarSet allBoundVariables
 
 {- *********************************************************************
 *                                                                      *

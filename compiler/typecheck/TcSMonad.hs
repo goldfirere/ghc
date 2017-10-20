@@ -28,7 +28,7 @@ module TcSMonad (
     -- Evidence creation and transformation
     MaybeNew(..), freshGoals, isFresh, getEvTerm,
 
-    newTcEvBinds,
+    newTcEvBinds, newNoTcEvBinds,
     newWantedEq, emitNewWantedEq,
     newWanted, newWantedEvVar, newWantedNC, newWantedEvVarNC, newDerivedNC,
     newBoundEvVarId,
@@ -2440,7 +2440,7 @@ runTcSDeriveds tcs
 -- | This can deal only with equality constraints.
 runTcSEqualities :: TcS a -> TcM a
 runTcSEqualities thing_inside
-  = do { ev_binds_var <- TcM.newTcEvBinds
+  = do { ev_binds_var <- TcM.newNoTcEvBinds
        ; runTcSWithEvBinds ev_binds_var thing_inside }
 
 runTcSWithEvBinds :: EvBindsVar
@@ -3062,7 +3062,8 @@ setEvBind ev_bind
 -- | Mark variables as used filling a coercion hole
 useVars :: CoVarSet -> TcS ()
 useVars vars
-  = do { EvBindsVar { ebv_tcvs = ref } <- getTcEvBindsVar
+  = do { ev_binds_var <- getTcEvBindsVar
+       ; let ref = ebv_tcvs ev_binds_var
        ; wrapTcS $
          do { tcvs <- TcM.readTcRef ref
             ; let tcvs' = tcvs `unionVarSet` vars
@@ -3100,6 +3101,9 @@ setEvBindIfWanted ev tm
 
 newTcEvBinds :: TcS EvBindsVar
 newTcEvBinds = wrapTcS TcM.newTcEvBinds
+
+newNoTcEvBinds :: TcS EvBindsVar
+newNoTcEvBinds = wrapTcS TcM.newNoTcEvBinds
 
 newEvVar :: TcPredType -> TcS EvVar
 newEvVar pred = wrapTcS (TcM.newEvVar pred)
