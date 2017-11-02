@@ -71,6 +71,7 @@ import Kind
 import RdrName( lookupLocalRdrOcc )
 import Var
 import VarSet
+import UniqSet ( nonDetEltsUniqSet )
 import TyCon
 import ConLike
 import DataCon
@@ -1434,8 +1435,20 @@ kcHsTyVarBndrs name flav cusk all_kind_vars
        ; scoped_kvs <- zipWithM newSigTyVar kv_ns kv_kinds
                      -- the names must line up in splitTelescopeTvs
        ; (binders, res_kind, stuff)
-           <- scopeTyVars2 skol_info (kv_ns `zip` scoped_kvs) $
+           <- solveLocalEqualities $
+              scopeTyVars2 skol_info (kv_ns `zip` scoped_kvs) $
               bind_telescope hs_tvs thing_inside
+
+         -- The binders and res_kind might still mention tyvars who have too
+         -- high a TcLevel. If they are unconstrained, the promotion in
+         -- solveLocalEqualities doesn't find them. So we promote them here.
+       ; res_kind <- zonkTcType res_kind
+       ; binders <- mapM zonkTcTyVarBinder binders
+       ; let all_kinds = res_kind : map binderKind binders
+             all_kvs   = tyCoVarsOfTypes all_kinds
+       ; mapM_ promoteTyVarToCurrentLevel (nonDetEltsUniqSet all_kvs)
+           -- non-determinism is OK because promotion order doesn't matter
+
        ; let   -- NB: Don't add scoped_kvs to tyConTyVars, because they
                -- must remain lined up with the binders
              tycon = mkTcTyCon name binders res_kind

@@ -12,7 +12,8 @@ module TcSimplify(
        tcCheckSatisfiability,
        tcSubsumes,
 
-       promoteTyVar, -- TcHsType.tcImplicitTKBndrsX needs to promote
+       promoteTyVar,
+       promoteTyVarToCurrentLevel,
 
        -- For Rules we need these
        solveWanteds, solveWantedsAndDrop,
@@ -1838,6 +1839,11 @@ some unification in solveSimpleWanteds; because that's the only way
 we'll get more Givens (a unification is like adding a Given) to
 allow the implication to make progress.
 -}
+
+promoteTyVarToCurrentLevel :: TcTyVar -> TcM ()
+promoteTyVarToCurrentLevel tv
+  = do { tc_level <- TcM.getTcLevel
+       ; discardResult $ promoteTyVar tc_level tv }
 
 promoteTyVar :: TcLevel -> TcTyVar  -> TcM Bool
 -- When we float a constraint out of an implication we must restore
