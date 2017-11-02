@@ -62,7 +62,7 @@ import TcMType
 import TcValidity
 import TcUnify
 import TcIface
-import TcSimplify ( solveEqualities, solveEqualityWanteds, promoteTyVar )
+import TcSimplify
 import TcType
 import TcHsSyn( zonkSigType )
 import Inst   ( tcInstBinders, tcInstBinder )
@@ -1696,16 +1696,6 @@ scopeTyVars2 skol_info orig_prs thing_inside
   = go orig_prs
   where
     go []       = thing_inside
-    go (pr:prs)
-      = do { (inner_tclvl, wanted, result)
-               <- pushLevelAndCaptureConstraints $
-                  tcExtendTyVarEnv2 [pr] $
-                  go prs
-           ; residual_wanted <- setTcLevel inner_tclvl $
-                                solveEqualityWanteds wanted
-           ;
-
-
     go (pr:prs) = fmap snd $ -- discard the TcEvBinds, which will always be empty
                   checkConstraints skol_info [snd pr] [{- no EvVars -}] $
                   tcExtendTyVarEnv2 [pr] $
@@ -2134,14 +2124,15 @@ tcHsPatSigType ctxt sig_ty
   = addSigCtxt ctxt hs_ty $
     do { sig_tkvs <- mapM new_implicit_tv sig_vars
        ; (wcs, sig_ty)
-            <- tcWildCardBindersX newWildTyVar    Nothing sig_wcs  $ \ wcs ->
+             -- TODO (RAE): Comment solveLocalEqualities
+            <- solveLocalEqualities $
+               tcWildCardBindersX newWildTyVar    Nothing sig_wcs  $ \ wcs ->
                tcExtendTyVarEnv sig_tkvs                           $
                do { sig_ty <- tcHsOpenType hs_ty
                   ; return (wcs, sig_ty) }
 
         ; emitWildCardHoleConstraints wcs
 
-          -- TODO (RAE): This makes me nervous. We haven't called the solver.
         ; sig_ty <- zonkTcType sig_ty
         ; checkValidType ctxt sig_ty
 
@@ -2317,7 +2308,9 @@ It does sort checking and desugaring at the same time, in one single pass.
 
 tcLHsKindSig :: LHsKind GhcRn -> TcM Kind
 tcLHsKindSig hs_kind
-  = do { kind <- tc_lhs_kind kindLevelMode hs_kind
+    -- TODO (RAE): Comment the solveLocalEqualities
+  = do { kind <- solveLocalEqualities $
+                 tc_lhs_kind kindLevelMode hs_kind
        ; zonkTcType kind }
          -- This zonk is very important in the case of higher rank kinds
          -- E.g. Trac #13879    f :: forall (p :: forall z (y::z). <blah>).

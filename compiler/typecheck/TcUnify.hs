@@ -886,7 +886,7 @@ fillInferResult orig_ty (IR { ir_uniq = u, ir_lvl = res_lvl
       = do { let ty_lvl = tcTypeLevel ty
            ; MASSERT2( not (ty_lvl `strictlyDeeperThan` res_lvl),
                        ppr u $$ ppr res_lvl $$ ppr ty_lvl $$
-                       ppr ty <+> ppr (typeKind ty) $$ ppr orig_ty )
+                       ppr ty <+> dcolon <+> ppr (typeKind ty) $$ ppr orig_ty )
            ; cts <- readTcRef ref
            ; case cts of
                Just already_there -> pprPanic "writeExpType"

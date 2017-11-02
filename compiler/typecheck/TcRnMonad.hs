@@ -1491,6 +1491,7 @@ captureConstraints thing_inside
            Left _    -> do { emitConstraints lie; failM }
            Right res -> return (res, lie) }
 
+-- | The name says it all. The returned TcLevel is the *inner* TcLevel.
 pushLevelAndCaptureConstraints :: TcM a -> TcM (TcLevel, WantedConstraints, a)
 pushLevelAndCaptureConstraints thing_inside
   = do { env <- getLclEnv

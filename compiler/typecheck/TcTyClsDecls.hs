@@ -577,10 +577,10 @@ kcTyClDecl :: TyClDecl GhcRn -> TcM ()
 --    by getInitialKind, so we can ignore them here.
 
 kcTyClDecl (DataDecl { tcdLName = L _ name, tcdDataDefn = defn })
-  | HsDataDefn { dd_cons = cons, dd_kindSig = Just _ } <- defn
+  | HsDataDefn { dd_cons = cons@(L _ (ConDeclGADT {}) : _), dd_ctxt = L _ [] } <- defn
   = mapM_ (wrapLocM kcConDecl) cons
     -- hs_tvs and dd_kindSig already dealt with in getInitialKind
-    -- If dd_kindSig is Just, this must be a GADT-style decl,
+    -- This must be a GADT-style decl,
     --        (see invariants of DataDefn declaration)
     -- so (a) we don't need to bring the hs_tvs into scope, because the
     --        ConDecls bind all their own variables

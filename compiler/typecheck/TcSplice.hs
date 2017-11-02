@@ -768,7 +768,6 @@ runMeta' show_code ppr_hs run_and_convert expr
             Right v -> return v
             Left se -> case fromException se of
                          Just IOEnvFailure -> failM -- Error already in Tc monad
-                         Just (IOEnvFailureMsg msg) -> fail msg
                          _ -> fail_with_exn "run" se -- Exception
         }}}
   where

@@ -1145,12 +1145,13 @@ validSubstitutions :: ReportErrCtxt -> Ct -> TcM SDoc
 validSubstitutions (CEC {cec_encl = implics}) ct | isExprHoleCt ct =
   do { rdr_env <- getGlobalRdrEnv
      ; dflags <- getDynFlags
-     ; traceTc "findingValidSubstitutionsFor {" $ ppr wrapped_hole_ty
+     ; traceTc "findingValidSubstitutionsFor {" $ vcat [ ppr wrapped_hole_ty
+                                                       , ppr hole_lvl ]
      ; (discards, substitutions) <-
         setTcLevel hole_lvl $
          go (maxValidSubstitutions dflags) $
           localsFirst $ globalRdrEnvElts rdr_env
-     ; traceTc "}" empty
+     ; traceTc "findingValidSubstitutionsFor }" empty
      ; return $ ppUnless (null substitutions) $
                  hang (text "Valid substitutions include")
                   2 (vcat (map (ppr_sub rdr_env) substitutions)

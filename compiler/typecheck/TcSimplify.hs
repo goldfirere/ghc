@@ -6,7 +6,8 @@ module TcSimplify(
        simplifyAmbiguityCheck,
        simplifyDefault,
        simplifyTop, simplifyTopImplic, captureTopConstraints,
-       simplifyInteractive, solveEqualityWanteds, solveEqualities,
+       simplifyInteractive,
+       solveEqualityWanteds, solveEqualities, solveLocalEqualities,
        simplifyWantedsTcM,
        tcCheckSatisfiability,
        tcSubsumes,
@@ -144,6 +145,58 @@ solveEqualityWanteds wc = runTcSEqualities (solveWantedsAndDrop wc)
   -- NB: Don't use simpl_top here, because we don't want to default tyvars.
   -- Instead, tyvars that can't get solved should float out, which is
   -- handled by the caller of this function.
+
+-- | Type-check a thing that emits only equality constraints, solving any
+-- constraints we can and re-emitting constraints that we can't. This can
+-- issue errors if there's a constraint that we can't solve but isn't reachable
+-- from any tyvar in an outer scope.
+solveLocalEqualities :: TcM a -> TcM a
+-- 1. Type-check the thing_inside
+-- 2. Solve what we can
+-- 3. Look for any remaining constraints that are reachable
+--    from tyvars (skolems or metavars) that came into being outside the
+--    thing_inside (Reachable here is in the sense of growThetaTyVars.)
+-- 4. Promote any tyvars mentioned in the found constraints.
+-- 5. Re-emit those constraints.
+-- 6. Report errors on any unsolved, unpromoted constraints.
+solveLocalEqualities thing_inside
+  = do { traceTc "solveLocalEqualities {" empty
+
+         -- 1.
+       ; (result, wanted) <- captureConstraints thing_inside
+
+         -- 2.
+       ; traceTc "solveLocalEqualities: running solver {" (ppr wanted)
+       ; reduced_wanted <- runTcSEqualities (simpl_top wanted)
+                           >>= TcM.zonkWC
+       ; traceTc "solveLocalEqualities: running solver }" (ppr reduced_wanted)
+
+         -- 3.
+       ; global_scoped_tvs <- tcGetGlobalTyCoVars
+       ; outer_level <- TcM.getTcLevel
+       ; let (floated, cannot_float_wc) = approximateWC False reduced_wanted
+
+         -- 4.
+             float_preds = ctsPreds floated
+             tvs_to_promote = growThetaTyVarsTcLevel outer_level float_preds
+                                                     global_scoped_tvs
+       ; mapM_ (promoteTyVar outer_level) (nonDetEltsUniqSet tvs_to_promote)
+          -- OK to be non-deterministic here, as the order of promotion is immaterial
+
+         -- 5.
+       ; emitSimples floated
+
+       ; traceTc "solveLocalEqualities: promotion"
+           (vcat [ text "floated:" <+> ppr floated
+                 , text "cannot_float_wc:" <+> ppr cannot_float_wc
+                 , text "tvs_to_promote:" <+> ppr tvs_to_promote ])
+
+         -- 6.
+       ; reportAllUnsolved cannot_float_wc
+
+         -- We're done!
+       ; traceTc "solveLocalEqualities }" empty
+       ; return result }
 
 -- | Type-check a thing that emits only equality constraints, then
 -- solve those constraints. Fails outright if there is trouble.
@@ -502,9 +555,9 @@ simplifyDefault theta
 tcSubsumes :: TcSigmaType -> TcSigmaType -> TcM Bool
 tcSubsumes ty_a ty_b | ty_a `eqType` ty_b = return True
 tcSubsumes ty_a ty_b = discardErrs $
- do {  (_, wanted, _) <- pushLevelAndCaptureConstraints $
+ do {  (tclevel, wanted, _) <- pushLevelAndCaptureConstraints $
                            tcSubType_NC ExprSigCtxt ty_b ty_a
-    ; (rem, _) <- runTcS (simpl_top wanted)
+    ; (rem, _) <- setTcLevel tclevel $ runTcS (simpl_top wanted)
     -- We don't want any insoluble or simple constraints left,
     -- but solved implications are ok (and neccessary for e.g. undefined)
     ; return (isEmptyBag (wc_simple rem)
@@ -670,7 +723,7 @@ simplifyInfer rhs_tclvl infer_mode sigs name_taus wanteds
              wanted_transformed = dropDerivedWC wanted_transformed_incl_derivs
              quant_pred_candidates
                | definite_error = []
-               | otherwise      = ctsPreds (approximateWC False wanted_transformed)
+               | otherwise      = ctsPreds (fst $ approximateWC False wanted_transformed)
 
        -- Decide what type variables and constraints to quantify
        -- NB: quant_pred_candidates is already fully zonked
@@ -1025,23 +1078,45 @@ decideQuantifiedTyVars mono_tvs name_taus psigs candidates
 growThetaTyVars :: ThetaType -> TyCoVarSet -> TyVarSet
 -- See Note [Growing the tau-tvs using constraints]
 -- NB: only returns tyvars, never covars
-growThetaTyVars theta tvs
+growThetaTyVars = growThetaTyVarsTcLevel topTcLevel
+
+growThetaTyVarsTcLevel :: TcLevel -> ThetaType -> TyCoVarSet -> TyVarSet
+-- See Note [Growing the tau-tvs using constraints]
+-- Considers any metavar with a TcLevel less than or equal to the given level to
+-- be like the mono_tvs passed in (but won't necessarily return them)
+growThetaTyVarsTcLevel tclevel theta tvs
   | null theta = tvs_only
   | otherwise  = filterVarSet isTyVar $
                  transCloVarSet mk_next seed_tvs
   where
     tvs_only = filterVarSet isTyVar tvs
-    seed_tvs = tvs `unionVarSet` tyCoVarsOfTypes ips
+    seed_tvs = tvs `unionVarSet` tyCoVarsOfTypes ips `unionVarSet` outer_metavar_tvs
     (ips, non_ips) = partition isIPPred theta
                          -- See Note [Inheriting implicit parameters] in TcType
+    outer_metavar_tvs
+      | isTopTcLevel tclevel = emptyVarSet  -- optimize common case
+      | otherwise            = mapUnionVarSet get_outer_metavar_tvs theta
+
+    get_outer_metavar_tvs :: PredType -> TyVarSet
+    get_outer_metavar_tvs pred
+      | anyVarSet is_outer_metavar pred_tvs = pred_tvs
+      | otherwise                           = emptyVarSet
+      where
+        pred_tvs = tyCoVarsOfType pred
+        is_outer_metavar tv
+          | Just tv_level <- metaTyVarTcLevel_maybe tv
+          = tv_level <= tclevel
+          | otherwise
+          = False
 
     mk_next :: VarSet -> VarSet -- Maps current set to newly-grown ones
     mk_next so_far = foldr (grow_one so_far) emptyVarSet non_ips
     grow_one so_far pred tvs
-       | pred_tvs `intersectsVarSet` so_far = tvs `unionVarSet` pred_tvs
-       | otherwise                          = tvs
+       | pred_tvs `intersectsVarSet` so_far  = tvs `unionVarSet` pred_tvs
+       | otherwise                           = tvs
        where
          pred_tvs = tyCoVarsOfType pred
+
 
 {- Note [Promote momomorphic tyvars]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1802,32 +1877,38 @@ defaultTyVarTcS the_tv
   | otherwise
   = return False  -- the common case
 
-approximateWC :: Bool -> WantedConstraints -> Cts
+approximateWC :: Bool -> WantedConstraints -> (Cts, WantedConstraints)
 -- Postcondition: Wanted or Derived Cts
 -- See Note [ApproximateWC]
 approximateWC float_past_equalities wc
   = float_wc emptyVarSet wc
   where
-    float_wc :: TcTyCoVarSet -> WantedConstraints -> Cts
-    float_wc trapping_tvs (WC { wc_simple = simples, wc_impl = implics })
-      = filterBag is_floatable simples `unionBags`
-        do_bag (float_implic trapping_tvs) implics
+    float_wc :: TcTyCoVarSet -> WantedConstraints -> (Cts, WantedConstraints)
+    float_wc trapping_tvs (WC { wc_simple = simples, wc_impl = implics, wc_insol = insol })
+      = ( float_simples `unionBags` float_from_implics
+        , WC { wc_simple = keep_simples, wc_impl = keep_implics, wc_insol = insol })
       where
+        (float_simples, keep_simples) = partitionBag is_floatable simples
+        (float_from_implics, keep_implics) = concatMapBagPair (float_implic trapping_tvs) implics
+
         is_floatable ct = tyCoVarsOfCt ct `disjointVarSet` trapping_tvs
 
-    float_implic :: TcTyCoVarSet -> Implication -> Cts
+    float_implic :: TcTyCoVarSet -> Implication -> (Cts, Bag Implication)
     float_implic trapping_tvs imp
       | float_past_equalities || ic_no_eqs imp
-      = float_wc new_trapping_tvs (ic_wanted imp)
-      | otherwise   -- Take care with equalities
-      = emptyCts    -- See (1) under Note [ApproximateWC]
+      = let (float_cts, keep_wc) = float_wc new_trapping_tvs (ic_wanted imp)
+            new_imps
+              | isEmptyWC keep_wc = emptyBag
+              | otherwise         = unitBag $ imp { ic_wanted = keep_wc }
+        in (float_cts, new_imps)
+      | otherwise                  -- Take care with equalities
+      = (emptyCts, unitBag imp)    -- See (1) under Note [ApproximateWC]
       where
         new_trapping_tvs = trapping_tvs `extendVarSetList` ic_skols imp
-    do_bag :: (a -> Bag c) -> Bag a -> Bag c
-    do_bag f = foldrBag (unionBags.f) emptyBag
 
 {- Note [ApproximateWC]
 ~~~~~~~~~~~~~~~~~~~~~~~
+TODO (RAE): Update note.
 approximateWC takes a constraint, typically arising from the RHS of a
 let-binding whose type we are *inferring*, and extracts from it some
 *simple* constraints that we might plausibly abstract over.  Of course
@@ -2212,7 +2293,7 @@ findDefaultableGroups (default_tys, (ovl_strings, extended_defaults)) wanteds
     , defaultable_tyvar tv
     , defaultable_classes (map sndOf3 group) ]
   where
-    simples                = approximateWC True wanteds
+    (simples, _)           = approximateWC True wanteds
     (unaries, non_unaries) = partitionWith find_unary (bagToList simples)
     unary_groups           = equivClasses cmp_tv unaries
 

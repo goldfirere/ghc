@@ -389,9 +389,11 @@ runSolverPipeline :: [(String,SimplifierStage)] -- The pipeline
 runSolverPipeline pipeline workItem
   = do { wl <- getWorkList
        ; inerts <- getTcSInerts
+       ; tclevel <- getTcLevel
        ; traceTcS "----------------------------- " empty
        ; traceTcS "Start solver pipeline {" $
-                  vcat [ text "work item =" <+> ppr workItem
+                  vcat [ text "tclevel =" <+> ppr tclevel
+                       , text "work item =" <+> ppr workItem
                        , text "inerts =" <+> ppr inerts
                        , text "rest of worklist =" <+> ppr wl ]
 

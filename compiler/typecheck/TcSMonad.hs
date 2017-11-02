@@ -96,7 +96,7 @@ module TcSMonad (
     cloneMetaTyVar, demoteUnfilledFmv,
     tcInstType, tcInstSkolTyVarsX,
 
-    TcLevel, isTouchableMetaTyVarTcS,
+    TcLevel,
     isFilledMetaTyVar_maybe, isFilledMetaTyVar,
     zonkTyCoVarsAndFV, zonkTcType, zonkTcTypes, zonkTcTyVar, zonkCo,
     zonkTyCoVarsAndFVList,
@@ -2784,11 +2784,6 @@ checkWellStagedDFun pred dfun_id loc
 
 pprEq :: TcType -> TcType -> SDoc
 pprEq ty1 ty2 = pprParendType ty1 <+> char '~' <+> pprParendType ty2
-
-isTouchableMetaTyVarTcS :: TcTyVar -> TcS Bool
-isTouchableMetaTyVarTcS tv
-  = do { tclvl <- getTcLevel
-       ; return $ isTouchableMetaTyVar tclvl tv }
 
 isFilledMetaTyVar_maybe :: TcTyVar -> TcS (Maybe Type)
 isFilledMetaTyVar_maybe tv

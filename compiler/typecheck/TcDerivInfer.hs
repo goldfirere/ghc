@@ -682,7 +682,7 @@ simplifyDeriv pred tvs thetas
        -- building an @unsolved :: WantedConstraints@ representing all
        -- the constraints we can't just shunt to the predicates.
        -- See Note [Exotic derived instance contexts]
-       ; let residual_simple = approximateWC True solved_implics
+       ; let (residual_simple, _) = approximateWC True solved_implics
              (bad, good) = partitionBagWith get_good residual_simple
 
              get_good :: Ct -> Either Ct PredType
