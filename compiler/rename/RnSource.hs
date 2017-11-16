@@ -2030,7 +2030,7 @@ rnConDecls :: [LConDecl GhcPs] -> RnM ([LConDecl GhcRn], FreeVars)
 rnConDecls = mapFvRn (wrapLocFstM rnConDecl)
 
 rnConDecl :: ConDecl GhcPs -> RnM (ConDecl GhcRn, FreeVars)
-rnConDecl decl@(ConDeclH98 { con_name = name, con_qvars = qtvs
+rnConDecl decl@(ConDeclH98 { con_name = name, con_qvars = m_qtvs
                            , con_cxt = mcxt, con_details = details
                            , con_doc = mb_doc })
   = do  { _ <- addLocM checkConName name
@@ -2038,13 +2038,9 @@ rnConDecl decl@(ConDeclH98 { con_name = name, con_qvars = qtvs
         ; mb_doc'      <- rnMbLHsDoc mb_doc
 
         ; let doc      = ConDeclCtx [new_name]
-              qtvs'    = qtvs `orElse` mkHsQTvs []
-              body_kvs = []  -- Consider   data T a = forall (b::k). MkT (...)
-                             -- The 'k' will already be in scope from the
-                             -- bindHsQTyVars for the entire DataDecl
-                             -- So there can be no new body_kvs here
-        ; bindHsQTyVars doc (Just $ inHsDocContext doc) Nothing body_kvs qtvs' $
-          \new_tyvars _ -> do
+              qtvs'    = m_qtvs `orElse` []
+        ; bindLHsTyVarBndrs doc (Just $ inHsDocContext doc) Nothing qtvs' $
+          \new_tyvars -> do
         { (new_context, fvs1) <- case mcxt of
                              Nothing   -> return (Nothing,emptyFVs)
                              Just lcxt -> do { (lctx',fvs) <- rnContext doc lcxt
@@ -2052,12 +2048,10 @@ rnConDecl decl@(ConDeclH98 { con_name = name, con_qvars = qtvs
         ; (new_details, fvs2) <- rnConDeclDetails (unLoc new_name) doc details
         ; let (new_details',fvs3) = (new_details,emptyFVs)
         ; traceRn "rnConDecl" (ppr name <+> vcat
-             [ text "qtvs:" <+> ppr qtvs
+             [ text "qtvs:" <+> ppr m_qtvs
              , text "qtvs':" <+> ppr qtvs' ])
         ; let all_fvs = fvs1 `plusFV` fvs2 `plusFV` fvs3
-              new_tyvars' = case qtvs of
-                Nothing -> Nothing
-                Just _ -> Just new_tyvars
+              new_tyvars' = m_qtvs *> Just new_tyvars
         ; return (decl { con_name = new_name, con_qvars = new_tyvars'
                        , con_cxt = new_context, con_details = new_details'
                        , con_doc = mb_doc' },

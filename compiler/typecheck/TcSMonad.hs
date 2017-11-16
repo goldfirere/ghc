@@ -3021,6 +3021,7 @@ instFlexiHelper subst tv
        ; let name = setNameUnique (tyVarName tv) uniq
              kind = substTyUnchecked subst (tyVarKind tv)
              ty'  = mkTyVarTy (mkTcTyVar name kind details)
+       ; TcM.traceTc "instFlexi" (ppr ty')
        ; return (extendTvSubst subst tv ty') }
 
 tcInstType :: ([TyVar] -> TcM (TCvSubst, [TcTyVar]))

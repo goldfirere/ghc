@@ -1160,9 +1160,8 @@ data ConDecl pass
   | ConDeclH98
       { con_name    :: Located (IdP pass)
 
-      , con_qvars     :: Maybe (LHsQTyVars pass)
-        -- User-written forall (if any), and its implicit
-        -- kind variables
+      , con_qvars     :: Maybe [LHsTyVarBndr pass]
+        -- User-written forall (if any)
         -- Non-Nothing means an explicit user-written forall
         --     e.g. data T a = forall b. MkT b (b->a)
         --     con_qvars = {b}
@@ -1269,10 +1268,7 @@ pprConDecl (ConDeclH98 { con_name = L _ con
                                    : map (pprHsType . unLoc) tys)
     ppr_details (RecCon fields)  = pprPrefixOcc con
                                  <+> pprConDeclFields (unLoc fields)
-    tvs = case mtvs of
-      Nothing -> []
-      Just (HsQTvs { hsq_explicit = tvs }) -> tvs
-
+    tvs = fromMaybe [] mtvs
     cxt = fromMaybe (noLoc []) mcxt
 
 pprConDecl (ConDeclGADT { con_names = cons, con_type = res_ty, con_doc = doc })

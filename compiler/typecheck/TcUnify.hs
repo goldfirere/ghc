@@ -1177,7 +1177,11 @@ buildImplicationFor tclvl skol_info skol_tvs given wanted
   = return (emptyBag, emptyTcEvBinds)
 
   | otherwise
-  = ASSERT2( all isSkolemTyVar skol_tvs, ppr skol_tvs )
+  = ASSERT2( all (isSkolemTyVar <||> isSigTyVar) skol_tvs, ppr skol_tvs )
+      -- Why allow SigTvs? Because implicitly declared kind variables in
+      -- non-CUSK type declarations are SigTvs, and we need to bring them
+      -- into scope as a skolem in an implication. This is OK, though,
+      -- because SigTvs will always remain tyvars, even after unification.
     do { ev_binds_var <- newTcEvBinds
        ; env <- getLclEnv
        ; let implic = Implic { ic_tclvl = tclvl

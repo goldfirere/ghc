@@ -2,7 +2,8 @@
 holes3.hs:3:5: error:
     • Found hole: _ :: t
       Where: ‘t’ is a rigid type variable bound by
-               the inferred type of f :: t at holes3.hs:3:1-5
+               the inferred type of f :: t
+               at holes3.hs:3:1-5
     • In the expression: _
       In an equation for ‘f’: f = _
     • Relevant bindings include f :: t (bound at holes3.hs:3:1)
@@ -65,10 +66,9 @@ holes3.hs:11:15: error:
         z :: [a] -> [a] (bound at holes3.hs:11:1)
       Valid substitutions include
         f :: forall t. t (defined at holes3.hs:3:1)
-        g :: Int -> Char (defined at holes3.hs:6:1)
-        toEnum :: forall a. Enum a => Int -> a
+        pi :: forall a. Floating a => a
           (imported from ‘Prelude’ at holes3.hs:1:8-13
-           (and originally defined in ‘GHC.Enum’))
+           (and originally defined in ‘GHC.Float’))
         undefined :: forall (a :: TYPE r).
                      GHC.Stack.Types.HasCallStack =>
                      a

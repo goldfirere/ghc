@@ -521,9 +521,8 @@ cvtConstr (ForallC tvs ctxt con)
                 ConDeclH98  {} ->
                   let qvars = case (tvs, con_qvars con') of
                         ([], Nothing) -> Nothing
-                        (_ , m_qvs  ) -> Just $
-                          mkHsQTvs (hsQTvExplicit tvs' ++
-                                    maybe [] hsQTvExplicit m_qvs)
+                        (_ , m_qvs  ) ->
+                          Just (hsQTvExplicit tvs' ++ fromMaybe [] m_qvs)
                   in con' { con_qvars = qvars
                           , con_cxt = Just $
                             L loc (ctxt' ++

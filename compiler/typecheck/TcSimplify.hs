@@ -13,7 +13,6 @@ module TcSimplify(
        tcSubsumes,
 
        promoteTyVar,
-       promoteTyVarToCurrentLevel,
 
        -- For Rules we need these
        solveWanteds, solveWantedsAndDrop,
@@ -181,7 +180,7 @@ solveLocalEqualities thing_inside
              float_preds = ctsPreds floated
              tvs_to_promote = growThetaTyVarsTcLevel outer_level float_preds
                                                      global_scoped_tvs
-       ; mapM_ (promoteTyVar outer_level) (nonDetEltsUniqSet tvs_to_promote)
+       ; mapM_ promoteTyVar (nonDetEltsUniqSet tvs_to_promote)
           -- OK to be non-deterministic here, as the order of promotion is immaterial
 
          -- 5.
@@ -992,12 +991,11 @@ defaultTyVarsAndSimplify :: TcLevel
 defaultTyVarsAndSimplify rhs_tclvl mono_tvs candidates
   = do {  -- Promote any tyvars that we cannot generalise
           -- See Note [Promote momomorphic tyvars]
-       ; outer_tclvl <- TcM.getTcLevel
        ; let prom_tvs = nonDetEltsUniqSet mono_tvs
                         -- It's OK to use nonDetEltsUniqSet here
                         -- because promoteTyVar is commutative
        ; traceTc "decideMonoTyVars: promotion:" (ppr prom_tvs)
-       ; proms <- mapM (promoteTyVar outer_tclvl) prom_tvs
+       ; proms <- mapM promoteTyVar prom_tvs
 
        -- Default any kind/levity vars
        ; let DV {dv_kvs = cand_kvs, dv_tvs = cand_tvs}
@@ -1840,38 +1838,32 @@ we'll get more Givens (a unification is like adding a Given) to
 allow the implication to make progress.
 -}
 
-promoteTyVarToCurrentLevel :: TcTyVar -> TcM ()
-promoteTyVarToCurrentLevel tv
-  = do { tc_level <- TcM.getTcLevel
-       ; discardResult $ promoteTyVar tc_level tv }
-
-promoteTyVar :: TcLevel -> TcTyVar  -> TcM Bool
+promoteTyVar :: TcTyVar  -> TcM Bool
 -- When we float a constraint out of an implication we must restore
 -- invariant (MetaTvInv) in Note [TcLevel and untouchable type variables] in TcType
 -- Return True <=> we did some promotion
 -- See Note [Promoting unification variables]
-promoteTyVar tclvl tv
-  | isFloatedTouchableMetaTyVar tclvl tv
-  = do { cloned_tv <- TcM.cloneMetaTyVar tv
-       ; let rhs_tv = setMetaTyVarTcLevel cloned_tv tclvl
-       ; TcM.writeMetaTyVar tv (mkTyVarTy rhs_tv)
-       ; return True }
-  | otherwise
-  = return False
+promoteTyVar tv
+  = do { tclvl <- TcM.getTcLevel
+       ; if (isFloatedTouchableMetaTyVar tclvl tv)
+         then do { cloned_tv <- TcM.cloneMetaTyVar tv
+                 ; let rhs_tv = setMetaTyVarTcLevel cloned_tv tclvl
+                 ; TcM.writeMetaTyVar tv (mkTyVarTy rhs_tv)
+                 ; return True }
+         else return False }
 
-promoteTyVarTcS :: TcLevel -> TcTyVar  -> TcS ()
+promoteTyVarTcS :: TcTyVar  -> TcS ()
 -- When we float a constraint out of an implication we must restore
 -- invariant (MetaTvInv) in Note [TcLevel and untouchable type variables] in TcType
 -- See Note [Promoting unification variables]
 -- We don't just call promoteTyVar because we want to use unifyTyVar,
 -- not writeMetaTyVar
-promoteTyVarTcS tclvl tv
-  | isFloatedTouchableMetaTyVar tclvl tv
-  = do { cloned_tv <- TcS.cloneMetaTyVar tv
-       ; let rhs_tv = setMetaTyVarTcLevel cloned_tv tclvl
-       ; unifyTyVar tv (mkTyVarTy rhs_tv) }
-  | otherwise
-  = return ()
+promoteTyVarTcS tv
+  = do { tclvl <- TcS.getTcLevel
+       ; when (isFloatedTouchableMetaTyVar tclvl tv) $
+         do { cloned_tv <- TcS.cloneMetaTyVar tv
+            ; let rhs_tv = setMetaTyVarTcLevel cloned_tv tclvl
+            ; unifyTyVar tv (mkTyVarTy rhs_tv) } }
 
 -- | Like 'defaultTyVar', but in the TcS monad.
 defaultTyVarTcS :: TcTyVar -> TcS Bool
@@ -2144,9 +2136,7 @@ floatEqualities skols no_given_eqs
 
        -- Promote any unification variables mentioned in the floated equalities
        -- See Note [Promoting unification variables]
-       ; outer_tclvl <- TcS.getTcLevel
-       ; mapM_ (promoteTyVarTcS outer_tclvl)
-               (tyCoVarsOfCtsList float_eqs)
+       ; mapM_ promoteTyVarTcS (tyCoVarsOfCtsList float_eqs)
 
        ; traceTcS "floatEqualities" (vcat [ text "Skols =" <+> ppr skols
                                           , text "Simples =" <+> ppr simples

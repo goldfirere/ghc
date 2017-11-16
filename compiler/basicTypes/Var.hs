@@ -35,7 +35,7 @@
 module Var (
         -- * The main data type and synonyms
         Var, CoVar, Id, NcId, DictId, DFunId, EvVar, EqVar, EvId, IpId, JoinId,
-        TyVar, TypeVar, KindVar, TKVar, TyCoVar,
+        TyVar, TcTyVar, TypeVar, KindVar, TKVar, TyCoVar,
 
         -- * In and Out variants
         InVar,  InCoVar,  InId,  InTyVar,
@@ -127,6 +127,9 @@ type TyVar   = Var     -- Type *or* kind variable (historical)
 
 -- | Type or Kind Variable
 type TKVar   = Var     -- Type *or* kind variable (historical)
+
+-- | Type variable that might be a metavariable
+type TcTyVar = Var
 
 -- | Type Variable
 type TypeVar = Var     -- Definitely a type variable

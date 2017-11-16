@@ -488,7 +488,7 @@ getInitialKind :: TyClDecl GhcRn
 getInitialKind decl@(ClassDecl { tcdLName = L _ name, tcdTyVars = ktvs, tcdATs = ats })
   = do { let cusk = hsDeclHasCusk decl
        ; (tycon, inner_prs) <-
-           kcHsTyVarBndrs name ClassFlavour cusk True ktvs $
+           kcHsTyVarBndrs name ClassFlavour cusk ktvs $
            do { inner_prs <- getFamDeclInitialKinds (Just cusk) ats
               ; return (constraintKind, inner_prs) }
        ; return (extendEnvWithTcTyCon inner_prs tycon) }
@@ -498,7 +498,7 @@ getInitialKind decl@(DataDecl { tcdLName = L _ name
                               , tcdDataDefn = HsDataDefn { dd_kindSig = m_sig
                                                          , dd_ND = new_or_data } })
   = do  { (tycon, _) <-
-           kcHsTyVarBndrs name (newOrDataToFlavour new_or_data) (hsDeclHasCusk decl) True ktvs $
+           kcHsTyVarBndrs name (newOrDataToFlavour new_or_data) (hsDeclHasCusk decl) ktvs $
            do { res_k <- case m_sig of
                            Just ksig -> tcLHsKindSig ksig
                            Nothing   -> return liftedTypeKind
@@ -512,8 +512,7 @@ getInitialKind decl@(SynDecl { tcdLName = L _ name
                              , tcdTyVars = ktvs
                              , tcdRhs = rhs })
   = do  { (tycon, _) <- kcHsTyVarBndrs name TypeSynonymFlavour
-                            (hsDeclHasCusk decl)
-                            True ktvs $
+                            (hsDeclHasCusk decl) ktvs $
             do  { res_k <- case kind_annotation rhs of
                             Nothing -> newMetaKindVar
                             Just ksig -> tcLHsKindSig ksig
@@ -542,7 +541,7 @@ getFamDeclInitialKind mb_cusk decl@(FamilyDecl { fdLName     = L _ name
                                                , fdResultSig = L _ resultSig
                                                , fdInfo      = info })
   = do { (tycon, _) <-
-           kcHsTyVarBndrs name flav cusk True ktvs $
+           kcHsTyVarBndrs name flav cusk ktvs $
            do { res_k <- case resultSig of
                       KindSig ki                        -> tcLHsKindSig ki
                       TyVarSig (L _ (KindedTyVar _ ki)) -> tcLHsKindSig ki
@@ -622,24 +621,17 @@ kcConDecl :: ConDecl GhcRn -> TcM ()
 kcConDecl (ConDeclH98 { con_name = name, con_qvars = ex_tvs
                       , con_cxt = ex_ctxt, con_details = details })
   = addErrCtxt (dataConCtxtName [name]) $
-         -- the 'False' says that the existentials don't have a CUSK, as the
-         -- concept doesn't really apply here. We just need to bring the variables
-         -- into scope. (Similarly, the choice of PromotedDataConFlavour isn't
-         -- particularly important.)
-    do { _ <- kcHsTyVarBndrs (unLoc name) PromotedDataConFlavour
-                             False False
-                             ((fromMaybe emptyLHsQTvs ex_tvs)) $
-              do { _ <- tcHsContext (fromMaybe (noLoc []) ex_ctxt)
-                 ; mapM_ (tcHsOpenType . getBangType) (hsConDeclArgTys details)
-                 ; return (panic "kcConDecl", ()) }
+      -- See Note [Use SigTvs in kind-checking pass]
+    tcExplicitTKBndrsSig (DataConSkol (unLoc name)) (fromMaybe [] ex_tvs) $ \ _ex_tvs' ->
+    do { _ <- tcHsContext (fromMaybe (noLoc []) ex_ctxt)
+       ; mapM_ (tcHsOpenType . getBangType) (hsConDeclArgTys details) }
               -- We don't need to check the telescope here, because that's
               -- done in tcConDecl
-       ; return () }
 
 kcConDecl (ConDeclGADT { con_names = names
                        , con_type = ty })
   = addErrCtxt (dataConCtxtName names) $
-      do { _ <- tcGadtSigType (ppr names) (unLoc $ head names) ty
+      do { kcGadtSigType (ppr names) (unLoc $ head names) ty
                 -- Even though the data constructor's type is closed, we
                 -- must still call tcGadtSigType, because that influences
                 -- the inferred kind of the /type/ constructor.  Example:
@@ -666,6 +658,10 @@ mappings:
 APromotionErr is only used for DataCons, and only used during type checking
 in tcTyClGroup.
 
+Note [Use SigTvs in kind-checking pass]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+TODO (RAE): Write note.
 
 ************************************************************************
 *                                                                      *
@@ -1633,37 +1629,29 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
                       , con_details = hs_details })
   = addErrCtxt (dataConCtxtName [name]) $
     do { -- Get hold of the existential type variables
-         -- e.g. data T a = forall (b::k) f. MkT a (f b)
+         -- e.g. data T a = forall k (b::k) f. MkT a (f b)
          -- Here tmpl_bndrs = {a}
-         --          hs_kvs = {k}
-         --          hs_tvs = {f,b}
-       ; let (hs_kvs, hs_tvs) = case hs_qvars of
-               Nothing -> ([], [])
-               Just (HsQTvs { hsq_implicit = kvs, hsq_explicit = tvs })
-                       -> (kvs, tvs)
+         --          hs_tvs = {k,f,b}
+       ; let hs_tvs = fromMaybe [] hs_qvars
+       ; traceTc "tcConDecl 1" (vcat [ ppr name, ppr hs_tvs ])
 
-       ; traceTc "tcConDecl 1" (vcat [ ppr name, ppr hs_kvs, ppr hs_tvs ])
-
-       ; (imp_tvs, (exp_tvs, ctxt, arg_tys, field_lbls, stricts))
+       ; (user_tvs, ctxt, arg_tys, field_lbls, stricts)
            <- solveEqualities $
-              tcImplicitTKBndrs skol_info hs_kvs $
-              tcExplicitTKBndrs skol_info hs_tvs $ \ exp_tvs ->
+              tcExplicitTKBndrs skol_info hs_tvs $ \ user_tvs ->
               do { traceTc "tcConDecl" (ppr name <+> text "tvs:" <+> ppr hs_tvs)
                  ; ctxt <- tcHsContext (fromMaybe (noLoc []) hs_ctxt)
                  ; btys <- tcConArgs hs_details
                  ; field_lbls <- lookupConstructorFields (unLoc name)
                  ; let (arg_tys, stricts) = unzip btys
-                 ; return (exp_tvs, ctxt, arg_tys, field_lbls, stricts)
+                 ; return (user_tvs, ctxt, arg_tys, field_lbls, stricts)
                  }
 
-         -- exp_tvs have explicit, user-written binding sites
-         -- imp_tvs are user-written kind variables, without an explicit binding site
+         -- user_tvs have explicit, user-written binding sites
          -- the kvs below are those kind variables entirely unmentioned by the user
          --   and discovered only by generalization
 
              -- Kind generalisation
-       ; let all_user_tvs = imp_tvs ++ exp_tvs
-       ; vars <- zonkTcTypeAndSplitDepVars (mkSpecForAllTys all_user_tvs $
+       ; vars <- zonkTcTypeAndSplitDepVars (mkSpecForAllTys user_tvs $
                                             mkFunTys ctxt $
                                             mkFunTys arg_tys $
                                             unitTy)
@@ -1678,7 +1666,7 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
 
              -- Zonk to Types
        ; (ze, qkvs)      <- zonkTyBndrsX emptyZonkEnv kvs
-       ; (ze, user_qtvs) <- zonkTyBndrsX ze all_user_tvs
+       ; (ze, user_qtvs) <- zonkTyBndrsX ze user_tvs
        ; arg_tys         <- zonkTcTypeToTypes ze arg_tys
        ; ctxt            <- zonkTcTypeToTypes ze ctxt
 
@@ -1714,7 +1702,8 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
   = addErrCtxt (dataConCtxtName names) $
     do { traceTc "tcConDecl 1" (ppr names)
        ; (user_tvs, ctxt, stricts, field_lbls, arg_tys, res_ty,hs_details)
-           <- tcGadtSigType (ppr names) (unLoc $ head names) ty
+           <- solveEqualities $
+              tcGadtSigType (ppr names) (unLoc $ head names) ty
 
        ; vars <- zonkTcTypeAndSplitDepVars (mkSpecForAllTys user_tvs $
                                             mkFunTys ctxt $
@@ -1764,17 +1753,27 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
        }
 
 
+kcGadtSigType :: SDoc -> Name -> LHsSigType GhcRn -> TcM ()
+kcGadtSigType doc name gadt_ty
+  = discardResult $ tcGadtSigTypeX newSigTyVar doc name gadt_ty
+
 tcGadtSigType :: SDoc -> Name -> LHsSigType GhcRn
               -> TcM ( [TcTyVar], [PredType],[HsSrcBang], [FieldLabel], [Type], Type
                      , HsConDetails (LHsType GhcRn)
                                     (Located [LConDeclField GhcRn]) )
-tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
+tcGadtSigType = tcGadtSigTypeX newSkolemTyVar
+
+tcGadtSigTypeX :: (Name -> Kind -> TcM TcTyVar)
+               -> SDoc -> Name -> LHsSigType GhcRn
+               -> TcM ( [TcTyVar], [PredType],[HsSrcBang], [FieldLabel], [Type], Type
+                      , HsConDetails (LHsType GhcRn)
+                                     (Located [LConDeclField GhcRn]) )
+tcGadtSigTypeX new_tv doc name ty@(HsIB { hsib_vars = vars })
   = do { let (hs_details', res_ty', cxt, gtvs) = gadtDeclDetails ty
        ; (hs_details, res_ty) <- updateGadtResult failWithTc doc hs_details' res_ty'
        ; (imp_tvs, (exp_tvs, ctxt, arg_tys, res_ty, field_lbls, stricts))
-           <- solveEqualities $
-              tcImplicitTKBndrs skol_info vars $
-              tcExplicitTKBndrs skol_info gtvs $ \ exp_tvs ->
+           <- tcImplicitTKBndrsX new_tv skol_info vars $
+              tcExplicitTKBndrsX new_tv skol_info gtvs $ \ exp_tvs ->
               do { ctxt <- tcHsContext cxt
                  ; btys <- tcConArgs hs_details
                  ; ty' <- tcHsLiftedType res_ty

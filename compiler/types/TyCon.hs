@@ -813,8 +813,8 @@ data TyCon
         tyConKind    :: Kind,             -- ^ Kind of this TyCon
         tyConArity   :: Arity,            -- ^ Arity
 
-        tcTyConScopedTyVars :: [TyVar], -- ^ Scoped tyvars over the
-                                        -- tycon's body. See Note [TcTyCon]
+        tcTyConScopedTyVars :: [TcTyVar], -- ^ Scoped tyvars over the
+                                          -- tycon's body. See Note [TcTyCon]
         tcTyConFlavour :: TyConFlavour
                            -- ^ What sort of 'TyCon' this represents.
       }
@@ -1161,7 +1161,7 @@ TcTyCons are used for two distinct purposes
     during desugaring. A desugared program should never have a TcTyCon.
 
     A challenging piece in all of this is that we end up taking three separate
-    passes over every declaration: one in getInitialKind (this pass look only
+    passes over every declaration: one in getInitialKind (this pass looks only
     at the head, not the body), one in kcTyClDecls (to kind-check the body),
     and a final one in tcTyClDecls (to desugar). In the latter two passes,
     we need to connect the user-written type variables in an LHsQTyVars
@@ -1541,7 +1541,7 @@ mkSumTyCon name binders res_kind arity tyvars cons parent
 mkTcTyCon :: Name
           -> [TyConBinder]
           -> Kind                -- ^ /result/ kind only
-          -> [TyVar]             -- ^ Scoped type variables, see Note [TcTyCon]
+          -> [TcTyVar]           -- ^ Scoped type variables, see Note [TcTyCon]
           -> TyConFlavour        -- ^ What sort of 'TyCon' this represents
           -> TyCon
 mkTcTyCon name binders res_kind scoped_tvs flav

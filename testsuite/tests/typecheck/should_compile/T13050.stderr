@@ -18,6 +18,12 @@ T13050.hs:4:9: warning: [-Wtyped-holes (in -Wdefault)]
         const :: forall a b. a -> b -> a
           (imported from ‘Prelude’ at T13050.hs:1:8-17
            (and originally defined in ‘GHC.Base’))
+        pure :: forall (f :: * -> *). Applicative f => forall a. a -> f a
+          (imported from ‘Prelude’ at T13050.hs:1:8-17
+           (and originally defined in ‘GHC.Base’))
+        return :: forall (m :: * -> *). Monad m => forall a. a -> m a
+          (imported from ‘Prelude’ at T13050.hs:1:8-17
+           (and originally defined in ‘GHC.Base’))
         (*) :: forall a. Num a => a -> a -> a
           (imported from ‘Prelude’ at T13050.hs:1:8-17
            (and originally defined in ‘GHC.Num’))
@@ -81,6 +87,12 @@ T13050.hs:5:11: warning: [-Wtyped-holes (in -Wdefault)]
           (imported from ‘Prelude’ at T13050.hs:1:8-17
            (and originally defined in ‘GHC.Base’))
         const :: forall a b. a -> b -> a
+          (imported from ‘Prelude’ at T13050.hs:1:8-17
+           (and originally defined in ‘GHC.Base’))
+        pure :: forall (f :: * -> *). Applicative f => forall a. a -> f a
+          (imported from ‘Prelude’ at T13050.hs:1:8-17
+           (and originally defined in ‘GHC.Base’))
+        return :: forall (m :: * -> *). Monad m => forall a. a -> m a
           (imported from ‘Prelude’ at T13050.hs:1:8-17
            (and originally defined in ‘GHC.Base’))
         (*) :: forall a. Num a => a -> a -> a
@@ -148,6 +160,12 @@ T13050.hs:6:11: warning: [-Wtyped-holes (in -Wdefault)]
           (imported from ‘Prelude’ at T13050.hs:1:8-17
            (and originally defined in ‘GHC.Base’))
         const :: forall a b. a -> b -> a
+          (imported from ‘Prelude’ at T13050.hs:1:8-17
+           (and originally defined in ‘GHC.Base’))
+        pure :: forall (f :: * -> *). Applicative f => forall a. a -> f a
+          (imported from ‘Prelude’ at T13050.hs:1:8-17
+           (and originally defined in ‘GHC.Base’))
+        return :: forall (m :: * -> *). Monad m => forall a. a -> m a
           (imported from ‘Prelude’ at T13050.hs:1:8-17
            (and originally defined in ‘GHC.Base’))
         (*) :: forall a. Num a => a -> a -> a

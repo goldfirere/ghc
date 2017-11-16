@@ -3078,6 +3078,8 @@ data SkolemInfo
 
   | TyConSkol TyConFlavour Name  -- bound in a type declaration of the given flavour
 
+  | DataConSkol Name    -- bound as an existential in a Haskell98 datacon decl
+
   | ReifySkol           -- Bound during Template Haskell reification
 
   | UnkSkol             -- Unhelpful info (until I improve it)
@@ -3114,6 +3116,7 @@ pprSkolInfo (InferSkol ids)   = hang (text "the inferred type" <> plural ids <+>
                                                    | (name,ty) <- ids ])
 pprSkolInfo (UnifyForAllSkol ty) = text "the type" <+> ppr ty
 pprSkolInfo (TyConSkol flav name) = text "the" <+> ppr flav <+> text "declaration for" <+> quotes (ppr name)
+pprSkolInfo (DataConSkol name)= text "the data constructor" <+> quotes (ppr name)
 pprSkolInfo ReifySkol         = text "the type being reified"
 
 -- UnkSkol

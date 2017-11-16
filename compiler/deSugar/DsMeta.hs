@@ -637,12 +637,14 @@ repC (L _ (ConDeclH98 { con_name = con
 repC (L _ (ConDeclH98 { con_name = con
                       , con_qvars = mcon_tvs, con_cxt = mcxt
                       , con_details = details }))
-  = do { let con_tvs = fromMaybe emptyLHsQTvs mcon_tvs
+  = do { let con_tvs = fromMaybe [] mcon_tvs
              ctxt    = unLoc $ fromMaybe (noLoc []) mcxt
-       ; addTyVarBinds con_tvs $ \ ex_bndrs ->
+       ; addTyVarBinds (HsQTvs { hsq_implicit = []
+                               , hsq_explicit = con_tvs
+                               , hsq_dependent = emptyNameSet }) $ \ ex_bndrs ->
          do { c'    <- repDataCon con details
             ; ctxt' <- repContext ctxt
-            ; if isEmptyLHsQTvs con_tvs && null ctxt
+            ; if null con_tvs && null ctxt
               then return c'
               else rep2 forallCName ([unC ex_bndrs, unC ctxt', unC c'])
             }

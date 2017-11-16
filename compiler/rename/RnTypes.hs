@@ -23,7 +23,7 @@ module RnTypes (
         checkPrecMatch, checkSectionPrec,
 
         -- Binding related stuff
-        bindLHsTyVarBndr,
+        bindLHsTyVarBndr, bindLHsTyVarBndrs,
         bindSigTyVarsFV, bindHsQTyVars, bindLRdrNames,
         extractFilteredRdrTyVars, extractFilteredRdrTyVarsDups,
         extractHsTyRdrTyVars, extractHsTyRdrTyVarsKindVars,
@@ -1732,7 +1732,7 @@ extractDataDefnKindVars (HsDataDefn { dd_ctxt = ctxt, dd_kindSig = ksig
     extract_con (ConDeclGADT { }) acc = return acc
     extract_con (ConDeclH98 { con_qvars = qvs
                             , con_cxt = ctxt, con_details = details }) acc
-      = extract_hs_tv_bndrs (maybe [] hsQTvExplicit qvs) acc =<<
+      = extract_hs_tv_bndrs (fromMaybe [] qvs) acc =<<
         extract_mlctxt ctxt =<<
         extract_ltys TypeLevel (hsConDeclArgTys details) emptyFKTV
 
