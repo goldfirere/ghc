@@ -1401,7 +1401,17 @@ kcHsTyVarBndrs name flav cusk
           -- If there are any meta-tvs left, the user has
           -- lied about having a CUSK. Error.
        ; let (meta_tvs, good_tvs) = partition isMetaTyVar qkvs
-       ; when (not (null meta_tvs)) $
+          -- skip this check for associated types. Why?
+          -- Any variables mentioned in the definition will get defaulted,
+          -- except those that appear in the class head. Defaulted vars do
+          -- not concern us here (they are fully determined). Variables from
+          -- the class head will be fully determined whenever the class has
+          -- a CUSK, and an associated family has a CUSK only when the enclosing
+          -- class has one. So skipping is safe. But why is it necessary?
+          -- It's possible that a class variable has too low a TcLevel to have
+          -- fully settled down by this point, and so this check will get
+          -- a false positive.
+       ; when (not_associated && not (null meta_tvs)) $
          report_non_cusk_tvs (qkvs ++ tc_tvs)
 
           -- If any of the scoped_kvs aren't actually mentioned in a binder's
@@ -1449,6 +1459,10 @@ kcHsTyVarBndrs name flav cusk
        ; return (tycon, stuff) }
   where
     open_fam = tcFlavourIsOpen flav
+    not_associated = case flav of
+      DataFamilyFlavour assoc     -> not assoc
+      OpenTypeFamilyFlavour assoc -> not assoc
+      _                           -> False
 
     skol_info = TyConSkol flav name
 

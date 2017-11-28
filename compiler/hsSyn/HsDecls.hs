@@ -956,7 +956,7 @@ famDeclHasCusk _ (FamilyDecl { fdInfo      = ClosedTypeFamily _
                              , fdResultSig = L _ resultSig })
   = hsTvbAllKinded tyvars && hasReturnKindSignature resultSig
 famDeclHasCusk mb_class_cusk _ = mb_class_cusk `orElse` True
-        -- all un-associated open families have CUSKs!
+        -- all un-associated open families have CUSKs
 
 -- | Does this family declaration have user-supplied return kind signature?
 hasReturnKindSignature :: FamilyResultSig a -> Bool

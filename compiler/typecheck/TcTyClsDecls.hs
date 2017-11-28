@@ -555,8 +555,8 @@ getFamDeclInitialKind mb_cusk decl@(FamilyDecl { fdLName     = L _ name
   where
     cusk  = famDeclHasCusk mb_cusk decl
     flav  = case info of
-      DataFamily         -> DataFamilyFlavour
-      OpenTypeFamily     -> OpenTypeFamilyFlavour
+      DataFamily         -> DataFamilyFlavour (isJust mb_cusk)
+      OpenTypeFamily     -> OpenTypeFamilyFlavour (isJust mb_cusk)
       ClosedTypeFamily _ -> ClosedTypeFamilyFlavour
 
 ------------------------------------------------------------------------
@@ -821,7 +821,7 @@ tcFamDecl1 parent (FamilyDecl { fdInfo = fam_info, fdLName = tc_lname@(L _ tc_na
                               , fdResultSig = L _ sig
                               , fdInjectivityAnn = inj })
   | DataFamily <- fam_info
-  = tcTyClTyVars tc_name DataFamilyFlavour $ \ binders res_kind -> do
+  = tcTyClTyVars tc_name (DataFamilyFlavour (isJust parent)) $ \ binders res_kind -> do
   { traceTc "data family:" (ppr tc_name)
   ; checkFamFlag tc_name
   ; (extra_binders, real_res_kind) <- tcDataKindSig False res_kind
@@ -834,7 +834,7 @@ tcFamDecl1 parent (FamilyDecl { fdInfo = fam_info, fdLName = tc_lname@(L _ tc_na
   ; return tycon }
 
   | OpenTypeFamily <- fam_info
-  = tcTyClTyVars tc_name OpenTypeFamilyFlavour $ \ binders res_kind -> do
+  = tcTyClTyVars tc_name (OpenTypeFamilyFlavour (isJust parent)) $ \ binders res_kind -> do
   { traceTc "open type family:" (ppr tc_name)
   ; checkFamFlag tc_name
   ; inj' <- tcInjectivity binders inj
@@ -1379,9 +1379,9 @@ tcFamTyPats fam_tc mb_clsinfo
          -- errors below when an arity error will be much easier to
          -- understand.
          let should_check_arity
-               | DataFamilyFlavour <- flav = False
+               | DataFamilyFlavour _ <- flav = False
                   -- why not check data families? See [Arity of data families] in FamInstEnv
-               | otherwise                 = True
+               | otherwise                   = True
 
        ; when should_check_arity $
          checkTc (arg_pats `lengthIs` vis_arity) $
