@@ -1613,6 +1613,7 @@ tcExplicitTKBndrs = tcExplicitTKBndrsX newSkolemTyVar
 -- | This brings a bunch of tyvars into scope as SigTvs, where they can unify
 -- with other type *variables* only.
 -- TODO (RAE): Do I need this? Should it bump the TcLevel?
+-- TODO (RAE): Yes, it should bump the level.
 tcExplicitTKBndrsSig :: SkolemInfo
                      -> [LHsTyVarBndr GhcRn]
                      -> ([TcTyVar] -> TcM a)
@@ -1625,27 +1626,26 @@ tcExplicitTKBndrsX :: (Name -> Kind -> TcM TyVar)
                    -> ([TcTyVar] -> TcM a)
                    -> TcM a
 tcExplicitTKBndrsX new_tv skol_info orig_hs_tvs thing_inside
-  = go orig_hs_tvs $ \ tvs ->
-    do { result <- thing_inside tvs
+  = do { (result, tvs) <- solveLocalEqualities $
+                          go orig_hs_tvs thing_inside
 
-         -- Issue an error if the ordering is bogus.
-         -- See Note [Bad telescopes] in TcValidity.
-         -- TODO (RAE): Update.
-       ; tvs <- checkZonkValidTelescope (interppSP orig_hs_tvs) tvs empty
+         -- We're done processing this clump of binders. If we haven't figured
+         -- out dependencies, we're not going to. Promote the lot.
+       ; tys <- zonkTcTyVars tvs
+       ; _ <- promoteTyVarSet (tyCoVarsOfTypes tys)
 
-       ; traceTc "tcExplicitTKBndrs" $
-           vcat [ text "Hs vars:" <+> ppr orig_hs_tvs
-                , text "tvs:" <+> sep (map pprTyVar tvs) ]
+       ; traceTc "tcExplicitTKBndrs" $ text "Hs vars:" <+> ppr orig_hs_tvs
 
-       ; return result
-       }
+       ; return result }
   where
-    go [] thing = thing []
+    go [] thing = do { result <- thing [];
+                       return (result, []) }
     go (L _ hs_tv : hs_tvs) thing
       = do { tv <- tcHsTyVarBndr new_tv hs_tv
-           ; scopeTyVars skol_info [tv] $
-             go hs_tvs $ \ tvs ->
-             thing (tv : tvs) }
+           ; (result, tvs) <- scopeTyVars skol_info [tv] $
+                              go hs_tvs $ \ tvs ->
+                              thing (tv : tvs)
+           ; return (result, tv : tvs) }
 
 -- | Used during the "kind-checking" pass in TcTyClsDecls only.
 -- See Note [Use SigTvs in kind-checking pass] in TcTyClsDecls

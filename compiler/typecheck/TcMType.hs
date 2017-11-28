@@ -55,7 +55,7 @@ module TcMType (
   -- Instantiation
   newMetaTyVars, newMetaTyVarX, newMetaTyVarsX,
   newMetaSigTyVars, newMetaSigTyVarX,
-  newSigTyVar, newSkolemTyVar, newWildCardX,
+  newSigTyVar, newSigTyVarTcLevel, newSkolemTyVar, newWildCardX,
   tcInstType,
   tcInstSkolTyVars,tcInstSkolTyVarsX,
   tcInstSuperSkolTyVarsX,
@@ -589,6 +589,10 @@ newSigTyVar name kind
        ; let tyvar = mkTcTyVar name kind details
        ; traceTc "newSigTyVar" (ppr tyvar)
        ; return tyvar }
+
+newSigTyVarTcLevel :: TcLevel -> Name -> Kind -> TcM TcTyVar
+newSigTyVarTcLevel tclvl name kind
+  = setMetaTyVarTcLevel <$> newSigTyVar name kind <*> pure tclvl
 
 -- makes a new skolem tv
 newSkolemTyVar :: Name -> Kind -> TcM TcTyVar

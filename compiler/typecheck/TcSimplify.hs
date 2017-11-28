@@ -13,6 +13,7 @@ module TcSimplify(
        tcSubsumes,
 
        promoteTyVar,
+       promoteTyVarSet,
 
        -- For Rules we need these
        solveWanteds, solveWantedsAndDrop,
@@ -180,8 +181,8 @@ solveLocalEqualities thing_inside
              float_preds = ctsPreds floated
              tvs_to_promote = growThetaTyVarsTcLevel outer_level float_preds
                                                      global_scoped_tvs
-       ; mapM_ promoteTyVar (nonDetEltsUniqSet tvs_to_promote)
-          -- OK to be non-deterministic here, as the order of promotion is immaterial
+
+       ; _ <- promoteTyVarSet tvs_to_promote
 
          -- 5.
        ; emitSimples floated
@@ -991,11 +992,8 @@ defaultTyVarsAndSimplify :: TcLevel
 defaultTyVarsAndSimplify rhs_tclvl mono_tvs candidates
   = do {  -- Promote any tyvars that we cannot generalise
           -- See Note [Promote momomorphic tyvars]
-       ; let prom_tvs = nonDetEltsUniqSet mono_tvs
-                        -- It's OK to use nonDetEltsUniqSet here
-                        -- because promoteTyVar is commutative
-       ; traceTc "decideMonoTyVars: promotion:" (ppr prom_tvs)
-       ; proms <- mapM promoteTyVar prom_tvs
+       ; traceTc "decideMonoTyVars: promotion:" (ppr mono_tvs)
+       ; prom <- promoteTyVarSet mono_tvs
 
        -- Default any kind/levity vars
        ; let DV {dv_kvs = cand_kvs, dv_tvs = cand_tvs}
@@ -1009,7 +1007,7 @@ defaultTyVarsAndSimplify rhs_tclvl mono_tvs candidates
 
        ; case () of
            _ | some_default -> simplify_cand candidates
-             | or proms     -> mapM TcM.zonkTcType candidates
+             | prom         -> mapM TcM.zonkTcType candidates
              | otherwise    -> return candidates
        }
   where
@@ -1851,6 +1849,12 @@ promoteTyVar tv
                  ; TcM.writeMetaTyVar tv (mkTyVarTy rhs_tv)
                  ; return True }
          else return False }
+
+-- Returns whether or not *any* tyvar is defaulted
+promoteTyVarSet :: TcTyVarSet -> TcM Bool
+promoteTyVarSet tvs
+  = or <$> mapM promoteTyVar (nonDetEltsUniqSet tvs)
+    -- non-determinism is OK because order of promotion doesn't matter
 
 promoteTyVarTcS :: TcTyVar  -> TcS ()
 -- When we float a constraint out of an implication we must restore
