@@ -585,13 +585,13 @@ kcTyClDecl (DataDecl { tcdLName = L _ name, tcdDataDefn = defn })
     --        ConDecls bind all their own variables
     --    (b) dd_ctxt is not allowed for GADT-style decls, so we can ignore it
 
-  | HsDataDefn { dd_ctxt = ctxt, dd_cons = cons, dd_ND = nd } <- defn
-  = kcTyClTyVars name (newOrDataToFlavour nd) $
+  | HsDataDefn { dd_ctxt = ctxt, dd_cons = cons } <- defn
+  = kcTyClTyVars name $
     do  { _ <- tcHsContext ctxt
         ; mapM_ (wrapLocM kcConDecl) cons }
 
 kcTyClDecl (SynDecl { tcdLName = L _ name, tcdRhs = lrhs })
-  = kcTyClTyVars name TypeSynonymFlavour $
+  = kcTyClTyVars name $
     do  { syn_tc <- kcLookupTcTyCon name
         -- NB: check against the result kind that we allocated
         -- in getInitialKinds.
@@ -599,7 +599,7 @@ kcTyClDecl (SynDecl { tcdLName = L _ name, tcdRhs = lrhs })
 
 kcTyClDecl (ClassDecl { tcdLName = L _ name
                       , tcdCtxt = ctxt, tcdSigs = sigs })
-  = kcTyClTyVars name ClassFlavour $
+  = kcTyClTyVars name $
     do  { _ <- tcHsContext ctxt
         ; mapM_ (wrapLocM kc_sig)     sigs }
   where
@@ -622,7 +622,7 @@ kcConDecl (ConDeclH98 { con_name = name, con_qvars = ex_tvs
                       , con_cxt = ex_ctxt, con_details = details })
   = addErrCtxt (dataConCtxtName [name]) $
       -- See Note [Use SigTvs in kind-checking pass]
-    tcExplicitTKBndrsSig (DataConSkol (unLoc name)) (fromMaybe [] ex_tvs) $ \ _ex_tvs' ->
+    kcExplicitTKBndrs (fromMaybe [] ex_tvs) $
     do { _ <- tcHsContext (fromMaybe (noLoc []) ex_ctxt)
        ; mapM_ (tcHsOpenType . getBangType) (hsConDeclArgTys details) }
               -- We don't need to check the telescope here, because that's
@@ -1167,17 +1167,19 @@ kcTyFamInstEqn tc_fam_tc
   = setSrcSpan loc $
     do { checkTc (fam_name == eqn_tc_name)
                  (wrongTyFamName fam_name eqn_tc_name)
-       ; discardResult $
-         tc_fam_ty_pats tc_fam_tc Nothing -- not an associated type
-                        tv_names pats (kcTyFamEqnRhs Nothing pp_lhs hs_ty) }
+          -- this check reports an arity error instead of a kind error; easier for user
+       ; checkTc (pats `lengthIs` vis_arity) $
+                  wrongNumberOfParmsErr vis_arity
+       ; kcFamTyPats tc_fam_tc tv_names pats $ \ rhs_kind ->
+         discardResult $ kcTyFamEqnRhs Nothing pp_lhs hs_ty rhs_kind }
   where
     fam_name = tyConName tc_fam_tc
     pp_lhs = pprFamInstLHS lname pats fixity [] Nothing
+    vis_arity = length (tyConVisibleTyVars tc_fam_tc)
 
 -- Infer the kind of the type on the RHS of a type family eqn. Then use
 -- this kind to check the kind of the LHS of the equation. This is useful
--- as the callback to tc_fam_ty_pats and the kind-checker to
--- tcFamTyPats.
+-- as the callback to tcFamTyPats.
 kcTyFamEqnRhs :: Maybe ClsInstInfo
               -> SDoc                 -- ^ Eqn LHS (for errors only)
               -> LHsType GhcRn        -- ^ Eqn RHS
@@ -1293,24 +1295,6 @@ Kind check type patterns and kind annotate the embedded type variables.
    not check whether there is a pattern for each type index; the latter
    check is only required for type synonym instances.
 
-Note [tc_fam_ty_pats vs tcFamTyPats]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-tc_fam_ty_pats does the type checking of the patterns, but it doesn't
-zonk or generate any desugaring. It is used when kind-checking closed
-type families.
-
-tcFamTyPats type checks the patterns, zonks, and then calls thing_inside
-to generate a desugaring. It is used during type-checking (not kind-checking).
-
-Note [Type-checking type patterns]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-When typechecking the patterns of a family instance declaration, we can't
-rely on using the family TyCon itself, because this is sometimes called
-from within a type-checking knot. (Specifically for closed type families.)
-The TcTyCon gives just enough information to do the job.
-
-See also Note [tc_fam_ty_pats vs tcFamTyPats]
-
 Note [Instantiating a family tycon]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 It's possible that kind-checking the result of a family tycon applied to
@@ -1347,15 +1331,37 @@ two bad things could happen:
 -}
 
 -----------------
-tc_fam_ty_pats :: TcTyCon    -- The family TcTyCon
-                             -- See Note [Type-checking type patterns]
-               -> Maybe ClsInstInfo
-               -> [Name]              -- Bound kind/type variable names
-               -> HsTyPats GhcRn      -- Type patterns
-               -> (TcKind -> TcM r)   -- Kind checker for RHS
-               -> TcM ( [TcTyVar]     -- Returns the type-checked patterns,
-                      , [TcType]      -- the type variables that scope over
-                      , r )           -- them, and the thing inside
+kcFamTyPats :: TcTyCon
+            -> [Name]
+            -> HsTyPats GhcRn
+            -> (TcKind -> TcM ())
+            -> TcM ()
+kcFamTyPats tc_fam_tc tv_names arg_pats kind_checker
+  = kcImplicitTKBndrs tv_names $
+    do { let loc     = nameSrcSpan name
+             lhs_fun = L loc (HsTyVar NotPromoted (L loc name))
+               -- lhs_fun is for error messages only
+             no_fun  = pprPanic "kcFamTyPats" (ppr name)
+             fun_kind = tyConKind tc_fam_tc
+
+       ; (_, _, res_kind_out) <- tcInferApps typeLevelMode Nothing lhs_fun no_fun
+                                             fun_kind arg_pats
+       ; kind_checker res_kind_out }
+  where
+    name = tyConName tc_fam_tc
+
+tcFamTyPats :: TyCon
+            -> Maybe ClsInstInfo
+            -> [Name]          -- Implicitly bound kind/type variable names
+            -> HsTyPats GhcRn  -- Type patterns
+            -> (TcKind -> TcM ([TcType], TcKind))
+                -- kind-checker for RHS
+                -- See Note [Instantiating a family tycon]
+            -> (   [TcTyVar]         -- Kind and type variables
+                -> [TcType]          -- Kind and type arguments
+                -> TcKind
+                -> TcM a)            -- NB: You can use solveEqualities here.
+            -> TcM a
 -- Check the type patterns of a type or data family instance
 --     type instance F <pat1> <pat2> = <type>
 -- The 'tyvars' are the free type variables of pats
@@ -1366,9 +1372,8 @@ tc_fam_ty_pats :: TcTyCon    -- The family TcTyCon
 --          type F [a] = ...
 -- In that case, the type variable 'a' will *already be in scope*
 -- (and, if C is poly-kinded, so will its kind parameter).
-
-tc_fam_ty_pats tc_fam_tc mb_clsinfo tv_names arg_pats
-               kind_checker
+tcFamTyPats fam_tc mb_clsinfo
+            tv_names arg_pats kind_checker thing_inside
   = do { -- First, check the arity.
          -- If we wait until validity checking, we'll get kind
          -- errors below when an arity error will be much easier to
@@ -1383,48 +1388,21 @@ tc_fam_ty_pats tc_fam_tc mb_clsinfo tv_names arg_pats
          wrongNumberOfParmsErr vis_arity
                       -- report only explicit arguments
 
-         -- Kind-check and quantify
-         -- See Note [Quantifying over family patterns]
-       ; (arg_tvs, (args, stuff)) <- tcImplicitTKBndrs FamInstSkol tv_names $
-         do { let loc          = nameSrcSpan name
-                  lhs_fun      = L loc (HsTyVar NotPromoted (L loc name))
-                  fun_ty       = mkTyConApp tc_fam_tc []
-                  fun_kind     = tyConKind tc_fam_tc
-                  mb_kind_env  = thdOf3 <$> mb_clsinfo
-
-            ; (_, args, res_kind_out)
-                <- tcInferApps typeLevelMode mb_kind_env
-                               lhs_fun fun_ty fun_kind arg_pats
-
-            ; stuff <- kind_checker res_kind_out
-
-            ; return (args, stuff) }
-
-       ; return (arg_tvs, args, stuff) }
-  where
-    name      = tyConName tc_fam_tc
-    vis_arity = length (tyConVisibleTyVars tc_fam_tc)
-    flav      = tyConFlavour tc_fam_tc
-
--- See Note [tc_fam_ty_pats vs tcFamTyPats]
-tcFamTyPats :: TcTyCon
-            -> Maybe ClsInstInfo
-            -> [Name]          -- Implicitly bound kind/type variable names
-            -> HsTyPats GhcRn  -- Type patterns
-            -> (TcKind -> TcM ([TcType], TcKind))
-                -- kind-checker for RHS
-                -- See Note [Instantiating a family tycon]
-            -> (   [TcTyVar]         -- Kind and type variables
-                -> [TcType]          -- Kind and type arguments
-                -> TcKind
-                -> TcM a)            -- NB: You can use solveEqualities here.
-            -> TcM a
-tcFamTyPats tc_fam_tc mb_clsinfo
-            tv_names arg_pats kind_checker thing_inside
-  = do { (fam_used_tvs, typats, (more_typats, res_kind))
+       ; (fam_used_tvs, (typats, (more_typats, res_kind)))
             <- solveEqualities $  -- See Note [Constraints in patterns]
-               tc_fam_ty_pats tc_fam_tc mb_clsinfo
-                              tv_names arg_pats kind_checker
+               tcImplicitTKBndrs FamInstSkol tv_names $
+               do { let loc = nameSrcSpan fam_name
+                        lhs_fun = L loc (HsTyVar NotPromoted (L loc fam_name))
+                        fun_ty = mkTyConApp fam_tc []
+                        fun_kind = tyConKind fam_tc
+                        mb_kind_env = thdOf3 <$> mb_clsinfo
+
+                  ; (_, args, res_kind_out)
+                      <- tcInferApps typeLevelMode mb_kind_env
+                                     lhs_fun fun_ty fun_kind arg_pats
+
+                  ; stuff <- kind_checker res_kind_out
+                  ; return (args, stuff) }
 
           {- TODO (RAE): This should be cleverer. Consider this:
 
@@ -1456,13 +1434,12 @@ tcFamTyPats tc_fam_tc mb_clsinfo
            -- above would fail. TODO (RAE): Update once the solveEqualities
            -- bit is cleverer.
 
-       ; traceTc "tcFamTyPats" (ppr (getName tc_fam_tc)
+       ; traceTc "tcFamTyPats" (ppr (getName fam_tc)
                                 $$ ppr all_pats $$ ppr qtkvs)
            -- Don't print out too much, as we might be in the knot
 
            -- See Note [Free-floating kind vars] in TcHsType
-       ; let tc_flav = tyConFlavour tc_fam_tc
-             all_mentioned_tvs = mkVarSet qtkvs
+       ; let all_mentioned_tvs = mkVarSet qtkvs
                                    -- qtkvs has all the tyvars bound by LHS
                                    -- type patterns
              unmentioned_tvs   = filterOut (`elemVarSet` all_mentioned_tvs)
@@ -1470,7 +1447,7 @@ tcFamTyPats tc_fam_tc mb_clsinfo
                                    -- If there are tyvars left over, we can
                                    -- assume they're free-floating, since they
                                    -- aren't bound by a type pattern
-       ; checkNoErrs $ reportFloatingKvs (getName tc_fam_tc) tc_flav
+       ; checkNoErrs $ reportFloatingKvs fam_name flav
                                          qtkvs unmentioned_tvs
 
        ; scopeTyVars FamInstSkol qtkvs $
@@ -1478,6 +1455,11 @@ tcFamTyPats tc_fam_tc mb_clsinfo
             -- kind checking etc done by thing_inside does not expect
             -- to encounter TyVars; it expects TcTyVars
          thing_inside qtkvs all_pats res_kind }
+  where
+    fam_name  = tyConName fam_tc
+    flav      = tyConFlavour fam_tc
+    vis_arity = length (tyConVisibleTyVars fam_tc)
+
 
 {-
 Note [Constraints in patterns]

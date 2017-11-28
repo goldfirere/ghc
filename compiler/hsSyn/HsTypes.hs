@@ -56,7 +56,7 @@ module HsTypes (
         hsLTyVarName, hsLTyVarLocName, hsExplicitLTyVarNames,
         splitLHsInstDeclTy, getLHsInstDeclHead, getLHsInstDeclClass_maybe,
         splitLHsPatSynTy,
-        splitLHsForAllTy, splitLHsQualTy, splitLHsSigmaTy,
+        splitLHsForAllTy, splitNestedLHsForAllTy, splitLHsQualTy, splitLHsSigmaTy,
         splitHsFunType, splitHsAppsTy,
         splitHsAppTys, getAppsTyHead_maybe, hsTyGetAppHead_maybe,
         mkHsOpTy, mkHsAppTy, mkHsAppTys,
@@ -1052,10 +1052,21 @@ splitLHsSigmaTy ty
   = (tvs, ctxt, ty2)
 
 splitLHsForAllTy :: LHsType pass -> ([LHsTyVarBndr pass], LHsType pass)
+splitLHsForAllTy (L _ (HsParTy ty)) = splitLHsForAllTy ty
 splitLHsForAllTy (L _ (HsForAllTy { hst_bndrs = tvs, hst_body = body })) = (tvs, body)
 splitLHsForAllTy body                                                    = ([], body)
 
+-- | Also handles forall a. forall b. blah
+splitNestedLHsForAllTy :: LHsType pass -> ([LHsTyVarBndr pass], LHsType pass)
+splitNestedLHsForAllTy (L _ (HsParTy ty)) = splitNestedLHsForAllTy ty
+splitNestedLHsForAllTy (L _ (HsForAllTy { hst_bndrs = tvs1, hst_body = body }))
+  = (tvs1 ++ tvs', body')
+  where
+    (tvs', body') = splitNestedLHsForAllTy body
+splitNestedLHsForAllTy body = ([], body)
+
 splitLHsQualTy :: LHsType pass -> (LHsContext pass, LHsType pass)
+splitLHsQualTy (L _ (HsParTy ty)) = splitLHsQualTy ty
 splitLHsQualTy (L _ (HsQualTy { hst_ctxt = ctxt, hst_body = body })) = (ctxt,     body)
 splitLHsQualTy body                                                  = (noLoc [], body)
 

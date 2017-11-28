@@ -97,7 +97,7 @@ module TcRnMonad(
   emitImplication, emitImplications, emitInsoluble,
   discardConstraints, captureConstraints, tryCaptureConstraints,
   pushLevelAndCaptureConstraints,
-  pushTcLevelM_, pushTcLevelM,
+  pushTcLevelM_, pushTcLevelM, pushTcLevelsM,
   getTcLevel, setTcLevel, isTouchableTcM,
   getLclTypeEnv, setLclTypeEnv,
   traceTcConstraints, emitWildCardHoleConstraints,
@@ -1510,6 +1510,15 @@ pushTcLevelM thing_inside
        ; let tclvl' = pushTcLevel (tcl_tclvl env)
        ; res <- setLclEnv (env { tcl_tclvl = tclvl' })
                           thing_inside
+       ; return (res, tclvl') }
+
+-- Returns pushed TcLevel
+pushTcLevelsM :: Int -> TcM a -> TcM (a, TcLevel)
+pushTcLevelsM num_levels thing_inside
+  = do { env <- getLclEnv
+       ; let tclvl' = nTimes num_levels pushTcLevel (tcl_tclvl env)
+       ; res <- setLclEnv (env { tcl_tclvl = tclvl' }) $
+                thing_inside
        ; return (res, tclvl') }
 
 getTcLevel :: TcM TcLevel

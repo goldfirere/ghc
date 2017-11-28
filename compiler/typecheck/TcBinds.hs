@@ -40,7 +40,7 @@ import FamInstEnv( normaliseType )
 import FamInst( tcGetFamInstEnvs )
 import TyCon
 import TcType
-import Type( mkStrLitTy, tidyOpenType, splitTyConApp_maybe)
+import Type( mkStrLitTy, tidyOpenType, splitTyConApp_maybe, mkCastTy)
 import TysPrim
 import TysWiredIn( mkBoxedTupleTy )
 import Id
@@ -946,7 +946,7 @@ chooseInferredQuantifiers inferred_theta tau_tvs qtvs
        ; psig_qtvs <- mk_psig_qtvs annotated_tvs
        ; return (mk_final_qtvs psig_qtvs free_tvs, annotated_theta) }
 
-  | Just wc_var <- wcx
+  | Just wc_var_ty <- wcx
   = do { annotated_theta <- zonkTcTypes annotated_theta
        ; let free_tvs = closeOverKinds (growThetaTyVars inferred_theta seed_tvs)
                           -- growThetaVars just like the no-type-sig case
@@ -967,7 +967,13 @@ chooseInferredQuantifiers inferred_theta tau_tvs qtvs
                              | pred <- my_theta
                              , all (not . (`eqType` pred)) annotated_theta ]
        ; ctuple <- mk_ctuple inferred_diff
-       ; writeMetaTyVar wc_var ctuple
+
+       ; case tcGetCastedTyVar_maybe wc_var_ty of
+             -- We know that wc_co must have type kind(wc_var) ~ Constraint, as it
+             -- comes from the checkExpectedKind in TcHsType.tcWildCardOcc. So, to
+             -- make the kinds work out, we reverse the cast here.
+           Just (wc_var, wc_co) -> writeMetaTyVar wc_var (ctuple `mkCastTy` mkTcSymCo wc_co)
+           Nothing              -> pprPanic "chooseInferredQuantifiers 1" (ppr wc_var_ty)
 
        ; traceTc "completeTheta" $
             vcat [ ppr sig

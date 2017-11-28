@@ -1506,8 +1506,11 @@ data TcIdSigInst
                -- wildcards scope over the binding, and hence their
                -- Names may appear in type signatures in the binding
 
-         , sig_inst_wcx   :: Maybe TcTyVar
+         , sig_inst_wcx   :: Maybe TcType
                -- Extra-constraints wildcard to fill in, if any
+               -- If this exists, it is surely of the form (meta_tv |> co)
+               -- (where the co might be reflexive). This is filled in
+               -- only from the return value of TcHsType.tcWildCardOcc
          }
 
 {- Note [sig_inst_tau may be polymorphic]
