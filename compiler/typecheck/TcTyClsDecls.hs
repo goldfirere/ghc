@@ -1754,7 +1754,7 @@ tcGadtSigTypeX new_tv doc name ty@(HsIB { hsib_vars = vars })
   = do { let (hs_details', res_ty', cxt, gtvs) = gadtDeclDetails ty
        ; (hs_details, res_ty) <- updateGadtResult failWithTc doc hs_details' res_ty'
        ; (imp_tvs, (exp_tvs, ctxt, arg_tys, res_ty, field_lbls, stricts))
-           <- tcImplicitTKBndrsX new_tv skol_info vars $
+           <- tcImplicitTKBndrsX new_tv False {- not nec'ly kind vars -} skol_info vars $
               tcExplicitTKBndrsX new_tv skol_info gtvs $ \ exp_tvs ->
               do { ctxt <- tcHsContext cxt
                  ; btys <- tcConArgs hs_details

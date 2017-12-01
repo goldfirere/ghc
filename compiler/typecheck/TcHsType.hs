@@ -1382,11 +1382,9 @@ kcHsTyVarBndrs name flav cusk
   (HsQTvs { hsq_implicit = kv_ns, hsq_explicit = hs_tvs
           , hsq_dependent = dep_names }) thing_inside
   | cusk
-  = do { kv_kinds <- mk_kv_kinds
-       ; scoped_kvs <- zipWithM newSkolemTyVar kv_ns kv_kinds
-       ; (tc_binders, res_kind, stuff)
+  = do { (scoped_kvs, (tc_binders, res_kind, stuff))
            <- solveEqualities $
-              scopeTyVars2 skol_info (kv_ns `zip` scoped_kvs) $  -- TODO (RAE): This is wrong. It should bring them all into scope at once, like tcImplicitTKBndrs.
+              tcImplicitTKBndrsX newSkolemTyVar True {- all kind vars -} skol_info kv_ns $
               bind_telescope hs_tvs thing_inside
 
            -- Now, because we're in a CUSK, quantify over the mentioned
@@ -1444,7 +1442,6 @@ kcHsTyVarBndrs name flav cusk
   | otherwise
   = do { kv_kinds <- mk_kv_kinds
        ; scoped_kvs <- zipWithM newSigTyVar kv_ns kv_kinds
-                     -- the names must line up in splitTelescopeTvs
        ; (binders, res_kind, stuff)
            <- solveLocalEqualities $
               tcExtendTyVarEnv scoped_kvs $ -- Note [Don't bump TcLevel in non-CUSK types]
@@ -1543,7 +1540,7 @@ tcImplicitTKBndrs :: SkolemInfo
                   -> [Name]
                   -> TcM a
                   -> TcM ([TcTyVar], a)
-tcImplicitTKBndrs = tcImplicitTKBndrsX newSkolemTyVar
+tcImplicitTKBndrs = tcImplicitTKBndrsX newSkolemTyVar False
 
 -- | Like 'tcImplicitTKBndrs', but uses 'newSigTyVar' to create tyvars
 -- TODO (RAE): Do I need this?
@@ -1551,9 +1548,11 @@ tcImplicitTKBndrsSig :: SkolemInfo
                      -> [Name]
                      -> TcM a
                      -> TcM ([TcTyVar], a)
-tcImplicitTKBndrsSig = tcImplicitTKBndrsX newSigTyVar
+tcImplicitTKBndrsSig = tcImplicitTKBndrsX newSigTyVar False
 
 tcImplicitTKBndrsX :: (Name -> Kind -> TcM TcTyVar) -- new_tv function
+                   -> Bool -- True <=> these are all *kind* variables
+                           -- (matters for -XNoTypeInType only)
                    -> SkolemInfo
                    -> [Name]
                    -> TcM a
@@ -1562,14 +1561,19 @@ tcImplicitTKBndrsX :: (Name -> Kind -> TcM TcTyVar) -- new_tv function
 -- but may be in different order to the original [Name]
 --   (because of sorting to respect dependency)
 -- Returned TcTyVars have zonked kinds
-tcImplicitTKBndrsX new_tv skol_info var_ns thing_inside
-  = do { (((skol_tvs, result), wanted), inner_tclvl)
+tcImplicitTKBndrsX new_tv kind_vars skol_info var_ns thing_inside
+  = do { typeintype <- xoptM LangExt.TypeInType
+       ; let m_kind
+               | not kind_vars || typeintype = Nothing              -- meta kinds
+               | otherwise                   = Just liftedTypeKind  -- default to Type
+
+       ; (((skol_tvs, result), wanted), inner_tclvl)
            -- We must bump the TcLevel by the exact amount of variables we're binding.
            -- Why? Because there will be exactly that many foralls when we're all done,
            -- and every forall will bump the level once.
            <- pushTcLevelsM (length var_ns) $
               captureConstraints $
-              do { tkvs_pairs <- mapM (tcHsTyVarName new_tv Nothing) var_ns
+              do { tkvs_pairs <- mapM (tcHsTyVarName new_tv m_kind) var_ns
                  ; let must_scope_tkvs = [ tkv | (tkv, False) <- tkvs_pairs ]
                        tkvs            = map fst tkvs_pairs
                  ; result <- tcExtendTyVarEnv must_scope_tkvs $
