@@ -677,6 +677,7 @@ deriveTyData tvs tc tc_args deriv_strat deriv_pred
   = setSrcSpan (getLoc (hsSigType deriv_pred)) $  -- Use loc of the 'deriving' item
     do  { (deriv_tvs, cls, cls_tys, cls_arg_kinds)
                 <- scopeTyVars (TyConSkol DataTypeFlavour (getName tc)) tvs $
+                     -- TODO (RAE): This is wrong. The tvs aren't ordered.
                    tcHsDeriv deriv_pred
                 -- Deriving preds may (now) mention
                 -- the type variables for the type constructor, hence tcExtendTyVarenv

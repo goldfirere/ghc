@@ -1451,6 +1451,7 @@ tcFamTyPats fam_tc mb_clsinfo
                                          qtkvs unmentioned_tvs
 
        ; scopeTyVars FamInstSkol qtkvs $
+         -- TODO (RAE): scopeTyVars is wrong; qtkvs is unordered
             -- Extend envt with TcTyVars not TyVars, because the
             -- kind checking etc done by thing_inside does not expect
             -- to encounter TyVars; it expects TcTyVars
