@@ -785,7 +785,7 @@ isLiftedTypeKind = is_TYPE is_lifted
 isUnliftedTypeKind :: Kind -> Bool
 isUnliftedTypeKind = is_TYPE is_unlifted
   where
-    is_unlifted (TyConApp rr _args) = not (rr `hasKey` liftedRepDataConKey)
+    is_unlifted (TyConApp rr _args) = elem (getUnique rr) unliftedRepDataConKeys
     is_unlifted _                   = False
 
 -- | Is this the type 'RuntimeRep'?

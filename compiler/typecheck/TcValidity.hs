@@ -1867,7 +1867,7 @@ tcImplicitTKBndrs.
 -- of problem is harder to spot (as we'll generalise over the unbound
 -- k in a's type.) See also Note [Bad telescopes].
 checkValidTelescope :: SDoc        -- the original user-written telescope
-                    -> [TyVar]     -- explicit vars (not necessarily zonked)
+                    -> [TcTyVar]   -- explicit vars (not necessarily zonked)
                     -> SDoc        -- note to put at bottom of message
                     -> TcM ()
 checkValidTelescope hs_tvs orig_tvs extra

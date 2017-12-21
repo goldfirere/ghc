@@ -168,7 +168,7 @@ solveLocalEqualities thing_inside
 
          -- 2.
        ; traceTc "solveLocalEqualities: running solver {" (ppr wanted)
-       ; reduced_wanted <- runTcSEqualities (simpl_top wanted)
+       ; reduced_wanted <- runTcSEqualities (simpl_top wanted) -- TODO (RAE): Why not solveWantedsTcM
                            >>= TcM.zonkWC
        ; traceTc "solveLocalEqualities: running solver }" (ppr reduced_wanted)
 

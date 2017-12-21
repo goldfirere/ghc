@@ -563,11 +563,16 @@ getFamDeclInitialKind mb_cusk decl@(FamilyDecl { fdLName     = L _ name
 kcLTyClDecl :: LTyClDecl GhcRn -> TcM ()
   -- See Note [Kind checking for type and class decls]
 kcLTyClDecl (L loc decl)
+  | hsDeclHasCusk decl
+  = traceTc "kcTyClDecl skipped due to cusk" (ppr tc_name)
+  | otherwise
   = setSrcSpan loc $
     tcAddDeclCtxt decl $
-    do { traceTc "kcTyClDecl {" (ppr (tyClDeclLName decl))
+    do { traceTc "kcTyClDecl {" (ppr tc_name)
        ; kcTyClDecl decl
-       ; traceTc "kcTyClDecl done }" (ppr (tyClDeclLName decl)) }
+       ; traceTc "kcTyClDecl done }" (ppr tc_name) }
+  where
+    tc_name = tyClDeclLName decl
 
 kcTyClDecl :: TyClDecl GhcRn -> TcM ()
 -- This function is used solely for its side effect on kind variables
@@ -871,7 +876,7 @@ tcFamDecl1 parent (FamilyDecl { fdInfo = fam_info, fdLName = tc_lname@(L _ tc_na
        ; let tc_fam_tc = mkTcTyCon tc_name binders res_kind
                                    [] ClosedTypeFamilyFlavour
 
-       ; branches <- mapM (tcTyFamInstEqn tc_fam_tc Nothing) eqns
+       ; branches <- mapAndReportM (tcTyFamInstEqn tc_fam_tc Nothing) eqns
          -- Do not attempt to drop equations dominated by earlier
          -- ones here; in the case of mutual recursion with a data
          -- type, we get a knot-tying failure.  Instead we check
@@ -1753,9 +1758,10 @@ tcGadtSigTypeX :: (Name -> Kind -> TcM TcTyVar)
                                      (Located [LConDeclField GhcRn]) )
 tcGadtSigTypeX new_tv doc name ty@(HsIB { hsib_vars = vars })
   = do { let (hs_details', res_ty', cxt, gtvs) = gadtDeclDetails ty
+             var_tvbs = userHsTyVarBndrs (nameSrcSpan name) vars
        ; (hs_details, res_ty) <- updateGadtResult failWithTc doc hs_details' res_ty'
        ; (imp_tvs, (exp_tvs, ctxt, arg_tys, res_ty, field_lbls, stricts))
-           <- tcImplicitTKBndrsX new_tv False {- not nec'ly kind vars -} skol_info vars $
+           <- tcImplicitTKBndrsX new_tv skol_info var_tvbs $ \ _unordered_tvs ->
               tcExplicitTKBndrsX new_tv skol_info gtvs $ \ exp_tvs ->
               do { ctxt <- tcHsContext cxt
                  ; btys <- tcConArgs hs_details

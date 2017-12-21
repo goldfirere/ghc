@@ -1382,9 +1382,17 @@ kcHsTyVarBndrs name flav cusk
   (HsQTvs { hsq_implicit = kv_ns, hsq_explicit = hs_tvs
           , hsq_dependent = dep_names }) thing_inside
   | cusk
-  = do { (scoped_kvs, (tc_binders, res_kind, stuff))
+  = do { typeintype <- xoptM LangExt.TypeInType
+       ; let name_loc = nameSrcSpan name
+             kv_tvbs
+               | typeintype = userHsTyVarBndrs name_loc kv_ns
+                 -- without -XTypeInType, default all kind variables to have kind *
+               | otherwise  = [ L name_loc $ KindedTyVar (L name_loc kv_n)
+                                                         (noLoc $ HsCoreTy liftedTypeKind)
+                              | kv_n <- kv_ns ]
+       ; (scoped_kvs, (tc_binders, res_kind, stuff))
            <- solveEqualities $
-              tcImplicitTKBndrsX newSkolemTyVar True {- all kind vars -} skol_info kv_ns $
+              tcImplicitTKBndrsX newSkolemTyVar skol_info kv_tvbs $ \_ ->
               bind_telescope hs_tvs thing_inside
 
            -- Now, because we're in a CUSK, quantify over the mentioned
@@ -1540,7 +1548,9 @@ tcImplicitTKBndrs :: SkolemInfo
                   -> [Name]
                   -> TcM a
                   -> TcM ([TcTyVar], a)
-tcImplicitTKBndrs = tcImplicitTKBndrsX newSkolemTyVar False
+tcImplicitTKBndrs skol_info tv_nms thing_inside
+  = tcImplicitTKBndrsX newSkolemTyVar skol_info (userHsTyVarBndrs noSrcSpan tv_nms)
+                       (\_ -> thing_inside)
 
 -- | Like 'tcImplicitTKBndrs', but uses 'newSigTyVar' to create tyvars
 -- TODO (RAE): Do I need this?
@@ -1548,36 +1558,30 @@ tcImplicitTKBndrsSig :: SkolemInfo
                      -> [Name]
                      -> TcM a
                      -> TcM ([TcTyVar], a)
-tcImplicitTKBndrsSig = tcImplicitTKBndrsX newSigTyVar False
+tcImplicitTKBndrsSig skol_info tv_nms thing_inside
+  = tcImplicitTKBndrsX newSigTyVar skol_info (userHsTyVarBndrs noSrcSpan tv_nms)
+                       (\_ -> thing_inside)
 
 tcImplicitTKBndrsX :: (Name -> Kind -> TcM TcTyVar) -- new_tv function
-                   -> Bool -- True <=> these are all *kind* variables
-                           -- (matters for -XNoTypeInType only)
                    -> SkolemInfo
-                   -> [Name]
-                   -> TcM a
-                   -> TcM ([TcTyVar], a)
--- Returned TcTyVars have the supplied Names,
+                   -> [LHsTyVarBndr GhcRn]
+                   -> ([TcTyVar] -> TcM a) -- these tyvars are ordered like the binders
+                   -> TcM ([TcTyVar], a)   -- these tyvars are dependency-ordered
+-- Returned TcTyVars have the supplied HsTyVarBndrs,
 -- but may be in different order to the original [Name]
 --   (because of sorting to respect dependency)
 -- Returned TcTyVars have zonked kinds
-tcImplicitTKBndrsX new_tv kind_vars skol_info var_ns thing_inside
-  = do { typeintype <- xoptM LangExt.TypeInType
-       ; let m_kind
-               | not kind_vars || typeintype = Nothing              -- meta kinds
-               | otherwise                   = Just liftedTypeKind  -- default to Type
-
-       ; (((skol_tvs, result), wanted), inner_tclvl)
+tcImplicitTKBndrsX new_tv skol_info bndrs thing_inside
+-- TODO (RAE): Use solveLocalEqualities; emit implication constraint inside
+  = do { (((skol_tvs, result), wanted), inner_tclvl)
            -- We must bump the TcLevel by the exact amount of variables we're binding.
            -- Why? Because there will be exactly that many foralls when we're all done,
            -- and every forall will bump the level once.
-           <- pushTcLevelsM (length var_ns) $
+           -- TODO (RAE): Examine this assumption. What if we don't bump many times.
+           <- pushTcLevelsM (length bndrs) $
               captureConstraints $
-              do { tkvs_pairs <- mapM (tcHsTyVarName new_tv m_kind) var_ns
-                 ; let must_scope_tkvs = [ tkv | (tkv, False) <- tkvs_pairs ]
-                       tkvs            = map fst tkvs_pairs
-                 ; result <- tcExtendTyVarEnv must_scope_tkvs $
-                             thing_inside
+              bind_tvbs bndrs $ \ tkvs ->
+              do { result <- thing_inside tkvs
                  ; return (tkvs, result) }
 
        ; residual_wanted <- setTcLevel inner_tclvl $
@@ -1585,11 +1589,10 @@ tcImplicitTKBndrsX new_tv kind_vars skol_info var_ns thing_inside
           -- TODO (RAE): Comment me.
 
           -- TODO (RAE): Comment me.
-       ; skol_tvs        <- mapM zonkTyCoVarKind skol_tvs
-       ; let free_meta_kvs = [ kv | kv <- tyCoVarsOfTypesList (map tyVarKind skol_tvs)
-                                  , isMetaTyVar kv ]
-       ; mapM_ promoteTyVar free_meta_kvs
-       ; skol_tvs <- mapM zonkTyCoVarKind skol_tvs
+       ; skol_tvs <- mapM zonkTcTyCoVarBndr skol_tvs
+          -- use zonkTyCoVarBndr because a skol_tv might be a SigTv
+       ; _ <- promoteTyVarSet $ tyCoVarsOfTypes (mkTyVarTys skol_tvs)
+       ; skol_tvs <- mapM zonkTcTyCoVarBndr skol_tvs
                  -- NB: /not/ zonkTcTyVarToTyVar. tcImplicitTKBndrsX
                  -- guarantees to return TcTyVars with the same Names
                  -- as the var_ns.  See [Pattern signature binders]
@@ -1611,9 +1614,18 @@ tcImplicitTKBndrsX new_tv kind_vars skol_info var_ns thing_inside
        ; emitImplication implic
 
        ; let final_tvs = toposortTyVars skol_tvs
-       ; traceTc "tcImplicitTKBndrs" (ppr var_ns $$ ppr final_tvs)
+       ; traceTc "tcImplicitTKBndrs" (ppr bndrs $$ ppr final_tvs)
        ; return (final_tvs, result) }
 
+  where
+    bind_tvbs []               thing = thing []
+    bind_tvbs (L _ tvb : tvbs) thing
+      = do { (tv, in_scope) <- tcHsTyVarBndr new_tv tvb
+           ; (if in_scope then id else tcExtendTyVarEnv [tv]) $
+             bind_tvbs tvbs $ \ tvs ->
+             thing (tv : tvs) }
+
+-- TODO (RAE): Comment me.
 kcImplicitTKBndrs :: [Name] -> TcM a -> TcM a
 kcImplicitTKBndrs var_ns thing_inside
   = do { tkvs_pairs <- mapM (tcHsTyVarName newSigTyVar Nothing) var_ns
@@ -1643,27 +1655,20 @@ tcExplicitTKBndrsX :: (Name -> Kind -> TcM TyVar)
                    -> [LHsTyVarBndr GhcRn]
                    -> ([TcTyVar] -> TcM a)
                    -> TcM a
-tcExplicitTKBndrsX new_tv skol_info orig_hs_tvs thing_inside
-  = do { (result, tvs) <- solveLocalEqualities $
-                          go orig_hs_tvs thing_inside
+tcExplicitTKBndrsX new_tv skol_info hs_tvs thing_inside
+  = do { (_sorted_tvs, (tvs, result))
+           <- tcImplicitTKBndrsX new_tv skol_info hs_tvs $ \ tvs ->
+              do { result <- thing_inside tvs
+                 ; return (tvs, result) }
 
-         -- We're done processing this clump of binders. If we haven't figured
-         -- out dependencies, we're not going to. Promote the lot.
-       ; tys <- zonkTcTyVars tvs
-       ; _ <- promoteTyVarSet (tyCoVarsOfTypes tys)
+         -- issue an error if the user-written ordering is bogus
+       ; tvs <- checkZonkValidTelescope (interppSP hs_tvs) tvs empty
 
-       ; traceTc "tcExplicitTKBndrs" $ text "Hs vars:" <+> ppr orig_hs_tvs
+       ; traceTc "tcExplicitTKBndrs" $
+           vcat [ text "Hs vars:" <+> ppr hs_tvs
+                , text "tvs:" <+> sep (map pprTyVar tvs) ]
 
        ; return result }
-  where
-    go [] thing = do { result <- thing [];
-                       return (result, []) }
-    go (L _ hs_tv : hs_tvs) thing
-      = do { tv <- tcHsTyVarBndr new_tv hs_tv
-           ; (result, tvs) <- scopeTyVars skol_info [tv] $
-                              go hs_tvs $ \ tvs ->
-                              thing (tv : tvs)
-           ; return (result, tv : tvs) }
 
 -- | Used during the "kind-checking" pass in TcTyClsDecls only.
 -- See Note [Use SigTvs in kind-checking pass] in TcTyClsDecls
@@ -1672,29 +1677,29 @@ kcExplicitTKBndrs :: [LHsTyVarBndr GhcRn]
                   -> TcM a
 kcExplicitTKBndrs [] thing_inside = thing_inside
 kcExplicitTKBndrs (L _ hs_tv : hs_tvs) thing_inside
-  = do { tv <- tcHsTyVarBndr newSigTyVar hs_tv
+  = do { (tv, _) <- tcHsTyVarBndr newSigTyVar hs_tv
        ; tcExtendTyVarEnv [tv] $
          kcExplicitTKBndrs hs_tvs thing_inside }
 
 tcHsTyVarBndr :: (Name -> Kind -> TcM TyVar)
-              -> HsTyVarBndr GhcRn -> TcM TcTyVar
--- Return a SkolemTv TcTyVar, initialised with a kind variable.
+              -> HsTyVarBndr GhcRn -> TcM (TcTyVar, Bool)
+-- Return a TcTyVar, built using the provided function
 -- Typically the Kind inside the HsTyVarBndr will be a tyvar
 -- with a mutable kind in it.
--- NB: These variables must not be in scope. This function
--- is not appropriate for use with associated types, for example.
+--
+-- These variables might be in scope already (with associated types, for example).
+-- This function then checks that the kind annotation (if any) matches the
+-- kind of the in-scope type variable.
 --
 -- Returned TcTyVar has the same name; no cloning
 --
 -- See also Note [Associated type tyvar names] in Class
 --
-tcHsTyVarBndr new_tv (UserTyVar (L _ name))
-  = do { kind <- newMetaKindVar
-       ; new_tv name kind }
-
-tcHsTyVarBndr new_tv (KindedTyVar (L _ name) kind)
-  = do { kind <- tcLHsKindSig kind
-       ; new_tv name kind }
+-- Returns True iff the tyvar was already in scope
+tcHsTyVarBndr new_tv (UserTyVar (L _ tv_nm)) = tcHsTyVarName new_tv Nothing tv_nm
+tcHsTyVarBndr new_tv (KindedTyVar (L _ tv_nm) lhs_kind)
+  = do { kind <- tcLHsKindSig lhs_kind
+       ; tcHsTyVarName new_tv (Just kind) tv_nm }
 
 newWildTyVar :: Name -> TcM TcTyVar
 -- ^ New unification variable for a wildcard

@@ -775,23 +775,18 @@ tcTyVarLevel tv
 
 tcTypeLevel :: TcType -> TcLevel
 -- Maximum TcLevel of any metavar not within any foralls.
--- Why not within foralls? Because GHC bumps the TcLevel at a forall.
--- Why can't we just take that into account here? Because GHC bumps an arbitrary number
--- of TcLevels at a forall. For example, tcExplicitTKBndrs bumps one level per variable,
--- while tcImplicitTKBndrs bumps just once for all the variables.
---
--- This function is used only in error checking, and so a lower bound for the maximum
--- TcLevel is good enough
+-- TODO (RAE): Go back to old version.
+-- TODO (RAE): Also, try not bumping so many levels in tcImplicitTKBndrsX
 tcTypeLevel = go topTcLevel
   where
-    go acc (TyVarTy tv)     = acc `go_tyvar` tv
-    go acc (AppTy t1 t2)    = acc `go` t1 `go` t2
-    go acc (TyConApp _ tys) = acc `gos` tys
-    go acc (ForAllTy tvb _) = acc `go` binderKind tvb
-    go acc (FunTy t1 t2)    = acc `go` t1 `go` t2
-    go acc (LitTy {})       = acc
-    go acc (CastTy ty _)    = acc `go` ty
-    go acc (CoercionTy _)   = acc
+    go acc (TyVarTy tv)      = acc `go_tyvar` tv
+    go acc (AppTy t1 t2)     = acc `go` t1 `go` t2
+    go acc (TyConApp _ tys)  = acc `gos` tys
+    go acc (ForAllTy tvb _ty)= acc `go` binderKind tvb -- `go` ty -- TODO (RAE): decrement!
+    go acc (FunTy t1 t2)     = acc `go` t1 `go` t2
+    go acc (LitTy {})        = acc
+    go acc (CastTy ty _)     = acc `go` ty
+    go acc (CoercionTy _)    = acc
 
     gos acc [] = acc
     gos acc (ty:tys) = acc `go` ty `gos` tys

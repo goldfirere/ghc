@@ -2003,10 +2003,10 @@ tupleRepDataConKey                      = mkPreludeDataConUnique 72
 sumRepDataConKey                        = mkPreludeDataConUnique 73
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
-runtimeRepSimpleDataConKeys :: [Unique]
+runtimeRepSimpleDataConKeys, unliftedRepDataConKeys :: [Unique]
 liftedRepDataConKey :: Unique
 runtimeRepSimpleDataConKeys@(
-  liftedRepDataConKey : _)
+  liftedRepDataConKey : unliftedRepDataConKeys)
   = map mkPreludeDataConUnique [74..82]
 
 -- See Note [Wiring in RuntimeRep] in TysWiredIn
