@@ -693,6 +693,10 @@ data TcGblEnv
         tcg_tc_plugins :: [TcPluginSolver],
         -- ^ A list of user-defined plugins for the constraint solver.
 
+        tcg_tc_plugin_defaults :: [TcPluginDefaulter],
+        -- ^ A list of user-defined plugin defaulters. See comments on
+        --   tcPluginDefault in the definition of TcPlugin (in this file)
+
         tcg_top_loc :: RealSrcSpan,
         -- ^ The RealSrcSpan this module came from
 
@@ -3588,6 +3592,10 @@ type TcPluginSolver = [Ct]    -- given
                    -> [Ct]    -- wanted
                    -> TcPluginM TcPluginResult
 
+type TcPluginDefaulter = WantedConstraints
+                      -> TcPluginM [(TcTyVar, TcType)]
+                           -- returns list of variables to default
+
 newtype TcPluginM a = TcPluginM (EvBindsVar -> TcM a)
 
 instance Functor TcPluginM where
@@ -3629,6 +3637,12 @@ data TcPlugin = forall s. TcPlugin
   , tcPluginSolve :: s -> TcPluginSolver
     -- ^ Solve some constraints.
     -- TODO: WRITE MORE DETAILS ON HOW THIS WORKS.
+
+  , tcPluginDefault :: s -> TcPluginDefaulter
+   -- ^ This is called after solving a top-level set of constraints,
+   --   but before trying any of GHC's internal defaulting mechanisms
+   --   (defaulting kinds to Type, defaulting class-constrained types,
+   --    and defaulting CallStacks)
 
   , tcPluginStop  :: s -> TcPluginM ()
    -- ^ Clean up after the plugin, when exiting the type-checker.

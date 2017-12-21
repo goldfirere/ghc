@@ -381,7 +381,6 @@ runTcPlugins plugins all_cts
       CtDerived{} -> (givens, ct:deriveds, wanteds)
       CtWanted {} -> (givens, deriveds, (ev,ct):wanteds)
 
-
 type WorkItem = Ct
 type SimplifierStage = WorkItem -> TcS (StopOrContinue Ct)
 

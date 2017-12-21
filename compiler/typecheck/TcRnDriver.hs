@@ -2628,19 +2628,20 @@ withTcPlugins hsc_env m =
      case plugins of
        [] -> m  -- Common fast case
        _  -> do ev_binds_var <- newTcEvBinds
-                (solvers,stops) <- unzip `fmap` mapM (startPlugin ev_binds_var) plugins
+                (solvers,defaults,stops) <- unzip3 `fmap` mapM (startPlugin ev_binds_var) plugins
                 -- This ensures that tcPluginStop is called even if a type
                 -- error occurs during compilation (Fix of #10078)
                 eitherRes <- tryM $ do
-                  updGblEnv (\e -> e { tcg_tc_plugins = solvers }) m
+                  updGblEnv (\e -> e { tcg_tc_plugins = solvers
+                                     , tcg_tc_plugin_defaults = defaults }) m
                 mapM_ (flip runTcPluginM ev_binds_var) stops
                 case eitherRes of
                   Left _ -> failM
                   Right res -> return res
   where
-  startPlugin ev_binds_var (TcPlugin start solve stop) =
+  startPlugin ev_binds_var (TcPlugin start solve deflt stop) =
     do s <- runTcPluginM start ev_binds_var
-       return (solve s, stop s)
+       return (solve s, deflt s, stop s)
 
 loadTcPlugins :: HscEnv -> IO [TcPlugin]
 #if !defined(GHCI)

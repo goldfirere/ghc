@@ -154,8 +154,19 @@ simpl_top :: WantedConstraints -> TcS WantedConstraints
 simpl_top wanteds
   = do { wc_first_go <- nestTcS (solveWantedsAndDrop wanteds)
                             -- This is where the main work happens
-       ; try_tyvar_defaulting wc_first_go }
+       ; try_plugin_defaulting wc_first_go }
   where
+    try_plugin_defaulting :: WantedConstraints -> TcS WantedConstraints
+    try_plugin_defaulting wc
+      | isEmptyWC wc
+      = return wc
+      | otherwise
+      = do { something_happened <- runTcPluginDefaults wc
+           ; if something_happened
+             then do { wc_residual <- nestTcS (solveWantedsAndDrop wc)
+                     ; try_plugin_defaulting wc_residual }
+             else try_tyvar_defaulting wc }
+
     try_tyvar_defaulting :: WantedConstraints -> TcS WantedConstraints
     try_tyvar_defaulting wc
       | isEmptyWC wc
@@ -231,6 +242,16 @@ defaultCallStacks wanteds
   defaultCallStack ct
     = return (Just ct)
 
+runTcPluginDefaults :: WantedConstraints -> TcS Bool
+runTcPluginDefaults wc
+  = do { wc <- TcS.zonkWC wc  -- TODO (RAE): Should this be done in simpl_top?
+       ; tcg_env <- TcS.getGblEnv
+       ; let run defaulter = runTcPluginTcS (defaulter wc)
+       ; pairs <- concatMapM run (tcg_tc_plugin_defaults tcg_env)
+       ; when (not (null pairs)) $
+         traceTcS "Defaulting tyvars as instructed by plugin:" (vcat (map ppr pairs))
+       ; mapM_ (uncurry unifyTyVar) pairs
+       ; return (not (null pairs)) }
 
 {- Note [Fail fast on kind errors]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
