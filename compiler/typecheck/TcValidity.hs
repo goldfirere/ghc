@@ -457,7 +457,7 @@ check_type :: TidyEnv -> UserTypeCtxt -> Rank -> Type -> TcM ()
 -- Rank 0 means no for-alls anywhere
 
 check_type env ctxt rank ty
-  | not (null tvs && null theta)
+  | not (null tvbs && null theta)
   = do  { traceTc "check_type" (ppr ty $$ ppr (forAllAllowed rank))
         ; checkTcM (forAllAllowed rank) (forAllTyErr env rank ty)
                 -- Reject e.g. (Maybe (?x::Int => Int)),
@@ -468,14 +468,24 @@ check_type env ctxt rank ty
                 -- but not   type T = ?x::Int
 
         ; check_type env' ctxt rank tau      -- Allow foralls to right of arrow
+
+        ; let vis_tvs = [ binderVar tvb | tvb <- tvbs
+                                        , isVisibleArgFlag (binderArgFlag tvb) ]
+              doc     = pprTyVars vis_tvs
+        ; checkValidTelescope doc tvs empty
+
+
         ; checkTcM (not (any (`elemVarSet` tyCoVarsOfType phi_kind) tvs))
                    (forAllEscapeErr env' ty tau_kind)
         }
   where
-    (tvs, theta, tau) = tcSplitSigmaTy ty
-    tau_kind          = typeKind tau
-    (env', _)         = tidyTyCoVarBndrs env tvs
+    (tvbs, phi)  = tcSplitForAllTyVarBndrs ty
+    (theta, tau) = tcSplitPhiTy phi
 
+    tvs          = binderVars tvbs
+    (env', _)    = tidyTyCoVarBndrs env tvs
+
+    tau_kind              = typeKind tau
     phi_kind | null theta = tau_kind
              | otherwise  = liftedTypeKind
         -- If there are any constraints, the kind is *. (#11405)

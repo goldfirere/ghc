@@ -1383,16 +1383,14 @@ kcHsTyVarBndrs name flav cusk
           , hsq_dependent = dep_names }) thing_inside
   | cusk
   = do { typeintype <- xoptM LangExt.TypeInType
-       ; let name_loc = nameSrcSpan name
-             kv_tvbs
-               | typeintype = userHsTyVarBndrs name_loc kv_ns
+       ; let m_kind
+               | typeintype = Nothing
+               | otherwise  = Just liftedTypeKind
                  -- without -XTypeInType, default all kind variables to have kind *
-               | otherwise  = [ L name_loc $ KindedTyVar (L name_loc kv_n)
-                                                         (noLoc $ HsCoreTy liftedTypeKind)
-                              | kv_n <- kv_ns ]
+
        ; (scoped_kvs, (tc_binders, res_kind, stuff))
            <- solveEqualities $
-              tcImplicitTKBndrsX newSkolemTyVar skol_info kv_tvbs $ \_ ->
+              tcImplicitTKBndrsX newSkolemTyVar m_kind skol_info kv_ns $
               bind_telescope hs_tvs thing_inside
 
            -- Now, because we're in a CUSK, quantify over the mentioned
@@ -1548,9 +1546,7 @@ tcImplicitTKBndrs :: SkolemInfo
                   -> [Name]
                   -> TcM a
                   -> TcM ([TcTyVar], a)
-tcImplicitTKBndrs skol_info tv_nms thing_inside
-  = tcImplicitTKBndrsX newSkolemTyVar skol_info (userHsTyVarBndrs noSrcSpan tv_nms)
-                       (\_ -> thing_inside)
+tcImplicitTKBndrs = tcImplicitTKBndrsX newSkolemTyVar Nothing
 
 -- | Like 'tcImplicitTKBndrs', but uses 'newSigTyVar' to create tyvars
 -- TODO (RAE): Do I need this?
@@ -1558,31 +1554,32 @@ tcImplicitTKBndrsSig :: SkolemInfo
                      -> [Name]
                      -> TcM a
                      -> TcM ([TcTyVar], a)
-tcImplicitTKBndrsSig skol_info tv_nms thing_inside
-  = tcImplicitTKBndrsX newSigTyVar skol_info (userHsTyVarBndrs noSrcSpan tv_nms)
-                       (\_ -> thing_inside)
+tcImplicitTKBndrsSig = tcImplicitTKBndrsX newSigTyVar Nothing
 
 tcImplicitTKBndrsX :: (Name -> Kind -> TcM TcTyVar) -- new_tv function
+                   -> Maybe Kind           -- Just k <=> assign all names this kind
                    -> SkolemInfo
-                   -> [LHsTyVarBndr GhcRn]
-                   -> ([TcTyVar] -> TcM a) -- these tyvars are ordered like the binders
+                   -> [Name]
+                   -> TcM a
                    -> TcM ([TcTyVar], a)   -- these tyvars are dependency-ordered
 -- Returned TcTyVars have the supplied HsTyVarBndrs,
 -- but may be in different order to the original [Name]
 --   (because of sorting to respect dependency)
 -- Returned TcTyVars have zonked kinds
-tcImplicitTKBndrsX new_tv skol_info bndrs thing_inside
+tcImplicitTKBndrsX new_tv m_kind skol_info tv_names thing_inside
 -- TODO (RAE): Use solveLocalEqualities; emit implication constraint inside
   = do { (((skol_tvs, result), wanted), inner_tclvl)
            -- We must bump the TcLevel by the exact amount of variables we're binding.
            -- Why? Because there will be exactly that many foralls when we're all done,
            -- and every forall will bump the level once.
            -- TODO (RAE): Examine this assumption. What if we don't bump many times.
-           <- pushTcLevelsM (length bndrs) $
+           <- pushTcLevelsM (length tv_names) $
               captureConstraints $
-              bind_tvbs bndrs $ \ tkvs ->
-              do { result <- thing_inside tkvs
-                 ; return (tkvs, result) }
+              do { tv_pairs <- mapM (tcHsTyVarName new_tv m_kind) tv_names
+                 ; let must_scope_tvs = [ tv | (tv, False) <- tv_pairs ]
+                 ; result <- tcExtendTyVarEnv must_scope_tvs $
+                             thing_inside
+                 ; return (map fst tv_pairs, result) }
 
        ; residual_wanted <- setTcLevel inner_tclvl $
                             solveEqualityWanteds wanted
@@ -1599,31 +1596,11 @@ tcImplicitTKBndrsX new_tv skol_info bndrs thing_inside
 
 
           -- TODO (RAE): Comment me.
-       ; tc_lcl_env <- getLclEnv
-       ; ev_binds   <- newNoTcEvBinds
-       ; let implic = Implic { ic_tclvl  = inner_tclvl
-                             , ic_skols  = skol_tvs
-                             , ic_no_eqs = True
-                             , ic_given  = []
-                             , ic_wanted = residual_wanted
-                             , ic_status = IC_Unsolved
-                             , ic_binds  = ev_binds
-                             , ic_info   = skol_info
-                             , ic_needed = emptyVarSet  -- nothing discarded yet
-                             , ic_env    = tc_lcl_env }
-       ; emitImplication implic
+       ; emitTvImplication inner_tclvl skol_tvs residual_wanted skol_info
 
        ; let final_tvs = toposortTyVars skol_tvs
-       ; traceTc "tcImplicitTKBndrs" (ppr bndrs $$ ppr final_tvs)
+       ; traceTc "tcImplicitTKBndrs" (ppr tv_names $$ ppr final_tvs)
        ; return (final_tvs, result) }
-
-  where
-    bind_tvbs []               thing = thing []
-    bind_tvbs (L _ tvb : tvbs) thing
-      = do { (tv, in_scope) <- tcHsTyVarBndr new_tv tvb
-           ; (if in_scope then id else tcExtendTyVarEnv [tv]) $
-             bind_tvbs tvbs $ \ tvs ->
-             thing (tv : tvs) }
 
 -- TODO (RAE): Comment me.
 kcImplicitTKBndrs :: [Name] -> TcM a -> TcM a
@@ -1656,19 +1633,31 @@ tcExplicitTKBndrsX :: (Name -> Kind -> TcM TyVar)
                    -> ([TcTyVar] -> TcM a)
                    -> TcM a
 tcExplicitTKBndrsX new_tv skol_info hs_tvs thing_inside
-  = do { (_sorted_tvs, (tvs, result))
-           <- tcImplicitTKBndrsX new_tv skol_info hs_tvs $ \ tvs ->
-              do { result <- thing_inside tvs
-                 ; return (tvs, result) }
+  -- TODO (RAE): Comment, explaining why to bring everything into the same
+  -- TcLevel and that checking is done in TcValidity
+  -- TODO (RAE): Try pushing only one level.
+  = do { (((skol_tvs, result), wanted), inner_tclvl)
+           <- pushTcLevelsM (length hs_tvs) $
+              captureConstraints $
+              bind_tvbs hs_tvs $ \ tkvs ->
+              do { result <- thing_inside tkvs
+                 ; return (tkvs, result) }
 
-         -- issue an error if the user-written ordering is bogus
-       ; tvs <- checkZonkValidTelescope (interppSP hs_tvs) tvs empty
+       ; emitTvImplication inner_tclvl skol_tvs wanted skol_info
 
        ; traceTc "tcExplicitTKBndrs" $
            vcat [ text "Hs vars:" <+> ppr hs_tvs
-                , text "tvs:" <+> sep (map pprTyVar tvs) ]
+                , text "tvs:" <+> pprTyVars skol_tvs ]
 
        ; return result }
+
+  where
+    bind_tvbs []               thing = thing []
+    bind_tvbs (L _ tvb : tvbs) thing
+      = do { (tv, in_scope) <- tcHsTyVarBndr new_tv tvb
+           ; (if in_scope then id else tcExtendTyVarEnv [tv]) $
+             bind_tvbs tvbs $ \ tvs ->
+             thing (tv : tvs) }
 
 -- | Used during the "kind-checking" pass in TcTyClsDecls only.
 -- See Note [Use SigTvs in kind-checking pass] in TcTyClsDecls
@@ -1682,6 +1671,29 @@ kcExplicitTKBndrs (L _ hs_tv : hs_tvs) thing_inside
        ; (tv, _) <- tcHsTyVarBndr newSigTyVar hs_tv
        ; tcExtendTyVarEnv [tv] $
          kcExplicitTKBndrs hs_tvs thing_inside }
+
+-- | Build and emit an Implication appropriate for type-checking a type.
+-- This assumes all constraints will be equality constraints, and
+-- so does not create an EvBindsVar
+emitTvImplication :: TcLevel    -- of the constraints
+                   -> [TcTyVar]  -- skolems
+                   -> WantedConstraints
+                   -> SkolemInfo
+                   -> TcM ()
+emitTvImplication inner_tclvl skol_tvs wanted skol_info
+  = do { tc_lcl_env <- getLclEnv
+       ; ev_binds   <- newNoTcEvBinds
+       ; let implic = Implic { ic_tclvl  = inner_tclvl
+                             , ic_skols  = skol_tvs
+                             , ic_no_eqs = True
+                             , ic_given  = []
+                             , ic_wanted = wanted
+                             , ic_status = IC_Unsolved
+                             , ic_binds  = ev_binds
+                             , ic_info   = skol_info
+                             , ic_needed = emptyVarSet  -- nothing discarded yet
+                             , ic_env    = tc_lcl_env }
+       ; emitImplication implic }
 
 tcHsTyVarBndr :: (Name -> Kind -> TcM TyVar)
               -> HsTyVarBndr GhcRn -> TcM (TcTyVar, Bool)
