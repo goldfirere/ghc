@@ -1677,7 +1677,9 @@ kcExplicitTKBndrs :: [LHsTyVarBndr GhcRn]
                   -> TcM a
 kcExplicitTKBndrs [] thing_inside = thing_inside
 kcExplicitTKBndrs (L _ hs_tv : hs_tvs) thing_inside
-  = do { (tv, _) <- tcHsTyVarBndr newSigTyVar hs_tv
+  = do { tclvl <- getTcLevel
+       ; traceTc "RAE2" (ppr tclvl)
+       ; (tv, _) <- tcHsTyVarBndr newSigTyVar hs_tv
        ; tcExtendTyVarEnv [tv] $
          kcExplicitTKBndrs hs_tvs thing_inside }
 
@@ -1699,6 +1701,8 @@ tcHsTyVarBndr :: (Name -> Kind -> TcM TyVar)
 tcHsTyVarBndr new_tv (UserTyVar (L _ tv_nm)) = tcHsTyVarName new_tv Nothing tv_nm
 tcHsTyVarBndr new_tv (KindedTyVar (L _ tv_nm) lhs_kind)
   = do { kind <- tcLHsKindSig lhs_kind
+       ; tclvl <- getTcLevel
+       ; traceTc "RAE3" (ppr tclvl)
        ; tcHsTyVarName new_tv (Just kind) tv_nm }
 
 newWildTyVar :: Name -> TcM TcTyVar
@@ -1722,13 +1726,16 @@ tcHsTyVarName :: (Name -> Kind -> TcM TcTyVar) -- new_tv function
               -> Maybe Kind -> Name -> TcM (TcTyVar, Bool)
 tcHsTyVarName new_tv m_kind name
   = do { mb_tv <- tcLookupLcl_maybe name
+       ; traceTc "RAE4" (ppr mb_tv)
        ; case mb_tv of
            Just (ATyVar _ tv)
              -> do { whenIsJust m_kind $ \ kind ->
                      discardResult $
                      unifyKind (Just (HsTyVar NotPromoted (noLoc name))) kind (tyVarKind tv)
                    ; return (tv, True) }
-           _ -> do { kind <- case m_kind of
+           _ -> do { tclvl <- getTcLevel
+                   ; traceTc "RAE5" (ppr tclvl)
+                   ; kind <- case m_kind of
                                Just kind -> return kind
                                Nothing   -> newMetaKindVar
                    ; tv <- new_tv name kind
@@ -2099,8 +2106,6 @@ tcHsPartialSigType ctxt sig_ty
 
         ; theta   <- mapM zonkTcType theta
         ; tau     <- zonkTcType tau
-        ; lvl <- getTcLevel
-        ; traceTc "RAE1" (ppr lvl)
         ; checkValidType ctxt (mkSpecForAllTys all_tvs $ mkPhiTy theta tau)
 
         ; traceTc "tcHsPartialSigType" (ppr all_tvs)

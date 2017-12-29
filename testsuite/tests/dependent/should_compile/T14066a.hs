@@ -9,8 +9,8 @@ import Data.Type.Bool
 
 
 type family Bar x y where
-  Bar (x :: a) (y :: b) = x
-  Bar (x :: c) (y :: d) = y   -- these should unify
+  Bar (x :: a) (y :: b) = Int
+  Bar (x :: c) (y :: d) = Bool   -- a,b,c,d should be SigTvs and unify appropriately
 
 
   -- the two k's, even though they have different scopes, should unify in the
@@ -22,7 +22,7 @@ data Prox3 a where
 
   -- This probably should be rejected, as it's polymorphic recursion without a CUSK.
   -- But GHC accepts it because the polymorphic occurrence is at a type variable.
-data T a = forall k (b :: k). MkT (T b) Int
+data T0 a = forall k (b :: k). MkT0 (T0 b) Int
 
   -- k and j should unify
 type family G x a where

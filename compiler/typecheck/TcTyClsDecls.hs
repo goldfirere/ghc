@@ -569,6 +569,8 @@ kcLTyClDecl (L loc decl)
   = setSrcSpan loc $
     tcAddDeclCtxt decl $
     do { traceTc "kcTyClDecl {" (ppr tc_name)
+       ; tclvl <- getTcLevel
+       ; traceTc "RAE1" (ppr tclvl)
        ; kcTyClDecl decl
        ; traceTc "kcTyClDecl done }" (ppr tc_name) }
   where
@@ -1746,38 +1748,43 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
 
 
 kcGadtSigType :: SDoc -> Name -> LHsSigType GhcRn -> TcM ()
-kcGadtSigType doc name gadt_ty
-  = discardResult $ tcGadtSigTypeX newSigTyVar doc name gadt_ty
+kcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
+  = discardResult $
+    kcImplicitTKBndrs vars $
+    kcExplicitTKBndrs gtvs $
+    tcGadtSigTypeDetails doc name hs_details res_ty cxt
+  where
+    (hs_details, res_ty, cxt, gtvs) = gadtDeclDetails ty
 
 tcGadtSigType :: SDoc -> Name -> LHsSigType GhcRn
               -> TcM ( [TcTyVar], [PredType],[HsSrcBang], [FieldLabel], [Type], Type
                      , HsConDetails (LHsType GhcRn)
                                     (Located [LConDeclField GhcRn]) )
-tcGadtSigType = tcGadtSigTypeX newSkolemTyVar
-
-tcGadtSigTypeX :: (Name -> Kind -> TcM TcTyVar)
-               -> SDoc -> Name -> LHsSigType GhcRn
-               -> TcM ( [TcTyVar], [PredType],[HsSrcBang], [FieldLabel], [Type], Type
-                      , HsConDetails (LHsType GhcRn)
-                                     (Located [LConDeclField GhcRn]) )
-tcGadtSigTypeX new_tv doc name ty@(HsIB { hsib_vars = vars })
-  = do { let (hs_details', res_ty', cxt, gtvs) = gadtDeclDetails ty
-             var_tvbs = userHsTyVarBndrs (nameSrcSpan name) vars
-       ; (hs_details, res_ty) <- updateGadtResult failWithTc doc hs_details' res_ty'
-       ; (imp_tvs, (exp_tvs, ctxt, arg_tys, res_ty, field_lbls, stricts))
-           <- tcImplicitTKBndrsX new_tv skol_info var_tvbs $ \ _unordered_tvs ->
-              tcExplicitTKBndrsX new_tv skol_info gtvs $ \ exp_tvs ->
-              do { ctxt <- tcHsContext cxt
-                 ; btys <- tcConArgs hs_details
-                 ; ty' <- tcHsLiftedType res_ty
-                 ; field_lbls <- lookupConstructorFields name
-                 ; let (arg_tys, stricts) = unzip btys
-                 ; return (exp_tvs, ctxt, arg_tys, ty', field_lbls, stricts)
-                 }
-       ; return (imp_tvs ++ exp_tvs, ctxt, stricts, field_lbls, arg_tys, res_ty, hs_details)
-       }
+tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
+  = do { (imp_tvs, (exp_tvs, (a, b, c, d, e, f))) <-
+           tcImplicitTKBndrs skol_info vars $
+           tcExplicitTKBndrs skol_info gtvs $ \ exp_tvs ->
+             do { stuff <- tcGadtSigTypeDetails doc name hs_details res_ty cxt
+                ; return (exp_tvs, stuff) }
+       ; return (imp_tvs ++ exp_tvs, a, b, c, d, e, f) }
   where
+    (hs_details, res_ty, cxt, gtvs) = gadtDeclDetails ty
     skol_info = SigTypeSkol (ConArgCtxt name)
+
+tcGadtSigTypeDetails :: SDoc -> Name
+                     -> HsConDeclDetails GhcRn
+                     -> LHsType GhcRn
+                     -> LHsContext GhcRn
+                     -> TcM ( [PredType],[HsSrcBang], [FieldLabel], [Type], Type
+                            , HsConDetails (LHsType GhcRn) (Located [LConDeclField GhcRn]) )
+tcGadtSigTypeDetails doc name hs_details' res_ty' cxt
+  = do { (hs_details, res_ty) <- updateGadtResult failWithTc doc hs_details' res_ty'
+       ; ctxt <- tcHsContext cxt
+       ; btys <- tcConArgs hs_details
+       ; ty' <- tcHsLiftedType res_ty
+       ; field_lbls <- lookupConstructorFields name
+       ; let (arg_tys, stricts) = unzip btys
+       ; return (ctxt, stricts, field_lbls, arg_tys, ty', hs_details) }
 
 tcConIsInfixH98 :: Name
              -> HsConDetails (LHsType GhcRn) (Located [LConDeclField GhcRn])
