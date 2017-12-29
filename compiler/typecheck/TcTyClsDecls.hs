@@ -667,6 +667,10 @@ Note [Use SigTvs in kind-checking pass]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 TODO (RAE): Write note.
+TODO (RAE): Mention this test (dependent/should_compile/T14066a)
+  data T a = forall k (b :: k). MkT (T b) Int
+It should be rejected (polymorphic recursion without CUSK), but the current
+algorithm accepts.
 
 ************************************************************************
 *                                                                      *
