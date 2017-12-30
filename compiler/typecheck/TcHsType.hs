@@ -218,7 +218,7 @@ tcHsSigType ctxt sig_ty
        ; do_kind_gen <- decideKindGeneralisationPlan sig_ty
        ; ty <- if do_kind_gen
                then tc_hs_sig_type_and_gen skol_info sig_ty kind
-               else tc_hs_sig_type         skol_info sig_ty kind >>= zonkTcType
+               else tc_hs_sig_type         skol_info sig_ty kind
 
        ; checkValidType ctxt ty
        ; return ty }
@@ -231,24 +231,39 @@ tc_hs_sig_type_and_gen :: SkolemInfo -> LHsSigType GhcRn -> Kind -> TcM Type
 --   and then kind-generalizes.
 -- This will never emit constraints, as it uses solveEqualities interally.
 -- No validity checking, but it does zonk en route to generalization
-tc_hs_sig_type_and_gen skol_info hs_ty kind
-  = do { ty <- solveEqualities $
-               tc_hs_sig_type skol_info hs_ty kind
+tc_hs_sig_type_and_gen skol_info (HsIB { hsib_vars = sig_vars
+                                       , hsib_body = hs_ty }) kind
+  = do { (tkvs, ty) <- solveEqualities $
+                       tcImplicitTKBndrs skol_info sig_vars $
+                       tc_lhs_type typeLevelMode hs_ty kind
          -- NB the call to solveEqualities, which unifies all those
          --    kind variables floating about, immediately prior to
          --    kind generalisation
-       ; kindGeneralizeType ty }
+       ; kindGeneralizeType (mkSpecForAllTys tkvs ty) }
 
 tc_hs_sig_type :: SkolemInfo -> LHsSigType GhcRn -> Kind -> TcM Type
 -- Kind-check/desugar a 'LHsSigType', but does not solve
 -- the equalities that arise from doing so; instead it may
 -- emit kind-equality constraints into the monad
--- No zonking or validity checking
+-- Zonking, but no validity checking
 tc_hs_sig_type skol_info (HsIB { hsib_vars = sig_vars
                                , hsib_body = hs_ty }) kind
-  = do { (tkvs, ty) <- tcImplicitTKBndrs skol_info sig_vars $
+  = do { (tkvs, ty) <- solveLocalEqualities $
+                       tcImplicitTKBndrs skol_info sig_vars $
                        tc_lhs_type typeLevelMode hs_ty kind
-       ; return (mkSpecForAllTys tkvs ty) }
+            -- In the NoGen case, we might legitimately have unsolved
+            -- constraints in the type signature, referring to metavariables
+            -- in an outer scope that are currently untouchable.
+            -- Thus: solveLocalEqualities. (We still want to solve what equalities
+            -- we can, because we will zonk and validity-check)
+
+       ; forall_ty <- zonkTcType (mkSpecForAllTys tkvs ty)
+       ; did_promotion <- promoteTyVarSet (tyCoVarsOfType forall_ty)
+          -- need to promote any remaining metavariables; test case:
+          -- dependent/should_fail/T14066e.
+       ; if did_promotion           -- don't zonk again if we don't have to
+         then zonkTcType forall_ty  -- have to zonk again
+         else return forall_ty }    -- no need to zonk
 
 -----------------
 tcHsDeriv :: LHsSigType GhcRn -> TcM ([TyVar], Class, [Type], [Kind])

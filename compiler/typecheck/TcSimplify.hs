@@ -160,6 +160,8 @@ solveLocalEqualities :: TcM a -> TcM a
 -- 4. Promote any tyvars mentioned in the found constraints.
 -- 5. Re-emit those constraints.
 -- 6. Report errors on any unsolved, unpromoted constraints.
+
+-- TODO (RAE): What about just emitting the implication like I wanted to at first??
 solveLocalEqualities thing_inside
   = do { traceTc "solveLocalEqualities {" empty
 
