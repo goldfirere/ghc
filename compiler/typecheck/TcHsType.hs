@@ -2122,21 +2122,32 @@ tcHsPartialSigType ctxt sig_ty
 
                   ; return (wcs, wcx, explicit_tvs, theta, tau) }
 
-        -- Spit out the wildcards (including the extra-constraints one)
-        -- as "hole" constraints, so that they'll be reported if necessary
-        -- See Note [Extra-constraint holes in partial type signatures]
-        ; emitWildCardHoleConstraints wcs
+         -- The SigTvs created above will sometimes have too high a TcLevel
+         -- (note that they are generated *after* bumping the level in
+         -- the tc{Im,Ex}plicitTKBndrsSig functions. Bumping the level
+         -- is still important here, because the kinds of these variables
+         -- do indeed need to have the higher level, so they can unify
+         -- with other local type variables. But, now that we've type-checked
+         -- everything (and solved equalities in the tcImplicit call)
+         -- we need to promote the SigTvs so we don't violate the TcLevel
+         -- invariant
+       ; let all_unzonked_tvs = implicit_tvs ++ explicit_tvs
+       ; mapM_ promoteTyVar all_unzonked_tvs
 
-        ; explicit_tvs <- mapM zonkTyCoVarKind explicit_tvs
-        ; let all_tvs = implicit_tvs ++ explicit_tvs
-                        -- The implicit_tvs already have zonked kinds
+       -- Spit out the wildcards (including the extra-constraints one)
+       -- as "hole" constraints, so that they'll be reported if necessary
+       -- See Note [Extra-constraint holes in partial type signatures]
+       ; emitWildCardHoleConstraints wcs
 
-        ; theta   <- mapM zonkTcType theta
-        ; tau     <- zonkTcType tau
-        ; checkValidType ctxt (mkSpecForAllTys all_tvs $ mkPhiTy theta tau)
+       ; all_tvs <- mapM zonkTcTyCoVarBndr all_unzonked_tvs
+            -- zonkTcTyCoVarBndr deals well with SigTvs
 
-        ; traceTc "tcHsPartialSigType" (ppr all_tvs)
-        ; return (wcs, wcx, all_tvs, theta, tau) }
+       ; theta   <- mapM zonkTcType theta
+       ; tau     <- zonkTcType tau
+       ; checkValidType ctxt (mkSpecForAllTys all_tvs $ mkPhiTy theta tau)
+
+       ; traceTc "tcHsPartialSigType" (ppr all_tvs)
+       ; return (wcs, wcx, all_tvs, theta, tau) }
   where
     skol_info   = SigTypeSkol ctxt
 

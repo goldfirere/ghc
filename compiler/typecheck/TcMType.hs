@@ -918,7 +918,7 @@ also free in the type.  Eg
      Typeable k (a::k)
 has free vars {k,a}.  But the type (see Trac #7916)
     (f::k->*) (a::k)
-has free vars {f,a}, but we must add 'k' as well! Hence step (3).
+has free vars {f,a}, but we must add 'k' as well! Hence step (2).
 
 * This function distinguishes between dependent and non-dependent
   variables only to keep correct defaulting behavior with -XNoPolyKinds.

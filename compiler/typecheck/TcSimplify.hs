@@ -1838,7 +1838,7 @@ we'll get more Givens (a unification is like adding a Given) to
 allow the implication to make progress.
 -}
 
-promoteTyVar :: TcTyVar  -> TcM Bool
+promoteTyVar :: TcTyVar -> TcM Bool
 -- When we float a constraint out of an implication we must restore
 -- invariant (MetaTvInv) in Note [TcLevel and untouchable type variables] in TcType
 -- Return True <=> we did some promotion
