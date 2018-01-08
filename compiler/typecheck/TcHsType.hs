@@ -239,7 +239,10 @@ tc_hs_sig_type_and_gen skol_info (HsIB { hsib_vars = sig_vars
          -- NB the call to solveEqualities, which unifies all those
          --    kind variables floating about, immediately prior to
          --    kind generalisation
-       ; kindGeneralizeType (mkSpecForAllTys tkvs ty) }
+       ; ty1 <- zonkTcType $ mkSpecForAllTys tkvs ty
+         -- See Note [When to check telescopes] in TcValidity
+       ; checkValidTelescopeRec ty1
+       ; kindGeneralizeType ty1 }
 
 tc_hs_sig_type :: SkolemInfo -> LHsSigType GhcRn -> Kind -> TcM Type
 -- Kind-check/desugar a 'LHsSigType', but does not solve
@@ -1823,16 +1826,6 @@ kindGeneralize kind_or_type
        ; let dvs = DV { dv_kvs = kvs, dv_tvs = emptyDVarSet }
        ; gbl_tvs <- tcGetGlobalTyCoVars -- Already zonked
        ; quantifyTyVars gbl_tvs dvs }
-
--- Get the CandidatesQTvs of a type, also recursively checking to make
--- sure any telescopes in the type are well-formed. This should be
--- called after calling solveEqualities.
--- See also [When to check telescopes] in TcValidity
-prepareToKindGeneralize :: TcType -> TcM CandidatesQTvs
-prepareToKindGeneralize ty
-  = do { ty <- zonkTcTypeInKnot ty
-       ; checkValidTelescopeRec ty
-       ; return (candidatesQTyVarsOfType ty) }
 
 {-
 Note [Kind generalisation]

@@ -1853,18 +1853,9 @@ This is a straightforward skolem escape. Note that a and b need to have
 the same kind.
 (Testcase: polykinds/T11142)
 
-How do we deal with all of this? For TyCons, we have checkValidTyConTyVars.
-That function looks to see if any of the tyConTyVars are repeated, but
-it's really a telescope check. It works because all tycons are kind-generalized.
-If there is a bad telescope, the kind-generalization will end up generalizing
-over a variable bound later in the telescope.
-
--- TODO (RAE): Update Note.
-For non-tycons, we do scope checking when we bring tyvars into scope,
-in tcImplicitTKBndrs and tcExplicitTKBndrs. Note that we also have to
-sort implicit binders into a well-scoped order whenever we have implicit
-binders to worry about. This is done in quantifyTyVars and in
-tcImplicitTKBndrs.
+How do we deal with all of this? During validity checking, we must
+call checkValidTelescope. But see Note [When to check telescopes]
+for further wrinkles.
 
 Note [When to check telescopes]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1964,7 +1955,7 @@ checkValidTelescopeRec :: TcType -> TcM ()
 
 checkValidTelescopeRec ty
   | not (null tvs)
-  = do { checkValidTelescope (pprTvBndrs tvs) tvs empty
+  = do { checkValidTelescope (pprTyVars tvs) tvs empty
        ; mapM_ (checkValidTelescopeRec . tyVarKind) tvs
        ; checkValidTelescopeRec inner_ty }
   where

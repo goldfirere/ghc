@@ -2334,7 +2334,6 @@ checkValidTyCon tc
 
   | otherwise
   = do { traceTc "checkValidTyCon" (ppr tc $$ ppr (tyConClass_maybe tc))
-       ; checkValidTyConTyVars tc
        ; if | Just cl <- tyConClass_maybe tc
               -> checkValidClass cl
 
@@ -2424,56 +2423,6 @@ checkFieldCompat fld con1 con2 res1 res2 fty1 fty2
   where
     mb_subst1 = tcMatchTy res1 res2
     mb_subst2 = tcMatchTyX (expectJust "checkFieldCompat" mb_subst1) fty1 fty2
-
--------------------------------
--- | Check for ill-scoped telescopes in a tycon.
--- For example:
---
--- > data SameKind :: k -> k -> *   -- this is OK
--- > data Bad a (c :: Proxy b) (d :: Proxy a) (x :: SameKind b d)
---
--- The problem is that @b@ should be bound (implicitly) at the beginning,
--- but its kind mentions @a@, which is not yet in scope. Kind generalization
--- makes a mess of this, and ends up including @a@ twice in the final
--- tyvars. So this function checks for duplicates and, if there are any,
--- produces the appropriate error message.
-checkValidTyConTyVars :: TyCon -> TcM ()
-checkValidTyConTyVars tc
-  = do { -- strip off the duplicates and look for ill-scoped things
-         -- but keep the *last* occurrence of each variable, as it's
-         -- most likely the one the user wrote
-         let stripped_tvs | duplicate_vars
-                          = reverse $ nub $ reverse tvs
-                          | otherwise
-                          = tvs
-             vis_tvs      = tyConVisibleTyVars tc
-             extra | not (vis_tvs `equalLength` stripped_tvs)
-                   = text "NB: Implicitly declared kind variables are put first."
-                   | otherwise
-                   = empty
-       ; traceTc "checkValidTyConTyVars" (ppr tc <+> ppr tvs)
-       ; checkValidTelescope (pprTyVars vis_tvs) stripped_tvs extra
-         `and_if_that_doesn't_error`
-           -- This triggers on test case dependent/should_fail/InferDependency
-           -- It reports errors around Note [Dependent LHsQTyVars] in TcHsType
-         when duplicate_vars (
-          addErr (vcat [ text "Invalid declaration for" <+>
-                         quotes (ppr tc) <> semi <+> text "you must explicitly"
-                       , text "declare which variables are dependent on which others."
-                       , hang (text "Inferred variable kinds:")
-                         2 (vcat (map pp_tv stripped_tvs)) ])) }
-  where
-    tvs = tyConTyVars tc
-    duplicate_vars = tvs `lengthExceeds` sizeVarSet (mkVarSet tvs)
-
-    pp_tv tv = ppr tv <+> dcolon <+> ppr (tyVarKind tv)
-
-     -- only run try_second if the first reports no errors
-    and_if_that_doesn't_error :: TcM () -> TcM () -> TcM ()
-    try_first `and_if_that_doesn't_error` try_second
-      = recoverM (return ()) $
-        do { checkNoErrs try_first
-           ; try_second }
 
 -------------------------------
 checkValidDataCon :: DynFlags -> Bool -> TyCon -> DataCon -> TcM ()
