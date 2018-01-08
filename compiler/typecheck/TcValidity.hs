@@ -1865,6 +1865,48 @@ in tcImplicitTKBndrs and tcExplicitTKBndrs. Note that we also have to
 sort implicit binders into a well-scoped order whenever we have implicit
 binders to worry about. This is done in quantifyTyVars and in
 tcImplicitTKBndrs.
+
+Note [When to check telescopes]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+tcExplicitTKBndrs processes a user-written telescope. When do we check if it's
+indeed in proper order? I (Richard) had originally thought that we could just
+call checkValidTelescope right from tcExplicitTKBndrsX, but that doesn't quite
+work. The "challenge" case from dependent/should_compile/T14066a has an
+example where key information about an explicit telescope is available only
+outside the telescope's scope. This information isn't present when we process
+the telescope, and so the validity check fails (because we also have to solve
+equalities to contemplate a validity check). Instead, we should check the
+telescope during validity checking.
+
+However, that plan, too, doesn't work, because we sometimes quantify
+over free variables before validity checking. Consider
+
+  forall a k. Proxy (a :: k)
+
+Type inference determines that a's kind is k, making the telescope
+look like
+
+  forall (a :: k) (k :: Type). Proxy (a :: k)
+
+But then, when we quantify (quantifyTyVars), that first k is *free*,
+and thus gets quantified, producing
+
+  forall (k :: Type) (a :: k) (k :: Type). Proxy (a :: k)
+
+which is just plain wrong, on multiple levels.
+
+The trick is to validity-check telescopes *before* quantification.
+Note that this check must properly be recursive, in case there was
+a telescope deep down inside a type which might erroneously produce
+an extra free variable during generalization.
+
+We *also* do telescope checking under checkValidType. This is necessary
+because we can't do telescope checking in the middle of normal type-checking
+(as explained above), and not every type is kind-generalized. So,
+if we did telescope checking only before kind-generalization, we'd miss
+some cases (e.g., the RHS of a type synonym). This does mean we check
+some telescopes twice, but it doesn't seem worth it to come up with
+an elaborate scheme to prevent double-checks.
 -}
 
 -- | Check a list of binders to see if they make a valid telescope.
@@ -1912,6 +1954,43 @@ checkZonkValidTelescope hs_tvs orig_tvs extra
       = let bad_tvs = filterOut (`elemVarSet` in_scope) $
                       tyCoVarsOfTypeList (tyVarKind tv)
         in go (bad_tvs ++ errs) (in_scope `extendVarSet` tv) tvs
+
+-- | Check for valid telescopes (see 'checkValidTelescope') recursively
+-- in a type. The type should already be zonked. This does *not* do
+-- full validity checking, though, as that's expected to be done later.
+checkValidTelescopeRec :: TcType -> TcM ()
+  -- NB: Don't use tcView. Expanding a type syononym can't change validity of
+  -- telescopes.
+
+checkValidTelescopeRec ty
+  | not (null tvs)
+  = do { checkValidTelescope (pprTvBndrs tvs) tvs empty
+       ; mapM_ (checkValidTelescopeRec . tyVarKind) tvs
+       ; checkValidTelescopeRec inner_ty }
+  where
+    (tvs, inner_ty) = tcSplitForAllTys ty
+
+checkValidTelescopeRec (TyVarTy _) = return ()
+  -- No need to check the tv's kind here. We do that at binding sites.
+
+checkValidTelescopeRec (AppTy ty1 ty2)
+  = do { checkValidTelescopeRec ty1
+       ; checkValidTelescopeRec ty2 }
+
+checkValidTelescopeRec (TyConApp _ tys)
+  = mapM_ checkValidTelescopeRec tys
+
+ -- this is caught by first case
+checkValidTelescopeRec ty@(ForAllTy _ _) = pprPanic "checkValidTelescopeRec" (ppr ty)
+
+ -- NB: This handles constraints, too.
+checkValidTelescopeRec (FunTy arg res)
+  = do { checkValidTelescopeRec arg
+       ; checkValidTelescopeRec res }
+
+checkValidTelescopeRec (LitTy _)      = return ()
+checkValidTelescopeRec (CastTy ty _)  = checkValidTelescopeRec ty
+checkValidTelescopeRec (CoercionTy _) = return ()
 
 -- | After inferring kinds of type variables, check to make sure that the
 -- inferred kinds any of the type variables bound in a smaller scope.

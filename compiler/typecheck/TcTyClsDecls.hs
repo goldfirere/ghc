@@ -374,7 +374,10 @@ kcTyClGroup decls
                  kc_binders  = tyConBinders tc
                  kc_res_kind = tyConResKind tc
                  kc_tyvars   = tyConTyVars tc
-           ; kvs <- kindGeneralize (mkTyConKind kc_binders kc_res_kind)
+                 kind        = mkTyConKind kc_binders kc_res_kind
+               -- See Note [When to check telescopes] in TcValidity
+           ; checkValidTelescopeRec kind
+           ; kvs <- kindGeneralize kind
            ; let all_binders = mkNamedTyConBinders Inferred kvs ++ kc_binders
 
            ; (env, all_binders') <- zonkTyVarBindersX emptyZonkEnv all_binders
@@ -1640,23 +1643,22 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
                  ; return (user_tvs, ctxt, arg_tys, field_lbls, stricts)
                  }
 
+
          -- user_tvs have explicit, user-written binding sites
          -- the kvs below are those kind variables entirely unmentioned by the user
          --   and discovered only by generalization
 
-             -- Kind generalisation
-       ; vars <- zonkTcTypeAndSplitDepVars (mkSpecForAllTys user_tvs $
-                                            mkFunTys ctxt $
-                                            mkFunTys arg_tys $
-                                            unitTy)
+       ; kvs <- quantifyConDecl (mkVarSet (binderVars tmpl_bnds))
+                                (mkSpecForAllTys user_tvs $
+                                 mkFunTys ctxt $
+                                 mkFunTys arg_tys $
+                                 unitTy)
                  -- That type is a lie, of course. (It shouldn't end in ()!)
                  -- And we could construct a proper result type from the info
                  -- at hand. But the result would mention only the tmpl_tvs,
                  -- and so it just creates more work to do it right. Really,
                  -- we're doing this to get the right behavior around removing
                  -- any vars bound in exp_binders.
-
-       ; kvs <- quantifyTyVars (mkVarSet (binderVars tmpl_bndrs)) vars
 
              -- Zonk to Types
        ; (ze, qkvs)      <- zonkTyBndrsX emptyZonkEnv kvs
@@ -1695,15 +1697,14 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
           (ConDeclGADT { con_names = names, con_type = ty })
   = addErrCtxt (dataConCtxtName names) $
     do { traceTc "tcConDecl 1" (ppr names)
-       ; (user_tvs, ctxt, stricts, field_lbls, arg_tys, res_ty,hs_details)
+       ; (user_hs_tvs, user_tvs, ctxt, stricts, field_lbls, arg_tys, res_ty,hs_details)
            <- solveEqualities $
               tcGadtSigType (ppr names) (unLoc $ head names) ty
 
-       ; vars <- zonkTcTypeAndSplitDepVars (mkSpecForAllTys user_tvs $
-                                            mkFunTys ctxt $
-                                            mkFunTys arg_tys $
-                                            res_ty)
-       ; tkvs <- quantifyTyVars emptyVarSet vars
+       ; tkvs <- quantifyConDecl emptyVarSet (mkSpecForAllTys user_tvs $
+                                              mkFunTys ctxt $
+                                              mkFunTys arg_tys $
+                                              res_ty)
 
              -- Zonk to Types
        ; (ze, qtkvs) <- zonkTyBndrsX emptyZonkEnv (tkvs ++ user_tvs)
@@ -1746,6 +1747,17 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
        ; mapM buildOneDataCon names
        }
 
+-- | Produce the telescope of kind variables that this datacon is
+-- implicitly quantified over. Also checks for valid telescopes
+-- before quantifying, as instructed by Note [When to check telescopes]
+-- in TcValidity. Incoming type need not be zonked.
+quantifyConDecl :: TcTyCoVarSet  -- outer tvs, not to be quantified over; zonked
+                -> [TcTyVar] -> TcType -> TcM [TcTyVar]
+quantifyConDecl gbl_tvs ty
+  = do { ty <- zonkTcTypeInKnot ty
+       ; checkValidTelescopeRec ty
+       ; let fvs = candidatesQTyVarsOfType ty
+       ; quantifyTyVars gbl_tvs fvs }
 
 kcGadtSigType :: SDoc -> Name -> LHsSigType GhcRn -> TcM ()
 kcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
@@ -1757,7 +1769,8 @@ kcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
     (hs_details, res_ty, cxt, gtvs) = gadtDeclDetails ty
 
 tcGadtSigType :: SDoc -> Name -> LHsSigType GhcRn
-              -> TcM ( [TcTyVar], [PredType],[HsSrcBang], [FieldLabel], [Type], Type
+              -> TcM ( [LHsTyVarBndr GhcRn], [TcTyVar], [PredType]
+                     , [HsSrcBang], [FieldLabel], [Type], Type
                      , HsConDetails (LHsType GhcRn)
                                     (Located [LConDeclField GhcRn]) )
 tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
@@ -1766,7 +1779,7 @@ tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
            tcExplicitTKBndrs skol_info gtvs $ \ exp_tvs ->
              do { stuff <- tcGadtSigTypeDetails doc name hs_details res_ty cxt
                 ; return (exp_tvs, stuff) }
-       ; return (imp_tvs ++ exp_tvs, a, b, c, d, e, f) }
+       ; return (gtvs, imp_tvs ++ exp_tvs, a, b, c, d, e, f) }
   where
     (hs_details, res_ty, cxt, gtvs) = gadtDeclDetails ty
     skol_info = SigTypeSkol (ConArgCtxt name)

@@ -1648,8 +1648,17 @@ tcExplicitTKBndrsX :: (Name -> Kind -> TcM TyVar)
                    -> ([TcTyVar] -> TcM a)
                    -> TcM a
 tcExplicitTKBndrsX new_tv skol_info hs_tvs thing_inside
-  -- TODO (RAE): Comment, explaining why to bring everything into the same
-  -- TcLevel and that checking is done in TcValidity
+-- This function brings into scope a telescope of binders as written by
+-- the user. At first blush, it would then seem that we should bring
+-- them into scope one at a time, bumping the TcLevel each time.
+-- (Recall that we bump the level to prevent skolem escape from happening.)
+-- However, this leads to terrible error messages, because we end up
+-- failing to unify with some `k0`. Better would be to allow type inference
+-- to work, potentially creating a skolem-escape problem, and then to
+-- notice that the telescope is out of order. That's what we do here,
+-- following the logic of tcImplicitTKBndrsX.
+--
+-- See also Note [When to check telescopes] in TcValidity
   -- TODO (RAE): Try pushing only one level.
   = do { (((skol_tvs, result), wanted), inner_tclvl)
            <- pushTcLevelsM (length hs_tvs) $
@@ -1814,6 +1823,16 @@ kindGeneralize kind_or_type
        ; let dvs = DV { dv_kvs = kvs, dv_tvs = emptyDVarSet }
        ; gbl_tvs <- tcGetGlobalTyCoVars -- Already zonked
        ; quantifyTyVars gbl_tvs dvs }
+
+-- Get the CandidatesQTvs of a type, also recursively checking to make
+-- sure any telescopes in the type are well-formed. This should be
+-- called after calling solveEqualities.
+-- See also [When to check telescopes] in TcValidity
+prepareToKindGeneralize :: TcType -> TcM CandidatesQTvs
+prepareToKindGeneralize ty
+  = do { ty <- zonkTcTypeInKnot ty
+       ; checkValidTelescopeRec ty
+       ; return (candidatesQTyVarsOfType ty) }
 
 {-
 Note [Kind generalisation]

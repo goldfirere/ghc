@@ -356,11 +356,15 @@ tcPatSynSig name sig_ty
                      -- e.g. pattern Zero <- 0#   (Trac #12094)
                  ; return (univ_tvs, req, ex_tvs, prov, body_ty) }
 
+       ; ungen_patsyn_ty <- zonkTcType $
+                            build_patsyn_type [] implicit_tvs univ_tvs req
+                                              ex_tvs prov body_ty
+
+         -- See Note [When to check telescopes] in TcValidity
+       ; checkValidTelescopeRec ungen_patsyn_ty
 
        -- Kind generalisation
-       ; kvs <- kindGeneralize $
-                build_patsyn_type [] implicit_tvs univ_tvs req
-                                  ex_tvs prov body_ty
+       ; kvs <- kindGeneralize ungen_patsyn_ty
 
        -- These are /signatures/ so we zonk to squeeze out any kind
        -- unification variables.  Do this after quantifyTyVars which may
