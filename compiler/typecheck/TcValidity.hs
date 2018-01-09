@@ -14,7 +14,8 @@ module TcValidity (
   ClsInstInfo, checkValidCoAxiom, checkValidCoAxBranch,
   checkValidTyFamEqn,
   arityErr, badATErr,
-  checkValidTelescope, checkZonkValidTelescope, checkValidInferredKinds,
+  checkValidTelescopes, checkValidTelescopesBndrs,
+  checkValidTelescope1,
   allDistinctTyVars
   ) where
 
@@ -29,7 +30,6 @@ import TcUnify    ( tcSubType_NC )
 import TcSimplify ( simplifyAmbiguityCheck )
 import TyCoRep
 import TcType hiding ( sizeType, sizeTypes )
-import TcMType
 import PrelNames
 import Type
 import Coercion
@@ -50,7 +50,6 @@ import FamInst     ( makeInjectivityErrors )
 import Name
 import VarEnv
 import VarSet
-import UniqSet
 import Var         ( TyVarBndr(..), mkTyVar )
 import ErrUtils
 import DynFlags
@@ -63,7 +62,7 @@ import Unique      ( mkAlphaTyVarUnique )
 import qualified GHC.LanguageExtensions as LangExt
 
 import Control.Monad
-import Data.List        ( (\\) )
+import Data.List        ( (\\), maximumBy )
 import qualified Data.List.NonEmpty as NE
 
 {-
@@ -469,11 +468,7 @@ check_type env ctxt rank ty
 
         ; check_type env' ctxt rank tau      -- Allow foralls to right of arrow
 
-        ; let vis_tvs = [ binderVar tvb | tvb <- tvbs
-                                        , isVisibleArgFlag (binderArgFlag tvb) ]
-              doc     = pprTyVars vis_tvs
-        ; checkValidTelescope doc tvs empty
-
+        ; checkValidTelescope1 compare tvbs empty
 
         ; checkTcM (not (any (`elemVarSet` tyCoVarsOfType phi_kind) tvs))
                    (forAllEscapeErr env' ty tau_kind)
@@ -1854,14 +1849,14 @@ the same kind.
 (Testcase: polykinds/T11142)
 
 How do we deal with all of this? During validity checking, we must
-call checkValidTelescope. But see Note [When to check telescopes]
+call checkValidTelescopes. But see Note [When to check telescopes]
 for further wrinkles.
 
 Note [When to check telescopes]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 tcExplicitTKBndrs processes a user-written telescope. When do we check if it's
 indeed in proper order? I (Richard) had originally thought that we could just
-call checkValidTelescope right from tcExplicitTKBndrsX, but that doesn't quite
+call checkValidTelescopes right from tcExplicitTKBndrsX, but that doesn't quite
 work. The "challenge" case from dependent/should_compile/T14066a has an
 example where key information about an explicit telescope is available only
 outside the telescope's scope. This information isn't present when we process
@@ -1909,29 +1904,38 @@ an elaborate scheme to prevent double-checks.
 -- general validity checking, because once we kind-generalise, this sort
 -- of problem is harder to spot (as we'll generalise over the unbound
 -- k in a's type.) See also Note [Bad telescopes].
-checkValidTelescope :: SDoc        -- the original user-written telescope
-                    -> [TcTyVar]   -- explicit vars (not necessarily zonked)
-                    -> SDoc        -- note to put at bottom of message
-                    -> TcM ()
-checkValidTelescope hs_tvs orig_tvs extra
-  = discardResult $ checkZonkValidTelescope hs_tvs orig_tvs extra
+checkValidTelescope1 :: (flag -> flag -> Ordering) -- more visible is greater
+                     -> [TyVarBndr TcTyVar flag]   -- explicit vars (zonked)
+                     -> SDoc                       -- extra text at end
+                     -> TcM ()
+checkValidTelescope1 cmp tvbs extra
+    -- When printing, we want to write the tyvars that the user wrote.
+    -- Unfortunately, the actual HsSyn has been lost a long time ago.
+    -- So we just print the tyvars. But we don't want to print *all* the
+    -- tyvars, because some might be implicit in the code. Further
+    -- complicating this is that checkValidTelescope1 works on both
+    -- (class C a k (p :: Proxy (a :: k))) [invalid] and
+    -- (forall a k (p :: Proxy (a :: k))) [invalid]. In the first
+    -- case, the a and k are both Required. In the second, they're both
+    -- Specified. So: we find the most visible binder of the bunch and
+    -- print out only those binders with the same visibility. This works
+    -- in both cases.
+  = do { let flags    = map binderArgFlag tvbs
+             most_vis = maximumBy cmp flags
+             vis_tvs  = [ binderVar tvb | tvb <- tvbs
+                                        , most_vis `cmp` binderArgFlag tvb == EQ]
+             doc      = pprTyVars vis_tvs
 
--- | Like 'checkZonkValidTelescope', but returns the zonked tyvars
-checkZonkValidTelescope :: SDoc
-                        -> [TyVar]
-                        -> SDoc
-                        -> TcM [TyVar]
-checkZonkValidTelescope hs_tvs orig_tvs extra
-  = do { orig_tvs <- mapM zonkTyCoVarKind orig_tvs
-       ; let (_, sorted_tidied_tvs) = tidyTyCoVarBndrs emptyTidyEnv $
-                                      toposortTyVars orig_tvs
-       ; unless (go [] emptyVarSet orig_tvs) $
+             tvs      = binderVars tvbs
+
+             (_, sorted_tidied_tvs) = tidyTyCoVarBndrs emptyTidyEnv $
+                                      toposortTyVars tvs
+       ; unless (go [] emptyVarSet (binderVars tvbs)) $
          addErr $
-         vcat [ hang (text "These kind and type variables:" <+> hs_tvs $$
+         vcat [ hang (text "These kind and type variables:" <+> doc $$
                       text "are out of dependency order. Perhaps try this ordering:")
-                   2 (sep (map pprTyVar sorted_tidied_tvs))
-              , extra ]
-       ; return orig_tvs }
+                   2 (pprTyVars sorted_tidied_tvs)
+              , extra ] }
 
   where
     go :: [TyVar]  -- misplaced variables
@@ -1946,73 +1950,57 @@ checkZonkValidTelescope hs_tvs orig_tvs extra
                       tyCoVarsOfTypeList (tyVarKind tv)
         in go (bad_tvs ++ errs) (in_scope `extendVarSet` tv) tvs
 
--- | Check for valid telescopes (see 'checkValidTelescope') recursively
+-- | Check for valid telescopes (see 'checkValidTelescope1') recursively
 -- in a type. The type should already be zonked. This does *not* do
 -- full validity checking, though, as that's expected to be done later.
-checkValidTelescopeRec :: TcType -> TcM ()
+checkValidTelescopes :: TcType -> TcM ()
   -- NB: Don't use tcView. Expanding a type syononym can't change validity of
   -- telescopes.
 
-checkValidTelescopeRec ty
-  | not (null tvs)
-  = do { checkValidTelescope (pprTyVars tvs) tvs empty
-       ; mapM_ (checkValidTelescopeRec . tyVarKind) tvs
-       ; checkValidTelescopeRec inner_ty }
-  where
-    (tvs, inner_ty) = tcSplitForAllTys ty
-
-checkValidTelescopeRec (TyVarTy _) = return ()
+checkValidTelescopes (TyVarTy _) = return ()
   -- No need to check the tv's kind here. We do that at binding sites.
 
-checkValidTelescopeRec (AppTy ty1 ty2)
-  = do { checkValidTelescopeRec ty1
-       ; checkValidTelescopeRec ty2 }
+checkValidTelescopes (AppTy ty1 ty2)
+  = do { checkValidTelescopes ty1
+       ; checkValidTelescopes ty2 }
 
-checkValidTelescopeRec (TyConApp _ tys)
-  = mapM_ checkValidTelescopeRec tys
+checkValidTelescopes (TyConApp _ tys)
+  = mapM_ checkValidTelescopes tys
 
- -- this is caught by first case
-checkValidTelescopeRec ty@(ForAllTy _ _) = pprPanic "checkValidTelescopeRec" (ppr ty)
+ -- Can't use tcSplitXXX functions, because we might be inside the knot
+checkValidTelescopes (ForAllTy orig_tvb orig_ty)
+  = go (binderArgFlag orig_tvb) [orig_tvb] orig_ty
+  where
+    go :: ArgFlag -> [TyVarBinder] -> TcType -> TcM ()
+    go old_flag acc_tvbs (ForAllTy tvb ty)
+      | new_flag == old_flag
+      = go old_flag (tvb : acc_tvbs) ty
+      where
+        new_flag = binderArgFlag tvb
+
+    go _ acc_tvbs other_ty
+      = checkValidTelescopesBndrs compare (reverse acc_tvbs) other_ty
 
  -- NB: This handles constraints, too.
-checkValidTelescopeRec (FunTy arg res)
-  = do { checkValidTelescopeRec arg
-       ; checkValidTelescopeRec res }
+checkValidTelescopes (FunTy arg res)
+  = do { checkValidTelescopes arg
+       ; checkValidTelescopes res }
 
-checkValidTelescopeRec (LitTy _)      = return ()
-checkValidTelescopeRec (CastTy ty _)  = checkValidTelescopeRec ty
-checkValidTelescopeRec (CoercionTy _) = return ()
+checkValidTelescopes (LitTy _)      = return ()
+checkValidTelescopes (CastTy ty _)  = checkValidTelescopes ty
+checkValidTelescopes (CoercionTy _) = return ()
 
--- | After inferring kinds of type variables, check to make sure that the
--- inferred kinds any of the type variables bound in a smaller scope.
--- This is a skolem escape check. See also Note [Bad telescopes].
-checkValidInferredKinds :: [TyVar]     -- ^ vars to check (zonked)
-                        -> TyVarSet    -- ^ vars out of scope
-                        -> SDoc        -- ^ suffix to error message
-                        -> TcM ()
-checkValidInferredKinds orig_kvs out_of_scope extra
-  = do { let bad_pairs = [ (tv, kv)
-                         | kv <- orig_kvs
-                         , Just tv <- map (lookupVarSet out_of_scope)
-                                          (tyCoVarsOfTypeList (tyVarKind kv)) ]
-             report (tidyTyVarOcc env -> tv, tidyTyVarOcc env -> kv)
-               = addErr $
-                 text "The kind of variable" <+>
-                 quotes (ppr kv) <> text ", namely" <+>
-                 quotes (ppr (tyVarKind kv)) <> comma $$
-                 text "depends on variable" <+>
-                 quotes (ppr tv) <+> text "from an inner scope" $$
-                 text "Perhaps bind" <+> quotes (ppr kv) <+>
-                 text "sometime after binding" <+>
-                 quotes (ppr tv) $$
-                 extra
-       ; mapM_ report bad_pairs }
-
-  where
-    (env1, _) = tidyTyCoVarBndrs emptyTidyEnv orig_kvs
-    (env, _)  = tidyTyCoVarBndrs env1         (nonDetEltsUniqSet out_of_scope)
-      -- It's OK to use nonDetEltsUniqSet here because it's only used for
-      -- generating the error message
+-- | Variant of 'checkValidTelescopes' that takes an explicit telescope.
+-- Useful when the telescope is handy and when it would be hard to figure
+-- out what the user-written telescope was (e.g., in TyCon kinds).
+checkValidTelescopesBndrs :: (vis -> vis -> Ordering)  -- compare visibilities
+                                                      -- more visible is greater
+                         -> [TyVarBndr TcTyVar vis] -> TcType
+                         -> TcM ()
+checkValidTelescopesBndrs cmp bndrs inner_ty
+  = do { checkValidTelescope1 cmp bndrs empty
+       ; mapM_ (checkValidTelescopes . binderKind) bndrs
+       ; checkValidTelescopes inner_ty }
 
 {-
 ************************************************************************

@@ -2260,6 +2260,7 @@ tcRnType hsc_env normalise rdr_type
                        tcLHsTypeUnsaturated rn_type
 
        -- Do kind generalisation; see Note [Kind-generalise in tcRnType]
+       ; kind <- zonkTcType kind
        ; kvs <- kindGeneralize kind
        ; ty  <- zonkTcTypeToType emptyZonkEnv ty
 

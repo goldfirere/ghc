@@ -75,6 +75,7 @@ import qualified GHC.LanguageExtensions as LangExt
 import Control.Monad
 import Data.List
 import Data.List.NonEmpty ( NonEmpty(..) )
+import Data.Function ( on )
 
 {-
 ************************************************************************
@@ -303,8 +304,37 @@ instances of families altogether in the following. However, we need to include
 the kinds of *associated* families into the construction of the initial kind
 environment. (This is handled by `allDecls').
 
-
 See also Note [Kind checking recursive type and class declarations]
+
+Note [Check telescope again during generalisation]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The telescope check before kind generalisation is useful to catch something
+like this:
+
+  data T a k = MkT (Proxy (a :: k))
+
+Clearly, the k has to come first. Checking for this problem must come before
+kind generalisation, as described in Note [When to check telescopes] in
+TcValidity.
+
+However, we have to check again *after* kind generalisation, to catch something
+like this:
+
+  data SameKind :: k -> k -> Type  -- to force unification
+  data S a (b :: a) (d :: SameKind c b)
+
+Note that c has no explicit binding site. As such, it's quantified by kind
+generalisation. (Note that kcHsTyVarBndrs does not return such variables
+as binders in its returned TcTyCon.) The user-written part of this telescope
+is well-ordered; no earlier variables depend on later ones. However, after
+kind generalisation, we put c up front, like so:
+
+  data S {c :: a} a (b :: a) (d :: SameKind c b)
+
+We now have a problem. We could detect this problem just by looking at the
+free vars of the kinds of the generalised variables (the kvs), but we get
+such a nice error message out of checkValidTelescope that it seems like the
+right thing to do.
 
 -}
 
@@ -359,7 +389,7 @@ kcTyClGroup decls
         -- Step 3: generalisation
         -- Kind checking done for this group
         -- Now we have to kind generalize the flexis
-        ; res <- concatMapM (generaliseTCD (tcl_env lcl_env)) decls
+        ; res <- concat <$> mapAndReportM (generaliseTCD (tcl_env lcl_env)) decls
 
         ; traceTc "kcTyClGroup result" (vcat (map pp_res res))
         ; return res }
@@ -368,31 +398,41 @@ kcTyClGroup decls
     generalise :: TcTypeEnv -> Name -> TcM TcTyCon
     -- For polymorphic things this is a no-op
     generalise kind_env name
-      = do { let tc = case lookupNameEnv kind_env name of
-                        Just (ATcTyCon tc) -> tc
-                        _ -> pprPanic "kcTyClGroup" (ppr name $$ ppr kind_env)
-                 kc_binders  = tyConBinders tc
-                 kc_res_kind = tyConResKind tc
-                 kc_tyvars   = tyConTyVars tc
-                 kind        = mkTyConKind kc_binders kc_res_kind
+      | Just (ATcTyCon tc) <- lookupNameEnv kind_env name
+      = setSrcSpan (getSrcSpan tc) $
+        addTyConCtxt tc $
+        do { kc_binders  <- mapM zonkTcTyVarBinder (tyConBinders tc)
+           ; kc_res_kind <- zonkTcType (tyConResKind tc)
+
                -- See Note [When to check telescopes] in TcValidity
-           ; checkValidTelescopeRec kind
-           ; kvs <- kindGeneralize kind
+           ; traceTc "RAEc1" (ppr kc_binders $$ ppr kc_res_kind)
+
+           ; let compareTCB = compare `on` tyConBndrVisArgFlag
+           ; checkValidTelescopesBndrs compareTCB kc_binders kc_res_kind
+           ; kvs <- kindGeneralize (mkTyConKind kc_binders kc_res_kind)
+
            ; let all_binders = mkNamedTyConBinders Inferred kvs ++ kc_binders
 
            ; (env, all_binders') <- zonkTyVarBindersX emptyZonkEnv all_binders
            ; kc_res_kind'        <- zonkTcTypeToType env kc_res_kind
+
+             -- See Note [Check telescope again during generalisation]
+           ; let extra_doc = text "NB: Implicitly declared variables come before others."
+           ; checkValidTelescope1 compareTCB all_binders extra_doc
 
                       -- Make sure kc_kind' has the final, zonked kind variables
            ; traceTc "Generalise kind" $
              vcat [ ppr name, ppr kc_binders, ppr (mkTyConKind kc_binders kc_res_kind)
                   , ppr kvs, ppr all_binders, ppr kc_res_kind
                   , ppr all_binders', ppr kc_res_kind'
-                  , ppr kc_tyvars, ppr (tcTyConScopedTyVars tc)]
+                  , ppr (tcTyConScopedTyVars tc)]
 
            ; return (mkTcTyCon name all_binders' kc_res_kind'
                                (tcTyConScopedTyVars tc)
                                (tyConFlavour tc)) }
+
+      | otherwise
+      = pprPanic "kcTyClGroup.generalise" (ppr name)
 
     generaliseTCD :: TcTypeEnv
                   -> LTyClDecl GhcRn -> TcM [TcTyCon]
@@ -1648,7 +1688,7 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
          -- the kvs below are those kind variables entirely unmentioned by the user
          --   and discovered only by generalization
 
-       ; kvs <- quantifyConDecl (mkVarSet (binderVars tmpl_bnds))
+       ; kvs <- quantifyConDecl (mkVarSet (binderVars tmpl_bndrs))
                                 (mkSpecForAllTys user_tvs $
                                  mkFunTys ctxt $
                                  mkFunTys arg_tys $
@@ -1697,7 +1737,7 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
           (ConDeclGADT { con_names = names, con_type = ty })
   = addErrCtxt (dataConCtxtName names) $
     do { traceTc "tcConDecl 1" (ppr names)
-       ; (user_hs_tvs, user_tvs, ctxt, stricts, field_lbls, arg_tys, res_ty,hs_details)
+       ; (user_tvs, ctxt, stricts, field_lbls, arg_tys, res_ty,hs_details)
            <- solveEqualities $
               tcGadtSigType (ppr names) (unLoc $ head names) ty
 
@@ -1752,11 +1792,12 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
 -- before quantifying, as instructed by Note [When to check telescopes]
 -- in TcValidity. Incoming type need not be zonked.
 quantifyConDecl :: TcTyCoVarSet  -- outer tvs, not to be quantified over; zonked
-                -> [TcTyVar] -> TcType -> TcM [TcTyVar]
+                -> TcType -> TcM [TcTyVar]
 quantifyConDecl gbl_tvs ty
   = do { ty <- zonkTcTypeInKnot ty
-       ; checkValidTelescopeRec ty
-       ; let fvs = candidatesQTyVarsOfType ty
+       ; traceTc "RAEb1" empty
+       ; checkValidTelescopes ty
+       ; let fvs = candidateQTyVarsOfType ty
        ; quantifyTyVars gbl_tvs fvs }
 
 kcGadtSigType :: SDoc -> Name -> LHsSigType GhcRn -> TcM ()
@@ -1769,8 +1810,7 @@ kcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
     (hs_details, res_ty, cxt, gtvs) = gadtDeclDetails ty
 
 tcGadtSigType :: SDoc -> Name -> LHsSigType GhcRn
-              -> TcM ( [LHsTyVarBndr GhcRn], [TcTyVar], [PredType]
-                     , [HsSrcBang], [FieldLabel], [Type], Type
+              -> TcM ( [TcTyVar], [PredType] , [HsSrcBang], [FieldLabel], [Type], Type
                      , HsConDetails (LHsType GhcRn)
                                     (Located [LConDeclField GhcRn]) )
 tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
@@ -1779,7 +1819,7 @@ tcGadtSigType doc name ty@(HsIB { hsib_vars = vars })
            tcExplicitTKBndrs skol_info gtvs $ \ exp_tvs ->
              do { stuff <- tcGadtSigTypeDetails doc name hs_details res_ty cxt
                 ; return (exp_tvs, stuff) }
-       ; return (gtvs, imp_tvs ++ exp_tvs, a, b, c, d, e, f) }
+       ; return (imp_tvs ++ exp_tvs, a, b, c, d, e, f) }
   where
     (hs_details, res_ty, cxt, gtvs) = gadtDeclDetails ty
     skol_info = SigTypeSkol (ConArgCtxt name)

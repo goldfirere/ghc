@@ -239,9 +239,12 @@ tc_hs_sig_type_and_gen skol_info (HsIB { hsib_vars = sig_vars
          -- NB the call to solveEqualities, which unifies all those
          --    kind variables floating about, immediately prior to
          --    kind generalisation
-       ; ty1 <- zonkTcType $ mkSpecForAllTys tkvs ty
+
+         -- We use "InKnot", because this is called on class method sigs
+         -- in the knot
+       ; ty1 <- zonkTcTypeInKnot $ mkSpecForAllTys tkvs ty
          -- See Note [When to check telescopes] in TcValidity
-       ; checkValidTelescopeRec ty1
+       ; checkValidTelescopes ty1
        ; kindGeneralizeType ty1 }
 
 tc_hs_sig_type :: SkolemInfo -> LHsSigType GhcRn -> Kind -> TcM Type
@@ -1811,7 +1814,7 @@ scopeTyVars2 skol_info orig_prs thing_inside
 
 ------------------
 kindGeneralizeType :: Type -> TcM Type
--- Result is zonked
+-- Input must be zonked; output is zonked again
 kindGeneralizeType ty
   = do { kvs <- kindGeneralize ty
        ; ty <- zonkSigType (mkInvForAllTys kvs ty)
@@ -1821,9 +1824,10 @@ kindGeneralize :: TcType -> TcM [KindVar]
 -- Quantify the free kind variables of a kind or type
 -- In the latter case the type is closed, so it has no free
 -- type variables.  So in both cases, all the free vars are kind vars
+-- Input must be zonked.
 kindGeneralize kind_or_type
-  = do { kvs <- zonkTcTypeAndFV kind_or_type
-       ; let dvs = DV { dv_kvs = kvs, dv_tvs = emptyDVarSet }
+  = do { let kvs = tyCoVarsOfTypeDSet kind_or_type
+             dvs = DV { dv_kvs = kvs, dv_tvs = emptyDVarSet }
        ; gbl_tvs <- tcGetGlobalTyCoVars -- Already zonked
        ; quantifyTyVars gbl_tvs dvs }
 

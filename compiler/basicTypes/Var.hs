@@ -381,8 +381,9 @@ updateVarTypeM f id = do { ty' <- f (varType id)
 -- permitted by request ('Specified') (visible type application), or
 -- prohibited entirely from appearing in source Haskell ('Inferred')?
 -- See Note [TyVarBndrs, TyVarBinders, TyConBinders, and visibility] in TyCoRep
-data ArgFlag = Required | Specified | Inferred
-  deriving (Eq, Data)
+data ArgFlag = Inferred | Specified | Required
+  deriving (Eq, Ord, Data)
+  -- (<) on ArgFlag meant "is less visible than"
 
 -- | Does this 'ArgFlag' classify an argument that is written in Haskell?
 isVisibleArgFlag :: ArgFlag -> Bool

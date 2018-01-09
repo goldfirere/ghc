@@ -19,7 +19,7 @@ module TyCon(
         TyConBinder, TyConBndrVis(..),
         mkNamedTyConBinder, mkNamedTyConBinders,
         mkAnonTyConBinder, mkAnonTyConBinders,
-        tyConBinderArgFlag, isNamedTyConBinder,
+        tyConBinderArgFlag, tyConBndrVisArgFlag, isNamedTyConBinder,
         isVisibleTyConBinder, isInvisibleTyConBinder,
 
         -- ** Field labels
@@ -408,8 +408,11 @@ mkNamedTyConBinders :: ArgFlag -> [TyVar] -> [TyConBinder]
 mkNamedTyConBinders vis tvs = map (mkNamedTyConBinder vis) tvs
 
 tyConBinderArgFlag :: TyConBinder -> ArgFlag
-tyConBinderArgFlag (TvBndr _ (NamedTCB vis)) = vis
-tyConBinderArgFlag (TvBndr _ AnonTCB)        = Required
+tyConBinderArgFlag (TvBndr _ vis) = tyConBndrVisArgFlag vis
+
+tyConBndrVisArgFlag :: TyConBndrVis -> ArgFlag
+tyConBndrVisArgFlag (NamedTCB vis) = vis
+tyConBndrVisArgFlag AnonTCB        = Required
 
 isNamedTyConBinder :: TyConBinder -> Bool
 -- Identifies kind variables

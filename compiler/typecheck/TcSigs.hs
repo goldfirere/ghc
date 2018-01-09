@@ -33,7 +33,7 @@ import TcRnTypes
 import TcRnMonad
 import TcType
 import TcMType
-import TcValidity ( checkValidType )
+import TcValidity ( checkValidType, checkValidTelescopes )
 import TcUnify( tcSkolemise, unifyType )
 import Inst( topInstantiate )
 import TcEnv( tcLookupId )
@@ -361,7 +361,7 @@ tcPatSynSig name sig_ty
                                               ex_tvs prov body_ty
 
          -- See Note [When to check telescopes] in TcValidity
-       ; checkValidTelescopeRec ungen_patsyn_ty
+       ; checkValidTelescopes ungen_patsyn_ty
 
        -- Kind generalisation
        ; kvs <- kindGeneralize ungen_patsyn_ty
