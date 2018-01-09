@@ -1344,8 +1344,8 @@ Earlier, thought it would work simply to do a free-variable check
 during kcHsTyVarBndrs, but this is bogus, because there may be
 unsolved equalities about. And we don't want to eagerly solve the
 equalities, because we may get further information after
-kcHsTyVarBndrs is called.  (Recall that kcHsTyVarBndrs is usually
-called from getInitialKind.  The only other case is in kcConDecl.)
+kcHsTyVarBndrs is called.  (Recall that kcHsTyVarBndrs is called
+only from getInitialKind.)
 This is what implements the rule that all variables intended to be
 dependent must be manifestly so.
 
@@ -1828,6 +1828,7 @@ kindGeneralize :: TcType -> TcM [KindVar]
 kindGeneralize kind_or_type
   = do { let kvs = tyCoVarsOfTypeDSet kind_or_type
              dvs = DV { dv_kvs = kvs, dv_tvs = emptyDVarSet }
+       ; traceTc "RAEd1" (ppr kind_or_type $$ ppr kvs $$ ppr dvs)
        ; gbl_tvs <- tcGetGlobalTyCoVars -- Already zonked
        ; quantifyTyVars gbl_tvs dvs }
 

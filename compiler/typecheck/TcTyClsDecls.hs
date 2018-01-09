@@ -405,7 +405,7 @@ kcTyClGroup decls
            ; kc_res_kind <- zonkTcType (tyConResKind tc)
 
                -- See Note [When to check telescopes] in TcValidity
-           ; traceTc "RAEc1" (ppr kc_binders $$ ppr kc_res_kind)
+           ; traceTc "RAEc1" (ppr kc_binders $$ ppr (map binderKind kc_binders) $$ ppr kc_res_kind)
 
            ; let compareTCB = compare `on` tyConBndrVisArgFlag
            ; checkValidTelescopesBndrs compareTCB kc_binders kc_res_kind
