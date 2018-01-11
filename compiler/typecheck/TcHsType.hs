@@ -2257,6 +2257,12 @@ tcHsPatSigType ctxt sig_ty
 
         ; emitWildCardHoleConstraints wcs
 
+          -- sig_ty might have tyvars that are at a higher TcLevel (if hs_ty
+          -- contains a forall). Promote these.
+          -- TODO (RAE): Do I need this? (typecheck/should_fail/tcfail104)
+        ; sig_ty <- zonkTcType sig_ty
+        ; _ <- promoteTyVarSet (tyCoVarsOfType sig_ty)
+
         ; sig_ty <- zonkTcType sig_ty
         ; checkValidType ctxt sig_ty
 
