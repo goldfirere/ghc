@@ -1316,6 +1316,14 @@ uType t_or_k origin orig_ty1 orig_ty2
       | tc1 == tc2
       = return $ mkReflCo Nominal ty1
 
+    go (CastTy t1 co1) t2
+      = do { co_tys <- go t1 t2
+           ; return (mkCoherenceLeftCo co_tys co1) }
+
+    go t1 (CastTy t2 co2)
+      = do { co_tys <- go t1 t2
+           ; return (mkCoherenceRightCo co_tys co2) }
+
         -- See Note [Expanding synonyms during unification]
         --
         -- Also NB that we recurse to 'go' so that we don't push a
@@ -1327,14 +1335,6 @@ uType t_or_k origin orig_ty1 orig_ty2
     go ty1 ty2
       | Just ty1' <- tcView ty1 = go ty1' ty2
       | Just ty2' <- tcView ty2 = go ty1  ty2'
-
-    go (CastTy t1 co1) t2
-      = do { co_tys <- go t1 t2
-           ; return (mkCoherenceLeftCo co_tys co1) }
-
-    go t1 (CastTy t2 co2)
-      = do { co_tys <- go t1 t2
-           ; return (mkCoherenceRightCo co_tys co2) }
 
         -- Functions (or predicate functions) just check the two parts
     go (FunTy fun1 arg1) (FunTy fun2 arg2)
@@ -1449,6 +1449,9 @@ We expand synonyms during unification, but:
    variables with un-expanded type synonym. This just makes it
    more likely that the inferred types will mention type synonyms
    understandable to the user
+
+ * Similarly, we expand *after* the CastTy case, just in case the
+   CastTy wraps a variable.
 
  * We expand *before* the TyConApp case.  For example, if we have
       type Phantom a = Int

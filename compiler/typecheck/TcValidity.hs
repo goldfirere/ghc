@@ -1854,6 +1854,8 @@ for further wrinkles.
 
 Note [When to check telescopes]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+TODO (RAE): Move check to setImplicationStatus and TcErrors
+
 tcExplicitTKBndrs processes a user-written telescope. When do we check if it's
 indeed in proper order? I (Richard) had originally thought that we could just
 call checkValidTelescopes right from tcExplicitTKBndrsX, but that doesn't quite
