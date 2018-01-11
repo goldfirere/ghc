@@ -416,20 +416,18 @@ kcTyClGroup decls
            ; (env, all_binders') <- zonkTyVarBindersX emptyZonkEnv all_binders
            ; kc_res_kind'        <- zonkTcTypeToType env kc_res_kind
 
-           ; let all_binders'' = preferAnonTCB all_binders' kc_res_kind'
-
              -- See Note [Check telescope again during generalisation]
            ; let extra_doc = text "NB: Implicitly declared variables come before others."
-           ; checkValidTelescope1 compareTCB all_binders'' extra_doc
+           ; checkValidTelescope1 compareTCB all_binders extra_doc
 
                       -- Make sure kc_kind' has the final, zonked kind variables
            ; traceTc "Generalise kind" $
              vcat [ ppr name, ppr kc_binders, ppr (mkTyConKind kc_binders kc_res_kind)
                   , ppr kvs, ppr all_binders, ppr kc_res_kind
-                  , ppr all_binders'', ppr kc_res_kind'
+                  , ppr all_binders', ppr kc_res_kind'
                   , ppr (tcTyConScopedTyVars tc)]
 
-           ; return (mkTcTyCon name all_binders'' kc_res_kind'
+           ; return (mkTcTyCon name all_binders' kc_res_kind'
                                (tcTyConScopedTyVars tc)
                                (tyConFlavour tc)) }
 
@@ -458,32 +456,6 @@ kcTyClGroup decls
       = generalise kind_env name
 
     pp_res tc = ppr (tyConName tc) <+> dcolon <+> ppr (tyConKind tc)
-
-      -- See Note [Dependent LHsQTyVars] in TcHsType
-    preferAnonTCB :: [TyConBinder] -> Kind -> [TyConBinder]
-    preferAnonTCB tcbs res_ki = go [] (tyCoVarsOfType res_ki) (reverse tcbs)
-      where
-        go :: [TyConBinder]  -- accumulator of result (in original order)
-           -> TyVarSet       -- free variables in scope
-           -> [TyConBinder]  -- TCBs of the tycon (in reverse order)
-                             -- These are all assumed to be NamedTCB, as per
-                             -- kcHsTyVarBndr's behavior
-           -> [TyConBinder]
-        go acc_tcbs _ [] = acc_tcbs
-        go acc_tcbs fvs (tcb : tcbs)
-          | tcb_var `elemVarSet` fvs
-          = go (tcb : acc_tcbs)
-               (fvs `delVarSet` tcb_var
-                    `unionVarSet` tyCoVarsOfType tcb_kind)
-               tcbs
-
-          | otherwise
-          = go (mkAnonTyConBinder tcb_var : acc_tcbs)
-               (fvs `unionVarSet` tyCoVarsOfType tcb_kind)
-               tcbs
-          where
-            tcb_var  = binderVar tcb
-            tcb_kind = tyVarKind tcb_var
 
 --------------
 mkTcTyConEnv :: TcTyCon -> TcTypeEnv

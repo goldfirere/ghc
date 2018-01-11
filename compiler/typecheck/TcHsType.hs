@@ -1313,10 +1313,6 @@ addTypeCtxt (L _ ty) thing
 
 Note [Dependent LHsQTyVars]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-TODO (RAE): Update Note. I'm going to have kcHsTyVarBndrs always
-create NamedTCB and then fix it in kcTyClGroup.generalise.
-Talk about preferAnonTCB in TcTyClsDecls.
-
 We track (in the renamer) which explicitly bound variables in a
 LHsQTyVars are manifestly dependent; only precisely these variables
 may be used within the LHsQTyVars. We must do this so that kcHsTyVarBndrs
@@ -1519,7 +1515,7 @@ kcHsTyVarBndrs name flav cusk
                                            bind_telescope hs_tvs $
                                            thing
                   -- See Note [Dependent LHsQTyVars]
-           ; let new_binder | not cusk || hsTyVarName hs_tv `elemNameSet` dep_names
+           ; let new_binder | hsTyVarName hs_tv `elemNameSet` dep_names
                             = mkNamedTyConBinder Required tv
                             | otherwise
                             = mkAnonTyConBinder tv
