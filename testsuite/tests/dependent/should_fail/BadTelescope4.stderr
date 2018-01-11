@@ -1,6 +1,6 @@
 
 BadTelescope4.hs:9:1: error:
-    • These kind and type variables: (a :: k)
+    • These kind and type variables: (a :: k0)
                                      (c :: Proxy b)
                                      (d :: Proxy a)
                                      (x :: SameKind b d)

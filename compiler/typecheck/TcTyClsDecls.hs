@@ -404,6 +404,9 @@ kcTyClGroup decls
         do { kc_binders  <- mapM zonkTcTyVarBinder (tyConBinders tc)
            ; kc_res_kind <- zonkTcType (tyConResKind tc)
 
+              -- See Note [checkValidDependency]
+           ; checkValidDependency kc_binders kc_res_kind
+
                -- See Note [When to check telescopes] in TcValidity
            ; traceTc "RAEc1" (ppr kc_binders $$ ppr (map binderKind kc_binders) $$ ppr kc_res_kind)
 
@@ -2962,6 +2965,75 @@ tcSplitSigmaTy. tcSplitNestedSigmaTys will always split any foralls that it
 sees until it can't go any further, so if you called it on the default type
 signature for `each`, it would return (a -> f b) -> s -> f t like we desired.
 
+Note [checkValidDependency]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider
+
+  data Proxy k (a :: k)
+  data Proxy2 k a = P (Proxy k a)
+
+(This is test dependent/should_fail/InferDependency.) While it seems GHC can
+figure out the dependency between the arguments to Proxy2, this case errors.
+The problem is that when we build the initial kind (getInitialKind) for
+a tycon, we need to decide whether an argument is dependent or not. At first,
+I thought we could just assume that *all* arguments are dependent, and then
+patch it up later. However, this causes problems in error messages (where
+tycon's have mysterious kinds "forall (a :: k) -> blah") and in unification
+(where we try to unify kappa ~ forall (a :: k) -> blah, failing because the
+RHS is not a tau-type). Perhaps a cleverer algorithm could sort this out
+(say, by storing the dependency flag in a mutable cell and by avoiding
+these fancy kinds in error messages depending on the extension in effect)
+but it doesn't seem worth it.
+
+So: we choose the dependency for each argument variable once and for all
+in getInitialKind. This means that any dependency must be lexically manifest.
+
+checkValidDependency checks to make sure that no lexically non-dependent
+argument actually appears in a kind. Note the example above, where the k
+in Proxy2 is a dependent argument, but this fact is not lexically
+manifest. checkValidDependency will reject. This function must be called
+*before* kind generalization, because kind generalization works with
+the result of mkTyConKind, which will think that Proxy2's kind is
+Type -> k -> Type, where k is unbound. (It won't use a forall for a
+"non-dependent" argument k.)
+-}
+
+-- | See Note [checkValidDependency]
+checkValidDependency :: [TyConBinder]  -- zonked
+                     -> TcKind         -- zonked (result kind)
+                     -> TcM ()
+checkValidDependency binders res_kind
+  = go (tyCoVarsOfType res_kind) (reverse binders)
+  where
+    go :: TyCoVarSet     -- fvs from scope
+       -> [TyConBinder]  -- binders, in reverse order
+       -> TcM ()
+    go _   []           = return ()  -- all set
+    go fvs (tcb : tcbs)
+      | not (isNamedTyConBinder tcb) && tcb_var `elemVarSet` fvs
+      = do { setSrcSpan (getSrcSpan tcb_var) $
+             addErrTc (vcat [ text "Type constructor argument" <+> quotes (ppr tcb_var) <+>
+                              text "is used dependently."
+                            , text "Any dependent arguments must be obviously so, not inferred"
+                            , text "by the type-checker."
+                            , hang (text "Inferred argument kinds:")
+                                 2 (vcat (map pp_binder binders))
+                            , text "Suggestion: use" <+> quotes (ppr tcb_var) <+>
+                              text "in a kind to make the dependency clearer." ])
+           ; go new_fvs tcbs }
+
+      | otherwise
+      = go new_fvs tcbs
+      where
+        new_fvs = fvs `delVarSet` tcb_var
+                      `unionVarSet` tyCoVarsOfType tcb_kind
+
+        tcb_var  = binderVar tcb
+        tcb_kind = tyVarKind tcb_var
+
+        pp_binder binder = ppr (binderVar binder) <+> dcolon <+> ppr (binderKind binder)
+
+{-
 ************************************************************************
 *                                                                      *
                 Checking role validity
