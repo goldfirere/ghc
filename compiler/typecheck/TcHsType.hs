@@ -48,6 +48,9 @@ module TcHsType (
         -- Sort-checking kinds
         tcLHsKindSig,
 
+        -- Zonking and promoting
+        zonkPromoteType,
+
         -- Pattern type signatures
         tcHsPatSigType, tcPatSig, funAppCtxt
    ) where
@@ -69,6 +72,7 @@ import TcType
 import TcHsSyn( zonkSigType )
 import Inst   ( tcInstBinders, tcInstBinder )
 import Type
+import Coercion
 import Kind
 import RdrName( lookupLocalRdrOcc )
 import Var
@@ -263,13 +267,9 @@ tc_hs_sig_type skol_info (HsIB { hsib_vars = sig_vars
             -- Thus: solveLocalEqualities. (We still want to solve what equalities
             -- we can, because we will zonk and validity-check)
 
-       ; forall_ty <- zonkTcType (mkSpecForAllTys tkvs ty)
-       ; did_promotion <- promoteTyVarSet (tyCoVarsOfType forall_ty)
           -- need to promote any remaining metavariables; test case:
           -- dependent/should_fail/T14066e.
-       ; if did_promotion           -- don't zonk again if we don't have to
-         then zonkTcType forall_ty  -- have to zonk again
-         else return forall_ty }    -- no need to zonk
+       ; zonkPromoteType (mkSpecForAllTys tkvs ty) }
 
 -----------------
 tcHsDeriv :: LHsSigType GhcRn -> TcM ([TyVar], Class, [Type], [Kind])
@@ -1607,10 +1607,8 @@ tcImplicitTKBndrsX new_tv m_kind skol_info tv_names thing_inside
           -- TODO (RAE): Comment me.
 
           -- TODO (RAE): Comment me.
-       ; skol_tvs <- mapM zonkTcTyCoVarBndr skol_tvs
-          -- use zonkTyCoVarBndr because a skol_tv might be a SigTv
-       ; _ <- promoteTyVarSet $ tyCoVarsOfTypes (mkTyVarTys skol_tvs)
-       ; skol_tvs <- mapM zonkTcTyCoVarBndr skol_tvs
+       ; skol_tvs <- mapM zonkPromoteTyCoVarBndr skol_tvs
+          -- use zonkPromoteTyCoVarBndr because a skol_tv might be a SigTv
                  -- NB: /not/ zonkTcTyVarToTyVar. tcImplicitTKBndrsX
                  -- guarantees to return TcTyVars with the same Names
                  -- as the var_ns.  See [Pattern signature binders]
@@ -2147,6 +2145,11 @@ tcHsPartialSigType ctxt sig_ty
          -- Test case: partial-sigs/should_compile/LocalDefinitionBug
        ; let tv_names = map tyVarName (implicit_tvs ++ explicit_tvs)
 
+       -- Spit out the wildcards (including the extra-constraints one)
+       -- as "hole" constraints, so that they'll be reported if necessary
+       -- See Note [Extra-constraint holes in partial type signatures]
+       ; emitWildCardHoleConstraints wcs
+
          -- The SigTvs created above will sometimes have too high a TcLevel
          -- (note that they are generated *after* bumping the level in
          -- the tc{Im,Ex}plicitTKBndrsSig functions. Bumping the level
@@ -2156,23 +2159,11 @@ tcHsPartialSigType ctxt sig_ty
          -- everything (and solved equalities in the tcImplicit call)
          -- we need to promote the SigTvs so we don't violate the TcLevel
          -- invariant
-       ; tvs_from_body <- zonkTcTypeAndFV $ maybe id mkFunTy wcx $
-                                            mkFunTys theta $
-                                            tau
-                -- not every tv is necessarily mentioned in the body
-       ; tvs_from_vars <- zonkTyCoVarsAndFV $ mkVarSet (implicit_tvs ++ explicit_tvs)
-       ; _ <- promoteTyVarSet (dVarSetToVarSet tvs_from_body `unionVarSet` tvs_from_vars)
+       ; all_tvs <- mapM zonkPromoteTyCoVarBndr (implicit_tvs ++ explicit_tvs)
+            -- zonkPromoteTyCoVarBndr deals well with SigTvs
 
-       -- Spit out the wildcards (including the extra-constraints one)
-       -- as "hole" constraints, so that they'll be reported if necessary
-       -- See Note [Extra-constraint holes in partial type signatures]
-       ; emitWildCardHoleConstraints wcs
-
-       ; all_tvs <- mapM zonkTcTyCoVarBndr (implicit_tvs ++ explicit_tvs)
-            -- zonkTcTyCoVarBndr deals well with SigTvs
-
-       ; theta   <- mapM zonkTcType theta
-       ; tau     <- zonkTcType tau
+       ; theta   <- mapM zonkPromoteType theta
+       ; tau     <- zonkPromoteType tau
        ; checkValidType ctxt (mkSpecForAllTys all_tvs $ mkPhiTy theta tau)
 
        ; traceTc "tcHsPartialSigType" (ppr all_tvs)
@@ -2268,10 +2259,7 @@ tcHsPatSigType ctxt sig_ty
           -- sig_ty might have tyvars that are at a higher TcLevel (if hs_ty
           -- contains a forall). Promote these.
           -- TODO (RAE): Do I need this? (typecheck/should_fail/tcfail104)
-        ; sig_ty <- zonkTcType sig_ty
-        ; _ <- promoteTyVarSet (tyCoVarsOfType sig_ty)
-
-        ; sig_ty <- zonkTcType sig_ty
+        ; sig_ty <- zonkPromoteType sig_ty
         ; checkValidType ctxt sig_ty
 
         ; tv_pairs <- mapM mk_tv_pair sig_tkvs
@@ -2432,6 +2420,74 @@ unifyKinds rn_tys act_kinds
        ; let check rn_ty (ty, act_kind) = checkExpectedKind (unLoc rn_ty) ty act_kind kind
        ; tys' <- zipWithM check rn_tys act_kinds
        ; return (tys', kind) }
+
+{-
+************************************************************************
+*                                                                      *
+    Promotion
+*                                                                      *
+************************************************************************
+-}
+
+-- | Whenever a type is about to be added to the environment, it's necessary
+-- to make sure that any free meta-tyvars in the type are promoted to the
+-- current TcLevel. (They might be at a higher level due to the level-bumping
+-- in tcExplicitTKBndrs, for example.) This function both zonks *and*
+-- promotes.
+zonkPromoteType :: TcType -> TcM TcType
+zonkPromoteType = mapType zonkPromoteMapper ()
+
+zonkPromoteMapper :: TyCoMapper () TcM
+zonkPromoteMapper = TyCoMapper { tcm_smart    = True
+                               , tcm_tyvar    = const zonkPromoteTcTyVar
+                               , tcm_covar    = const covar
+                               , tcm_hole     = const hole
+                               , tcm_tybinder = const tybinder }
+  where
+    covar cv
+      = mkCoVarCo <$> zonkPromoteTyCoVarKind cv
+
+    hole :: CoercionHole -> Role -> Type -> Type -> TcM Coercion
+    hole h r t1 t2
+      = do { contents <- unpackCoercionHole_maybe h
+           ; case contents of
+               Just co -> do { co <- zonkPromoteCoercion co
+                             ; checkCoercionHole co h r t1 t2 }
+               Nothing -> do { t1 <- zonkPromoteType t1
+                             ; t2 <- zonkPromoteType t2
+                             ; return $ mkHoleCo h r t1 t2 } }
+
+    tybinder :: TyVar -> ArgFlag -> TcM ((), TyVar)
+    tybinder tv _flag = ((), ) <$> zonkPromoteTyCoVarKind tv
+
+zonkPromoteTcTyVar :: TyCoVar -> TcM TcType
+zonkPromoteTcTyVar tv
+  | isMetaTyVar tv
+  = do { let ref = metaTyVarRef tv
+       ; contents <- readTcRef ref
+       ; case contents of
+           Flexi -> do { promoted <- promoteTyVar tv
+                       ; if promoted
+                         then zonkPromoteTcTyVar tv   -- read it again
+                         else mkTyVarTy <$> zonkPromoteTyCoVarKind tv }
+           Indirect ty -> zonkPromoteType ty }
+
+  | otherwise
+  = mkTyVarTy <$> zonkPromoteTyCoVarKind tv
+
+zonkPromoteTyCoVarKind :: TyCoVar -> TcM TyCoVar
+zonkPromoteTyCoVarKind = updateTyVarKindM zonkPromoteType
+
+zonkPromoteTyCoVarBndr :: TyCoVar -> TcM TyCoVar
+zonkPromoteTyCoVarBndr tv
+  | isSigTyVar tv
+  = tcGetTyVar "zonkPromoteTyCoVarBndr SigTv" <$> zonkPromoteTcTyVar tv
+
+  | otherwise
+  = zonkPromoteTyCoVarKind tv
+
+zonkPromoteCoercion :: Coercion -> TcM Coercion
+zonkPromoteCoercion = mapCoercion zonkPromoteMapper ()
 
 {-
 ************************************************************************

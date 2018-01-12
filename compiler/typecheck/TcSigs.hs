@@ -356,7 +356,7 @@ tcPatSynSig name sig_ty
                      -- e.g. pattern Zero <- 0#   (Trac #12094)
                  ; return (univ_tvs, req, ex_tvs, prov, body_ty) }
 
-       ; ungen_patsyn_ty <- zonkTcType $
+       ; ungen_patsyn_ty <- zonkPromoteType $
                             build_patsyn_type [] implicit_tvs univ_tvs req
                                               ex_tvs prov body_ty
 
