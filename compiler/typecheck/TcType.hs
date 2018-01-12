@@ -32,7 +32,7 @@ module TcType (
   TcLevel(..), topTcLevel, pushTcLevel, isTopTcLevel,
   strictlyDeeperThan, sameDepthAs, fmvTcLevel,
   tcTypeLevel, tcTyVarLevel, maxTcLevel,
-
+  promoteSkolemX, promoteSkolemsX,
   --------------------------------
   -- MetaDetails
   UserTypeCtxt(..), pprUserTypeCtxt, isSigMaybe,
@@ -147,7 +147,7 @@ module TcType (
 
   -- Type substitutions
   TCvSubst(..),         -- Representation visible to a few friends
-  TvSubstEnv, emptyTCvSubst,
+  TvSubstEnv, emptyTCvSubst, mkEmptyTCvSubst,
   zipTvSubst,
   mkTvSubstPrs, notElemTCvSubst, unionTCvSubst,
   getTvSubstEnv, setTvSubstEnv, getTCvInScope, extendTCvInScope,
@@ -229,6 +229,7 @@ import FastString
 import ErrUtils( Validity(..), MsgDoc, isValid )
 import qualified GHC.LanguageExtensions as LangExt
 
+import Data.List  ( mapAccumL )
 import Data.IORef
 import Data.Functor.Identity
 import qualified Data.Semigroup as Semi
@@ -797,6 +798,19 @@ tcTypeLevel = go topTcLevel
 
 instance Outputable TcLevel where
   ppr (TcLevel us) = ppr us
+
+-- | Change the TcLevel in a skolem to the top level
+promoteSkolemX :: TCvSubst -> TcTyVar -> (TCvSubst, TcTyVar)
+promoteSkolemX subst skol
+  = ASSERT( isSkolemTyVar skol )
+    (new_subst, new_skol)
+  where
+    new_skol  = setTcTyVarDetails (updateTyVarKind (substTy subst) skol)
+                                  vanillaSkolemTv  -- just promote all the way.
+    new_subst = extendTvSubstWithClone subst skol new_skol
+
+promoteSkolemsX :: TCvSubst -> [TcTyVar] -> (TCvSubst, [TcTyVar])
+promoteSkolemsX = mapAccumL promoteSkolemX
 
 {- *********************************************************************
 *                                                                      *

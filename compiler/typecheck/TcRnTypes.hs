@@ -1547,7 +1547,7 @@ data TcPatSynInfo
         patsig_name           :: Name,
         patsig_implicit_bndrs :: [TyVarBinder], -- Implicitly-bound kind vars (Inferred) and
                                                 -- implicitly-bound type vars (Specified)
-          -- See Note [The pattern-synonym signature splitting rule] in TcPatSyn
+          -- See Note [The pattern-synonym signature splitting rule] in TcSigs
         patsig_univ_bndrs     :: [TyVar],       -- Bound by explicit user forall
         patsig_req            :: TcThetaType,
         patsig_ex_bndrs       :: [TyVar],       -- Bound by explicit user forall

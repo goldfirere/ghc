@@ -42,6 +42,8 @@ import Type( mkTyVarBinders )
 
 import DynFlags
 import Var      ( TyVar, tyVarKind )
+import VarSet   ( mkVarSet )
+import VarEnv   ( mkInScopeSet )
 import Id       ( Id, idName, idType, idInlinePragma, setInlinePragma, mkLocalId )
 import PrelNames( mkUnboundName )
 import BasicTypes
@@ -367,9 +369,8 @@ tcPatSynSig name sig_ty
        ; kvs <- kindGeneralize ungen_patsyn_ty
 
        -- These are /signatures/ so we zonk to squeeze out any kind
-       -- unification variables.  Do this after quantifyTyVars which may
+       -- unification variables.  Do this after kindGeneralize which may
        -- default kind variables to *.
-       ; traceTc "about zonk" empty
        ; implicit_tvs <- mapM zonkTcTyCoVarBndr implicit_tvs
        ; univ_tvs     <- mapM zonkTcTyCoVarBndr univ_tvs
        ; ex_tvs       <- mapM zonkTcTyCoVarBndr ex_tvs
@@ -377,31 +378,42 @@ tcPatSynSig name sig_ty
        ; prov         <- zonkTcTypes prov
        ; body_ty      <- zonkTcType  body_ty
 
+       -- Skolems have TcLevels too, though they're used only for debugging.
+       -- If you don't do this, the debugging checks fail in TcPatSyn.
+       -- Test case: patsyn/should_compile/T13441
+       ; let env0                  = mkEmptyTCvSubst $ mkInScopeSet $ mkVarSet kvs
+             (env1, implicit_tvs') = promoteSkolemsX env0 implicit_tvs
+             (env2, univ_tvs')     = promoteSkolemsX env1 univ_tvs
+             (env3, ex_tvs')       = promoteSkolemsX env2 ex_tvs
+             req'                  = substTys env3 req
+             prov'                 = substTys env3 prov
+             body_ty'              = substTy  env3 body_ty
+
        -- Now do validity checking
        ; checkValidType ctxt $
-         build_patsyn_type kvs implicit_tvs univ_tvs req ex_tvs prov body_ty
+         build_patsyn_type kvs implicit_tvs' univ_tvs' req' ex_tvs' prov' body_ty'
 
        -- arguments become the types of binders. We thus cannot allow
        -- levity polymorphism here
-       ; let (arg_tys, _) = tcSplitFunTys body_ty
+       ; let (arg_tys, _) = tcSplitFunTys body_ty'
        ; mapM_ (checkForLevPoly empty) arg_tys
 
        ; traceTc "tcTySig }" $
-         vcat [ text "implicit_tvs" <+> ppr_tvs implicit_tvs
+         vcat [ text "implicit_tvs" <+> ppr_tvs implicit_tvs'
               , text "kvs" <+> ppr_tvs kvs
-              , text "univ_tvs" <+> ppr_tvs univ_tvs
-              , text "req" <+> ppr req
-              , text "ex_tvs" <+> ppr_tvs ex_tvs
-              , text "prov" <+> ppr prov
-              , text "body_ty" <+> ppr body_ty ]
+              , text "univ_tvs" <+> ppr_tvs univ_tvs'
+              , text "req" <+> ppr req'
+              , text "ex_tvs" <+> ppr_tvs ex_tvs'
+              , text "prov" <+> ppr prov'
+              , text "body_ty" <+> ppr body_ty' ]
        ; return (TPSI { patsig_name = name
-                      , patsig_implicit_bndrs = mkTyVarBinders Inferred kvs ++
-                                                mkTyVarBinders Specified implicit_tvs
-                      , patsig_univ_bndrs     = univ_tvs
-                      , patsig_req            = req
-                      , patsig_ex_bndrs       = ex_tvs
-                      , patsig_prov           = prov
-                      , patsig_body_ty        = body_ty }) }
+                      , patsig_implicit_bndrs = mkTyVarBinders Inferred  kvs ++
+                                                mkTyVarBinders Specified implicit_tvs'
+                      , patsig_univ_bndrs     = univ_tvs'
+                      , patsig_req            = req'
+                      , patsig_ex_bndrs       = ex_tvs'
+                      , patsig_prov           = prov'
+                      , patsig_body_ty        = body_ty' }) }
   where
     ctxt = PatSynCtxt name
     skol_info = SigTypeSkol ctxt
