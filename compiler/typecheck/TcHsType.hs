@@ -2119,7 +2119,8 @@ tcHsPartialSigType
   -> LHsSigWcType GhcRn       -- The type signature
   -> TcM ( [(Name, TcTyVar)]  -- Wildcards
          , Maybe TcType       -- Extra-constraints wildcard
-         , [TcTyVar]          -- Implicitly and explicitly bound type variables
+         , [Name]             -- Original tyvar names, in correspondence with ...
+         , [TcTyVar]          -- ... Implicitly and explicitly bound type variables
          , TcThetaType        -- Theta part
          , TcType )           -- Tau part
 tcHsPartialSigType ctxt sig_ty
@@ -2139,6 +2140,13 @@ tcHsPartialSigType ctxt sig_ty
 
                   ; return (wcs, wcx, explicit_tvs, theta, tau) }
 
+         -- We must return these separately, because all the zonking below
+         -- might change the name of a SigTv. This, in turn, causes trouble
+         -- in partial type signatures that bind scoped type variables, as
+         -- we bring the wrong name into scope in the function body.
+         -- Test case: partial-sigs/should_compile/LocalDefinitionBug
+       ; let tv_names = map tyVarName (implicit_tvs ++ explicit_tvs)
+
          -- The SigTvs created above will sometimes have too high a TcLevel
          -- (note that they are generated *after* bumping the level in
          -- the tc{Im,Ex}plicitTKBndrsSig functions. Bumping the level
@@ -2148,15 +2156,19 @@ tcHsPartialSigType ctxt sig_ty
          -- everything (and solved equalities in the tcImplicit call)
          -- we need to promote the SigTvs so we don't violate the TcLevel
          -- invariant
-       ; let all_unzonked_tvs = implicit_tvs ++ explicit_tvs
-       ; mapM_ promoteTyVar all_unzonked_tvs
+       ; tvs_to_promote <- zonkTcTypeAndFV $ mkSpecForAllTys implicit_tvs $
+                                             mkSpecForAllTys explicit_tvs $
+                                             maybe id mkFunTy wcx $
+                                             mkFunTys theta $
+                                             tau
+       ; _ <- promoteTyVarSet (dVarSetToVarSet tvs_to_promote)
 
        -- Spit out the wildcards (including the extra-constraints one)
        -- as "hole" constraints, so that they'll be reported if necessary
        -- See Note [Extra-constraint holes in partial type signatures]
        ; emitWildCardHoleConstraints wcs
 
-       ; all_tvs <- mapM zonkTcTyCoVarBndr all_unzonked_tvs
+       ; all_tvs <- mapM zonkTcTyCoVarBndr (implicit_tvs ++ explicit_tvs)
             -- zonkTcTyCoVarBndr deals well with SigTvs
 
        ; theta   <- mapM zonkTcType theta
@@ -2164,7 +2176,7 @@ tcHsPartialSigType ctxt sig_ty
        ; checkValidType ctxt (mkSpecForAllTys all_tvs $ mkPhiTy theta tau)
 
        ; traceTc "tcHsPartialSigType" (ppr all_tvs)
-       ; return (wcs, wcx, all_tvs, theta, tau) }
+       ; return (wcs, wcx, tv_names, all_tvs, theta, tau) }
   where
     skol_info   = SigTypeSkol ctxt
 

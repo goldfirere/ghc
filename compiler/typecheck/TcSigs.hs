@@ -41,7 +41,7 @@ import TcEvidence( HsWrapper, (<.>) )
 import Type( mkTyVarBinders )
 
 import DynFlags
-import Var      ( TyVar, tyVarName, tyVarKind )
+import Var      ( TyVar, tyVarKind )
 import Id       ( Id, idName, idType, idInlinePragma, setInlinePragma, mkLocalId )
 import PrelNames( mkUnboundName )
 import BasicTypes
@@ -69,7 +69,7 @@ especially on value bindings.  Here's an overview.
     f = ...g...
     g = ...f...
 
-* HsSyn: a signature in a binding starts of as a TypeSig, in
+* HsSyn: a signature in a binding starts off as a TypeSig, in
   type HsBinds.Sig
 
 * When starting a mutually recursive group, like f/g above, we
@@ -444,9 +444,9 @@ tcInstSig sig@(PartialSig { psig_hs_ty = hs_ty
                           , sig_ctxt = ctxt
                           , sig_loc = loc })
   = setSrcSpan loc $  -- Set the binding site of the tyvars
-    do { (wcs, wcx, tvs, theta, tau) <- tcHsPartialSigType ctxt hs_ty
+    do { (wcs, wcx, tv_names, tvs, theta, tau) <- tcHsPartialSigType ctxt hs_ty
        ; return (TISI { sig_inst_sig   = sig
-                      , sig_inst_skols = map (\tv -> (tyVarName tv, tv)) tvs
+                      , sig_inst_skols = zip tv_names tvs
                       , sig_inst_wcs   = wcs
                       , sig_inst_wcx   = wcx
                       , sig_inst_theta = theta

@@ -1474,9 +1474,10 @@ tcExtendTyVarEnvFromSig :: TcIdSigInst -> TcM a -> TcM a
 tcExtendTyVarEnvFromSig sig_inst thing_inside
   | TISI { sig_inst_skols = skol_prs, sig_inst_wcs = wcs } <- sig_inst
      -- Note [Use tcExtendTyVar not scopeTyVars in tcRhs]
-  = tcExtendTyVarEnv2 wcs $
-    tcExtendTyVarEnv2 skol_prs $
-    thing_inside
+  = do { traceTc "RAEx1" (ppr skol_prs $$ ppr wcs)
+       ; tcExtendTyVarEnv2 wcs $
+         tcExtendTyVarEnv2 skol_prs $
+         thing_inside }
 
 tcExtendIdBinderStackForRhs :: [MonoBindInfo] -> TcM a -> TcM a
 -- Extend the TcBinderStack for the RHS of the binding, with
