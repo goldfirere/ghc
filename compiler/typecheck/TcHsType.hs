@@ -1436,6 +1436,7 @@ kcHsTyVarBndrs name flav cusk
           -- It's possible that a class variable has too low a TcLevel to have
           -- fully settled down by this point, and so this check will get
           -- a false positive.
+       ; traceTc "RAEw1" (ppr tc_binders $$ ppr res_kind $$ ppr qkvs $$ ppr meta_tvs $$ ppr good_tvs $$ ppr not_associated)
        ; when (not_associated && not (null meta_tvs)) $
          report_non_cusk_tvs (qkvs ++ tc_tvs)
 
@@ -1486,7 +1487,7 @@ kcHsTyVarBndrs name flav cusk
     not_associated = case flav of
       DataFamilyFlavour assoc     -> not assoc
       OpenTypeFamilyFlavour assoc -> not assoc
-      _                           -> False
+      _                           -> True
 
     skol_info = TyConSkol flav name
 
