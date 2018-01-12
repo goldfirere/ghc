@@ -162,6 +162,8 @@ solveLocalEqualities :: TcM a -> TcM a
 -- 6. Report errors on any unsolved, unpromoted constraints.
 
 -- TODO (RAE): What about just emitting the implication like I wanted to at first??
+-- TODO (RAE): This should probably keep track of the vars created inside and promote
+-- all of them. Then lots of calls to promoteTyVar could be removed.
 solveLocalEqualities thing_inside
   = do { traceTc "solveLocalEqualities {" empty
 

@@ -2156,12 +2156,12 @@ tcHsPartialSigType ctxt sig_ty
          -- everything (and solved equalities in the tcImplicit call)
          -- we need to promote the SigTvs so we don't violate the TcLevel
          -- invariant
-       ; tvs_to_promote <- zonkTcTypeAndFV $ mkSpecForAllTys implicit_tvs $
-                                             mkSpecForAllTys explicit_tvs $
-                                             maybe id mkFunTy wcx $
-                                             mkFunTys theta $
-                                             tau
-       ; _ <- promoteTyVarSet (dVarSetToVarSet tvs_to_promote)
+       ; tvs_from_body <- zonkTcTypeAndFV $ maybe id mkFunTy wcx $
+                                            mkFunTys theta $
+                                            tau
+                -- not every tv is necessarily mentioned in the body
+       ; tvs_from_vars <- zonkTyCoVarsAndFV $ mkVarSet (implicit_tvs ++ explicit_tvs)
+       ; _ <- promoteTyVarSet (dVarSetToVarSet tvs_from_body `unionVarSet` tvs_from_vars)
 
        -- Spit out the wildcards (including the extra-constraints one)
        -- as "hole" constraints, so that they'll be reported if necessary
