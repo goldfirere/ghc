@@ -187,7 +187,12 @@ report_unsolved mb_binds_var type_errors expr_holes
   | isEmptyWC wanted
   = return ()
   | otherwise
-  = do { traceTc "reportUnsolved (before zonking and tidying)" (ppr wanted)
+  = do { traceTc "reportUnsolved warning/error settings:" $
+           vcat [ text "type errors:" <+> ppr type_errors
+                , text "expr holes:" <+> ppr expr_holes
+                , text "type holes:" <+> ppr type_holes
+                , text "scope holes:" <+> ppr out_of_scope_holes ]
+       ; traceTc "reportUnsolved (before zonking and tidying)" (ppr wanted)
 
        ; wanted <- zonkWC wanted   -- Zonk to reveal all information
        ; env0 <- tcInitTidyEnv
@@ -338,9 +343,9 @@ instance Outputable ReportErrCtxt where
 
 -- | Returns True <=> the ReportErrCtxt indicates that something is deferred
 deferringAnyBindings :: ReportErrCtxt -> Bool
+  -- Don't check cec_type_holes, as these don't cause bindings to be deferred
 deferringAnyBindings (CEC { cec_defer_type_errors  = TypeError
                           , cec_expr_holes         = HoleError
-                          , cec_type_holes         = HoleError
                           , cec_out_of_scope_holes = HoleError }) = False
 deferringAnyBindings _                                            = True
 

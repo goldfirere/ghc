@@ -494,7 +494,7 @@ check_type env ctxt rank (FunTy arg_ty res_ty)
     (arg_rank, res_rank) = funArgResRank rank
 
 check_type env ctxt rank (AppTy ty1 ty2)
-  = do  { check_arg_type env ctxt rank ty1
+  = do  { check_type env ctxt rank ty1
         ; check_arg_type env ctxt rank ty2 }
 
 check_type env ctxt rank ty@(TyConApp tc tys)
@@ -586,7 +586,8 @@ check_arg_type env ctxt rank ty
         ; let rank' = case rank of          -- Predictive => must be monotype
                         MustBeMonoType     -> MustBeMonoType  -- Monotype, regardless
                         _other | impred    -> ArbitraryRank
-                               | otherwise -> tyConArgMonoType
+                               | otherwise -> pprTrace "RAEz1" (ppr ty) $
+                                              tyConArgMonoType
                         -- Make sure that MustBeMonoType is propagated,
                         -- so that we don't suggest -XImpredicativeTypes in
                         --    (Ord (forall a.a)) => a -> a
