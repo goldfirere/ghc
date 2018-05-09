@@ -240,10 +240,10 @@ sigT t k
 -------------------------------------------------------------------------------
 -- *   Kind
 
-plainTV :: Name -> TyVarBndr
+plainTV :: Name -> ArgFlag -> TyVarBndr
 plainTV = PlainTV
 
-kindedTV :: Name -> Kind -> TyVarBndr
+kindedTV :: Name -> Kind -> ArgFlag -> TyVarBndr
 kindedTV = KindedTV
 
 starK :: Kind

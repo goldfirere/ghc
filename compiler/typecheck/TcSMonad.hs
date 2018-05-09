@@ -160,9 +160,7 @@ import Maybes
 
 import TrieMap
 import Control.Monad
-#if __GLASGOW_HASKELL__ > 710
 import qualified Control.Monad.Fail as MonadFail
-#endif
 import MonadUtils
 import Data.IORef
 import Data.List ( foldl', partition )
@@ -364,10 +362,8 @@ instance Outputable WorkList where
           , ppUnless (null ders) $
             text "Derived =" <+> vcat (map ppr ders)
           , ppUnless (isEmptyBag implics) $
-            sdocWithPprDebug $ \dbg ->
-            if dbg  -- Typically we only want the work list for this level
-            then text "Implics =" <+> vcat (map ppr (bagToList implics))
-            else text "(Implics omitted)"
+            ifPprDebug (text "Implics =" <+> vcat (map ppr (bagToList implics)))
+                       (text "(Implics omitted)")
           ])
 
 
@@ -2298,10 +2294,8 @@ instance Monad TcS where
   fail err  = TcS (\_ -> fail err)
   m >>= k   = TcS (\ebs -> unTcS m ebs >>= \r -> unTcS (k r) ebs)
 
-#if __GLASGOW_HASKELL__ > 710
 instance MonadFail.MonadFail TcS where
   fail err  = TcS (\_ -> fail err)
-#endif
 
 instance MonadUnique TcS where
    getUniqueSupplyM = wrapTcS getUniqueSupplyM

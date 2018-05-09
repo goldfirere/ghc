@@ -113,7 +113,7 @@ test('T5168',
      ['$MAKE -s --no-print-directory T5168'])
 
 test('T5329', normal, compile, [''])
-test('T5303', reqlib('mtl'), compile, [''])   # Coercion-optimiation test
+test('T5303', normal, compile, [''])   # Coercion-optimiation test
 test('T5342', normal, compile, [''])   # Lint error with -prof
 test('T5359a', normal, compile, [''])  # Lint error with -O (OccurAnal)
 test('T5359b', normal, compile, [''])  # Lint error with -O (OccurAnal)
@@ -269,3 +269,4 @@ test('T12600',
      ['$MAKE -s --no-print-directory T12600'])
 test('T13658', normal, compile, ['-dcore-lint'])
 test('T13708', normal, compile, [''])
+test('T14137', normal, compile, ['-dsuppress-uniques -ddump-simpl'])

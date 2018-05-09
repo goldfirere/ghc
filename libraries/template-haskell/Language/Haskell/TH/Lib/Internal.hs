@@ -792,11 +792,11 @@ strTyLit s = return (StrTyLit s)
 -------------------------------------------------------------------------------
 -- *   Kind
 
-plainTV :: Name -> TyVarBndrQ
-plainTV = pure . PlainTV
+plainTV :: Name -> TH.ArgFlag -> TyVarBndrQ
+plainTV n arg_flag = pure $ PlainTV n arg_flag
 
-kindedTV :: Name -> KindQ -> TyVarBndrQ
-kindedTV n = fmap (KindedTV n)
+kindedTV :: Name -> KindQ -> TH.ArgFlag -> TyVarBndrQ
+kindedTV n kind arg_flag = fmap (\k -> KindedTV n k arg_flag) kind
 
 varK :: Name -> Kind
 varK = VarT

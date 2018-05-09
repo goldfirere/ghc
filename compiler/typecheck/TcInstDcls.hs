@@ -487,8 +487,11 @@ tcClsInstDecl (L loc (ClsInstDecl { cid_poly_ty = poly_ty, cid_binds = binds
         -- from their defaults (if available)
         ; let defined_ats = mkNameSet (map (tyFamInstDeclName . unLoc) ats)
                             `unionNameSet`
-                            mkNameSet (map (unLoc . dfid_tycon . unLoc) adts)
-        ; tyfam_insts1 <- mapM (tcATDefault True loc mini_subst defined_ats)
+                            mkNameSet (map (unLoc . feqn_tycon
+                                                  . hsib_body
+                                                  . dfid_eqn
+                                                  . unLoc) adts)
+        ; tyfam_insts1 <- mapM (tcATDefault loc mini_subst defined_ats)
                                (classATItems clas)
 
         -- Finally, construct the Core representation of the instance.
@@ -600,7 +603,7 @@ tcTyFamInstDecl :: Maybe ClsInstInfo
 tcTyFamInstDecl mb_clsinfo (L loc decl@(TyFamInstDecl { tfid_eqn = eqn }))
   = setSrcSpan loc           $
     tcAddTyFamInstCtxt decl  $
-    do { let fam_lname = tfe_tycon (unLoc eqn)
+    do { let fam_lname = feqn_tycon (hsib_body eqn)
        ; fam_tc <- tcFamInstDeclCombined mb_clsinfo fam_lname
 
          -- (0) Check it's an open type family
@@ -609,7 +612,8 @@ tcTyFamInstDecl mb_clsinfo (L loc decl@(TyFamInstDecl { tfid_eqn = eqn }))
        ; checkTc (isOpenTypeFamilyTyCon fam_tc) (notOpenFamily fam_tc)
 
          -- (1) do the work of verifying the synonym group
-       ; co_ax_branch <- tcTyFamInstEqn (famTyConShape fam_tc) mb_clsinfo eqn
+       ; co_ax_branch <- tcTyFamInstEqn (famTyConShape fam_tc) mb_clsinfo
+                                        (L (getLoc fam_lname) eqn)
 
          -- (2) check for validity
        ; checkValidCoAxBranch mb_clsinfo fam_tc co_ax_branch
@@ -623,13 +627,17 @@ tcDataFamInstDecl :: Maybe ClsInstInfo
                   -> LDataFamInstDecl GhcRn -> TcM (FamInst, Maybe DerivInfo)
   -- "newtype instance" and "data instance"
 tcDataFamInstDecl mb_clsinfo
-    (L loc decl@(DataFamInstDecl
-       { dfid_pats = pats
-       , dfid_tycon = fam_tc_name
-       , dfid_fixity = fixity
-       , dfid_defn = HsDataDefn { dd_ND = new_or_data, dd_cType = cType
-                                , dd_ctxt = ctxt, dd_cons = cons
-                                , dd_kindSig = m_ksig, dd_derivs = derivs } }))
+    (L loc decl@(DataFamInstDecl { dfid_eqn = HsIB { hsib_vars = tv_names
+                                                   , hsib_body =
+      FamEqn { feqn_pats   = pats
+             , feqn_tycon  = fam_tc_name
+             , feqn_fixity = fixity
+             , feqn_rhs    = HsDataDefn { dd_ND = new_or_data
+                                        , dd_cType = cType
+                                        , dd_ctxt = ctxt
+                                        , dd_cons = cons
+                                        , dd_kindSig = m_ksig
+                                        , dd_derivs = derivs } }}}))
   = setSrcSpan loc             $
     tcAddDataFamInstCtxt decl  $
     do { fam_tc <- tcFamInstDeclCombined mb_clsinfo fam_tc_name
@@ -640,7 +648,7 @@ tcDataFamInstDecl mb_clsinfo
 
          -- Kind check type patterns
        ; let mb_kind_env = thdOf3 <$> mb_clsinfo
-       ; tcFamTyPats (famTyConShape fam_tc) mb_clsinfo pats
+       ; tcFamTyPats (famTyConShape fam_tc) mb_clsinfo tv_names pats
                      (kcDataDefn mb_kind_env decl) $
              \tvs pats res_kind ->
     do { stupid_theta <- solveEqualities $ tcHsContext ctxt
@@ -695,7 +703,7 @@ tcDataFamInstDecl mb_clsinfo
                       -- the end of Note [Data type families] in TyCon
                     rep_tc   = mkAlgTyCon rep_tc_name
                                           ty_binders liftedTypeKind
-                                          (map (const Nominal) full_tvs)
+                                          (map (const Nominal) ty_binders)
                                           (fmap unLoc cType) stupid_theta
                                           tc_rhs parent
                                           gadt_syntax
@@ -889,7 +897,8 @@ tcInstDecl2 (InstInfo { iSpec = ispec, iBinds = ibinds })
                                   , abs_ev_vars = dfun_ev_vars
                                   , abs_exports = [export]
                                   , abs_ev_binds = []
-                                  , abs_binds = unitBag dict_bind }
+                                  , abs_binds = unitBag dict_bind
+                                  , abs_sig = True }
 
        ; return (unitBag (L loc main_bind) `unionBags` sc_meth_binds)
        }
@@ -1037,7 +1046,8 @@ tcSuperClasses dfun_id cls tyvars dfun_evs inst_tys dfun_ev_binds sc_theta
                                  , abs_ev_vars  = dfun_evs
                                  , abs_exports  = [export]
                                  , abs_ev_binds = [dfun_ev_binds, local_ev_binds]
-                                 , abs_binds    = emptyBag }
+                                 , abs_binds    = emptyBag
+                                 , abs_sig      = False }
            ; return (sc_top_id, L loc bind, sc_implic) }
 
 -------------------
@@ -1325,8 +1335,7 @@ tcMethods dfun_id clas tyvars dfun_ev_vars inst_tys
         error_rhs dflags = L inst_loc $ HsApp error_fun (error_msg dflags)
         error_fun    = L inst_loc $
                        wrapId (mkWpTyApps
-                                [ getRuntimeRep "tcInstanceMethods.tc_default" meth_tau
-                                , meth_tau])
+                                [ getRuntimeRep meth_tau, meth_tau])
                               nO_METHOD_BINDING_ERROR_ID
         error_msg dflags = L inst_loc (HsLit (HsStringPrim noSourceText
                                               (unsafeMkByteString (error_string dflags))))
@@ -1374,17 +1383,18 @@ tcMethodBody clas tyvars dfun_ev_vars inst_tys
        ; spec_prags     <- tcSpecPrags global_meth_id prags
 
         ; let specs  = mk_meth_spec_prags global_meth_id spec_inst_prags spec_prags
-              export = ABE { abe_poly      = global_meth_id
-                           , abe_mono      = local_meth_id
-                           , abe_wrap      = idHsWrapper
-                           , abe_prags     = specs }
+              export = ABE { abe_poly  = global_meth_id
+                           , abe_mono  = local_meth_id
+                           , abe_wrap  = idHsWrapper
+                           , abe_prags = specs }
 
               local_ev_binds = TcEvBinds ev_binds_var
               full_bind = AbsBinds { abs_tvs      = tyvars
                                    , abs_ev_vars  = dfun_ev_vars
                                    , abs_exports  = [export]
                                    , abs_ev_binds = [dfun_ev_binds, local_ev_binds]
-                                   , abs_binds    = tc_bind }
+                                   , abs_binds    = tc_bind
+                                   , abs_sig      = True }
 
         ; return (global_meth_id, L bind_loc full_bind, Just meth_implic) }
   where
@@ -1429,7 +1439,8 @@ tcMethodBodyHelp hs_sig_fn sel_id local_meth_id meth_bind
        ; return (unitBag $ L (getLoc meth_bind) $
                  AbsBinds { abs_tvs = [], abs_ev_vars = []
                           , abs_exports = [export]
-                          , abs_binds = tc_bind, abs_ev_binds = [] }) }
+                          , abs_binds = tc_bind, abs_ev_binds = []
+                          , abs_sig = True }) }
 
   | otherwise  -- No instance signature
   = do { let ctxt = FunSigCtxt sel_name False

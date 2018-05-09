@@ -357,7 +357,7 @@ repFamilyDecl decl@(L loc (FamilyDecl { fdInfo      = info,
              ClosedTypeFamily Nothing ->
                  notHandled "abstract closed type family" (ppr decl)
              ClosedTypeFamily (Just eqns) ->
-               do { eqns1  <- mapM repTyFamEqn eqns
+               do { eqns1  <- mapM (repTyFamEqn . unLoc) eqns
                   ; eqns2  <- coreList tySynEqnQTyConName eqns1
                   ; result <- repFamilyResultSig resultSig
                   ; inj    <- repInjectivityAnn injectivity
@@ -412,9 +412,9 @@ repAssocTyFamDefaults = mapM rep_deflt
   where
      -- very like repTyFamEqn, but different in the details
     rep_deflt :: LTyFamDefltEqn GhcRn -> DsM (Core TH.DecQ)
-    rep_deflt (L _ (TyFamEqn { tfe_tycon = tc
-                             , tfe_pats  = bndrs
-                             , tfe_rhs   = rhs }))
+    rep_deflt (L _ (FamEqn { feqn_tycon = tc
+                           , feqn_pats  = bndrs
+                           , feqn_rhs   = rhs }))
       = addTyClTyVarBinds bndrs $ \ _ ->
         do { tc1  <- lookupLOcc tc
            ; tys1 <- repLTys (hsLTyVarBndrsToTypes bndrs)
@@ -495,10 +495,10 @@ repTyFamInstD decl@(TyFamInstDecl { tfid_eqn = eqn })
        ; eqn1 <- repTyFamEqn eqn
        ; repTySynInst tc eqn1 }
 
-repTyFamEqn :: LTyFamInstEqn GhcRn -> DsM (Core TH.TySynEqnQ)
-repTyFamEqn (L _ (TyFamEqn { tfe_pats = HsIB { hsib_body = tys
-                                             , hsib_vars = var_names }
-                           , tfe_rhs = rhs }))
+repTyFamEqn :: TyFamInstEqn GhcRn -> DsM (Core TH.TySynEqnQ)
+repTyFamEqn (HsIB { hsib_vars = var_names
+                  , hsib_body = FamEqn { feqn_pats = tys
+                                       , feqn_rhs  = rhs }})
   = do { let hs_tvs = HsQTvs { hsq_implicit = var_names
                              , hsq_explicit = []
                              , hsq_dependent = emptyNameSet }   -- Yuk
@@ -509,9 +509,11 @@ repTyFamEqn (L _ (TyFamEqn { tfe_pats = HsIB { hsib_body = tys
             ; repTySynEqn tys2 rhs1 } }
 
 repDataFamInstD :: DataFamInstDecl GhcRn -> DsM (Core TH.DecQ)
-repDataFamInstD (DataFamInstDecl { dfid_tycon = tc_name
-                                 , dfid_pats = HsIB { hsib_body = tys, hsib_vars = var_names }
-                                 , dfid_defn = defn })
+repDataFamInstD (DataFamInstDecl { dfid_eqn =
+                  (HsIB { hsib_vars = var_names
+                        , hsib_body = FamEqn { feqn_tycon = tc_name
+                                             , feqn_pats  = tys
+                                             , feqn_rhs   = defn }})})
   = do { tc <- lookupLOcc tc_name               -- See note [Binders and occurrences]
        ; let hs_tvs = HsQTvs { hsq_implicit = var_names
                              , hsq_explicit = []
@@ -913,18 +915,18 @@ addTyClTyVarBinds tvs m
 --
 repTyVarBndrWithKind :: LHsTyVarBndr GhcRn
                      -> Core TH.Name -> DsM (Core TH.TyVarBndrQ)
-repTyVarBndrWithKind (L _ (UserTyVar _)) nm
+repTyVarBndrWithKind (L _ (UserTyVar _ _arg_flag)) nm
   = repPlainTV nm
-repTyVarBndrWithKind (L _ (KindedTyVar _ ki)) nm
+repTyVarBndrWithKind (L _ (KindedTyVar _ ki _arg_flag)) nm
   = repLTy ki >>= repKindedTV nm
 
 -- | Represent a type variable binder
 repTyVarBndr :: LHsTyVarBndr GhcRn -> DsM (Core TH.TyVarBndrQ)
-repTyVarBndr (L _ (UserTyVar (L _ nm)) )= do { nm' <- lookupBinder nm
-                                             ; repPlainTV nm' }
-repTyVarBndr (L _ (KindedTyVar (L _ nm) ki)) = do { nm' <- lookupBinder nm
-                                                  ; ki' <- repLTy ki
-                                                  ; repKindedTV nm' ki' }
+repTyVarBndr (L _ (UserTyVar (L _ nm) _arg_flag) ) = do { nm' <- lookupBinder nm
+                                                        ; repPlainTV nm' }
+repTyVarBndr (L _ (KindedTyVar (L _ nm) ki _arg_flag)) = do { nm' <- lookupBinder nm
+                                                            ; ki' <- repLTy ki
+                                                            ; repKindedTV nm' ki' }
 
 -- represent a type context
 --
@@ -1257,7 +1259,7 @@ repE e                     = notHandled "Expression form" (ppr e)
 -- Building representations of auxillary structures like Match, Clause, Stmt,
 
 repMatchTup ::  LMatch GhcRn (LHsExpr GhcRn) -> DsM (Core TH.MatchQ)
-repMatchTup (L _ (Match _ [p] _ (GRHSs guards (L _ wheres)))) =
+repMatchTup (L _ (Match { m_pats = [p], m_grhss = GRHSs guards (L _ wheres) })) =
   do { ss1 <- mkGenSyms (collectPatBinders p)
      ; addBinds ss1 $ do {
      ; p1 <- repLP p
@@ -1269,7 +1271,7 @@ repMatchTup (L _ (Match _ [p] _ (GRHSs guards (L _ wheres)))) =
 repMatchTup _ = panic "repMatchTup: case alt with more than one arg"
 
 repClauseTup ::  LMatch GhcRn (LHsExpr GhcRn) -> DsM (Core TH.ClauseQ)
-repClauseTup (L _ (Match _ ps _ (GRHSs guards (L _ wheres)))) =
+repClauseTup (L _ (Match { m_pats = ps, m_grhss = GRHSs guards (L _ wheres) })) =
   do { ss1 <- mkGenSyms (collectPatsBinders ps)
      ; addBinds ss1 $ do {
        ps1 <- repLPs ps
@@ -1439,8 +1441,8 @@ rep_bind :: LHsBind GhcRn -> DsM (SrcSpan, Core TH.DecQ)
 rep_bind (L loc (FunBind
                  { fun_id = fn,
                    fun_matches = MG { mg_alts
-                           = L _ [L _ (Match _ [] _
-                                             (GRHSs guards (L _ wheres)))] } }))
+                           = L _ [L _ (Match { m_pats = []
+                                             , m_grhss = GRHSs guards (L _ wheres) })] } }))
  = do { (ss,wherecore) <- repBinds wheres
         ; guardcore <- addBinds ss (repGuards guards)
         ; fn'  <- lookupLBinder fn
@@ -1475,7 +1477,6 @@ rep_bind (L _ (VarBind { var_id = v, var_rhs = e}))
         ; return (srcLocSpan (getSrcLoc v), ans) }
 
 rep_bind (L _ (AbsBinds {}))  = panic "rep_bind: AbsBinds"
-rep_bind (L _ (AbsBindsSig {})) = panic "rep_bind: AbsBindsSig"
 rep_bind (L loc (PatSynBind (PSB { psb_id   = syn
                                  , psb_fvs  = _fvs
                                  , psb_args = args
@@ -1582,7 +1583,8 @@ repExplBidirPatSynDir (MkC cls) = rep2 explBidirPatSynName [cls]
 -- (\ p1 .. pn -> exp) by causing an error.
 
 repLambda :: LMatch GhcRn (LHsExpr GhcRn) -> DsM (Core TH.ExpQ)
-repLambda (L _ (Match _ ps _ (GRHSs [L _ (GRHS [] e)] (L _ EmptyLocalBinds))))
+repLambda (L _ (Match { m_pats = ps
+                      , m_grhss = GRHSs [L _ (GRHS [] e)] (L _ EmptyLocalBinds) } ))
  = do { let bndrs = collectPatsBinders ps ;
       ; ss  <- mkGenSyms bndrs
       ; lam <- addBinds ss (

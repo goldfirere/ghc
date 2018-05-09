@@ -162,10 +162,6 @@ import Util
 import BooleanFormula   ( mkAnd )
 
 import qualified Data.ByteString.Char8 as BS
-#if !MIN_VERSION_bytestring(0,10,8)
-import qualified Data.ByteString.Internal as BSI
-import qualified Data.ByteString.Unsafe as BSU
-#endif
 
 alpha_tyvar :: [TyVar]
 alpha_tyvar = [alphaTyVar]
@@ -690,7 +686,7 @@ isBuiltInOcc_maybe occ =
 
       -- boxed tuple data/tycon
       "()"    -> Just $ tup_name Boxed 0
-      _ | Just rest <- "(" `stripPrefix` name
+      _ | Just rest <- "(" `BS.stripPrefix` name
         , (commas, rest') <- BS.span (==',') rest
         , ")" <- rest'
              -> Just $ tup_name Boxed (1+BS.length commas)
@@ -698,21 +694,21 @@ isBuiltInOcc_maybe occ =
       -- unboxed tuple data/tycon
       "(##)"  -> Just $ tup_name Unboxed 0
       "Unit#" -> Just $ tup_name Unboxed 1
-      _ | Just rest <- "(#" `stripPrefix` name
+      _ | Just rest <- "(#" `BS.stripPrefix` name
         , (commas, rest') <- BS.span (==',') rest
         , "#)" <- rest'
              -> Just $ tup_name Unboxed (1+BS.length commas)
 
       -- unboxed sum tycon
-      _ | Just rest <- "(#" `stripPrefix` name
+      _ | Just rest <- "(#" `BS.stripPrefix` name
         , (pipes, rest') <- BS.span (=='|') rest
         , "#)" <- rest'
              -> Just $ tyConName $ sumTyCon (1+BS.length pipes)
 
       -- unboxed sum datacon
-      _ | Just rest <- "(#" `stripPrefix` name
+      _ | Just rest <- "(#" `BS.stripPrefix` name
         , (pipes1, rest') <- BS.span (=='|') rest
-        , Just rest'' <- "_" `stripPrefix` rest'
+        , Just rest'' <- "_" `BS.stripPrefix` rest'
         , (pipes2, rest''') <- BS.span (=='|') rest''
         , "#)" <- rest'''
              -> let arity = BS.length pipes1 + BS.length pipes2 + 1
@@ -720,15 +716,6 @@ isBuiltInOcc_maybe occ =
                 in Just $ dataConName $ sumDataCon alt arity
       _ -> Nothing
   where
-    -- TODO: Drop when bytestring 0.10.8 can be assumed
-#if MIN_VERSION_bytestring(0,10,8)
-    stripPrefix = BS.stripPrefix
-#else
-    stripPrefix bs1@(BSI.PS _ _ l1) bs2
-      | bs1 `BS.isPrefixOf` bs2 = Just (BSU.unsafeDrop l1 bs2)
-      | otherwise = Nothing
-#endif
-
     name = fastStringToByteString $ occNameFS occ
 
     choose_ns :: Name -> Name -> Name
@@ -1500,7 +1487,7 @@ mkTupleTy :: Boxity -> [Type] -> Type
 mkTupleTy Boxed   [ty] = ty
 mkTupleTy Boxed   tys  = mkTyConApp (tupleTyCon Boxed (length tys)) tys
 mkTupleTy Unboxed tys  = mkTyConApp (tupleTyCon Unboxed (length tys))
-                                        (map (getRuntimeRep "mkTupleTy") tys ++ tys)
+                                        (map getRuntimeRep tys ++ tys)
 
 -- | Build the type of a small tuple that holds the specified type of thing
 mkBoxedTupleTy :: [Type] -> Type
@@ -1518,7 +1505,7 @@ unitTy = mkTupleTy Boxed []
 
 mkSumTy :: [Type] -> Type
 mkSumTy tys = mkTyConApp (sumTyCon (length tys))
-                         (map (getRuntimeRep "mkSumTy") tys ++ tys)
+                         (map getRuntimeRep tys ++ tys)
 
 {- *********************************************************************
 *                                                                      *

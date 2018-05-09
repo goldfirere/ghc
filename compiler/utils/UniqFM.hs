@@ -85,10 +85,7 @@ import qualified Data.Monoid as Mon
 import qualified Data.IntSet as S
 import Data.Typeable
 import Data.Data
-#if __GLASGOW_HASKELL__ > 710
-import Data.Semigroup   ( Semigroup )
-import qualified Data.Semigroup as Semigroup
-#endif
+import qualified Data.Semigroup as Semi
 
 
 newtype UniqFM ele = UFM (M.IntMap ele)
@@ -358,14 +355,12 @@ equalKeysUFM (UFM m1) (UFM m2) = M.keys m1 == M.keys m2
 
 -- Instances
 
-#if __GLASGOW_HASKELL__ > 710
-instance Semigroup (UniqFM a) where
+instance Semi.Semigroup (UniqFM a) where
   (<>) = plusUFM
-#endif
 
 instance Monoid (UniqFM a) where
     mempty = emptyUFM
-    mappend = plusUFM
+    mappend = (Semi.<>)
 
 -- Output-ery
 

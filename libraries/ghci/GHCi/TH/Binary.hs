@@ -70,6 +70,7 @@ instance Binary TH.FamilyResultSig
 instance Binary TH.TypeFamilyHead
 instance Binary TH.PatSynDir
 instance Binary TH.PatSynArgs
+instance Binary TH.ArgFlag
 
 -- We need Binary TypeRep for serializing annotations
 

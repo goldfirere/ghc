@@ -1,13 +1,9 @@
-{-# LANGUAGE CPP, DeriveDataTypeable,
+{-# LANGUAGE DeriveDataTypeable,
              DeriveGeneric, FlexibleInstances, DefaultSignatures,
              RankNTypes, RoleAnnotations, ScopedTypeVariables,
              Trustworthy #-}
 
 {-# OPTIONS_GHC -fno-warn-inline-rule-shadowing #-}
-
-#if MIN_VERSION_base(4,9,0)
-# define HAS_MONADFAIL 1
-#endif
 
 -----------------------------------------------------------------------------
 -- |
@@ -28,12 +24,14 @@ module Language.Haskell.TH.Syntax
       -- * Language extensions
     , module Language.Haskell.TH.LanguageExtensions
     , ForeignSrcLang(..)
+    , ArgFlag(..)
     ) where
 
 import Data.Data hiding (Fixity(..))
 import Data.IORef
 import System.IO.Unsafe ( unsafePerformIO )
 import Control.Monad (liftM)
+import Control.Monad.IO.Class (MonadIO (..))
 import System.IO        ( hPutStrLn, stderr )
 import Data.Char        ( isAlpha, isAlphaNum, isUpper )
 import Data.Int
@@ -45,9 +43,7 @@ import GHC.ForeignSrcLang.Type
 import Language.Haskell.TH.LanguageExtensions
 import Numeric.Natural
 
-#if HAS_MONADFAIL
 import qualified Control.Monad.Fail as Fail
-#endif
 
 -----------------------------------------------------
 --
@@ -55,11 +51,7 @@ import qualified Control.Monad.Fail as Fail
 --
 -----------------------------------------------------
 
-#if HAS_MONADFAIL
-class Fail.MonadFail m => Quasi m where
-#else
-class Monad m => Quasi m where
-#endif
+class (MonadIO m, Fail.MonadFail m) => Quasi m where
   qNewName :: String -> m Name
         -- ^ Fresh names
 
@@ -88,6 +80,7 @@ class Monad m => Quasi m where
   qLocation :: m Loc
 
   qRunIO :: IO a -> m a
+  qRunIO = liftIO
   -- ^ Input/output (dangerous)
 
   qAddDependentFile :: FilePath -> m ()
@@ -142,8 +135,6 @@ instance Quasi IO where
   qIsExtEnabled _       = badIO "isExtEnabled"
   qExtsEnabled          = badIO "extsEnabled"
 
-  qRunIO m = m
-
 badIO :: String -> IO a
 badIO op = do   { qReport True ("Can't do `" ++ op ++ "' in the IO monad")
                 ; fail "Template Haskell failure" }
@@ -179,14 +170,10 @@ runQ (Q m) = m
 instance Monad Q where
   Q m >>= k  = Q (m >>= \x -> unQ (k x))
   (>>) = (*>)
-#if !HAS_MONADFAIL
-  fail s     = report True s >> Q (fail "Q monad failure")
-#else
   fail       = Fail.fail
 
 instance Fail.MonadFail Q where
   fail s     = report True s >> Q (Fail.fail "Q monad failure")
-#endif
 
 instance Functor Q where
   fmap f (Q x) = Q (fmap f x)
@@ -508,6 +495,9 @@ isExtEnabled ext = Q (qIsExtEnabled ext)
 extsEnabled :: Q [Extension]
 extsEnabled = Q qExtsEnabled
 
+instance MonadIO Q where
+  liftIO = runIO
+
 instance Quasi Q where
   qNewName            = newName
   qReport             = report
@@ -521,7 +511,6 @@ instance Quasi Q where
   qReifyConStrictness = reifyConStrictness
   qLookupName         = lookupName
   qLocation           = location
-  qRunIO              = runIO
   qAddDependentFile   = addDependentFile
   qAddTopDecls        = addTopDecls
   qAddForeignFile     = addForeignFile
@@ -1845,6 +1834,35 @@ data DecidedStrictness = DecidedLazy
                        | DecidedUnpack
         deriving (Show, Eq, Ord, Data, Generic)
 
+-- | A single data constructor.
+--
+-- The constructors for 'Con' can roughly be divided up into two categories:
+-- those for constructors with \"vanilla\" syntax ('NormalC', 'RecC', and
+-- 'InfixC'), and those for constructors with GADT syntax ('GadtC' and
+-- 'RecGadtC'). The 'ForallC' constructor, which quantifies additional type
+-- variables and class contexts, can surround either variety of constructor.
+-- However, the type variables that it quantifies are different depending
+-- on what constructor syntax is used:
+--
+-- * If a 'ForallC' surrounds a constructor with vanilla syntax, then the
+--   'ForallC' will only quantify /existential/ type variables. For example:
+--
+--   @
+--   data Foo a = forall b. MkFoo a b
+--   @
+--
+--   In @MkFoo@, 'ForallC' will quantify @b@, but not @a@.
+--
+-- * If a 'ForallC' surrounds a constructor with GADT syntax, then the
+--   'ForallC' will quantify /all/ type variables used in the constructor.
+--   For example:
+--
+--   @
+--   data Bar a b where
+--     MkBar :: (a ~ b) => c -> MkBar a b
+--   @
+--
+--   In @MkBar@, 'ForallC' will quantify @a@, @b@, and @c@.
 data Con = NormalC Name [BangType]       -- ^ @C Int a@
          | RecC Name [VarBangType]       -- ^ @C { v :: Int, w :: a }@
          | InfixC BangType Name BangType -- ^ @Int :+ a@
@@ -1917,7 +1935,7 @@ data PatSynArgs
   | RecordPatSyn [Name]        -- ^ @pattern P { {x,y,z} } = p@
   deriving( Show, Eq, Ord, Data, Generic )
 
-data Type = ForallT [TyVarBndr] Cxt Type  -- ^ @forall \<vars\>. \<ctxt\> -> \<type\>@
+data Type = ForallT [TyVarBndr] Cxt Type  -- ^ @forall \<vars\>. \<ctxt\> => \<type\>@
           | AppT Type Type                -- ^ @T a b@
           | SigT Type Kind                -- ^ @t :: k@
           | VarT Name                     -- ^ @a@
@@ -1945,8 +1963,11 @@ data Type = ForallT [TyVarBndr] Cxt Type  -- ^ @forall \<vars\>. \<ctxt\> -> \<t
           | WildCardT                     -- ^ @_@
       deriving( Show, Eq, Ord, Data, Generic )
 
-data TyVarBndr = PlainTV  Name            -- ^ @a@
-               | KindedTV Name Kind       -- ^ @(a :: k)@
+data ArgFlag = Required | Specified | Inferred
+  deriving ( Show, Eq, Ord, Data, Generic )
+
+data TyVarBndr = PlainTV  Name ArgFlag      -- ^ @a@ or @{a}@
+               | KindedTV Name Kind ArgFlag -- ^ @(a :: k)@ or @{a :: k}@
       deriving( Show, Eq, Ord, Data, Generic )
 
 -- | Type family result signature

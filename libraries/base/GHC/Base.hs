@@ -207,13 +207,13 @@ data  Maybe a  =  Nothing | Just a
 -- | The class of monoids (types with an associative binary operation that
 -- has an identity).  Instances should satisfy the following laws:
 --
---  * @mappend mempty x = x@
+--  * @'mappend' 'mempty' x = x@
 --
---  * @mappend x mempty = x@
+--  * @'mappend' x 'mempty' = x@
 --
---  * @mappend x (mappend y z) = mappend (mappend x y) z@
+--  * @'mappend' x ('mappend' y z) = 'mappend' ('mappend' x y) z@
 --
---  * @mconcat = 'foldr' mappend mempty@
+--  * @'mconcat' = 'foldr' 'mappend' 'mempty'@
 --
 -- The method names refer to the monoid of lists under concatenation,
 -- but there are many other instances.
@@ -379,6 +379,7 @@ class  Functor f  where
 -- the same as their default definitions:
 --
 --      @('<*>') = 'liftA2' 'id'@
+--
 --      @'liftA2' f x y = f '<$>' x '<*>' y@
 --
 -- Further, any definition must satisfy the following:
@@ -426,6 +427,8 @@ class  Functor f  where
 --   * @'pure' = 'return'@
 --
 --   * @('<*>') = 'ap'@
+--
+--   * @('*>') = ('>>')@
 --
 -- (which implies that 'pure' and '<*>' satisfy the applicative functor laws).
 
@@ -629,8 +632,8 @@ liftM f m1              = do { x1 <- m1; return (f x1) }
 -- | Promote a function to a monad, scanning the monadic arguments from
 -- left to right.  For example,
 --
--- >    liftM2 (+) [0,1] [0,2] = [0,2,1,3]
--- >    liftM2 (+) (Just 1) Nothing = Nothing
+-- > liftM2 (+) [0,1] [0,2] = [0,2,1,3]
+-- > liftM2 (+) (Just 1) Nothing = Nothing
 --
 liftM2  :: (Monad m) => (a1 -> a2 -> r) -> m a1 -> m a2 -> m r
 liftM2 f m1 m2          = do { x1 <- m1; x2 <- m2; return (f x1 x2) }
@@ -671,11 +674,11 @@ liftM5 f m1 m2 m3 m4 m5 = do { x1 <- m1; x2 <- m2; x3 <- m3; x4 <- m4; x5 <- m5;
 {- | In many situations, the 'liftM' operations can be replaced by uses of
 'ap', which promotes function application.
 
->       return f `ap` x1 `ap` ... `ap` xn
+> return f `ap` x1 `ap` ... `ap` xn
 
 is equivalent to
 
->       liftMn f x1 x2 ... xn
+> liftMn f x1 x2 ... xn
 
 -}
 
@@ -744,9 +747,9 @@ infixl 3 <|>
 -- If defined, 'some' and 'many' should be the least solutions
 -- of the equations:
 --
--- * @some v = (:) '<$>' v '<*>' many v@
+-- * @'some' v = (:) '<$>' v '<*>' 'many' v@
 --
--- * @many v = some v '<|>' 'pure' []@
+-- * @'many' v = 'some' v '<|>' 'pure' []@
 class Applicative f => Alternative f where
     -- | The identity of '<|>'
     empty :: f a
@@ -1082,6 +1085,8 @@ maxInt  = I# 0x7FFFFFFFFFFFFFFF#
 ----------------------------------------------
 
 -- | Identity function.
+--
+-- > id x = x
 id                      :: a -> a
 id x                    =  x
 
@@ -1115,7 +1120,8 @@ breakpointCond _ r = r
 data Opaque = forall a. O a
 -- | @const x@ is a unary function which evaluates to @x@ for all inputs.
 --
--- For instance,
+-- >>> const 42 "hello"
+-- 42
 --
 -- >>> map (const 42) [0..3]
 -- [42,42,42,42]
@@ -1130,6 +1136,9 @@ const x _               =  x
 (.) f g = \x -> f (g x)
 
 -- | @'flip' f@ takes its (first) two arguments in the reverse order of @f@.
+--
+-- >>> flip (++) "hello" "world"
+-- "worldhello"
 flip                    :: (a -> b -> c) -> b -> a -> c
 flip f x y              =  f y x
 
@@ -1138,7 +1147,7 @@ flip f x y              =  f y x
 -- low, right-associative binding precedence, so it sometimes allows
 -- parentheses to be omitted; for example:
 --
--- >     f $ g $ h x  =  f (g (h x))
+-- > f $ g $ h x  =  f (g (h x))
 --
 -- It is also useful in higher-order situations, such as @'map' ('$' 0) xs@,
 -- or @'Data.List.zipWith' ('$') fs xs@.

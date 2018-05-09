@@ -62,6 +62,7 @@ import qualified GHC.LanguageExtensions as LangExt
 
 import Control.Monad
 import Data.List        ( (\\) )
+import qualified Data.List.NonEmpty as NE
 
 {-
 ************************************************************************
@@ -972,13 +973,13 @@ constraintSynErr env kind
     , hang (text "Illegal constraint synonym of kind:" <+> quotes (ppr_tidy env kind))
          2 (parens constraintKindsMsg) )
 
-dupPredWarn :: TidyEnv -> [[PredType]] -> (TidyEnv, SDoc)
+dupPredWarn :: TidyEnv -> [NE.NonEmpty PredType] -> (TidyEnv, SDoc)
 dupPredWarn env dups
   = ( env
     , text "Duplicate constraint" <> plural primaryDups <> text ":"
       <+> pprWithCommas (ppr_tidy env) primaryDups )
   where
-    primaryDups = map head dups
+    primaryDups = map NE.head dups
 
 tyConArityErr :: TyCon -> [TcType] -> SDoc
 -- For type-constructor arity errors, be careful to report
@@ -1200,7 +1201,7 @@ It checks for three things
     might be applications thus (f (g x)).
 
     Note that tys only includes the visible arguments of the class type
-    constructor. Including the non-vivisble arguments can cause the following,
+    constructor. Including the non-visible arguments can cause the following,
     perfectly valid instance to be rejected:
        class Category (cat :: k -> k -> *) where ...
        newtype T (c :: * -> * -> *) a b = MkT (c a b)
@@ -1554,8 +1555,8 @@ checkConsistentFamInst (Just (clas, inst_tvs, mini_env)) fam_tc at_tys pp_hs_pat
        ; checkTc (all check_arg type_shapes)   pp_wrong_at_arg
 
        -- And now kind args
-       ; checkTc (all check_arg kind_shapes)
-                 (pp_wrong_at_arg $$ ppSuggestExplicitKinds)
+       ; checkTcM (all check_arg kind_shapes)
+                  (tidy_env2, pp_wrong_at_arg $$ ppSuggestExplicitKinds)
 
        ; traceTc "cfi" (vcat [ ppr inst_tvs
                              , ppr arg_shapes
@@ -1584,7 +1585,16 @@ checkConsistentFamInst (Just (clas, inst_tvs, mini_env)) fam_tc at_tys pp_hs_pat
                vcat [ text "where the `<tv>' arguments are type variables,"
                     , text "distinct from each other and from the instance variables" ] ]
 
-    expected_args = [ exp_ty `orElse` mk_tv at_ty | (exp_ty, at_ty) <- arg_shapes ]
+    -- We need to tidy, since it's possible that expected_args will contain
+    -- inferred kind variables with names identical to those in at_tys. If we
+    -- don't, we'll end up with horrible messages like this one (#13972):
+    --
+    --   Expected: T (a -> Either a b)
+    --     Actual: T (a -> Either a b)
+    (tidy_env1, _) = tidyOpenTypes emptyTidyEnv at_tys
+    (tidy_env2, expected_args)
+      = tidyOpenTypes tidy_env1 [ exp_ty `orElse` mk_tv at_ty
+                                | (exp_ty, at_ty) <- arg_shapes ]
     mk_tv at_ty   = mkTyVarTy (mkTyVar tv_name (typeKind at_ty))
     tv_name = mkInternalName (mkAlphaTyVarUnique 1) (mkTyVarOcc "<tv>") noSrcSpan
 
@@ -1613,7 +1623,7 @@ checkValidCoAxiom ax@(CoAxiom { co_ax_tc = fam_tc, co_ax_branches = branches })
        ; foldlM_ check_branch_compat [] branch_list }
   where
     branch_list = fromBranches branches
-    injectivity = familyTyConInjectivityInfo fam_tc
+    injectivity = tyConInjectivityInfo fam_tc
 
     check_branch_compat :: [CoAxBranch]    -- previous branches in reverse order
                         -> CoAxBranch      -- current branch

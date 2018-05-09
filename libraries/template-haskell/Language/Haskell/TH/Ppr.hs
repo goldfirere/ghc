@@ -755,9 +755,10 @@ instance Ppr TyLit where
   ppr = pprTyLit
 
 ------------------------------
+-- TODO: print arg-flags properly here
 instance Ppr TyVarBndr where
-    ppr (PlainTV nm)    = ppr nm
-    ppr (KindedTV nm k) = parens (ppr nm <+> dcolon <+> ppr k)
+    ppr (PlainTV nm _arg_flag)    = ppr nm
+    ppr (KindedTV nm k _arg_flag) = parens (ppr nm <+> dcolon <+> ppr k)
 
 instance Ppr Role where
     ppr NominalR          = text "nominal"

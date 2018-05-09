@@ -59,7 +59,7 @@ module TyCon(
         isFamilyTyCon, isOpenFamilyTyCon,
         isTypeFamilyTyCon, isDataFamilyTyCon,
         isOpenTypeFamilyTyCon, isClosedSynFamilyTyConWithAxiom_maybe,
-        familyTyConInjectivityInfo,
+        tyConInjectivityInfo,
         isBuiltInSynFamTyCon_maybe,
         isUnliftedTyCon,
         isGadtSyntaxTyCon, isInjectiveTyCon, isGenerativeTyCon, isGenInjAlgRhs,
@@ -385,6 +385,7 @@ See also:
 -}
 
 type TyConBinder = TyVarBndr TyVar TyConBndrVis
+                   -- See also Note [TyBinder] in TyCoRep
 
 data TyConBndrVis
   = NamedTCB ArgFlag
@@ -485,7 +486,7 @@ That is, its TyVarBinders should be
                             , TvBndr (a:k->*) Specified
                             , TvBndr (b:k)    Specified ]
 
-So tyConTyVarBinders conversts TyCon's TyConBinders into TyVarBinders:
+So tyConTyVarBinders converts TyCon's TyConBinders into TyVarBinders:
   - variable names from the TyConBinders
   - but changing Anon/Required to Specified
 
@@ -547,10 +548,10 @@ They fit together like so:
 -}
 
 instance Outputable tv => Outputable (TyVarBndr tv TyConBndrVis) where
-  ppr (TvBndr v AnonTCB)              = ppr v
-  ppr (TvBndr v (NamedTCB Required))  = ppr v
-  ppr (TvBndr v (NamedTCB Specified)) = char '@' <> ppr v
-  ppr (TvBndr v (NamedTCB Inferred))  = braces (ppr v)
+  ppr (TvBndr v AnonTCB)              = text "anon" <+> parens (ppr v)
+  ppr (TvBndr v (NamedTCB Required))  = text "req"  <+> parens (ppr v)
+  ppr (TvBndr v (NamedTCB Specified)) = text "spec" <+> parens (ppr v)
+  ppr (TvBndr v (NamedTCB Inferred))  = text "inf"  <+> parens (ppr v)
 
 instance Binary TyConBndrVis where
   put_ bh AnonTCB        = putByte bh 0
@@ -1925,11 +1926,17 @@ isClosedSynFamilyTyConWithAxiom_maybe
   (FamilyTyCon {famTcFlav = ClosedSynFamilyTyCon mb}) = mb
 isClosedSynFamilyTyConWithAxiom_maybe _               = Nothing
 
--- | Try to read the injectivity information from a FamilyTyCon.
--- For every other TyCon this function panics.
-familyTyConInjectivityInfo :: TyCon -> Injectivity
-familyTyConInjectivityInfo (FamilyTyCon { famTcInj = inj }) = inj
-familyTyConInjectivityInfo _ = panic "familyTyConInjectivityInfo"
+-- | @'tyConInjectivityInfo' tc@ returns @'Injective' is@ is @tc@ is an
+-- injective tycon (where @is@ states for which 'tyConBinders' @tc@ is
+-- injective), or 'NotInjective' otherwise.
+tyConInjectivityInfo :: TyCon -> Injectivity
+tyConInjectivityInfo tc
+  | FamilyTyCon { famTcInj = inj } <- tc
+  = inj
+  | isInjectiveTyCon tc Nominal
+  = Injective (replicate (tyConArity tc) True)
+  | otherwise
+  = NotInjective
 
 isBuiltInSynFamTyCon_maybe :: TyCon -> Maybe BuiltInSynFamily
 isBuiltInSynFamTyCon_maybe
@@ -2108,6 +2115,10 @@ expandSynTyCon_maybe tc tys
 -- | Check if the tycon actually refers to a proper `data` or `newtype`
 --  with user defined constructors rather than one from a class or other
 --  construction.
+
+-- NB: This is only used in TcRnExports.checkPatSynParent to determine if an
+-- exported tycon can have a pattern synonym bundled with it, e.g.,
+-- module Foo (TyCon(.., PatSyn)) where
 isTyConWithSrcDataCons :: TyCon -> Bool
 isTyConWithSrcDataCons (AlgTyCon { algTcRhs = rhs, algTcParent = parent }) =
   case rhs of
@@ -2117,6 +2128,8 @@ isTyConWithSrcDataCons (AlgTyCon { algTcRhs = rhs, algTcParent = parent }) =
     _ -> False
   where
     isSrcParent = isNoParent parent
+isTyConWithSrcDataCons (FamilyTyCon { famTcFlav = DataFamilyTyCon {} })
+                         = True -- #14058
 isTyConWithSrcDataCons _ = False
 
 

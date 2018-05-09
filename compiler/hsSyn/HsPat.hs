@@ -29,7 +29,7 @@ module HsPat (
         mkPrefixConPat, mkCharLitPat, mkNilPat,
 
         looksLazyPatBind,
-        isBangedLPat, isBangedPatBind,
+        isBangedLPat,
         hsPatNeedsParens,
         isIrrefutableHsPat,
 
@@ -495,7 +495,7 @@ instance (Outputable arg)
   ppr (HsRecFields { rec_flds = flds, rec_dotdot = Just n })
         = braces (fsep (punctuate comma (map ppr (take n flds) ++ [dotdot])))
         where
-          dotdot = text ".." <+> ifPprDebug (ppr (drop n flds))
+          dotdot = text ".." <+> whenPprDebug (ppr (drop n flds))
 
 instance (Outputable p, Outputable arg)
       => Outputable (HsRecField' p arg) where
@@ -558,10 +558,6 @@ patterns are treated specially, of course.
 The 1.3 report defines what ``irrefutable'' and ``failure-free'' patterns are.
 -}
 
-isBangedPatBind :: HsBind p -> Bool
-isBangedPatBind (PatBind {pat_lhs = pat}) = isBangedLPat pat
-isBangedPatBind _ = False
-
 isBangedLPat :: LPat p -> Bool
 isBangedLPat (L _ (ParPat p))   = isBangedLPat p
 isBangedLPat (L _ (BangPat {})) = True
@@ -577,8 +573,6 @@ looksLazyPatBind (PatBind { pat_lhs = p })
   = looksLazyLPat p
 looksLazyPatBind (AbsBinds { abs_binds = binds })
   = anyBag (looksLazyPatBind . unLoc) binds
-looksLazyPatBind (AbsBindsSig { abs_sig_bind = L _ bind })
-  = looksLazyPatBind bind
 looksLazyPatBind _
   = False
 

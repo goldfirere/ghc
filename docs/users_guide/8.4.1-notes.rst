@@ -27,6 +27,20 @@ Language
   wish to; this is quite like how regular datatypes with a kind signature can omit
   some type variables.
 
+- Implicitly bidirectional pattern synonyms no longer allow bang patterns
+  (``!``) or irrefutable patterns (``~``) on the right-hand side. Previously,
+  this was allowed, although the bang patterns and irrefutable patterns would
+  be silently ignored when used in an expression context. This is now a proper
+  error, and explicitly bidirectional pattern synonyms should be used in their
+  stead. That is, instead of using this (which is an error): ::
+
+      data StrictJust a = Just !a
+
+  Use this: ::
+
+      data StrictJust a <- Just !a where
+        StrictJust !a = Just a
+
 Compiler
 ~~~~~~~~
 
@@ -110,6 +124,12 @@ Runtime system
 Template Haskell
 ~~~~~~~~~~~~~~~~
 
+- Template Haskell now reifies data types with GADT syntax accurately.
+  Previously, TH used heuristics to determine whether a data type
+  should be reified using GADT syntax, which could lead to incorrect results,
+  such as ``data T1 a = (a ~ Int) => MkT1`` being reified as a GADT and
+  ``data T2 a where MkT2 :: Show a => T2 a`` *not* being reified as a GADT.
+
 ``ghc`` library
 ~~~~~~~~~~~~~~~
 
@@ -152,3 +172,13 @@ Template Haskell
 
 - Blank strings can now be used as values for environment variables using the
   System.Environment.Blank module. See :ghc-ticket:`12494`
+
+Build system
+~~~~~~~~~~~~
+
+- ``dll-split`` has been removed and replaced with an automatic partitioning utility ``gen-dll``.
+  This utility can transparently split and compile any DLLs that require this. Note that the ``rts`` and
+  ``base`` can not be split at this point because of the mutual recursion between ``base`` and ``rts``.
+  There is currently no explicit dependency between the two in the build system and such there is no way
+  to notify ``base`` that the ``rts`` has been split, or vice versa.
+  (see :ghc-ticket:`5987`).

@@ -130,8 +130,6 @@ ds_val_bind (NonRecursive, hsbinds) body
   where
     is_polymorphic (AbsBinds { abs_tvs = tvs, abs_ev_vars = evs })
                      = not (null tvs && null evs)
-    is_polymorphic (AbsBindsSig { abs_tvs = tvs, abs_ev_vars = evs })
-                     = not (null tvs && null evs)
     is_polymorphic _ = False
 
     unlifted_must_be_bang bind
@@ -185,15 +183,6 @@ dsUnliftedBind (AbsBinds { abs_tvs = [], abs_ev_vars = []
                             body1 lbinds
        ; ds_binds <- dsTcEvBinds_s ev_binds
        ; return (mkCoreLets ds_binds body2) }
-
-dsUnliftedBind (AbsBindsSig { abs_tvs         = []
-                            , abs_ev_vars     = []
-                            , abs_sig_export  = poly
-                            , abs_sig_ev_bind = ev_bind
-                            , abs_sig_bind    = L _ bind }) body
-  = do { ds_binds <- dsTcEvBinds ev_bind
-       ; body' <- dsUnliftedBind (bind { fun_id = noLoc poly }) body
-       ; return (mkCoreLets ds_binds body') }
 
 dsUnliftedBind (FunBind { fun_id = L l fun
                         , fun_matches = matches
@@ -391,7 +380,7 @@ ds_expr _ (ExplicitTuple tup_args boxity)
 ds_expr _ (ExplicitSum alt arity expr types)
   = do { core_expr <- dsLExpr expr
        ; return $ mkCoreConApps (sumDataCon alt arity)
-                                (map (Type . getRuntimeRep "dsExpr ExplicitSum") types ++
+                                (map (Type . getRuntimeRep) types ++
                                  map Type types ++
                                  [core_expr]) }
 

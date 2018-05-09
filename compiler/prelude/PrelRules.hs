@@ -1423,7 +1423,7 @@ caseRules dflags (App (App (Var f) (Lit l)) v)   -- x# `op` v
   , Just x  <- isLitValue_maybe l
   , Just adjust_lit <- adjustDyadicLeft x op
   = Just (v, tx_lit_con dflags adjust_lit
-           , \v -> (App (App (Var f) (Var v)) (Lit l)))
+           , \v -> (App (App (Var f) (Lit l)) (Var v)))
 
 
 caseRules dflags (App (Var f) v              )   -- op v
@@ -1517,7 +1517,7 @@ into
      0# -> e1
      1# -> e1
 
-This rule elimiantes a lot of boilerplate. For
+This rule eliminates a lot of boilerplate. For
   if (x>y) then e1 else e2
 we generate
   case tagToEnum (x ># y) of

@@ -42,9 +42,7 @@ import UniqFM
 import UniqSet
 
 import Control.Monad
-#if __GLASGOW_HASKELL__ > 710
 import qualified Control.Monad.Fail as MonadFail
-#endif
 import Control.Applicative hiding ( empty )
 import qualified Control.Applicative
 
@@ -806,7 +804,7 @@ unify_ty env ty1 ty2 _kco
   = if isInjectiveTyCon tc1 Nominal
     then unify_tys env tys1 tys2
     else do { let inj | isTypeFamilyTyCon tc1
-                      = case familyTyConInjectivityInfo tc1 of
+                      = case tyConInjectivityInfo tc1 of
                                NotInjective -> repeat False
                                Injective bs -> bs
                       | otherwise
@@ -1050,10 +1048,8 @@ instance Alternative UM where
 
 instance MonadPlus UM
 
-#if __GLASGOW_HASKELL__ > 710
 instance MonadFail.MonadFail UM where
     fail _   = UM (\_ -> SurelyApart) -- failed pattern match
-#endif
 
 initUM :: TvSubstEnv  -- subst to extend
        -> CvSubstEnv
