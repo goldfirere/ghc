@@ -1914,7 +1914,7 @@ btype :: { LHsType GhcPs }
 -- in order to forbid the blasphemous
 -- > data Foo = Int :+ Char :* Bool
 -- See also Note [Parsing data constructors is hard] in RdrHsSyn
-btype_no_ops :: { Located [LHsType GhcPs] } -- NB: This list is reversed
+btype_no_ops :: { Located [Located TyArg] } -- NB: This list is reversed
         : atype_docs                    { sL1 $1 [$1] }
         | btype_no_ops atype_docs       { sLL $1 $> $ $2 : (unLoc $1) }
 
@@ -1924,6 +1924,7 @@ tyapps :: { Located [Located TyEl] } -- NB: This list is reversed
 
 tyapp :: { Located TyEl }
         : atype                         { sL1 $1 $ TyElOpd (unLoc $1) }
+        | TYPEAPP atype                 { sLL $1 $> $ TyElTypeApp $2 }
         | qtyconop                      { sL1 $1 $ TyElOpr (unLoc $1) }
         | tyvarop                       { sL1 $1 $ TyElOpr (unLoc $1) }
         | SIMPLEQUOTE qconop            {% ams (sLL $1 $> $ TyElOpr (unLoc $2))
@@ -1931,9 +1932,10 @@ tyapp :: { Located TyEl }
         | SIMPLEQUOTE varop             {% ams (sLL $1 $> $ TyElOpr (unLoc $2))
                                                [mj AnnSimpleQuote $1] }
 
-atype_docs :: { LHsType GhcPs }
-        : atype docprev                 { sLL $1 $> $ HsDocTy noExt $1 $2 }
-        | atype                         { $1 }
+atype_docs :: { Located TyArg }
+        : atype docprev                 { sLL $1 $> $ TANormal (HsDocTy noExt $1 $2) }
+        | TYPEAPP atype                 { SLL $1 $> $ TATypeApp $2 }
+        | atype                         { SL1 $1 $ TANormal (unLoc $1) }
 
 atype :: { LHsType GhcPs }
         : ntgtycon                       { sL1 $1 (HsTyVar noExt NotPromoted $1) }      -- Not including unit tuples
@@ -2193,7 +2195,7 @@ constr_stuff :: { Located (Located RdrName, HsConDeclDetails GhcPs, Maybe LHsDoc
         | btype_no_ops conop maybe_docprev btype_no_ops
             {% do { lhs <- splitTilde (reverse (unLoc $1))
                   ; (_, ds_l) <- checkInfixConstr lhs
-                  ; let rhs1 = foldl1 mkHsAppTy (reverse (unLoc $4))
+                  ; let rhs1 = mkTyArgs (reverse (unLoc $4))
                   ; (rhs, ds_r) <- checkInfixConstr rhs1
                   ; return $ if isJust (ds_l `mplus` $3)
                                then sLL $1 $> ($2, InfixCon lhs rhs1, $3)

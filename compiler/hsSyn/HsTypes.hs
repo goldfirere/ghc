@@ -493,6 +493,10 @@ data HsType pass
 
       -- For details on above see note [Api annotations] in ApiAnnotation
 
+  | HsAppKindTy         (XAppKind pass)
+                        (LHsType pass)
+                        (LHsKind pass)
+
   | HsFunTy             (XFunTy pass)
                         (LHsType pass)   -- function type
                         (LHsType pass)

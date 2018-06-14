@@ -491,7 +491,7 @@ this is easy for the parser to produce and we avoid the overhead of unrolling
 
 -}
 
-splitCon :: [LHsType GhcPs]
+splitCon :: [Located TyArg]
       -> P ( Located RdrName         -- constructor name
            , HsConDeclDetails GhcPs  -- constructor field information
            , Maybe LHsDocString      -- docstring to go on the constructor
@@ -501,9 +501,15 @@ splitCon :: [LHsType GhcPs]
 --      C Int Bool
 -- or   C { x::Int, y::Bool }
 -- and returns the pieces
-splitCon apps
- = split apps' []
+splitCon ty_args
+ = do { report_illegal_type_apps type_apps
+      ; split apps' []
  where
+   (apps, type_apps) = partitionWith go ty_args
+     where
+       go (L loc (TANormal arg))  = Left (L loc arg)
+       go (L loc (TATypeApp arg)) = Right (L loc arg)
+
    oneDoc = [ () | L _ (HsDocTy{}) <- apps ] `lengthIs` 1
    ty = foldl1 mkHsAppTy (reverse apps)
 
@@ -535,6 +541,11 @@ splitCon apps
    mk_rest [L _ (HsDocTy _ t@(L _ HsRecTy{}) _)] = mk_rest [t]
    mk_rest [L l (HsRecTy _ flds)] = RecCon (L l flds)
    mk_rest ts                     = PrefixCon ts
+
+   report_illegal_type_apps :: [Located (LHsType GhcPs)] -> P ()
+   report_illegal_type_apps [] = return ()
+   report_illegal_type_apps (L loc lty : _)
+     = parseErrorSDoc loc (text "Unexpected type application:" <+> ppr lty)
 
 tyConToDataCon :: SrcSpan -> RdrName -> P (Located RdrName)
 -- See Note [Parsing data constructors is hard]
@@ -1275,9 +1286,10 @@ isFunLhs e = go e [] []
 --   [~a, ~b, c, ~d] ==> (~a) ~ ((b c) ~ d)
 --
 -- See Note [Parsing ~]
-splitTilde :: [LHsType GhcPs] -> P (LHsType GhcPs)
+splitTilde :: [Located TyArg] -> P (LHsType GhcPs)
 splitTilde [] = panic "splitTilde"
-splitTilde (x:xs) = go x xs
+splitTilde (L loc (TATypeApp t):_) = parseErrorSDoc loc (text "Unexpected type application: " <+> ppr t)
+splitTilde (L loc (TANormal t):xs) = go (L loc t) xs
   where
     -- We accumulate applications in the LHS until we encounter a laziness
     -- annotation. For example, if we have [Foo, x, y, ~Bar, z], the 'lhs'
@@ -1288,19 +1300,27 @@ splitTilde (x:xs) = go x xs
     -- In case the tail contained more laziness annotations, they would be
     -- processed similarly. This makes '~' right-associative.
     go lhs [] = return lhs
-    go lhs (x:xs)
-      | L loc (HsBangTy _ (HsSrcBang NoSourceText NoSrcUnpack SrcLazy) t) <- x
-      = do { rhs <- splitTilde (t:xs)
-           ; let r = mkLHsOpTy lhs (tildeOp loc) rhs
-           ; moveAnnotations loc (getLoc r)
-           ; return r }
-      | otherwise
-      = go (mkHsAppTy lhs x) xs
+    go lhs (x:xs) = case x of
+      L loc (TANormal (HsBangTy _ (HsSrcBang NoSourceText NoSrcUnpack SrcLazy) (L inner_loc t)))
+        -> do { rhs <- splitTilde (L inner_loc (TANormal t):xs)
+              ; let r = mkLHsOpTy lhs (tildeOp loc) rhs
+              ; moveAnnotations loc (getLoc r)
+              ; return r }
+      L loc (TANormal t)
+        -> go (mkHsAppTy lhs (L loc t)) xs
+      L loc (TATypeApp t)
+        -> go (L loc (HsAppKindTy lhs t)) xs
 
     tildeOp loc = L (srcSpanFirstCharacter loc) eqTyCon_RDR
 
 -- | Either an operator or an operand.
-data TyEl = TyElOpr RdrName | TyElOpd (HsType GhcPs)
+data TyEl = TyElOpr RdrName              -- ^ a type operator
+          | TyElOpd (HsType GhcPs)       -- ^ a type operand
+          | TyElTypeApp (LHsType GhcPs)  -- ^ a type-level type application (with '@')
+
+-- | A type argument: either a normal argument or a type-level type application (with '@')
+data TyArg = TANormal  (HsType GhcPs)
+           | TATypeApp (LHsType GhcPs)
 
 -- | Merge a /reversed/ and /non-empty/ soup of operators and operands
 --   into a type.
@@ -1315,6 +1335,12 @@ data TyEl = TyElOpr RdrName | TyElOpd (HsType GhcPs)
 mergeOps :: [Located TyEl] -> P (LHsType GhcPs)
 mergeOps = go [] id
   where
+    go :: [Located TyArg]     -- the components of the right-hand argument
+       -> (LHsType GhcPs      -- A transformation taking a left-hand argument
+           -> LHsType GhcPs)  -- into a binary operation (or the identity transformation)
+       -> [Located TyEl]      -- the reversed components of the type
+       -> P (LHsType GhcPs)
+
     -- clause (a):
     -- when we encounter an operator, we must have accumulated
     -- something for its rhs, and there must be something left
@@ -1327,9 +1353,13 @@ mergeOps = go [] id
 
     -- clause (b):
     -- whenever an operand is encountered, it is added to the accumulator
-    go acc ops_acc (L l (TyElOpd a):xs) = go (L l a:acc) ops_acc xs
+    go acc ops_acc (L l (TyElOpd a):xs) = go (L l (TANormal a):acc) ops_acc xs
 
     -- clause (c):
+    -- whenever a type application is encountered, it is added to the accumulator
+    go acc ops_acc (L l (TyElTypeApp a):xs) = go (L l (TATypeApp a):acc) ops_acc xs
+
+    -- clause (d):
     -- at this point we know that 'acc' is non-empty because
     -- there are three options when 'acc' can be empty:
     -- 1. 'mergeOps' was called with an empty list, and this
