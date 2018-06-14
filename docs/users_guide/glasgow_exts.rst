@@ -8790,14 +8790,8 @@ but actually requires some inference. As a very contrived example, consider ::
   data Proxy a           -- Proxy :: forall k. k -> *
   data X (a :: Proxy k)
 
-According to the rules above ``X`` has a CUSK. Yet, what is the kind of ``k``?
-It is impossible to know. This code is thus rejected as masquerading as having
-a CUSK, but not really. If you wish ``k`` to be polykinded, it is straightforward
-to specify this: ::
-
-  data X (a :: Proxy (k1 :: k2))
-
-The above definition is indeed fully fixed, with no masquerade.
+According to the rules above ``X`` has a CUSK. Yet, the kind of ``k`` is undetermined?
+It is thus quantified over, giving ``X`` the kind ``forall k1 (k :: k1). Proxy k -> Type``.
 
 Kind inference in closed type families
 --------------------------------------
